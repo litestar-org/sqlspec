@@ -12,7 +12,7 @@ from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_state
 async def asyncmy_config(mysql_service: MySQLService) -> AsyncmyConfig:
     """Create AsyncMy configuration for testing."""
     return AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,

@@ -651,7 +651,7 @@ async def test_for_update_skip_locked(postgres_service: PostgresService) -> None
     from sqlspec import sql
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "dsn": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "min_size": 2,
             "max_size": 5,

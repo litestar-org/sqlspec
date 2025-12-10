@@ -15,14 +15,14 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 @pytest.mark.sqlite
 def test_driver_features_enabled_by_default() -> None:
     """Test that driver features are enabled by default for stdlib types."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     assert config.driver_features.get("enable_custom_adapters") is True
 
 
 @pytest.mark.sqlite
 def test_enable_custom_adapters_feature() -> None:
     """Test enabling custom type adapters feature."""
-    config = SqliteConfig(pool_config={"database": ":memory:"}, driver_features={"enable_custom_adapters": True})
+    config = SqliteConfig(connection_config={"database": ":memory:"}, driver_features={"enable_custom_adapters": True})
 
     assert config.driver_features["enable_custom_adapters"] is True
 
@@ -31,7 +31,7 @@ def test_enable_custom_adapters_feature() -> None:
 def test_json_serialization_with_custom_adapters() -> None:
     """Test JSON dict/list serialization with custom adapters enabled."""
     config = SqliteConfig(
-        pool_config={"database": ":memory:", "detect_types": sqlite3.PARSE_DECLTYPES},
+        connection_config={"database": ":memory:", "detect_types": sqlite3.PARSE_DECLTYPES},
         driver_features={"enable_custom_adapters": True},
     )
 
@@ -67,7 +67,7 @@ def test_custom_json_serializer() -> None:
         return json.loads(text)
 
     config = SqliteConfig(
-        pool_config={"database": ":memory:", "detect_types": sqlite3.PARSE_DECLTYPES},
+        connection_config={"database": ":memory:", "detect_types": sqlite3.PARSE_DECLTYPES},
         driver_features={
             "enable_custom_adapters": True,
             "json_serializer": custom_serializer,
@@ -93,7 +93,7 @@ def test_custom_json_serializer() -> None:
 @pytest.mark.sqlite
 def test_backward_compatibility_without_custom_adapters() -> None:
     """Test backward compatibility when custom adapters are not enabled."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     sql = SQLSpec()
     sql.add_config(config)

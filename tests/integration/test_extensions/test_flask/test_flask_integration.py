@@ -16,7 +16,8 @@ def test_flask_manual_mode_sync_sqlite() -> None:
     """Test Flask extension with manual commit mode and sync SQLite."""
     sqlspec = SQLSpec()
     config = SqliteConfig(
-        pool_config={"database": ":memory:"}, extension_config={"flask": {"commit_mode": "manual", "session_key": "db"}}
+        connection_config={"database": ":memory:"},
+        extension_config={"flask": {"commit_mode": "manual", "session_key": "db"}},
     )
     sqlspec.add_config(config)
 
@@ -56,7 +57,7 @@ def test_flask_autocommit_mode_sync_sqlite() -> None:
     """Test Flask extension with autocommit mode and sync SQLite."""
     sqlspec = SQLSpec()
     config = SqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         extension_config={"flask": {"commit_mode": "autocommit", "session_key": "db"}},
     )
     sqlspec.add_config(config)
@@ -94,7 +95,7 @@ def test_flask_autocommit_rollback_on_error() -> None:
     """Test Flask extension autocommit rolls back on error status."""
     sqlspec = SQLSpec()
     config = SqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         extension_config={"flask": {"commit_mode": "autocommit", "session_key": "db"}},
     )
     sqlspec.add_config(config)
@@ -136,7 +137,7 @@ def test_flask_autocommit_include_redirect() -> None:
     """Test Flask extension autocommit_include_redirect commits on 3xx."""
     sqlspec = SQLSpec()
     config = SqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         extension_config={"flask": {"commit_mode": "autocommit_include_redirect", "session_key": "db"}},
     )
     sqlspec.add_config(config)
@@ -178,12 +179,12 @@ def test_flask_multi_database() -> None:
     sqlspec = SQLSpec()
 
     sqlite_config = SqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         extension_config={"flask": {"commit_mode": "autocommit", "session_key": "sqlite_db"}},
     )
 
     duckdb_config = DuckDBConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         extension_config={"flask": {"commit_mode": "autocommit", "session_key": "duckdb_db"}},
     )
 
@@ -229,7 +230,8 @@ def test_flask_session_caching() -> None:
     """Test that sessions are cached per request."""
     sqlspec = SQLSpec()
     config = SqliteConfig(
-        pool_config={"database": ":memory:"}, extension_config={"flask": {"commit_mode": "manual", "session_key": "db"}}
+        connection_config={"database": ":memory:"},
+        extension_config={"flask": {"commit_mode": "manual", "session_key": "db"}},
     )
     sqlspec.add_config(config)
 
@@ -252,7 +254,7 @@ def test_flask_default_session_key() -> None:
     """Test default session key resolves to 'db_session'."""
 
     sqlspec = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
 
     app = Flask(__name__)
@@ -281,7 +283,7 @@ def test_flask_async_adapter_via_portal() -> None:
 
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         extension_config={"flask": {"commit_mode": "autocommit", "session_key": "db"}},
     )
     sqlspec.add_config(config)

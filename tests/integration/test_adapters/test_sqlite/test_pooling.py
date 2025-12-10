@@ -15,8 +15,8 @@ def test_shared_memory_pooling(sqlite_config_shared_memory: SqliteConfig) -> Non
     """Test that shared memory databases allow pooling."""
     config = sqlite_config_shared_memory
 
-    assert config.pool_config["pool_min_size"] == 2
-    assert config.pool_config["pool_max_size"] == 5
+    assert config.connection_config["pool_min_size"] == 2
+    assert config.connection_config["pool_max_size"] == 5
 
     with config.provide_session() as session1:
         session1.execute_script("""
@@ -42,8 +42,8 @@ def test_regular_memory_auto_conversion(sqlite_config_regular_memory: SqliteConf
     """Test that regular memory databases are auto-converted to shared memory with pooling enabled."""
     config = sqlite_config_regular_memory
 
-    assert config.pool_config["pool_min_size"] == 5
-    assert config.pool_config["pool_max_size"] == 10
+    assert config.connection_config["pool_min_size"] == 5
+    assert config.connection_config["pool_max_size"] == 10
 
     db_uri = config._get_connection_config_dict()["database"]
     assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
@@ -73,8 +73,8 @@ def test_file_database_pooling_enabled(sqlite_temp_file_config: SqliteConfig) ->
     """Test that file-based databases allow pooling."""
     config = sqlite_temp_file_config
 
-    assert config.pool_config["pool_min_size"] == 3
-    assert config.pool_config["pool_max_size"] == 8
+    assert config.connection_config["pool_min_size"] == 3
+    assert config.connection_config["pool_max_size"] == 8
 
     with config.provide_session() as session1:
         session1.execute_script("""
@@ -214,12 +214,12 @@ def test_pool_transaction_rollback(sqlite_config_shared_memory: SqliteConfig) ->
 
 
 def test_config_with_pool_config_parameter(tmp_path: Path) -> None:
-    """Test that SqliteConfig correctly accepts pool_config parameter."""
+    """Test that SqliteConfig correctly accepts connection_config parameter."""
 
     db_path = tmp_path / "test.sqlite"
-    pool_config = {"database": str(db_path), "timeout": 10.0, "check_same_thread": False}
+    connection_config = {"database": str(db_path), "timeout": 10.0, "check_same_thread": False}
 
-    config = SqliteConfig(pool_config=pool_config)
+    config = SqliteConfig(connection_config=connection_config)
 
     try:
         connection_config = config._get_connection_config_dict()
@@ -242,12 +242,12 @@ def test_config_with_pool_config_parameter(tmp_path: Path) -> None:
 def test_config_memory_database_conversion() -> None:
     """Test that :memory: databases are converted to shared memory."""
 
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     try:
-        db_uri = config.pool_config["database"]
+        db_uri = config.connection_config["database"]
         assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
-        assert config.pool_config["uri"] is True
+        assert config.connection_config["uri"] is True
 
         with config.provide_session() as session:
             result = session.execute("SELECT 'memory_test' as test")
@@ -264,9 +264,9 @@ def test_config_default_database() -> None:
     config = SqliteConfig()
 
     try:
-        db_uri = config.pool_config["database"]
+        db_uri = config.connection_config["database"]
         assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
-        assert config.pool_config["uri"] is True
+        assert config.connection_config["uri"] is True
 
         with config.provide_session() as session:
             result = session.execute("SELECT 'default_test' as test")

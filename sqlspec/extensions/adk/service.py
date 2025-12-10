@@ -34,7 +34,7 @@ class SQLSpecSessionService(BaseSessionService):
         from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKStore
         from sqlspec.extensions.adk.service import SQLSpecSessionService
 
-        config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+        config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
         store = AsyncpgADKStore(config)
         await store.create_tables()
 

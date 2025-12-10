@@ -21,7 +21,7 @@ async def test_asyncmy_migration_full_workflow(tmp_path: Path, mysql_service: My
     migration_dir = tmp_path / "migrations"
 
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,
@@ -89,7 +89,7 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -104,7 +104,7 @@ async def test_asyncmy_multiple_migrations_workflow(tmp_path: Path, mysql_servic
     migration_dir = tmp_path / "migrations"
 
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,
@@ -208,7 +208,7 @@ def down():
             )
             assert len(users_result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -222,7 +222,7 @@ async def test_asyncmy_migration_current_command(tmp_path: Path, mysql_service: 
     migration_dir = tmp_path / "migrations"
 
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,
@@ -269,7 +269,7 @@ def down():
         current_version = await commands.current()
         assert current_version is None or current_version == "base"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -282,7 +282,7 @@ async def test_asyncmy_migration_error_handling(tmp_path: Path, mysql_service: M
     migration_dir = tmp_path / "migrations"
 
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,
@@ -317,7 +317,7 @@ def down():
             count = await driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
             assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -331,7 +331,7 @@ async def test_asyncmy_migration_with_transactions(tmp_path: Path, mysql_service
     migration_dir = tmp_path / "migrations"
 
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,
@@ -401,5 +401,5 @@ def down():
             result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()

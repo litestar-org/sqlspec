@@ -15,9 +15,9 @@ def test_connection_pooling_best_practice() -> None:
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
-    config = AsyncpgConfig(pool_config={"dsn": dsn, "min_size": 10, "max_size": 20})
+    config = AsyncpgConfig(connection_config={"dsn": dsn, "min_size": 10, "max_size": 20})
 
     # end-example
-    assert config.pool_config["min_size"] == 10
-    assert config.pool_config["max_size"] == 20
+    assert config.connection_config["min_size"] == 10
+    assert config.connection_config["max_size"] == 20
     assert config.supports_connection_pooling is True

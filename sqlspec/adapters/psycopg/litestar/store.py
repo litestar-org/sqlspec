@@ -36,7 +36,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         from sqlspec.adapters.psycopg import PsycopgAsyncConfig
         from sqlspec.adapters.psycopg.litestar.store import PsycopgAsyncStore
 
-        config = PsycopgAsyncConfig(pool_config={"conninfo": "postgresql://..."})
+        config = PsycopgAsyncConfig(connection_config={"conninfo": "postgresql://..."})
         store = PsycopgAsyncStore(config)
         await store.create_table()
     """
@@ -298,7 +298,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         from sqlspec.adapters.psycopg import PsycopgSyncConfig
         from sqlspec.adapters.psycopg.litestar.store import PsycopgSyncStore
 
-        config = PsycopgSyncConfig(pool_config={"conninfo": "postgresql://..."})
+        config = PsycopgSyncConfig(connection_config={"conninfo": "postgresql://..."})
         store = PsycopgSyncStore(config)
         await store.create_table()
     """

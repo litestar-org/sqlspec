@@ -18,7 +18,7 @@ def duckdb_test_setup() -> Generator[tuple[DuckDBDriver, str], None, None]:
     Returns:
         A tuple of (session, table_name)
     """
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db"})
 
     table_name = get_unique_table_name("test_table")
 

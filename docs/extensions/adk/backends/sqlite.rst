@@ -54,7 +54,7 @@ File-Based Database
    from sqlspec.extensions.adk import SQLSpecSessionService
 
    # Create file-based database
-   config = SqliteConfig(pool_config={"database": "./agent_sessions.db"})
+   config = SqliteConfig(connection_config={"database": "./agent_sessions.db"})
 
    store = SqliteADKStore(config)
    await store.create_tables()
@@ -77,7 +77,7 @@ In-Memory Database (Testing)
    from sqlspec.adapters.sqlite.adk import SqliteADKStore
 
    # Create in-memory database (ephemeral)
-   config = SqliteConfig(pool_config={"database": ":memory:"})
+   config = SqliteConfig(connection_config={"database": ":memory:"})
 
    store = SqliteADKStore(config)
    await store.create_tables()
@@ -98,7 +98,7 @@ Basic Configuration
    from sqlspec.adapters.sqlite import SqliteConfig
 
    config = SqliteConfig(
-       pool_config={
+       connection_config={
            "database": "/path/to/database.db",  # or ":memory:"
            "timeout": 5.0,  # Lock timeout in seconds
            "check_same_thread": False,  # Allow multi-threaded access
@@ -116,7 +116,7 @@ Write-Ahead Logging (WAL) mode significantly improves concurrency:
    from sqlspec.adapters.sqlite import SqliteConfig
 
    config = SqliteConfig(
-       pool_config={
+       connection_config={
            "database": "./agent.db",
            "check_same_thread": False,
        }
@@ -364,10 +364,10 @@ Best Practices
    # Good: Application data directory
    app_data = Path.home() / ".myagent" / "sessions.db"
    app_data.parent.mkdir(parents=True, exist_ok=True)
-   config = SqliteConfig(pool_config={"database": str(app_data)})
+   config = SqliteConfig(connection_config={"database": str(app_data)})
 
    # Bad: Hard-coded paths
-   config = SqliteConfig(pool_config={"database": "/tmp/sessions.db"})
+   config = SqliteConfig(connection_config={"database": "/tmp/sessions.db"})
 
 5. Backup Strategy
 ------------------
@@ -456,7 +456,7 @@ SQLite's zero-configuration makes it perfect for rapid development:
 .. code-block:: python
 
    # Quick setup - no database server needed!
-   config = SqliteConfig(pool_config={"database": ":memory:"})
+   config = SqliteConfig(connection_config={"database": ":memory:"})
    store = SqliteADKStore(config)
    await store.create_tables()
 
@@ -476,7 +476,7 @@ Store agent sessions locally in desktop apps:
    app_data = Path.home() / ".my_agent" / "sessions.db"
    app_data.parent.mkdir(parents=True, exist_ok=True)
 
-   config = SqliteConfig(pool_config={"database": str(app_data)})
+   config = SqliteConfig(connection_config={"database": str(app_data)})
    store = SqliteADKStore(config)
    await store.create_tables()
 
@@ -498,7 +498,7 @@ In-memory databases for fast, isolated tests:
    @pytest.fixture
    async def test_store():
        """Provide fresh in-memory store for each test."""
-       config = SqliteConfig(pool_config={"database": ":memory:"})
+       config = SqliteConfig(connection_config={"database": ":memory:"})
        store = SqliteADKStore(config)
        await store.create_tables()
        yield store
@@ -536,7 +536,7 @@ Database Locked Errors
 
 .. code-block:: python
 
-   config = SqliteConfig(pool_config={
+   config = SqliteConfig(connection_config={
        "database": "./agent.db",
        "timeout": 30.0  # Wait up to 30 seconds for locks
    })
@@ -574,7 +574,7 @@ File Permission Errors
 
    db_path = Path("./data/agent.db")
    db_path.parent.mkdir(parents=True, exist_ok=True)
-   config = SqliteConfig(pool_config={"database": str(db_path)})
+   config = SqliteConfig(connection_config={"database": str(db_path)})
 
 2. **Check write permissions**:
 
@@ -616,7 +616,7 @@ When ready for production, migrate from SQLite to PostgreSQL:
    from sqlspec.adapters.sqlite import SqliteConfig
    from sqlspec.adapters.sqlite.adk import SqliteADKStore
 
-   sqlite_config = SqliteConfig(pool_config={"database": "./dev.db"})
+   sqlite_config = SqliteConfig(connection_config={"database": "./dev.db"})
    sqlite_store = SqliteADKStore(sqlite_config)
 
    # Get all sessions
@@ -626,7 +626,7 @@ When ready for production, migrate from SQLite to PostgreSQL:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
-   pg_config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+   pg_config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
    pg_store = AsyncpgADKStore(pg_config)
    await pg_store.create_tables()
 
@@ -678,7 +678,7 @@ Complete runnable example demonstrating SQLite ADK integration:
        """Demonstrate SQLite ADK session storage."""
        # File-based database
        db_path = Path("./agent_sessions.db")
-       config = SqliteConfig(pool_config={"database": str(db_path)})
+       config = SqliteConfig(connection_config={"database": str(db_path)})
 
        store = SqliteADKStore(config)
        await store.create_tables()

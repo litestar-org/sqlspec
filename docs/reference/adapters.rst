@@ -74,7 +74,7 @@ AsyncPG
    sql = SQLSpec()
    db = sql.add_config(
        AsyncpgConfig(
-           pool_config=AsyncpgPoolConfig(
+           connection_config=AsyncpgPoolConfig(
                dsn="postgresql://user:password@localhost:5432/mydb",
                min_size=5,
                max_size=20,
@@ -147,7 +147,7 @@ Psycopg
    sql = SQLSpec()
    db = sql.add_config(
        PsycopgAsyncConfig(
-           pool_config={
+           connection_config={
                "conninfo": "postgresql://user:password@localhost:5432/mydb",
                "min_size": 5,
                "max_size": 20
@@ -168,7 +168,7 @@ Psycopg
    sql = SQLSpec()
    db = sql.add_config(
        PsycopgSyncConfig(
-           pool_config={
+           connection_config={
                "conninfo": "postgresql://user:password@localhost:5432/mydb",
                "min_size": 5,
                "max_size": 20
@@ -239,7 +239,7 @@ psqlpy
    sql = SQLSpec()
    db = sql.add_config(
        PsqlpyConfig(
-           pool_config={
+           connection_config={
                "dsn": "postgresql://user:password@localhost:5432/mydb",
                "max_pool_size": 20
            }
@@ -323,7 +323,7 @@ sqlite
    sql = SQLSpec()
    db = sql.add_config(
        SqliteConfig(
-           pool_config={
+           connection_config={
                "database": "/path/to/database.db",
                "timeout": 30.0,
                "check_same_thread": False
@@ -385,7 +385,7 @@ aiosqlite
    sql = SQLSpec()
    db = sql.add_config(
        AiosqliteConfig(
-           pool_config={
+           connection_config={
                "database": "/path/to/database.db",
                "timeout": 30.0
            }
@@ -454,7 +454,7 @@ asyncmy
    sql = SQLSpec()
    db = sql.add_config(
        AsyncmyConfig(
-           pool_config={
+           connection_config={
                "host": "localhost",
                "port": 3306,
                "user": "root",
@@ -551,7 +551,7 @@ duckdb
    sql = SQLSpec()
    db = sql.add_config(
        DuckDBConfig(
-           pool_config={
+           connection_config={
                "database": "/path/to/analytics.db",
                "threads": 4,
                "memory_limit": "4GB"
@@ -574,7 +574,7 @@ duckdb
 **Community Extensions**:
 
 DuckDBConfig accepts the runtime flags DuckDB expects for community/unsigned extensions via
-``pool_config`` (for example ``allow_community_extensions=True``,
+``connection_config`` (for example ``allow_community_extensions=True``,
 ``allow_unsigned_extensions=True``, ``enable_external_access=True``). SQLSpec applies those
 options with ``SET`` statements immediately after establishing each connection, so even older
 DuckDB builds that do not recognize the options during ``duckdb.connect()`` will still enable the
@@ -653,7 +653,7 @@ bigquery
    sql = SQLSpec()
    db = sql.add_config(
        BigQueryConfig(
-           pool_config={
+           connection_config={
                "project": "my-project-id",
                "credentials": credentials
            }
@@ -730,7 +730,7 @@ spanner
    sql = SQLSpec()
    db = sql.add_config(
        SpannerSyncConfig(
-           pool_config={
+           connection_config={
                "project": "my-project-id",
                "instance_id": "my-instance",
                "database_id": "my-database",
@@ -815,7 +815,7 @@ oracledb
    sql = SQLSpec()
    db = sql.add_config(
        OracleAsyncConfig(
-           pool_config={
+           connection_config={
                "user": "system",
                "password": "oracle",
                "dsn": "localhost:1521/XE",
@@ -838,7 +838,7 @@ oracledb
    sql = SQLSpec()
    db = sql.add_config(
        OracleSyncConfig(
-           pool_config={
+           connection_config={
                "user": "system",
                "password": "oracle",
                "dsn": "localhost:1521/XE"
@@ -860,7 +860,7 @@ oracledb
    sql = SQLSpec()
    db = sql.add_config(
        OracleAsyncConfig(
-           pool_config={
+           connection_config={
                "user": "system",
                "password": "oracle",
                "dsn": "localhost:1521/FREEPDB1"
@@ -1286,7 +1286,7 @@ Type handlers are configured via the ``driver_features`` parameter:
 
    sql = SQLSpec()
    db = sql.add_config(OracleAsyncConfig(
-       pool_config={"dsn": "localhost:1521/FREEPDB1"}
+       connection_config={"dsn": "localhost:1521/FREEPDB1"}
        # enable_numpy_vectors automatically set to True if numpy installed
    ))
 
@@ -1296,7 +1296,7 @@ Type handlers are configured via the ``driver_features`` parameter:
 
    # Explicitly disable optional feature
    db = sql.add_config(OracleAsyncConfig(
-       pool_config={"dsn": "localhost:1521/FREEPDB1"},
+       connection_config={"dsn": "localhost:1521/FREEPDB1"},
        driver_features={"enable_numpy_vectors": False}  # Force disable
    ))
 
@@ -1353,7 +1353,7 @@ PostgreSQL's pgvector extension enables vector similarity search. SQLSpec automa
 
    sql = SQLSpec()
    db = sql.add_config(AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/mydb"}
+       connection_config={"dsn": "postgresql://localhost/mydb"}
        # pgvector automatically registered if available
    ))
 

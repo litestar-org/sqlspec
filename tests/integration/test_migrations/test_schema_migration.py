@@ -11,7 +11,7 @@ from sqlspec.migrations.tracker import SyncMigrationTracker
 @pytest.fixture
 def sqlite_config() -> Generator[SqliteConfig, None, None]:
     """Create SQLite config for testing."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     yield config
     config.close_pool()
 

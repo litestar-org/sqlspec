@@ -17,7 +17,7 @@ async def test_example_9_asyncmy_config(mysql_service: MySQLService) -> None:
     spec = SQLSpec()
 
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,

@@ -117,6 +117,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self,
         *,
         connection_config: "BigQueryConnectionParams | dict[str, Any] | None" = None,
+        connection_instance: "Any" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
@@ -128,6 +129,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         Args:
             connection_config: Connection configuration parameters
+            connection_instance: Pre-created BigQuery Client instance to use instead of creating new one
             migration_config: Migration configuration
             statement_config: Statement configuration override
             driver_features: BigQuery-specific driver features
@@ -167,6 +169,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         super().__init__(
             connection_config=self.connection_config,
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=processed_driver_features,

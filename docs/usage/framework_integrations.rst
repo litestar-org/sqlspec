@@ -34,7 +34,7 @@ Basic Setup
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={
+           connection_config={
                "dsn": "postgresql://localhost/mydb",
                "min_size": 10,
                "max_size": 20,
@@ -103,7 +103,7 @@ You control transaction boundaries explicitly:
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={
                "litestar": {"commit_mode": "manual"}  # Default
            }
@@ -132,7 +132,7 @@ Automatically commits on successful requests (2xx responses):
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={
                "litestar": {"commit_mode": "autocommit"}  # Auto-commit on 2xx
            }
@@ -162,7 +162,7 @@ Commits on both 2xx and 3xx responses:
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={
                "litestar": {"commit_mode": "autocommit_include_redirect"}
            }
@@ -183,7 +183,7 @@ Customize the dependency injection keys via ``extension_config``:
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={
                "litestar": {
                    "connection_key": "database",    # Default: "db_connection"
@@ -216,7 +216,7 @@ The plugin supports multiple database configurations through a single SQLSpec in
    # Main database
    main_db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/main"},
+           connection_config={"dsn": "postgresql://localhost/main"},
            extension_config={
                "litestar": {
                    "session_key": "main_db",
@@ -229,7 +229,7 @@ The plugin supports multiple database configurations through a single SQLSpec in
    # Analytics database
    analytics_db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/analytics"},
+           connection_config={"dsn": "postgresql://localhost/analytics"},
            extension_config={
                "litestar": {
                    "session_key": "analytics_db",
@@ -275,7 +275,7 @@ Use SQLSpec as a session backend for Litestar:
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/db"},
+           connection_config={"dsn": "postgresql://localhost/db"},
            extension_config={
                "litestar": {"session_table": "litestar_sessions"}
            },
@@ -336,7 +336,7 @@ Enable request correlation tracking via ``extension_config``:
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={
                "litestar": {
                    "enable_correlation_middleware": True,  # Default: True
@@ -371,7 +371,7 @@ Basic Setup
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={
+           connection_config={
                "dsn": "postgresql://localhost/mydb",
                "min_size": 10,
                "max_size": 20,
@@ -452,10 +452,10 @@ Support multiple databases with different dependencies:
 .. code-block:: python
 
    # Main database
-   main_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/main"}))
+   main_db = spec.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/main"}))
 
    # Analytics database
-   analytics_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/analytics"}))
+   analytics_db = spec.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/analytics"}))
 
    # Dependency functions
    async def get_main_db():
@@ -497,7 +497,7 @@ Basic Setup
 
    # Initialize SQLSpec
    spec = SQLSpec()
-   db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"}))
+   db = spec.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"}))
 
    # Store in app context
    app.ctx.sqlspec = spec
@@ -562,7 +562,7 @@ Basic Setup
 
    # Initialize SQLSpec
    spec = SQLSpec()
-   db = spec.add_config(SqliteConfig(pool_config={"database": "app.db"}))
+   db = spec.add_config(SqliteConfig(connection_config={"database": "app.db"}))
 
 Using Request Context
 ^^^^^^^^^^^^^^^^^^^^^
@@ -657,7 +657,7 @@ For simple applications with a single database:
                cls._instance = super().__new__(cls)
                cls._spec = SQLSpec()
                cls._config = cls._spec.add_config(
-                   AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"})
+                   AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"})
                )
            return cls._instance
 
@@ -678,7 +678,7 @@ Best Practices
 
    # Prefer Litestar plugin over manual setup
    spec = SQLSpec()
-   db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
+   db = spec.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://..."}))
    app = Litestar(plugins=[SQLSpecPlugin(sqlspec=spec)])
 
 **2. Always Clean Up Pools**
@@ -713,7 +713,7 @@ Best Practices
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={
                "litestar": {"commit_mode": "autocommit"}
            }
@@ -764,7 +764,7 @@ Testing with Framework Integration
    @pytest.fixture
    async def test_db():
        spec = SQLSpec()
-       db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+       db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
        async with spec.provide_session(db) as session:
            # Set up test schema

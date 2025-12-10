@@ -16,7 +16,7 @@ def main() -> None:
     loader = SQLFileLoader()
     loader.load_sql(QUERIES)
     registry = SQLSpec()
-    config = registry.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    config = registry.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
     with registry.provide_session(config) as session:
         session.execute(
             """

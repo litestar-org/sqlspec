@@ -6,6 +6,7 @@ pytest.importorskip("starlette")
 
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from sqlspec import SQLSpec
@@ -22,7 +23,7 @@ def test_default_session_key_is_db_session() -> None:
 def test_uses_default_session_key_when_not_configured() -> None:
     """Plugin should use DEFAULT_SESSION_KEY when no extension_config provided."""
     sqlspec = SQLSpec()
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
 
     plugin = SQLSpecPlugin(sqlspec)
@@ -36,7 +37,7 @@ def test_respects_custom_session_key() -> None:
     custom_key = "custom_db"
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"}, extension_config={"starlette": {"session_key": custom_key}}
+        connection_config={"database": ":memory:"}, extension_config={"starlette": {"session_key": custom_key}}
     )
     sqlspec.add_config(config)
 
@@ -50,18 +51,21 @@ def test_get_session_works_in_route() -> None:
     """Test that get_session() works correctly in Starlette routes."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
+        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
     )
     sqlspec.add_config(config)
 
-    app = Starlette()
-    plugin = SQLSpecPlugin(sqlspec, app)
+    plugin_ref: SQLSpecPlugin | None = None
 
-    @app.route("/test")
-    async def test_route(request):
-        db = plugin.get_session(request)
+    async def test_route(request):  # type: ignore[no-untyped-def]
+        assert plugin_ref is not None
+        db = plugin_ref.get_session(request)
         result = await db.execute("SELECT 1 as value")
         return JSONResponse({"value": result.scalar()})
+
+    routes = [Route("/test", test_route)]
+    app = Starlette(routes=routes)
+    plugin_ref = SQLSpecPlugin(sqlspec, app)
 
     with TestClient(app) as client:
         response = client.get("/test")

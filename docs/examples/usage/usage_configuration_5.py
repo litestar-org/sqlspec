@@ -21,7 +21,7 @@ def test_psycopg_config_setup() -> None:
 
     # Async version
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": dsn,
             # Or keyword arguments:
             "host": host,
@@ -36,4 +36,4 @@ def test_psycopg_config_setup() -> None:
         }
     )
     # end-example
-    assert config.pool_config is not None
+    assert config.connection_config is not None

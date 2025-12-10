@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.postgres, pytest.
 async def psycopg_async_store_with_fk(postgres_service: "PostgresService") -> "AsyncGenerator[Any, None]":
     """Create Psycopg async ADK store with owner_id_column configured."""
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         extension_config={
@@ -37,7 +37,7 @@ async def psycopg_async_store_with_fk(postgres_service: "PostgresService") -> "A
         await cur.execute("DROP TABLE IF EXISTS test_events_fk CASCADE")
         await cur.execute("DROP TABLE IF EXISTS test_sessions_fk CASCADE")
 
-    if config.pool_instance:
+    if config.connection_instance:
         await config.close_pool()
 
 
@@ -45,7 +45,7 @@ async def psycopg_async_store_with_fk(postgres_service: "PostgresService") -> "A
 def psycopg_sync_store_with_fk(postgres_service: "PostgresService") -> "Generator[Any, None, None]":
     """Create Psycopg sync ADK store with owner_id_column configured."""
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         extension_config={
@@ -64,7 +64,7 @@ def psycopg_sync_store_with_fk(postgres_service: "PostgresService") -> "Generato
         cur.execute("DROP TABLE IF EXISTS test_events_sync_fk CASCADE")
         cur.execute("DROP TABLE IF EXISTS test_sessions_sync_fk CASCADE")
 
-    if config.pool_instance:
+    if config.connection_instance:
         config.close_pool()
 
 
@@ -83,7 +83,7 @@ def test_sync_store_owner_id_column_initialization(psycopg_sync_store_with_fk: P
 async def test_async_store_inherits_owner_id_column(postgres_service: "PostgresService") -> None:
     """Test that async store correctly inherits owner_id_column from base class."""
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         extension_config={
@@ -101,14 +101,14 @@ async def test_async_store_inherits_owner_id_column(postgres_service: "PostgresS
     assert store.owner_id_column_ddl == "org_id UUID"
     assert store.owner_id_column_name == "org_id"
 
-    if config.pool_instance:
+    if config.connection_instance:
         await config.close_pool()
 
 
 def test_sync_store_inherits_owner_id_column(postgres_service: "PostgresService") -> None:
     """Test that sync store correctly inherits owner_id_column from base class."""
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         extension_config={
@@ -126,14 +126,14 @@ def test_sync_store_inherits_owner_id_column(postgres_service: "PostgresService"
     assert store.owner_id_column_ddl == "company_id BIGINT"
     assert store.owner_id_column_name == "company_id"
 
-    if config.pool_instance:
+    if config.connection_instance:
         config.close_pool()
 
 
 async def test_async_store_without_owner_id_column(postgres_service: "PostgresService") -> None:
     """Test that async store works without owner_id_column (default behavior)."""
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         extension_config={"adk": {"session_table": "test_no_fk_async", "events_table": "test_events_no_fk_async"}},
@@ -143,14 +143,14 @@ async def test_async_store_without_owner_id_column(postgres_service: "PostgresSe
     assert store.owner_id_column_ddl is None
     assert store.owner_id_column_name is None
 
-    if config.pool_instance:
+    if config.connection_instance:
         await config.close_pool()
 
 
 def test_sync_store_without_owner_id_column(postgres_service: "PostgresService") -> None:
     """Test that sync store works without owner_id_column (default behavior)."""
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         extension_config={"adk": {"session_table": "test_no_fk_sync", "events_table": "test_events_no_fk_sync"}},
@@ -160,7 +160,7 @@ def test_sync_store_without_owner_id_column(postgres_service: "PostgresService")
     assert store.owner_id_column_ddl is None
     assert store.owner_id_column_name is None
 
-    if config.pool_instance:
+    if config.connection_instance:
         config.close_pool()
 
 

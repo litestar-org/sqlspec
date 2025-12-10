@@ -17,7 +17,7 @@ async def test_async_command_class_methods() -> None:
         from sqlspec.migrations.commands import AsyncMigrationCommands
 
         dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
-        config = AsyncpgConfig(pool_config={"dsn": dsn}, migration_config={"script_location": str(migration_dir)})
+        config = AsyncpgConfig(connection_config={"dsn": dsn}, migration_config={"script_location": str(migration_dir)})
 
         # Create commands instance
         commands = AsyncMigrationCommands(config)

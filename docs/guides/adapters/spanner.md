@@ -37,7 +37,7 @@ This guide provides specific instructions for the `spanner` adapter.
 from sqlspec.adapters.spanner import SpannerSyncConfig
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "my-project",
         "instance_id": "my-instance",
         "database_id": "my-database",
@@ -61,7 +61,7 @@ For local development and testing, use the Spanner emulator:
 from google.auth.credentials import AnonymousCredentials
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "test-project",
         "instance_id": "test-instance",
         "database_id": "test-database",
@@ -77,7 +77,7 @@ config = SpannerSyncConfig(
 from google.cloud.spanner_v1.pool import FixedSizePool, PingingPool
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "my-project",
         "instance_id": "my-instance",
         "database_id": "my-database",
@@ -99,7 +99,7 @@ The Spanner Python client requires base64-encoded bytes when using `param_types.
 from sqlspec.adapters.spanner import SpannerSyncConfig
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "my-project",
         "instance_id": "my-instance",
         "database_id": "my-database",
@@ -241,7 +241,7 @@ from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.spanner.litestar import SpannerSyncStore
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "my-project",
         "instance_id": "my-instance",
         "database_id": "my-database",
@@ -281,7 +281,7 @@ from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.spanner.adk import SpannerADKStore
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "my-project",
         "instance_id": "my-instance",
         "database_id": "my-database",

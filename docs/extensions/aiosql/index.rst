@@ -115,7 +115,7 @@ SQLFileLoader (Built-in)
    # Set up database
    spec = SQLSpec()
    config = spec.add_config(
-       AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
+       AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/mydb"})
    )
 
    # Load SQL files
@@ -159,7 +159,7 @@ aiosql Adapter (Compatibility)
    # Set up database
    spec = SQLSpec()
    config = spec.add_config(
-       AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
+       AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/mydb"})
    )
 
    # Create adapter and load queries

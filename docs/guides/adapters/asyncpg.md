@@ -54,7 +54,7 @@ db_manager = SQLSpec()
 
 # IAM authentication (no password required)
 db = db_manager.add_config(AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "my-service-account@project.iam",
         "database": "mydb",
         "min_size": 2,
@@ -77,7 +77,7 @@ Password authentication is also supported:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "postgres",
         "password": "secret",
         "database": "mydb",
@@ -97,7 +97,7 @@ Connect to AlloyDB instances with the same pattern:
 ```python
 # IAM authentication
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "my-service-account@project.iam",
         "database": "mydb",
     },
@@ -130,7 +130,7 @@ pip install cloud-alloydb-python-connector
 **Authentication Methods**:
 
 - IAM authentication: Set `cloud_sql_enable_iam_auth=True` or `alloydb_enable_iam_auth=True`
-- Password authentication: Leave IAM flags as `False` (default) and provide password in `pool_config`
+- Password authentication: Leave IAM flags as `False` (default) and provide password in `connection_config`
 
 For comprehensive configuration options and troubleshooting, see the [Google Cloud Connectors Guide](/guides/cloud/google-connectors.md).
 

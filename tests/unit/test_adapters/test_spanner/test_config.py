@@ -22,20 +22,20 @@ class _DummyDriver(SyncDriverAdapterBase):
 def test_config_initialization() -> None:
     """Test basic configuration initialization."""
     config = SpannerSyncConfig(
-        pool_config={"project": "my-project", "instance_id": "my-instance", "database_id": "my-database"}
+        connection_config={"project": "my-project", "instance_id": "my-instance", "database_id": "my-database"}
     )
-    assert config.pool_config is not None
-    assert config.pool_config["project"] == "my-project"
-    assert config.pool_config["instance_id"] == "my-instance"
-    assert config.pool_config["database_id"] == "my-database"
+    assert config.connection_config is not None
+    assert config.connection_config["project"] == "my-project"
+    assert config.connection_config["instance_id"] == "my-instance"
+    assert config.connection_config["database_id"] == "my-database"
 
 
 def test_config_defaults() -> None:
     """Test default values."""
-    config = SpannerSyncConfig(pool_config={"project": "p", "instance_id": "i", "database_id": "d"})
-    assert config.pool_config is not None
-    assert config.pool_config["min_sessions"] == 1
-    assert config.pool_config["max_sessions"] == 10
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    assert config.connection_config is not None
+    assert config.connection_config["min_sessions"] == 1
+    assert config.connection_config["max_sessions"] == 10
 
 
 def test_improper_configuration() -> None:
@@ -47,7 +47,7 @@ def test_improper_configuration() -> None:
 
 def test_driver_features_defaults() -> None:
     """Test driver features defaults."""
-    config = SpannerSyncConfig(pool_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     assert config.driver_features["enable_uuid_conversion"] is True
     assert config.driver_features["json_serializer"] is not None
 
@@ -98,7 +98,7 @@ def test_provide_connection_batch_and_snapshot() -> None:
         def snapshot(self, multi_use: bool = False):
             return _Ctx(snap_obj)
 
-    config = SpannerSyncConfig(pool_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     config.get_database = lambda: _DB()  # type: ignore[assignment]
 
     with config.provide_connection(transaction=True) as conn:
@@ -150,7 +150,7 @@ def test_provide_session_uses_batch_when_transaction_requested() -> None:
         def snapshot(self, multi_use: bool = False):
             return _Ctx()
 
-    config = SpannerSyncConfig(pool_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     config.get_database = lambda: _DB()  # type: ignore[assignment]
     config.driver_type = _DummyDriver  # type: ignore[assignment,misc]
 
@@ -201,7 +201,7 @@ def test_provide_write_session_alias() -> None:
         def snapshot(self, multi_use: bool = False):
             return _Ctx()
 
-    config = SpannerSyncConfig(pool_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     config.get_database = lambda: _DB()  # type: ignore[assignment]
     config.driver_type = _DummyDriver  # type: ignore[assignment,misc]
 

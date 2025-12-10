@@ -15,7 +15,7 @@ def test_extension_config() -> None:
 
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
     config = AsyncpgConfig(
-        pool_config={"dsn": dsn},
+        connection_config={"dsn": dsn},
         extension_config={
             "litestar": {
                 "connection_key": "db_connection",

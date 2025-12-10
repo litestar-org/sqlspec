@@ -38,7 +38,7 @@ extend = Extend(app)
 
 spec = SQLSpec()
 db_config = spec.add_config(
-    AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/service"}),
+    AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/service"}),
 )
 
 

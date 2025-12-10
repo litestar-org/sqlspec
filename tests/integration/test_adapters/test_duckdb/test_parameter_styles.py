@@ -20,7 +20,7 @@ def duckdb_parameters_session() -> "Generator[DuckDBDriver, None, None]":
     import uuid
 
     # Use unique database for each test to avoid data contamination
-    config = DuckDBConfig(pool_config={"database": f":memory:{uuid.uuid4().hex}"})
+    config = DuckDBConfig(connection_config={"database": f":memory:{uuid.uuid4().hex}"})
 
     with config.provide_session() as session:
         session.execute_script("""
@@ -498,7 +498,7 @@ def test_duckdb_parameter_performance(duckdb_parameters_session: DuckDBDriver) -
 
 def test_duckdb_none_parameters() -> None:
     """Test that None values in named parameters are handled correctly by DuckDB."""
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_none_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_none_test"})
 
     with config.provide_session() as driver:
         # Create test table
@@ -565,7 +565,7 @@ def test_duckdb_none_parameters() -> None:
 
 def test_duckdb_none_parameters_qmark_style() -> None:
     """Test None values with QMARK (?) parameter style - DuckDB default."""
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_qmark_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_qmark_test"})
 
     with config.provide_session() as driver:
         # Create test table without primary key constraint to allow None insertion test
@@ -597,7 +597,7 @@ def test_duckdb_none_parameters_qmark_style() -> None:
 
 def test_duckdb_none_parameters_numeric_style() -> None:
     """Test None values with NUMERIC ($1, $2) parameter style."""
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_numeric_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_numeric_test"})
 
     with config.provide_session() as driver:
         # Create test table without primary key constraint
@@ -629,7 +629,7 @@ def test_duckdb_none_parameters_numeric_style() -> None:
 
 def test_duckdb_all_none_parameters() -> None:
     """Test when all parameter values are None."""
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_all_none_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_all_none_test"})
 
     with config.provide_session() as driver:
         # Create test table with auto-increment ID
@@ -669,7 +669,7 @@ def test_duckdb_all_none_parameters() -> None:
 
 def test_duckdb_none_with_execute_many() -> None:
     """Test None values work correctly with execute_many."""
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_many_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_many_test"})
 
     with config.provide_session() as driver:
         # Create test table
@@ -710,7 +710,7 @@ def test_duckdb_none_with_execute_many() -> None:
 
 def test_duckdb_none_in_where_clause() -> None:
     """Test None values in WHERE clauses work correctly."""
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_where_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_where_test"})
 
     with config.provide_session() as driver:
         # Create test table
@@ -748,7 +748,7 @@ def test_duckdb_none_in_where_clause() -> None:
 
 def test_duckdb_none_complex_parameter_scenarios() -> None:
     """Test complex scenarios with None parameters that might cause issues."""
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_complex_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_complex_test"})
 
     with config.provide_session() as driver:
         # Create test table
@@ -809,7 +809,7 @@ def test_duckdb_none_complex_parameter_scenarios() -> None:
 
 def test_duckdb_none_parameter_edge_cases() -> None:
     """Test edge cases that might reveal parameter handling bugs."""
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_edge_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_edge_test"})
 
     with config.provide_session() as driver:
         # Test 1: Empty parameter list with None
@@ -857,7 +857,7 @@ def test_duckdb_parameter_count_mismatch_with_none() -> None:
     This test verifies the bug mentioned in the original issue where parameter
     count mismatches might be missed when None values are present.
     """
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_param_count_test"})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_db_param_count_test"})
 
     with config.provide_session() as driver:
         driver.execute("CREATE TABLE test_param_count (col1 VARCHAR, col2 INTEGER)")

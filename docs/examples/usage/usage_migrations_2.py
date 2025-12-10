@@ -16,7 +16,7 @@ def test_sync_methods() -> None:
         from sqlspec.adapters.sqlite import SqliteConfig
 
         config = SqliteConfig(
-            pool_config={"database": str(temp_db)},
+            connection_config={"database": str(temp_db)},
             migration_config={"enabled": True, "script_location": str(migration_dir)},
         )
 

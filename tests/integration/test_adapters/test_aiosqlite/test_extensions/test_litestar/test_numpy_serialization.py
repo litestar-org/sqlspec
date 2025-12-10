@@ -30,7 +30,7 @@ def test_litestar_numpy_encoder_registered() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 
@@ -45,7 +45,7 @@ def test_litestar_numpy_decoder_registered() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 
@@ -60,7 +60,7 @@ def test_litestar_numpy_response_encoding() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 
@@ -87,7 +87,7 @@ def test_litestar_numpy_request_decoding() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 
@@ -113,7 +113,7 @@ def test_litestar_numpy_round_trip() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 
@@ -147,7 +147,7 @@ def test_litestar_numpy_multidimensional_arrays() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 
@@ -172,7 +172,7 @@ def test_litestar_numpy_empty_array() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 
@@ -197,7 +197,7 @@ def test_litestar_numpy_various_dtypes() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 
@@ -231,7 +231,7 @@ def test_litestar_numpy_large_embedding_vector() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
         )
         sql.add_config(config)
 

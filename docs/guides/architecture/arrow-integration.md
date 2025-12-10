@@ -153,7 +153,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 sql = SQLSpec()
-config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
+config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/mydb"})
 sql.add_config(config)
 
 async with sql.provide_session() as session:
@@ -278,7 +278,7 @@ from sqlspec.adapters.adbc import AdbcConfig
 
 config = AdbcConfig(
     driver="adbc_driver_postgresql",
-    pool_config={"uri": "postgresql://localhost/db"}
+    connection_config={"uri": "postgresql://localhost/db"}
 )
 
 async with sql.provide_session(config) as session:
@@ -324,7 +324,7 @@ with sql.provide_session(config) as session:
 from sqlspec.adapters.bigquery import BigQueryConfig
 
 config = BigQueryConfig(
-    pool_config={"project": "my-project"},
+    connection_config={"project": "my-project"},
     driver_features={"enable_storage_api": True}  # Auto-detected
 )
 
@@ -350,7 +350,7 @@ async with sql.provide_session(config) as session:
 ```python
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"})
+config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"})
 
 async with sql.provide_session(config) as session:
     result = await session.select_to_arrow(
@@ -372,7 +372,7 @@ async with sql.provide_session(config) as session:
 ```python
 from sqlspec.adapters.oracledb import OracleAsyncConfig
 
-config = OracleAsyncConfig(pool_config={"dsn": "oracle://localhost/FREE"})
+config = OracleAsyncConfig(connection_config={"dsn": "oracle://localhost/FREE"})
 
 async with sql.provide_session(config) as session:
     result = await session.select_to_arrow(
@@ -393,7 +393,7 @@ async with sql.provide_session(config) as session:
 ```python
 from sqlspec.adapters.asyncmy import AsyncmyConfig
 
-config = AsyncmyConfig(pool_config={"dsn": "mysql://localhost/db"})
+config = AsyncmyConfig(connection_config={"dsn": "mysql://localhost/db"})
 
 async with sql.provide_session(config) as session:
     result = await session.select_to_arrow(

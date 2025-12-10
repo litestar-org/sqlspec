@@ -93,7 +93,7 @@ Supported adapters: adbc, aiosqlite, asyncmy, asyncpg, bigquery, duckdb, oracled
 manager = SQLSpec()
 
 # 2. Create and register configuration (returns same instance)
-config = manager.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
+config = manager.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://..."}))
 
 # 3. Get session via context manager (using config instance)
 async with manager.provide_session(config) as session:
@@ -283,8 +283,8 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 manager = SQLSpec()
 
 # Config instance IS the handle - add_config returns same instance
-main_db = manager.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://main/..."}))
-analytics_db = manager.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://analytics/..."}))
+main_db = manager.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://main/..."}))
+analytics_db = manager.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://analytics/..."}))
 
 # Type checker knows: AsyncpgConfig → AsyncContextManager[AsyncpgDriver]
 async with manager.provide_session(main_db) as driver:
@@ -330,7 +330,7 @@ All extensions use `extension_config` in database config:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://..."},
+    connection_config={"dsn": "postgresql://..."},
     extension_config={
         "starlette": {"commit_mode": "autocommit", "session_key": "db"}
     }
@@ -469,6 +469,46 @@ Dialect.classes["custom"] = CustomDialect
 **Reference implementation**: `sqlspec/adapters/spanner/dialect/` (GoogleSQL and PostgreSQL modes)
 
 **Documentation**: See `/docs/guides/architecture/custom-sqlglot-dialects.md` for full guide
+
+### Configuration Parameter Standardization Pattern
+
+For API consistency across all adapters (pooled and non-pooled):
+
+```python
+# ALL configs accept these parameters for consistency:
+class AdapterConfig(AsyncDatabaseConfig):  # or SyncDatabaseConfig
+    def __init__(
+        self,
+        *,
+        connection_config: dict[str, Any] | None = None,  # Settings dict
+        connection_instance: PoolT | None = None,         # Pre-created pool/connection
+        ...
+    ) -> None:
+        super().__init__(
+            connection_config=connection_config,
+            connection_instance=connection_instance,
+            ...
+        )
+```
+
+**Key principles:**
+
+- `connection_config` holds ALL connection and pool configuration (unified dict)
+- `connection_instance` accepts pre-created pools or connections (for dependency injection)
+- Works semantically for both pooled (AsyncPG) and non-pooled adapters (BigQuery, ADBC)
+- Non-pooled adapters accept `connection_instance` for API consistency (even if always None)
+- NoPoolSyncConfig and NoPoolAsyncConfig accept `connection_instance: Any = None` for flexibility
+
+**Why this pattern:**
+
+- Consistent API eliminates cognitive load when switching adapters
+- Clear separation: config dict vs pre-created instance
+- Supports dependency injection scenarios
+- Better than adapter-specific parameter names
+
+**Migration from old names:**
+
+- v0.33.0+: `pool_config` → `connection_config`, `pool_instance` → `connection_instance`
 
 ### Error Handling
 

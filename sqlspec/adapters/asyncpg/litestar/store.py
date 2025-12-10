@@ -32,7 +32,7 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://..."},
+            connection_config={"dsn": "postgresql://..."},
             extension_config={"litestar": {"session_table": "my_sessions"}}
         )
         store = AsyncpgStore(config)

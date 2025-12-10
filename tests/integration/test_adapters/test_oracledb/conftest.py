@@ -10,7 +10,7 @@ from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver, Orac
 
 
 @pytest.fixture
-def oracle_pool_config(oracle_23ai_service: OracleService) -> "dict[str, Any]":
+def oracle_connection_config(oracle_23ai_service: OracleService) -> "dict[str, Any]":
     """Shared Oracle pool configuration."""
 
     return {
@@ -23,20 +23,20 @@ def oracle_pool_config(oracle_23ai_service: OracleService) -> "dict[str, Any]":
 
 
 @pytest.fixture
-def oracle_sync_config(oracle_pool_config: "dict[str, Any]") -> OracleSyncConfig:
+def oracle_sync_config(oracle_connection_config: "dict[str, Any]") -> OracleSyncConfig:
     """Create Oracle sync configuration."""
 
-    return OracleSyncConfig(pool_config=dict(oracle_pool_config))
+    return OracleSyncConfig(connection_config=dict(oracle_connection_config))
 
 
 @pytest.fixture
-async def oracle_async_config(oracle_pool_config: "dict[str, Any]") -> "AsyncGenerator[OracleAsyncConfig, None]":
+async def oracle_async_config(oracle_connection_config: "dict[str, Any]") -> "AsyncGenerator[OracleAsyncConfig, None]":
     """Create Oracle async configuration."""
 
-    pool_config = dict(oracle_pool_config)
-    pool_config.setdefault("min", 1)
-    pool_config.setdefault("max", 5)
-    config = OracleAsyncConfig(pool_config=pool_config)
+    connection_config = dict(oracle_connection_config)
+    connection_config.setdefault("min", 1)
+    connection_config.setdefault("max", 5)
+    config = OracleAsyncConfig(connection_config=connection_config)
     try:
         yield config
     finally:

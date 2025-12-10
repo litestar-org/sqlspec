@@ -23,7 +23,7 @@ def test_psycopg_sync_migration_full_workflow(tmp_path: Path, postgres_service: 
     migration_dir = tmp_path / "migrations"
 
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
@@ -82,7 +82,7 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -96,7 +96,7 @@ async def test_psycopg_async_migration_full_workflow(tmp_path: Path, postgres_se
     migration_dir = tmp_path / "migrations"
 
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
@@ -157,7 +157,7 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -172,7 +172,7 @@ def test_psycopg_sync_multiple_migrations_workflow(tmp_path: Path, postgres_serv
     migration_dir = tmp_path / "migrations"
 
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
@@ -257,7 +257,7 @@ def down():
             )
             assert len(users_result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -277,7 +277,7 @@ async def test_psycopg_async_multiple_migrations_workflow(tmp_path: Path, postgr
         pytest.skip("PsycopgAsyncConfig not available")
 
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
@@ -362,7 +362,7 @@ def down():
             )
             assert len(users_result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -376,7 +376,7 @@ def test_psycopg_sync_migration_current_command(tmp_path: Path, postgres_service
     migration_dir = tmp_path / "migrations"
 
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
@@ -418,7 +418,7 @@ def down():
         current_version = commands.current()
         assert current_version is None or current_version == "base"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -437,7 +437,7 @@ async def test_psycopg_async_migration_current_command(tmp_path: Path, postgres_
         pytest.skip("PsycopgAsyncConfig not available")
 
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
@@ -479,7 +479,7 @@ def down():
         current_version = await commands.current()
         assert current_version is None or current_version == "base"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -488,7 +488,7 @@ def test_psycopg_sync_migration_error_handling(tmp_path: Path, postgres_service:
     migration_dir = tmp_path / "migrations"
 
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={
@@ -525,7 +525,7 @@ def down():
             except Exception as e:
                 assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -539,7 +539,7 @@ async def test_psycopg_async_migration_error_handling(tmp_path: Path, postgres_s
         pytest.skip("PsycopgAsyncConfig not available")
 
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={
@@ -576,7 +576,7 @@ def down():
             except Exception as e:
                 assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -590,7 +590,7 @@ def test_psycopg_sync_migration_with_transactions(tmp_path: Path, postgres_servi
     migration_dir = tmp_path / "migrations"
 
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
@@ -655,7 +655,7 @@ def down():
             result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -674,7 +674,7 @@ async def test_psycopg_async_migration_with_transactions(tmp_path: Path, postgre
         pytest.skip("PsycopgAsyncConfig not available")
 
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
@@ -739,5 +739,5 @@ def down():
             result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()

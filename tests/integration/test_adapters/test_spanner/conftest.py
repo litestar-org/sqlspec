@@ -43,7 +43,7 @@ def spanner_config(
     api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
 
     return SpannerSyncConfig(
-        pool_config={
+        connection_config={
             "project": spanner_service.project,
             "instance_id": spanner_service.instance_name,
             "database_id": spanner_service.database_name,

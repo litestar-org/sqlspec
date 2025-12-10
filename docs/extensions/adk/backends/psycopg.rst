@@ -83,7 +83,7 @@ Async Usage (Recommended)
 
    # Create async config with connection pool
    config = PsycopgAsyncConfig(
-       pool_config={
+       connection_config={
            "conninfo": "postgresql://user:pass@localhost/db",
            "min_size": 5,
            "max_size": 20,
@@ -115,7 +115,7 @@ Sync Usage
 
    # Create sync config with connection pool
    config = PsycopgSyncConfig(
-       pool_config={
+       connection_config={
            "conninfo": "postgresql://user:pass@localhost/db",
            "min_size": 5,
            "max_size": 20,
@@ -147,7 +147,7 @@ Basic Async Configuration
    from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 
    config = PsycopgAsyncConfig(
-       pool_config={
+       connection_config={
            "conninfo": "postgresql://user:pass@localhost:5432/dbname",
            "min_size": 5,           # Minimum pool connections
            "max_size": 20,          # Maximum pool connections
@@ -165,7 +165,7 @@ Basic Sync Configuration
    from sqlspec.adapters.psycopg import PsycopgSyncConfig
 
    config = PsycopgSyncConfig(
-       pool_config={
+       connection_config={
            "conninfo": "postgresql://user:pass@localhost:5432/dbname",
            "min_size": 5,
            "max_size": 20,
@@ -178,7 +178,7 @@ Advanced Configuration
 .. code-block:: python
 
    config = PsycopgAsyncConfig(
-       pool_config={
+       connection_config={
            # Connection string
            "conninfo": "postgresql://user:pass@localhost/db?sslmode=require",
 
@@ -479,7 +479,7 @@ Psycopg3 has built-in connection pooling via ``psycopg_pool``:
 .. code-block:: python
 
    config = PsycopgAsyncConfig(
-       pool_config={
+       connection_config={
            "conninfo": "postgresql://...",
            "min_size": 5,           # Pre-create 5 connections
            "max_size": 20,          # Allow up to 20 connections
@@ -596,7 +596,7 @@ Connection Pool Sizing
 
    # For web applications
    config = PsycopgAsyncConfig(
-       pool_config={
+       connection_config={
            "min_size": 10,          # Match expected concurrent requests
            "max_size": 50,          # 2-3x min_size for burst traffic
            "max_lifetime": 3600.0,  # Recycle hourly
@@ -605,7 +605,7 @@ Connection Pool Sizing
 
    # For background workers
    config = PsycopgAsyncConfig(
-       pool_config={
+       connection_config={
            "min_size": 2,
            "max_size": 10,
        }
@@ -625,7 +625,7 @@ Async Web Application
    from sqlspec.extensions.adk import SQLSpecSessionService
 
    config = PsycopgAsyncConfig(
-       pool_config={"conninfo": "postgresql://..."}
+       connection_config={"conninfo": "postgresql://..."}
    )
    store = PsycopgAsyncADKStore(config)
    service = SQLSpecSessionService(store)
@@ -647,7 +647,7 @@ Sync Background Worker
    from sqlspec.extensions.adk import SQLSpecSessionService
 
    config = PsycopgSyncConfig(
-       pool_config={"conninfo": "postgresql://..."}
+       connection_config={"conninfo": "postgresql://..."}
    )
    store = PsycopgSyncADKStore(config)
    service = SQLSpecSessionService(store)
@@ -666,13 +666,13 @@ Mixed Async/Sync Application
 
    # Async config for web API
    async_config = PsycopgAsyncConfig(
-       pool_config={"conninfo": "postgresql://..."}
+       connection_config={"conninfo": "postgresql://..."}
    )
    async_store = PsycopgAsyncADKStore(async_config)
 
    # Sync config for CLI tools (separate pool)
    sync_config = PsycopgSyncConfig(
-       pool_config={"conninfo": "postgresql://..."}
+       connection_config={"conninfo": "postgresql://..."}
    )
    sync_store = PsycopgSyncADKStore(sync_config)
 

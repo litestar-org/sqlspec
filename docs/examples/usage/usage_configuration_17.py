@@ -14,7 +14,7 @@ def test_cache_statistics() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         db_manager = SQLSpec()
-        db = db_manager.add_config(SqliteConfig(pool_config={"database": tmp.name}))
+        db = db_manager.add_config(SqliteConfig(connection_config={"database": tmp.name}))
 
         # Execute some queries to generate cache activity
         with db_manager.provide_session(db) as session:

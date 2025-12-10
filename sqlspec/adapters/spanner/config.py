@@ -70,8 +70,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def __init__(
         self,
         *,
-        pool_config: "SpannerPoolParams | dict[str, Any] | None" = None,
-        pool_instance: "AbstractSessionPool | None" = None,
+        connection_config: "SpannerPoolParams | dict[str, Any] | None" = None,
+        connection_instance: "AbstractSessionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "SpannerDriverFeatures | dict[str, Any] | None" = None,
@@ -79,11 +79,11 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
-        self.pool_config = dict(pool_config) if pool_config else {}
+        self.connection_config = dict(connection_config) if connection_config else {}
 
-        self.pool_config.setdefault("min_sessions", 1)
-        self.pool_config.setdefault("max_sessions", 10)
-        self.pool_config.setdefault("pool_type", FixedSizePool)
+        self.connection_config.setdefault("min_sessions", 1)
+        self.connection_config.setdefault("max_sessions", 10)
+        self.connection_config.setdefault("pool_type", FixedSizePool)
 
         features: dict[str, Any] = dict(driver_features) if driver_features else {}
         features.setdefault("enable_uuid_conversion", True)
@@ -93,8 +93,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         base_statement_config = statement_config or spanner_statement_config
 
         super().__init__(
-            pool_config=self.pool_config,
-            pool_instance=pool_instance,
+            connection_config=self.connection_config,
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=features,
@@ -109,70 +109,70 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def _get_client(self) -> Client:
         if self._client is None:
             self._client = Client(
-                project=self.pool_config.get("project"),
-                credentials=self.pool_config.get("credentials"),
-                client_options=self.pool_config.get("client_options"),
+                project=self.connection_config.get("project"),
+                credentials=self.connection_config.get("credentials"),
+                client_options=self.connection_config.get("client_options"),
             )
         return self._client
 
     def get_database(self) -> "Database":
-        instance_id = self.pool_config.get("instance_id")
-        database_id = self.pool_config.get("database_id")
+        instance_id = self.connection_config.get("instance_id")
+        database_id = self.connection_config.get("database_id")
         if not instance_id or not database_id:
             msg = "instance_id and database_id are required."
             raise ImproperConfigurationError(msg)
 
-        if self.pool_instance is None:
-            self.pool_instance = self.provide_pool()
+        if self.connection_instance is None:
+            self.connection_instance = self.provide_pool()
 
         if self._database is None:
             client = self._get_client()
-            self._database = client.instance(instance_id).database(database_id, pool=self.pool_instance)  # type: ignore[no-untyped-call]
+            self._database = client.instance(instance_id).database(database_id, pool=self.connection_instance)  # type: ignore[no-untyped-call]
         return self._database
 
     def create_connection(self) -> SpannerConnection:
-        instance_id = self.pool_config.get("instance_id")
-        database_id = self.pool_config.get("database_id")
+        instance_id = self.connection_config.get("instance_id")
+        database_id = self.connection_config.get("database_id")
         if not instance_id or not database_id:
             msg = "instance_id and database_id are required."
             raise ImproperConfigurationError(msg)
 
-        if self.pool_instance is None:
-            self.pool_instance = self.provide_pool()
+        if self.connection_instance is None:
+            self.connection_instance = self.provide_pool()
 
         client = self._get_client()
-        database = client.instance(instance_id).database(database_id, pool=self.pool_instance)  # type: ignore[no-untyped-call]
+        database = client.instance(instance_id).database(database_id, pool=self.connection_instance)  # type: ignore[no-untyped-call]
         return cast("SpannerConnection", database.snapshot())
 
     def _create_pool(self) -> AbstractSessionPool:
-        instance_id = self.pool_config.get("instance_id")
-        database_id = self.pool_config.get("database_id")
+        instance_id = self.connection_config.get("instance_id")
+        database_id = self.connection_config.get("database_id")
         if not instance_id or not database_id:
             msg = "instance_id and database_id are required."
             raise ImproperConfigurationError(msg)
 
-        pool_type = cast("type[AbstractSessionPool]", self.pool_config.get("pool_type", FixedSizePool))
+        pool_type = cast("type[AbstractSessionPool]", self.connection_config.get("pool_type", FixedSizePool))
 
         pool_kwargs: dict[str, Any] = {}
         if pool_type is FixedSizePool:
-            if "size" in self.pool_config:
-                pool_kwargs["size"] = self.pool_config["size"]
-            elif "max_sessions" in self.pool_config:
-                pool_kwargs["size"] = self.pool_config["max_sessions"]
-            if "labels" in self.pool_config:
-                pool_kwargs["labels"] = self.pool_config["labels"]
+            if "size" in self.connection_config:
+                pool_kwargs["size"] = self.connection_config["size"]
+            elif "max_sessions" in self.connection_config:
+                pool_kwargs["size"] = self.connection_config["max_sessions"]
+            if "labels" in self.connection_config:
+                pool_kwargs["labels"] = self.connection_config["labels"]
         else:
             valid_pool_keys = {"size", "labels", "ping_interval"}
-            pool_kwargs = {k: v for k, v in self.pool_config.items() if k in valid_pool_keys and v is not None}
-            if "size" not in pool_kwargs and "max_sessions" in self.pool_config:
-                pool_kwargs["size"] = self.pool_config["max_sessions"]
+            pool_kwargs = {k: v for k, v in self.connection_config.items() if k in valid_pool_keys and v is not None}
+            if "size" not in pool_kwargs and "max_sessions" in self.connection_config:
+                pool_kwargs["size"] = self.connection_config["max_sessions"]
 
         pool_factory = cast("Callable[..., AbstractSessionPool]", pool_type)
         return pool_factory(**pool_kwargs)
 
     def _close_pool(self) -> None:
-        if self.pool_instance and hasattr(self.pool_instance, "close"):
-            cast("Any", self.pool_instance).close()
+        if self.connection_instance and hasattr(self.connection_instance, "close"):
+            cast("Any", self.connection_instance).close()
 
     @contextmanager
     def provide_connection(

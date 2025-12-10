@@ -113,8 +113,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     def __init__(
         self,
         *,
-        pool_config: PsqlpyPoolParams | dict[str, Any] | None = None,
-        pool_instance: ConnectionPool | None = None,
+        connection_config: PsqlpyPoolParams | dict[str, Any] | None = None,
+        connection_instance: ConnectionPool | None = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: StatementConfig | None = None,
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
@@ -124,18 +124,18 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         """Initialize Psqlpy configuration.
 
         Args:
-            pool_config: Pool configuration parameters.
-            pool_instance: Existing connection pool instance to use.
+            connection_config: Connection and pool configuration parameters.
+            connection_instance: Existing connection pool instance to use.
             migration_config: Migration configuration.
             statement_config: SQL statement configuration.
             driver_features: Driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
         """
-        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in processed_pool_config:
-            extras = processed_pool_config.pop("extra")
-            processed_pool_config.update(extras)
+        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
+        if "extra" in processed_connection_config:
+            extras = processed_connection_config.pop("extra")
+            processed_connection_config.update(extras)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = processed_driver_features.get("json_serializer")
@@ -144,8 +144,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
-            pool_config=processed_pool_config,
-            pool_instance=pool_instance,
+            connection_config=processed_connection_config,
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config or build_psqlpy_statement_config(json_serializer=serializer_callable),
             driver_features=processed_driver_features,
@@ -159,7 +159,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             Dictionary with pool parameters, filtering out None values.
         """
-        return {k: v for k, v in self.pool_config.items() if v is not None}
+        return {k: v for k, v in self.connection_config.items() if v is not None}
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
@@ -177,13 +177,13 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
-        if not self.pool_instance:
+        if not self.connection_instance:
             return
 
         logger.info("Closing psqlpy connection pool", extra={"adapter": "psqlpy"})
 
         try:
-            self.pool_instance.close()
+            self.connection_instance.close()
             logger.info("Psqlpy connection pool closed successfully", extra={"adapter": "psqlpy"})
         except Exception as e:
             logger.exception("Failed to close psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
@@ -199,10 +199,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             A psqlpy Connection instance.
         """
-        if not self.pool_instance:
-            self.pool_instance = await self._create_pool()
+        if not self.connection_instance:
+            self.connection_instance = await self._create_pool()
 
-        return await self.pool_instance.connection()
+        return await self.connection_instance.connection()
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyConnection, None]:
@@ -215,10 +215,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Yields:
             A psqlpy Connection instance.
         """
-        if not self.pool_instance:
-            self.pool_instance = await self._create_pool()
+        if not self.connection_instance:
+            self.connection_instance = await self._create_pool()
 
-        async with self.pool_instance.acquire() as conn:
+        async with self.connection_instance.acquire() as conn:
             yield conn
 
     @asynccontextmanager
@@ -249,9 +249,9 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             The async connection pool.
         """
-        if not self.pool_instance:
-            self.pool_instance = await self.create_pool()
-        return self.pool_instance
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Psqlpy types.

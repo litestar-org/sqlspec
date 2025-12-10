@@ -16,7 +16,9 @@ def test_flask_disable_di_disables_hooks() -> None:
     """Test that disable_di disables request hooks in Flask extension."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
-        config = SqliteConfig(pool_config={"database": tmp.name}, extension_config={"flask": {"disable_di": True}})
+        config = SqliteConfig(
+            connection_config={"database": tmp.name}, extension_config={"flask": {"disable_di": True}}
+        )
         sql.add_config(config)
 
         app = Flask(__name__)
@@ -55,7 +57,9 @@ def test_flask_default_di_enabled() -> None:
     """Test that default behavior has disable_di=False."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
-        config = SqliteConfig(pool_config={"database": tmp.name}, extension_config={"flask": {"session_key": "db"}})
+        config = SqliteConfig(
+            connection_config={"database": tmp.name}, extension_config={"flask": {"session_key": "db"}}
+        )
         sql.add_config(config)
 
         app = Flask(__name__)

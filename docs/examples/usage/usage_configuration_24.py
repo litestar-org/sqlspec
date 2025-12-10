@@ -23,7 +23,7 @@ def test_environment_based_configuration() -> None:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
 
         config = AsyncpgConfig(
-            pool_config={
+            connection_config={
                 "host": os.getenv("DB_HOST", "localhost"),
                 "port": int(os.getenv("DB_PORT", "5432")),
                 "user": os.getenv("DB_USER"),
@@ -33,8 +33,8 @@ def test_environment_based_configuration() -> None:
         )
 
         # end-example
-        assert config.pool_config["host"] == "testhost"
-        assert config.pool_config["port"] == 5433
-        assert config.pool_config["user"] == "testuser"
-        assert config.pool_config["password"] == "testpass"
-        assert config.pool_config["database"] == "testdb"
+        assert config.connection_config["host"] == "testhost"
+        assert config.connection_config["port"] == 5433
+        assert config.connection_config["user"] == "testuser"
+        assert config.connection_config["password"] == "testpass"
+        assert config.connection_config["database"] == "testdb"

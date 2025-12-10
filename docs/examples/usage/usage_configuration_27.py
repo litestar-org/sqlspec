@@ -14,12 +14,12 @@ def test_tune_pool_sizes_best_practice() -> None:
 
     # start-example
     # CPU-bound workload - smaller pool
-    cpu_bound_pool_config = {"min_size": 5, "max_size": 10}
+    cpu_bound_connection_config = {"min_size": 5, "max_size": 10}
     # end-example
-    assert cpu_bound_pool_config["min_size"] == 5
-    assert cpu_bound_pool_config["max_size"] == 10
+    assert cpu_bound_connection_config["min_size"] == 5
+    assert cpu_bound_connection_config["max_size"] == 10
 
     # I/O-bound workload - larger pool
-    io_bound_pool_config = {"min_size": 20, "max_size": 50}
-    assert io_bound_pool_config["min_size"] == 20
-    assert io_bound_pool_config["max_size"] == 50
+    io_bound_connection_config = {"min_size": 20, "max_size": 50}
+    assert io_bound_connection_config["min_size"] == 20
+    assert io_bound_connection_config["max_size"] == 50

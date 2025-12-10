@@ -44,7 +44,7 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
         # Use a unique memory database identifier to avoid configuration conflicts
         connection_config["database"] = f":memory:{uuid4().hex}"
 
-    kwargs["pool_config"] = connection_config
+    kwargs["connection_config"] = connection_config
     return DuckDBConfig(**kwargs)
 
 
@@ -120,7 +120,7 @@ def test_connection_with_data_processing_settings() -> None:
 
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     with config.provide_session() as session:
         result = session.execute("SELECT ? as test_value", (42))
@@ -138,7 +138,7 @@ def test_connection_with_hook() -> None:
         connection.execute("SET threads = 1")
 
     config = DuckDBConfig(
-        pool_config={"database": ":memory:"}, driver_features={"on_connection_create": connection_hook}
+        connection_config={"database": ":memory:"}, driver_features={"on_connection_create": connection_hook}
     )
 
     registry = SQLSpec()
@@ -169,9 +169,9 @@ def test_connection_read_only_mode() -> None:
                 INSERT INTO test_readonly VALUES (1, 'test_data');
             """)
 
-        if hasattr(setup_config, "pool_instance") and setup_config.pool_instance:
-            setup_config.pool_instance.close()
-            setup_config.pool_instance = None
+        if hasattr(setup_config, "connection_instance") and setup_config.connection_instance:
+            setup_config.connection_instance.close()
+            setup_config.connection_instance = None
 
         time.sleep(0.1)
 
@@ -183,9 +183,9 @@ def test_connection_read_only_mode() -> None:
             assert result.data[0]["id"] == 1
             assert result.data[0]["value"] == "test_data"
 
-        if hasattr(readonly_config, "pool_instance") and readonly_config.pool_instance:
-            readonly_config.pool_instance.close()
-            readonly_config.pool_instance = None
+        if hasattr(readonly_config, "connection_instance") and readonly_config.connection_instance:
+            readonly_config.connection_instance.close()
+            readonly_config.connection_instance = None
 
     finally:
         if os.path.exists(temp_db_path):
@@ -282,12 +282,12 @@ def test_multiple_concurrent_connections() -> None:
 
 
 def test_config_with_pool_config_parameter(tmp_path: Path) -> None:
-    """Test that DuckDBConfig correctly accepts pool_config parameter."""
+    """Test that DuckDBConfig correctly accepts connection_config parameter."""
 
     db_path = tmp_path / "test.duckdb"
-    pool_config = {"database": str(db_path), "memory_limit": "256MB", "threads": 4}
+    connection_config = {"database": str(db_path), "memory_limit": "256MB", "threads": 4}
 
-    config = DuckDBConfig(pool_config=pool_config)
+    config = DuckDBConfig(connection_config=connection_config)
 
     try:
         connection_config = config._get_connection_config_dict()
@@ -310,10 +310,10 @@ def test_config_with_pool_config_parameter(tmp_path: Path) -> None:
 def test_config_memory_database_shared_conversion() -> None:
     """Test that :memory: databases are converted to shared memory."""
 
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     try:
-        assert config.pool_config["database"] == ":memory:shared_db"
+        assert config.connection_config["database"] == ":memory:shared_db"
 
         with config.provide_session() as session:
             result = session.execute("SELECT 'memory_test' as test")
@@ -327,10 +327,10 @@ def test_config_memory_database_shared_conversion() -> None:
 def test_config_empty_database_conversion() -> None:
     """Test that empty database string is converted to shared memory."""
 
-    config = DuckDBConfig(pool_config={"database": ""})
+    config = DuckDBConfig(connection_config={"database": ""})
 
     try:
-        assert config.pool_config["database"] == ":memory:shared_db"
+        assert config.connection_config["database"] == ":memory:shared_db"
 
         with config.provide_session() as session:
             result = session.execute("SELECT 'empty_test' as test")
@@ -347,7 +347,7 @@ def test_config_default_database_shared() -> None:
     config = DuckDBConfig()
 
     try:
-        assert config.pool_config["database"] == ":memory:shared_db"
+        assert config.connection_config["database"] == ":memory:shared_db"
 
         with config.provide_session() as session:
             result = session.execute("SELECT 'default_test' as test")
@@ -362,7 +362,7 @@ def test_config_consistency_with_other_adapters(tmp_path: Path) -> None:
     """Test that DuckDB config behaves consistently with SQLite/aiosqlite."""
 
     db_path = tmp_path / "consistency_test.duckdb"
-    pool_config = {
+    connection_config = {
         "database": str(db_path),
         "memory_limit": "512MB",
         "threads": 2,
@@ -370,7 +370,7 @@ def test_config_consistency_with_other_adapters(tmp_path: Path) -> None:
         "pool_max_size": 4,
     }
 
-    config = DuckDBConfig(pool_config=pool_config)
+    config = DuckDBConfig(connection_config=connection_config)
 
     try:
         connection_config = config._get_connection_config_dict()

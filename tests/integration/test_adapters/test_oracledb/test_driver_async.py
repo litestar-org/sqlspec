@@ -455,7 +455,8 @@ async def test_async_lowercase_columns_default(oracle_async_session: OracleAsync
 async def test_async_uppercase_columns_when_disabled(oracle_async_config: OracleAsyncConfig) -> None:
     """Ensure disabling lowercase feature preserves uppercase columns."""
     custom_config = OracleAsyncConfig(
-        pool_config=dict(oracle_async_config.pool_config), driver_features={"enable_lowercase_column_names": False}
+        connection_config=dict(oracle_async_config.connection_config),
+        driver_features={"enable_lowercase_column_names": False},
     )
 
     async with custom_config.provide_session() as session:

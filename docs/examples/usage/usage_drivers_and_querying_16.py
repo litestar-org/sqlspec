@@ -18,7 +18,7 @@ __all__ = ("test_example_16_async_transactions",)
 @pytest.mark.anyio
 async def test_example_16_async_transactions() -> None:
     spec = SQLSpec()
-    config = spec.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
+    config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
     # start-example
     @asynccontextmanager

@@ -155,7 +155,7 @@ async def test_async_autocommit_handler_raises_on_conflicting_statuses() -> None
 
 async def test_async_lifespan_handler_creates_and_closes_pool() -> None:
     """Test async lifespan handler manages pool lifecycle."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
 
     handler = lifespan_handler_maker(config, pool_key)
@@ -174,7 +174,7 @@ async def test_async_lifespan_handler_creates_and_closes_pool() -> None:
 
 async def test_async_pool_provider_returns_pool() -> None:
     """Test async pool provider returns pool from state."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
 
     provider = pool_provider_maker(config, pool_key)
@@ -192,7 +192,7 @@ async def test_async_pool_provider_returns_pool() -> None:
 
 async def test_async_pool_provider_raises_when_pool_missing() -> None:
     """Test async pool provider raises error when pool not in state."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
 
     provider = pool_provider_maker(config, pool_key)
@@ -210,7 +210,7 @@ async def test_async_pool_provider_raises_when_pool_missing() -> None:
 
 async def test_async_connection_provider_creates_connection() -> None:
     """Test async connection provider creates connection from pool."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
     connection_key = "test_connection"
 
@@ -229,7 +229,7 @@ async def test_async_connection_provider_creates_connection() -> None:
 
 async def test_async_connection_provider_raises_when_pool_missing() -> None:
     """Test async connection provider raises error when pool missing."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
     connection_key = "test_connection"
 
@@ -248,7 +248,7 @@ async def test_async_connection_provider_raises_when_pool_missing() -> None:
 
 async def test_sync_connection_provider_supports_context_manager() -> None:
     """Test sync connection provider wraps sync context managers."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
     connection_key = "test_connection"
 
@@ -271,7 +271,7 @@ async def test_sync_connection_provider_supports_context_manager() -> None:
 
 async def test_async_session_provider_creates_session() -> None:
     """Test async session provider creates driver session."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     connection_key = "test_connection"
 
     provider = session_provider_maker(config, connection_key)

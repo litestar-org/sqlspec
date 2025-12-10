@@ -14,7 +14,7 @@ def test_asyncpg_pool_setup() -> None:
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "dsn": dsn,
             "min_size": 10,
             "max_size": 20,
@@ -23,4 +23,4 @@ def test_asyncpg_pool_setup() -> None:
         }
     )
     # end-example
-    assert config.pool_config["min_size"] == 10
+    assert config.connection_config["min_size"] == 10

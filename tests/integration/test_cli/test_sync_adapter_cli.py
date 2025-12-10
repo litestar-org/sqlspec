@@ -65,7 +65,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 def get_config():
     return SqliteConfig(
         bind_key="sqlite_workflow_test",
-        pool_config={{"database": "{db_path}"}},
+        connection_config={{"database": "{db_path}"}},
         migration_config={{
             "enabled": True,
             "script_location": "{migrations_dir}"
@@ -124,7 +124,7 @@ from sqlspec.adapters.duckdb.config import DuckDBConfig
 def get_config():
     return DuckDBConfig(
         bind_key="duckdb_workflow_test",
-        pool_config={{"database": "{db_path}"}},
+        connection_config={{"database": "{db_path}"}},
         migration_config={{
             "enabled": True,
             "script_location": "{migrations_dir}"
@@ -165,7 +165,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 def get_config():
     return SqliteConfig(
         bind_key="sqlite_cycle_test",
-        pool_config={{"database": "{db_path}"}},
+        connection_config={{"database": "{db_path}"}},
         migration_config={{
             "enabled": True,
             "script_location": "{migrations_dir}"
@@ -211,7 +211,7 @@ def get_configs():
     return [
         SqliteConfig(
             bind_key="sqlite_multi",
-            pool_config={{"database": "{sqlite_db}"}},
+            connection_config={{"database": "{sqlite_db}"}},
             migration_config={{
                 "enabled": True,
                 "script_location": "{sqlite_migrations}"
@@ -219,7 +219,7 @@ def get_configs():
         ),
         DuckDBConfig(
             bind_key="duckdb_multi",
-            pool_config={{"database": "{duckdb_db}"}},
+            connection_config={{"database": "{duckdb_db}"}},
             migration_config={{
                 "enabled": True,
                 "script_location": "{duckdb_migrations}"
@@ -263,7 +263,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 def get_config():
     return SqliteConfig(
         bind_key="sqlite_stamp_test",
-        pool_config={{"database": "{db_path}"}},
+        connection_config={{"database": "{db_path}"}},
         migration_config={{
             "enabled": True,
             "script_location": "{migrations_dir}"

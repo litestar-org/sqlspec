@@ -209,7 +209,7 @@ def test_parameterized_query_patterns(
 
 def test_sqlite_none_parameters() -> None:
     """Test that None values in named parameters are handled correctly by SQLite."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with config.provide_session() as driver:
         # Create test table
@@ -277,7 +277,7 @@ def test_sqlite_none_parameters() -> None:
 
 def test_sqlite_none_parameters_qmark_style() -> None:
     """Test None values with QMARK (?) parameter style - SQLite default."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with config.provide_session() as driver:
         # Create test table
@@ -309,7 +309,7 @@ def test_sqlite_none_parameters_qmark_style() -> None:
 
 def test_sqlite_all_none_parameters() -> None:
     """Test when all parameter values are None."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with config.provide_session() as driver:
         # Create test table
@@ -348,7 +348,7 @@ def test_sqlite_all_none_parameters() -> None:
 
 def test_sqlite_none_with_execute_many() -> None:
     """Test None values work correctly with execute_many."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with config.provide_session() as driver:
         # Create test table
@@ -389,7 +389,7 @@ def test_sqlite_none_with_execute_many() -> None:
 
 def test_sqlite_none_in_where_clause() -> None:
     """Test None values in WHERE clauses work correctly."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with config.provide_session() as driver:
         # Create test table

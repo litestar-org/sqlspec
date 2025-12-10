@@ -326,7 +326,7 @@ class TestOracleUserFKColumn:
         """Create async Oracle ADK store with owner_id_column."""
         base_config = oracle_config_with_tenant_table
         config_with_extension = OracleAsyncConfig(
-            pool_config=base_config.pool_config,
+            connection_config=base_config.connection_config,
             extension_config={"adk": {"owner_id_column": "tenant_id NUMBER(10) NOT NULL REFERENCES tenants(id)"}},
         )
         store = OracleAsyncADKStore(config_with_extension)
@@ -381,7 +381,7 @@ class TestOracleUserFKColumn:
     async def test_fk_column_name_parsing(self, oracle_async_config: OracleAsyncConfig) -> None:
         """Test _owner_id_column_name is correctly parsed from DDL."""
         config_with_extension = OracleAsyncConfig(
-            pool_config=oracle_async_config.pool_config,
+            connection_config=oracle_async_config.connection_config,
             extension_config={"adk": {"owner_id_column": "account_id NUMBER(19) REFERENCES accounts(id)"}},
         )
         store = OracleAsyncADKStore(config_with_extension)
@@ -389,7 +389,7 @@ class TestOracleUserFKColumn:
         assert store.owner_id_column_ddl == "account_id NUMBER(19) REFERENCES accounts(id)"
 
         config_with_extension2 = OracleAsyncConfig(
-            pool_config=oracle_async_config.pool_config,
+            connection_config=oracle_async_config.connection_config,
             extension_config={"adk": {"owner_id_column": "org_uuid RAW(16) REFERENCES organizations(id)"}},
         )
         store2 = OracleAsyncADKStore(config_with_extension2)
@@ -498,7 +498,7 @@ class TestOracleSyncUserFKColumn:
         """Create sync Oracle ADK store with owner_id_column."""
         base_config = oracle_config_with_users_table
         config_with_extension = OracleSyncConfig(
-            pool_config=base_config.pool_config,
+            connection_config=base_config.connection_config,
             extension_config={"adk": {"owner_id_column": "owner_id NUMBER(19) REFERENCES users(id) ON DELETE CASCADE"}},
         )
         store = OracleSyncADKStore(config_with_extension)

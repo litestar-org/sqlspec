@@ -20,7 +20,7 @@ def test_example_3_sync(postgres_service: PostgresService) -> None:
     dsn = os.environ.get("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/test")
 
     # Sync version
-    config = PsycopgSyncConfig(pool_config={"conninfo": dsn, "min_size": 5, "max_size": 10})
+    config = PsycopgSyncConfig(connection_config={"conninfo": dsn, "min_size": 5, "max_size": 10})
     db = spec.add_config(config)
 
     with spec.provide_session(db) as session:

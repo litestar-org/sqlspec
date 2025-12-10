@@ -14,7 +14,7 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 async def test_aiosqlite_none_parameters() -> None:
     """Test that None values in named parameters are handled correctly by AIOSQLite."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     async with config.provide_session() as driver:
         # Create test table
@@ -81,7 +81,7 @@ async def test_aiosqlite_none_parameters() -> None:
 
 async def test_aiosqlite_none_parameters_qmark_style() -> None:
     """Test None values with QMARK (?) parameter style - AIOSQLite default."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     async with config.provide_session() as driver:
         # Create test table
@@ -113,7 +113,7 @@ async def test_aiosqlite_none_parameters_qmark_style() -> None:
 
 async def test_aiosqlite_all_none_parameters() -> None:
     """Test when all parameter values are None."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     async with config.provide_session() as driver:
         # Create test table
@@ -155,7 +155,7 @@ async def test_aiosqlite_all_none_parameters() -> None:
 
 async def test_aiosqlite_none_with_execute_many() -> None:
     """Test None values work correctly with execute_many."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     async with config.provide_session() as driver:
         # Create test table
@@ -196,7 +196,7 @@ async def test_aiosqlite_none_with_execute_many() -> None:
 
 async def test_aiosqlite_none_in_where_clause() -> None:
     """Test None values in WHERE clauses work correctly."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     async with config.provide_session() as driver:
         # Create test table
@@ -236,7 +236,7 @@ async def test_aiosqlite_none_in_where_clause() -> None:
 
 async def test_aiosqlite_none_complex_parameter_scenarios() -> None:
     """Test complex scenarios with None parameters that might cause issues."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     async with config.provide_session() as driver:
         # Create test table
@@ -296,7 +296,7 @@ async def test_aiosqlite_none_complex_parameter_scenarios() -> None:
 
 async def test_aiosqlite_none_parameter_edge_cases() -> None:
     """Test edge cases that might reveal parameter handling bugs."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     async with config.provide_session() as driver:
         # Test 1: Empty parameter list with None
@@ -346,7 +346,7 @@ async def test_aiosqlite_parameter_count_mismatch_with_none() -> None:
     This test verifies the bug mentioned in the original issue where parameter
     count mismatches might be missed when None values are present.
     """
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     async with config.provide_session() as driver:
         await driver.execute("CREATE TABLE test_param_count (col1 TEXT, col2 INTEGER)")

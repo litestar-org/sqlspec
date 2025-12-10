@@ -9,7 +9,7 @@ def test_statement_execution() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     db_manager = SQLSpec()
-    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = db_manager.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     # start-example
     sql_statement = SQL("SELECT ? AS message", "pipeline-complete")

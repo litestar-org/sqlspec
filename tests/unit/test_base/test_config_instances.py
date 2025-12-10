@@ -22,8 +22,8 @@ pytestmark = pytest.mark.xdist_group("base")
 def test_multiple_same_type_configs() -> None:
     """Test that multiple configs of same adapter type are stored separately."""
     manager = SQLSpec()
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config1 = DuckDBConfig(connection_config={"database": ":memory:"})
+    config2 = DuckDBConfig(connection_config={"database": ":memory:"})
 
     handle1 = manager.add_config(config1)
     handle2 = manager.add_config(config2)
@@ -37,7 +37,7 @@ def test_multiple_same_type_configs() -> None:
 def test_add_config_returns_same_instance() -> None:
     """Test that add_config returns the same config instance."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     result = manager.add_config(config)
 
@@ -47,7 +47,7 @@ def test_add_config_returns_same_instance() -> None:
 def test_provide_session_auto_registers_config() -> None:
     """Test that provide_session auto-registers configs."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     # Config should be auto-registered when used
     with manager.provide_session(config) as session:
@@ -60,7 +60,7 @@ def test_provide_session_auto_registers_config() -> None:
 def test_provide_connection_auto_registers_config() -> None:
     """Test that provide_connection auto-registers configs."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     # Config should be auto-registered when used
     with manager.provide_connection(config) as conn:
@@ -73,7 +73,7 @@ def test_provide_connection_auto_registers_config() -> None:
 def test_get_connection_auto_registers_config() -> None:
     """Test that get_connection auto-registers configs."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     # Config should be auto-registered when used
     conn = manager.get_connection(config)
@@ -87,7 +87,7 @@ def test_get_connection_auto_registers_config() -> None:
 def test_get_session_auto_registers_config() -> None:
     """Test that get_session auto-registers configs."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     # Config should be auto-registered when used
     session = manager.get_session(config)
@@ -100,7 +100,7 @@ def test_get_session_auto_registers_config() -> None:
 def test_get_pool_auto_registers_config() -> None:
     """Test that get_pool auto-registers configs."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     # Config should be auto-registered when used
     pool = manager.get_pool(config)
@@ -113,7 +113,7 @@ def test_get_pool_auto_registers_config() -> None:
 def test_close_pool_auto_registers_config() -> None:
     """Test that close_pool auto-registers configs."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     # Config should be auto-registered when used
     # Note: close_pool doesn't fail on unregistered configs, it just does nothing
@@ -126,7 +126,7 @@ def test_close_pool_auto_registers_config() -> None:
 def test_registry_uses_id_as_key() -> None:
     """Test that registry uses id(config) as key."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
 
@@ -136,8 +136,8 @@ def test_registry_uses_id_as_key() -> None:
 def test_mixed_adapter_types_stored_separately() -> None:
     """Test that different adapter types are stored separately."""
     manager = SQLSpec()
-    duckdb_config = DuckDBConfig(pool_config={"database": ":memory:"})
-    sqlite_config = SqliteConfig(pool_config={"database": ":memory:"})
+    duckdb_config = DuckDBConfig(connection_config={"database": ":memory:"})
+    sqlite_config = SqliteConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(duckdb_config)
     manager.add_config(sqlite_config)
@@ -150,7 +150,7 @@ def test_mixed_adapter_types_stored_separately() -> None:
 def test_config_overwrite_warning_on_duplicate_id() -> None:
     """Test that adding same config instance twice overwrites."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
     manager.add_config(config)
@@ -162,7 +162,7 @@ def test_config_overwrite_warning_on_duplicate_id() -> None:
 def test_registered_config_works_with_provide_session() -> None:
     """Test that registered configs work with provide_session."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
 
@@ -173,7 +173,7 @@ def test_registered_config_works_with_provide_session() -> None:
 def test_registered_config_works_with_provide_connection() -> None:
     """Test that registered configs work with provide_connection."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
 
@@ -184,7 +184,7 @@ def test_registered_config_works_with_provide_connection() -> None:
 def test_registered_config_works_with_get_connection() -> None:
     """Test that registered configs work with get_connection."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
 
@@ -195,7 +195,7 @@ def test_registered_config_works_with_get_connection() -> None:
 def test_registered_config_works_with_get_session() -> None:
     """Test that registered configs work with get_session."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
 
@@ -206,7 +206,7 @@ def test_registered_config_works_with_get_session() -> None:
 def test_registered_config_works_with_get_pool() -> None:
     """Test that registered configs work with get_pool."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
 
@@ -217,7 +217,7 @@ def test_registered_config_works_with_get_pool() -> None:
 def test_registered_config_works_with_close_pool() -> None:
     """Test that registered configs work with close_pool."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
 
@@ -228,8 +228,8 @@ def test_registered_config_works_with_close_pool() -> None:
 def test_multiple_configs_same_type_provide_session_independently() -> None:
     """Test that multiple configs of same type work independently with provide_session."""
     manager = SQLSpec()
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config1 = DuckDBConfig(connection_config={"database": ":memory:"})
+    config2 = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config1)
     manager.add_config(config2)
@@ -244,7 +244,7 @@ def test_multiple_configs_same_type_provide_session_independently() -> None:
 def test_instance_identity_preserved_through_add_config() -> None:
     """Test that config instance identity is preserved through add_config."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
     original_id = id(config)
 
     returned_config = manager.add_config(config)
@@ -256,8 +256,8 @@ def test_instance_identity_preserved_through_add_config() -> None:
 def test_configs_property_returns_dict_with_id_keys() -> None:
     """Test that configs property returns dict mapping id to config."""
     manager = SQLSpec()
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config2 = SqliteConfig(pool_config={"database": ":memory:"})
+    config1 = DuckDBConfig(connection_config={"database": ":memory:"})
+    config2 = SqliteConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config1)
     manager.add_config(config2)
@@ -274,8 +274,8 @@ def test_multiple_managers_have_independent_registries() -> None:
     manager1 = SQLSpec()
     manager2 = SQLSpec()
 
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config1 = DuckDBConfig(connection_config={"database": ":memory:"})
+    config2 = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager1.add_config(config1)
     manager2.add_config(config2)
@@ -292,7 +292,7 @@ def test_config_can_be_registered_with_multiple_managers() -> None:
     """Test that same config instance can be registered with multiple managers."""
     manager1 = SQLSpec()
     manager2 = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager1.add_config(config)
     manager2.add_config(config)
@@ -304,7 +304,7 @@ def test_config_can_be_registered_with_multiple_managers() -> None:
 
 def test_unregistered_after_manager_recreation() -> None:
     """Test that configs are unregistered when manager is recreated."""
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager1 = SQLSpec()
     manager1.add_config(config)
@@ -317,12 +317,12 @@ def test_unregistered_after_manager_recreation() -> None:
 def test_registry_survives_config_modifications() -> None:
     """Test that registry lookup works after config attributes are modified."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config)
     original_id = id(config)
 
-    config.pool_config["database"] = "test.db"
+    config.connection_config["database"] = "test.db"
 
     assert id(config) == original_id
     assert id(config) in manager.configs
@@ -331,7 +331,7 @@ def test_registry_survives_config_modifications() -> None:
 def test_auto_registration_on_first_use() -> None:
     """Test that configs are automatically registered on first use."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     # Config should not be registered initially
     assert id(config) not in manager.configs
@@ -347,9 +347,9 @@ def test_auto_registration_on_first_use() -> None:
 def test_three_configs_same_type_all_stored() -> None:
     """Test that more than two configs of same type are all stored."""
     manager = SQLSpec()
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config3 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config1 = DuckDBConfig(connection_config={"database": ":memory:"})
+    config2 = DuckDBConfig(connection_config={"database": ":memory:"})
+    config3 = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config1)
     manager.add_config(config2)
@@ -371,7 +371,7 @@ def test_registry_clear_on_fresh_instance() -> None:
 def test_config_instance_is_handle_pattern() -> None:
     """Test the 'config instance IS the handle' pattern."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     handle = manager.add_config(config)
 
@@ -385,8 +385,8 @@ def test_config_instance_is_handle_pattern() -> None:
 def test_multiple_sqlite_configs_stored_separately() -> None:
     """Test that multiple SQLite configs are stored separately."""
     manager = SQLSpec()
-    config1 = SqliteConfig(pool_config={"database": ":memory:"})
-    config2 = SqliteConfig(pool_config={"database": ":memory:"})
+    config1 = SqliteConfig(connection_config={"database": ":memory:"})
+    config2 = SqliteConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config1)
     manager.add_config(config2)
@@ -399,10 +399,10 @@ def test_multiple_sqlite_configs_stored_separately() -> None:
 def test_mixed_sqlite_duckdb_configs() -> None:
     """Test that mixed SQLite and DuckDB configs coexist."""
     manager = SQLSpec()
-    sqlite1 = SqliteConfig(pool_config={"database": ":memory:"})
-    duckdb1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    sqlite2 = SqliteConfig(pool_config={"database": ":memory:"})
-    duckdb2 = DuckDBConfig(pool_config={"database": ":memory:"})
+    sqlite1 = SqliteConfig(connection_config={"database": ":memory:"})
+    duckdb1 = DuckDBConfig(connection_config={"database": ":memory:"})
+    sqlite2 = SqliteConfig(connection_config={"database": ":memory:"})
+    duckdb2 = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(sqlite1)
     manager.add_config(duckdb1)
@@ -419,7 +419,7 @@ def test_mixed_sqlite_duckdb_configs() -> None:
 def test_config_not_in_registry_after_no_add() -> None:
     """Test that simply creating a config doesn't add it to registry."""
     manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     assert id(config) not in manager.configs
 
@@ -427,9 +427,9 @@ def test_config_not_in_registry_after_no_add() -> None:
 def test_provide_session_with_correct_config_after_multiple_adds() -> None:
     """Test provide_session works with correct config after adding multiple."""
     manager = SQLSpec()
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config3 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config1 = DuckDBConfig(connection_config={"database": ":memory:"})
+    config2 = DuckDBConfig(connection_config={"database": ":memory:"})
+    config3 = DuckDBConfig(connection_config={"database": ":memory:"})
 
     manager.add_config(config1)
     manager.add_config(config2)
@@ -443,7 +443,7 @@ def test_all_methods_auto_register_configs() -> None:
     """Test that all methods auto-register configs on first use."""
     # Test provide_session
     manager1 = SQLSpec()
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config1 = DuckDBConfig(connection_config={"database": ":memory:"})
     assert id(config1) not in manager1.configs
     with manager1.provide_session(config1):
         pass
@@ -451,7 +451,7 @@ def test_all_methods_auto_register_configs() -> None:
 
     # Test provide_connection
     manager2 = SQLSpec()
-    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config2 = DuckDBConfig(connection_config={"database": ":memory:"})
     assert id(config2) not in manager2.configs
     with manager2.provide_connection(config2):
         pass
@@ -459,7 +459,7 @@ def test_all_methods_auto_register_configs() -> None:
 
     # Test get_connection
     manager3 = SQLSpec()
-    config3 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config3 = DuckDBConfig(connection_config={"database": ":memory:"})
     assert id(config3) not in manager3.configs
     conn = manager3.get_connection(config3)
     conn.close()
@@ -467,21 +467,21 @@ def test_all_methods_auto_register_configs() -> None:
 
     # Test get_session
     manager4 = SQLSpec()
-    config4 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config4 = DuckDBConfig(connection_config={"database": ":memory:"})
     assert id(config4) not in manager4.configs
     manager4.get_session(config4)
     assert id(config4) in manager4.configs
 
     # Test get_pool
     manager5 = SQLSpec()
-    config5 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config5 = DuckDBConfig(connection_config={"database": ":memory:"})
     assert id(config5) not in manager5.configs
     manager5.get_pool(config5)
     assert id(config5) in manager5.configs
 
     # Test close_pool
     manager6 = SQLSpec()
-    config6 = DuckDBConfig(pool_config={"database": ":memory:"})
+    config6 = DuckDBConfig(connection_config={"database": ":memory:"})
     assert id(config6) not in manager6.configs
     manager6.close_pool(config6)
     assert id(config6) in manager6.configs

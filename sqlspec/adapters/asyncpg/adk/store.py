@@ -43,7 +43,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://..."},
+            connection_config={"dsn": "postgresql://..."},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",

@@ -36,7 +36,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         from sqlspec.adapters.oracledb.litestar.store import OracleAsyncStore
 
         config = OracleAsyncConfig(
-            pool_config={"dsn": "oracle://..."},
+            connection_config={"dsn": "oracle://..."},
             extension_config={
                 "litestar": {
                     "session_table": "my_sessions",
@@ -404,7 +404,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         from sqlspec.adapters.oracledb.litestar.store import OracleSyncStore
 
         config = OracleSyncConfig(
-            pool_config={"dsn": "oracle://..."},
+            connection_config={"dsn": "oracle://..."},
             extension_config={
                 "litestar": {
                     "session_table": "my_sessions",

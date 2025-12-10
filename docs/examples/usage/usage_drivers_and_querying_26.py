@@ -8,7 +8,7 @@ __all__ = ("test_example_26_statement_stack",)
 
 def test_example_26_statement_stack() -> None:
     spec = SQLSpec()
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     stack = StatementStack()
     stack = stack.push_execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")

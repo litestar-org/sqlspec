@@ -50,7 +50,7 @@ async def test_multi_database_setup_example(tmp_path: Path, postgres_service: Po
 
     spec = SQLSpec()
     postgres_config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "user": postgres_service.user,
             "password": postgres_service.password,
             "host": postgres_service.host,

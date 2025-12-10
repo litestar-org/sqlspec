@@ -101,7 +101,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 
         config = AiosqliteConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",

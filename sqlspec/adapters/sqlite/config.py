@@ -72,8 +72,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     def __init__(
         self,
         *,
-        pool_config: "SqliteConnectionParams | dict[str, Any] | None" = None,
-        pool_instance: "SqliteConnectionPool | None" = None,
+        connection_config: "SqliteConnectionParams | dict[str, Any] | None" = None,
+        connection_instance: "SqliteConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "SqliteDriverFeatures | dict[str, Any] | None" = None,
@@ -84,8 +84,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """Initialize SQLite configuration.
 
         Args:
-            pool_config: Configuration parameters including connection settings
-            pool_instance: Pre-created pool instance
+            connection_config: Configuration parameters including connection settings
+            connection_instance: Pre-created pool instance
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
@@ -93,20 +93,20 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
-        if pool_config is None:
-            pool_config = {}
-        if "database" not in pool_config or pool_config["database"] == ":memory:":
-            pool_config["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
-            pool_config["uri"] = True
-        elif "database" in pool_config:
-            database_path = str(pool_config["database"])
-            if database_path.startswith("file:") and not pool_config.get("uri"):
+        if connection_config is None:
+            connection_config = {}
+        if "database" not in connection_config or connection_config["database"] == ":memory:":
+            connection_config["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
+            connection_config["uri"] = True
+        elif "database" in connection_config:
+            database_path = str(connection_config["database"])
+            if database_path.startswith("file:") and not connection_config.get("uri"):
                 logger.debug(
                     "Database URI detected (%s) but uri=True not set. "
                     "Auto-enabling URI mode to prevent physical file creation.",
                     database_path,
                 )
-                pool_config["uri"] = True
+                connection_config["uri"] = True
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         processed_driver_features.setdefault("enable_custom_adapters", True)
@@ -122,8 +122,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
         super().__init__(
             bind_key=bind_key,
-            pool_instance=pool_instance,
-            pool_config=cast("dict[str, Any]", pool_config),
+            connection_instance=connection_instance,
+            connection_config=cast("dict[str, Any]", connection_config),
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=processed_driver_features,
@@ -135,13 +135,13 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """Get connection configuration as plain dict for pool creation."""
 
         excluded_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
-        return {k: v for k, v in self.pool_config.items() if v is not None and k not in excluded_keys}
+        return {k: v for k, v in self.connection_config.items() if v is not None and k not in excluded_keys}
 
     def _create_pool(self) -> SqliteConnectionPool:
         """Create connection pool from configuration."""
         config_dict = self._get_connection_config_dict()
 
-        pool = SqliteConnectionPool(connection_parameters=config_dict, **self.pool_config)
+        pool = SqliteConnectionPool(connection_parameters=config_dict, **self.connection_config)
 
         if self.driver_features.get("enable_custom_adapters", False):
             self._register_type_adapters()
@@ -162,8 +162,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
     def _close_pool(self) -> None:
         """Close the connection pool."""
-        if self.pool_instance:
-            self.pool_instance.close()
+        if self.connection_instance:
+            self.connection_instance.close()
 
     def create_connection(self) -> SqliteConnection:
         """Get a SQLite connection from the pool.

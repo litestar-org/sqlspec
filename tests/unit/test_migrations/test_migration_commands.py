@@ -25,13 +25,13 @@ pytestmark = pytest.mark.xdist_group("migrations")
 @pytest.fixture
 def sync_config() -> SqliteConfig:
     """Create a sync database config for testing."""
-    return SqliteConfig(pool_config={"database": ":memory:"})
+    return SqliteConfig(connection_config={"database": ":memory:"})
 
 
 @pytest.fixture
 def async_config() -> AiosqliteConfig:
     """Create an async database config for testing."""
-    return AiosqliteConfig(pool_config={"database": ":memory:"})
+    return AiosqliteConfig(connection_config={"database": ":memory:"})
 
 
 def test_migration_commands_sync_config_initialization(sync_config: SqliteConfig) -> None:

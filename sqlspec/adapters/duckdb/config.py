@@ -187,7 +187,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         ...     return msgspec.json.encode(obj).decode("utf-8")
         >>>
         >>> config = DuckDBConfig(
-        ...     pool_config={"database": ":memory:"},
+        ...     connection_config={"database": ":memory:"},
         ...     driver_features={
         ...         "json_serializer": custom_json,
         ...         "enable_uuid_conversion": False,
@@ -207,8 +207,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     def __init__(
         self,
         *,
-        pool_config: "DuckDBPoolParams | dict[str, Any] | None" = None,
-        pool_instance: "DuckDBConnectionPool | None" = None,
+        connection_config: "DuckDBPoolParams | dict[str, Any] | None" = None,
+        connection_instance: "DuckDBConnectionPool | None" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "DuckDBDriverFeatures | dict[str, Any] | None" = None,
@@ -219,8 +219,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """Initialize DuckDB configuration.
 
         Args:
-            pool_config: Pool configuration parameters
-            pool_instance: Pre-created pool instance
+            connection_config: Connection and pool configuration parameters
+            connection_instance: Pre-created pool instance
             migration_config: Migration configuration
             statement_config: Statement configuration override
             driver_features: DuckDB-specific driver features including json_serializer
@@ -229,17 +229,17 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
-        if pool_config is None:
-            pool_config = {}
-        pool_config.setdefault("database", ":memory:shared_db")
+        if connection_config is None:
+            connection_config = {}
+        connection_config.setdefault("database", ":memory:shared_db")
 
-        if pool_config.get("database") in {":memory:", ""}:
-            pool_config["database"] = ":memory:shared_db"
+        if connection_config.get("database") in {":memory:", ""}:
+            connection_config["database"] = ":memory:shared_db"
 
         extension_flags: dict[str, Any] = {}
-        for key in tuple(pool_config.keys()):
+        for key in tuple(connection_config.keys()):
             if key in EXTENSION_FLAG_KEYS:
-                extension_flags[key] = pool_config.pop(key)  # type: ignore[misc]
+                extension_flags[key] = connection_config.pop(key)  # type: ignore[misc]
 
         processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         user_connection_hook = cast(
@@ -271,8 +271,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         super().__init__(
             bind_key=bind_key,
-            pool_config=dict(pool_config),
-            pool_instance=pool_instance,
+            connection_config=dict(connection_config),
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=processed_features,
@@ -284,7 +284,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """Get connection configuration as plain dict for pool creation."""
         return {
             k: v
-            for k, v in self.pool_config.items()
+            for k, v in self.connection_config.items()
             if v is not None
             and k not in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
         }
@@ -305,13 +305,13 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             extensions=extensions_dicts,
             extension_flags=extension_flags_dict,
             secrets=secrets_dicts,
-            **self.pool_config,
+            **self.connection_config,
         )
 
     def _close_pool(self) -> None:
         """Close the connection pool."""
-        if self.pool_instance:
-            self.pool_instance.close()
+        if self.connection_instance:
+            self.connection_instance.close()
 
     def create_connection(self) -> DuckDBConnection:
         """Get a DuckDB connection from the pool.

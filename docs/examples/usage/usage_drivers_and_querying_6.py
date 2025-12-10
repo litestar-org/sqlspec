@@ -20,7 +20,7 @@ def test_example_6_sqlite_config(tmp_path: Path) -> None:
         spec = SQLSpec()
 
         db = spec.add_config(
-            SqliteConfig(pool_config={"database": db_path, "timeout": 5.0, "check_same_thread": False})
+            SqliteConfig(connection_config={"database": db_path, "timeout": 5.0, "check_same_thread": False})
         )
 
         try:

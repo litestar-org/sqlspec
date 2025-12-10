@@ -32,7 +32,7 @@ def _build_app(
         litestar_settings["auto_trace_headers"] = auto_trace_headers
 
     spec = SQLSpec()
-    spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}, extension_config=extension_config))
+    spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}, extension_config=extension_config))
 
     return Litestar(route_handlers=[correlation_handler], plugins=[SQLSpecPlugin(sqlspec=spec)])
 

@@ -60,7 +60,7 @@ from sqlspec.extensions.adk import SQLSpecSessionService
 
 async def build_service() -> SQLSpecSessionService:
     config = AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/agents"},
+        connection_config={"dsn": "postgresql://localhost/agents"},
         extension_config={
             "adk": {
                 "session_table": "adk_sessions",
@@ -117,7 +117,7 @@ from sqlspec.extensions.adk import SQLSpecSessionService
 
 def build_spanner_service() -> SQLSpecSessionService:
     config = SpannerSyncConfig(
-        pool_config={
+        connection_config={
             "project": "my-project",
             "instance_id": "my-instance",
             "database_id": "agents",
@@ -169,7 +169,7 @@ adk_config = cast("ADKConfig", {
     "events_table": "agent_events",
     "owner_id_column": "workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL",
 })
-config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."},
+config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."},
                        extension_config={"adk": adk_config})
 ```
 

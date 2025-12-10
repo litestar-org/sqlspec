@@ -282,7 +282,7 @@ For Python-based migration automation, use the config method directly instead of
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
+    connection_config={"dsn": "postgresql://user:pass@localhost/mydb"},
     migration_config={
         "enabled": True,
         "script_location": "migrations",
@@ -305,7 +305,7 @@ await config.fix_migrations(dry_run=False, update_database=False, yes=True)
 from sqlspec.adapters.sqlite import SqliteConfig
 
 config = SqliteConfig(
-    pool_config={"database": "myapp.db"},
+    connection_config={"database": "myapp.db"},
     migration_config={
         "enabled": True,
         "script_location": "migrations",
@@ -339,7 +339,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 async def deploy():
     config = AsyncpgConfig(
-        pool_config={"dsn": "postgresql://..."},
+        connection_config={"dsn": "postgresql://..."},
         migration_config={"script_location": "migrations"}
     )
 
@@ -869,7 +869,7 @@ Auto-sync is enabled by default. Disable via config:
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/mydb"},
+    connection_config={"dsn": "postgresql://localhost/mydb"},
     migration_config={
         "script_location": "migrations",
         "enabled": True,
@@ -1022,7 +1022,7 @@ Works with custom migration directories:
 ```python
 # config.py
 AsyncpgConfig(
-    pool_config={"dsn": "..."},
+    connection_config={"dsn": "..."},
     migration_config={
         "script_location": "db/migrations",  # Custom path
         "enabled": True

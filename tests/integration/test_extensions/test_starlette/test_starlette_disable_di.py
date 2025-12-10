@@ -21,7 +21,7 @@ def test_starlette_disable_di_disables_middleware() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"starlette": {"disable_di": True}}
+            connection_config={"database": tmp.name}, extension_config={"starlette": {"disable_di": True}}
         )
         sql.add_config(config)
         db_ext = SQLSpecPlugin(sql)
@@ -50,7 +50,7 @@ def test_starlette_default_di_enabled() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"starlette": {"session_key": "db"}}
+            connection_config={"database": tmp.name}, extension_config={"starlette": {"session_key": "db"}}
         )
         sql.add_config(config)
         db_ext = SQLSpecPlugin(sql)

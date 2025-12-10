@@ -145,7 +145,7 @@ def _is_valid_config(config: Any) -> bool:
 
     migration_config = getattr(config, "migration_config", None)
     if migration_config is not None:
-        if hasattr(config, "pool_config"):
+        if hasattr(config, "connection_config"):
             return True
         if hasattr(config, "database_url") and hasattr(config, "bind_key"):
             return True

@@ -34,7 +34,7 @@ SQLSpec Registry
       sql = SQLSpec()
       config = sql.add_config(
           AsyncpgConfig(
-              pool_config={"host": "localhost", "database": "mydb"}
+              connection_config={"host": "localhost", "database": "mydb"}
           )
       )
 
@@ -49,7 +49,7 @@ All database adapter configurations inherit from base protocol classes defined i
 Connection Pooling
 ==================
 
-Connection pooling is configured via adapter-specific TypedDicts passed to the ``pool_config`` parameter.
+Connection pooling is configured via adapter-specific TypedDicts passed to the ``connection_config`` parameter.
 
 Session Management
 ==================
@@ -98,7 +98,7 @@ Manual lifecycle control:
 .. code-block:: python
 
    sql = SQLSpec()
-   config = sql.add_config(AsyncpgConfig(pool_config={...}))
+   config = sql.add_config(AsyncpgConfig(connection_config={...}))
 
    # Startup pools explicitly
    # Pools created lazily on first use
@@ -141,7 +141,7 @@ Sessions are provided using the config instance returned from ``add_config``:
 .. code-block:: python
 
    # Config instance IS the handle
-   config = sql.add_config(AsyncpgConfig(pool_config={...}))
+   config = sql.add_config(AsyncpgConfig(connection_config={...}))
    async with sql.provide_session(config) as session:
        ...
 

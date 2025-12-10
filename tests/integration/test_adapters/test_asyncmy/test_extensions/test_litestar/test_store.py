@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.asyncmy, pytest.mark
 async def asyncmy_store(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyStore, None]":
     """Create AsyncMy store with test database."""
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,
@@ -36,7 +36,7 @@ async def asyncmy_store(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyS
             pass
     finally:
         try:
-            if config.pool_instance:
+            if config.connection_instance:
                 await config.close_pool()
         except Exception:
             pass

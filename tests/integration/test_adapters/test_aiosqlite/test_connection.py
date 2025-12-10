@@ -134,13 +134,13 @@ async def test_provide_connection_direct() -> None:
         await config.close_pool()
 
 
-async def test_config_with_pool_config(tmp_path: Path) -> None:
-    """Test that AiosqliteConfig correctly accepts pool_config parameter."""
+async def test_config_with_connection_config(tmp_path: Path) -> None:
+    """Test that AiosqliteConfig correctly accepts connection_config parameter."""
 
     db_path = tmp_path / f"test_{uuid4().hex}.db"
-    pool_config = {"database": str(db_path), "timeout": 10.0, "isolation_level": None, "check_same_thread": False}
+    connection_config = {"database": str(db_path), "timeout": 10.0, "isolation_level": None, "check_same_thread": False}
 
-    config = AiosqliteConfig(pool_config=pool_config)
+    config = AiosqliteConfig(connection_config=connection_config)
 
     try:
         connection_config = config._get_connection_config_dict()
@@ -161,14 +161,14 @@ async def test_config_with_pool_config(tmp_path: Path) -> None:
 
 
 async def test_config_with_kwargs_override(tmp_path: Path) -> None:
-    """Test that kwargs properly override pool_config values."""
+    """Test that kwargs properly override connection_config values."""
 
-    pool_config = {"database": "base.db", "timeout": 5.0}
+    connection_config = {"database": "base.db", "timeout": 5.0}
 
     db_path = tmp_path / f"override_{uuid4().hex}.db"
-    # Override pool_config with specific test values
-    test_pool_config = {**pool_config, "database": str(db_path), "timeout": 15.0}
-    config = AiosqliteConfig(pool_config=test_pool_config)
+    # Override connection_config with specific test values
+    test_connection_config = {**connection_config, "database": str(db_path), "timeout": 15.0}
+    config = AiosqliteConfig(connection_config=test_connection_config)
 
     try:
         connection_config = config._get_connection_config_dict()
@@ -225,7 +225,7 @@ async def test_aiosqlite_observability_hook_tracks_queries() -> None:
 async def test_config_memory_database_conversion() -> None:
     """Test that :memory: databases are converted to shared memory."""
 
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     try:
         connection_config = config._get_connection_config_dict()
@@ -264,9 +264,9 @@ async def test_config_parameter_preservation(tmp_path: Path) -> None:
     """Test that aiosqlite config properly preserves parameters."""
 
     db_path = tmp_path / "parameter_test.db"
-    pool_config = {"database": str(db_path), "isolation_level": None, "cached_statements": 100}
+    connection_config = {"database": str(db_path), "isolation_level": None, "cached_statements": 100}
 
-    config = AiosqliteConfig(pool_config=pool_config)
+    config = AiosqliteConfig(connection_config=connection_config)
 
     try:
         connection_config = config._get_connection_config_dict()

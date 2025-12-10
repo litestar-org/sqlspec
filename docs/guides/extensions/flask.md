@@ -35,7 +35,7 @@ from sqlspec.extensions.flask import SQLSpecPlugin
 
 sqlspec = SQLSpec()
 config = SqliteConfig(
-    pool_config={"database": "app.db"},
+    connection_config={"database": "app.db"},
     extension_config={
         "flask": {
             "commit_mode": "autocommit",
@@ -65,7 +65,7 @@ Configure the Flask extension via `extension_config["flask"]`:
 from sqlspec.config import FlaskConfig
 
 config = SqliteConfig(
-    pool_config={"database": "app.db"},
+    connection_config={"database": "app.db"},
     extension_config={
         "flask": FlaskConfig(
             connection_key="db_connection",  # Optional: Flask g object key for connection
@@ -103,14 +103,14 @@ sqlspec = SQLSpec()
 
 sqlspec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/main"},
+        connection_config={"dsn": "postgresql://localhost/main"},
         extension_config={"flask": {"session_key": "primary", "commit_mode": "autocommit"}},
     )
 )
 
 sqlspec.add_config(
     SqliteConfig(
-        pool_config={"database": "analytics.db"},
+        connection_config={"database": "analytics.db"},
         extension_config={"flask": {"session_key": "analytics", "commit_mode": "manual"}},
     )
 )
@@ -158,7 +158,7 @@ from sqlspec.extensions.flask import SQLSpecPlugin
 
 sqlspec = SQLSpec()
 config = SqliteConfig(
-    pool_config={"database": "app.db"},
+    connection_config={"database": "app.db"},
     extension_config={
         "flask": {"commit_mode": "manual", "session_key": "db"}
     }
@@ -192,7 +192,7 @@ Automatically commits on successful responses (2xx status codes), rolls back oth
 
 ```python
 config = SqliteConfig(
-    pool_config={"database": "app.db"},
+    connection_config={"database": "app.db"},
     extension_config={
         "flask": {"commit_mode": "autocommit", "session_key": "db"}
     }
@@ -235,7 +235,7 @@ Commits on 2xx and 3xx status codes (including redirects):
 
 ```python
 config = SqliteConfig(
-    pool_config={"database": "app.db"},
+    connection_config={"database": "app.db"},
     extension_config={
         "flask": {"commit_mode": "autocommit_include_redirect", "session_key": "db"}
     }
@@ -266,7 +266,7 @@ Add extra status codes for commit/rollback:
 
 ```python
 config = SqliteConfig(
-    pool_config={"database": "app.db"},
+    connection_config={"database": "app.db"},
     extension_config={
         "flask": {
             "commit_mode": "autocommit",
@@ -291,7 +291,7 @@ sqlspec = SQLSpec()
 
 # Primary database (user data)
 users_config = SqliteConfig(
-    pool_config={"database": "users.db"},
+    connection_config={"database": "users.db"},
     extension_config={
         "flask": {
             "commit_mode": "autocommit",
@@ -302,7 +302,7 @@ users_config = SqliteConfig(
 
 # Analytics database (events)
 events_config = DuckDBConfig(
-    pool_config={"database": "events.db"},
+    connection_config={"database": "events.db"},
     extension_config={
         "flask": {
             "commit_mode": "autocommit",
@@ -357,7 +357,7 @@ def create_app(config=None):
     # Create SQLSpec and config
     sqlspec = SQLSpec()
     db_config = SqliteConfig(
-        pool_config={"database": app.config.get("DATABASE_URL", "app.db")},
+        connection_config={"database": app.config.get("DATABASE_URL", "app.db")},
         extension_config={
             "flask": {
                 "commit_mode": app.config.get("DB_COMMIT_MODE", "autocommit"),
@@ -427,7 +427,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 sqlspec = SQLSpec()
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/mydb"},
+    connection_config={"dsn": "postgresql://localhost/mydb"},
     extension_config={
         "flask": {"commit_mode": "autocommit", "session_key": "db"}
     }
@@ -577,7 +577,7 @@ Sync adapters support connection pooling:
 from sqlspec.adapters.sqlite import SqliteConfig
 
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "database": "app.db",
         "check_same_thread": False,  # Required for pooling
         "timeout": 30.0
@@ -619,7 +619,7 @@ from sqlspec.extensions.flask import SQLSpecPlugin
 
 sqlspec = SQLSpec()
 config = SqliteConfig(
-    pool_config={"database": "app.db"},
+    connection_config={"database": "app.db"},
     extension_config={"flask": {"commit_mode": "autocommit"}}
 )
 sqlspec.add_config(config)
@@ -667,11 +667,11 @@ plugin.init_app(app)          # Error: already registered
 
 ```python
 config1 = SqliteConfig(
-    pool_config={"database": "db1.db"},
+    connection_config={"database": "db1.db"},
     extension_config={"flask": {"session_key": "db1"}}
 )
 config2 = SqliteConfig(
-    pool_config={"database": "db2.db"},
+    connection_config={"database": "db2.db"},
     extension_config={"flask": {"session_key": "db2"}}  # Must be unique!
 )
 ```

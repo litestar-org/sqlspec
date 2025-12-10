@@ -62,7 +62,7 @@ Basic Async File-Based Database
 
    async def main():
        # Create async file-based database
-       config = AiosqliteConfig(pool_config={"database": "./agent_sessions.db"})
+       config = AiosqliteConfig(connection_config={"database": "./agent_sessions.db"})
 
        store = AiosqliteADKStore(config)
        await store.create_tables()
@@ -90,7 +90,7 @@ Async In-Memory Database (Testing)
 
    async def test_setup():
        # Create async in-memory database
-       config = AiosqliteConfig(pool_config={"database": ":memory:"})
+       config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
        store = AiosqliteADKStore(config)
        await store.create_tables()
@@ -116,7 +116,7 @@ Basic Configuration
    from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
    config = AiosqliteConfig(
-       pool_config={
+       connection_config={
            "database": "/path/to/database.db",  # or ":memory:"
            "timeout": 5.0,                      # Connection timeout
            "isolation_level": "DEFERRED",       # Transaction isolation
@@ -136,7 +136,7 @@ Connection Pooling
 .. code-block:: python
 
    config = AiosqliteConfig(
-       pool_config={
+       connection_config={
            "database": "./sessions.db",
            "pool_size": 5,              # Connection pool size
            "connect_timeout": 30.0,     # Pool acquire timeout
@@ -234,7 +234,7 @@ Async Context Managers
    from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 
    async def use_store():
-       config = AiosqliteConfig(pool_config={"database": ":memory:"})
+       config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
        # Async context manager for connections
        async with config.provide_connection() as conn:
@@ -513,7 +513,7 @@ Database Locked Errors
 
    # 2. Increase timeout
    config = AiosqliteConfig(
-       pool_config={"database": "./db.sqlite", "timeout": 30.0}
+       connection_config={"database": "./db.sqlite", "timeout": 30.0}
    )
 
    # 3. Use transaction batching (reduce write frequency)
@@ -536,7 +536,7 @@ Ensure you're using ``asyncio.run()`` or managing the event loop properly:
    import asyncio
 
    async def main():
-       config = AiosqliteConfig(pool_config={"database": ":memory:"})
+       config = AiosqliteConfig(connection_config={"database": ":memory:"})
        store = AiosqliteADKStore(config)
        await store.create_tables()
 
@@ -559,7 +559,7 @@ Thread Safety Concerns
 
    # check_same_thread=False is safe with aiosqlite
    config = AiosqliteConfig(
-       pool_config={
+       connection_config={
            "database": "./db.sqlite",
            "check_same_thread": False  # Safe with aiosqlite
        }
@@ -609,7 +609,7 @@ Use Connection Pooling
 .. code-block:: python
 
    # Good: Reuse connection pool
-   config = AiosqliteConfig(pool_config={"database": "./db.sqlite", "pool_size": 5})
+   config = AiosqliteConfig(connection_config={"database": "./db.sqlite", "pool_size": 5})
    store = AiosqliteADKStore(config)
 
    # All operations use the pool
@@ -641,7 +641,7 @@ Graceful Cleanup
 .. code-block:: python
 
    async def application_lifecycle():
-       config = AiosqliteConfig(pool_config={"database": "./db.sqlite"})
+       config = AiosqliteConfig(connection_config={"database": "./db.sqlite"})
        store = AiosqliteADKStore(config)
        await store.create_tables()
 
@@ -673,7 +673,7 @@ Migrating from sync SQLite to AIOSQLite is straightforward:
    from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 
    async def async_app():
-       config = AiosqliteConfig(pool_config={"database": "./db.sqlite"})
+       config = AiosqliteConfig(connection_config={"database": "./db.sqlite"})
        store = AiosqliteADKStore(config)
        # ... async operations with await ...
 
@@ -681,7 +681,7 @@ Migrating from sync SQLite to AIOSQLite is straightforward:
 
 1. Import from ``aiosqlite`` instead of ``sqlite``
 2. Add ``async``/``await`` keywords
-3. Use ``pool_config`` parameter (not direct kwargs)
+3. Use ``connection_config`` parameter (not direct kwargs)
 4. Use ``asyncio.run()`` to execute
 
 API Reference

@@ -26,7 +26,7 @@ Configure the plugin via ``extension_config`` in database configuration:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/mydb"},
+       connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={
            "litestar": {
                "connection_key": "db_connection",
@@ -199,7 +199,7 @@ Basic Plugin Setup
 
    spec = SQLSpec()
    db = spec.add_config(
-       AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
+       AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/mydb"})
    )
 
    plugin = SQLSpecPlugin(sqlspec=spec)
@@ -220,7 +220,7 @@ Multi-Database Setup
 
    primary = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/primary"},
+           connection_config={"dsn": "postgresql://localhost/primary"},
            extension_config={
                "litestar": {"session_key": "primary_session"}
            }
@@ -256,7 +256,7 @@ Session Store Setup
    # Add database configuration
    config = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/mydb"},
+           connection_config={"dsn": "postgresql://localhost/mydb"},
            extension_config={"litestar": {"session_table": "litestar_sessions"}},
        )
    )

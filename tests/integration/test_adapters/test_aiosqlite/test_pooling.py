@@ -18,7 +18,12 @@ async def test_shared_memory_pooling() -> None:
     """Test that shared memory databases allow pooling."""
 
     config = AiosqliteConfig(
-        pool_config={"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
+        connection_config={
+            "database": "file::memory:?cache=shared",
+            "uri": True,
+            "pool_min_size": 2,
+            "pool_max_size": 5,
+        }
     )
 
     try:
@@ -53,7 +58,7 @@ async def test_shared_memory_pooling() -> None:
 async def test_regular_memory_auto_converted_pooling() -> None:
     """Test that regular memory databases are auto-converted and pooling works."""
 
-    config = AiosqliteConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
+    config = AiosqliteConfig(connection_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
     try:
         assert config._get_connection_config_dict()["database"] == "file::memory:?cache=shared"
@@ -91,7 +96,7 @@ async def test_file_database_pooling_enabled() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 
-    config = AiosqliteConfig(pool_config={"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
+    config = AiosqliteConfig(connection_config={"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
 
     try:
         async with config.provide_session() as session1:

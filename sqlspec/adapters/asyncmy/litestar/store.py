@@ -34,7 +34,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         from sqlspec.adapters.asyncmy import AsyncmyConfig
         from sqlspec.adapters.asyncmy.litestar.store import AsyncmyStore
 
-        config = AsyncmyConfig(pool_config={"host": "localhost", ...})
+        config = AsyncmyConfig(connection_config={"host": "localhost", ...})
         store = AsyncmyStore(config)
         await store.create_table()
 

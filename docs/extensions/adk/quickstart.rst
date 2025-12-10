@@ -47,7 +47,7 @@ Create a database configuration. This example uses PostgreSQL with AsyncPG:
 
 .. code-block:: python
 
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://user:password@localhost:5432/mydb",
        "min_size": 5,
        "max_size": 20
@@ -64,7 +64,7 @@ For local development with SQLite:
    from sqlspec.adapters.aiosqlite import AiosqliteConfig
    from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 
-   config = AiosqliteConfig(pool_config={
+   config = AiosqliteConfig(connection_config={
        "database": "./my_agent.db"
    })
 
@@ -313,7 +313,7 @@ The ``owner_id_column`` parameter accepts a full column DDL definition:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://user:password@localhost:5432/mydb"
    })
 
@@ -438,7 +438,7 @@ Complete example linking sessions to tenants:
    from sqlspec.adapters.duckdb import DuckDBConfig
    from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 
-   config = DuckDBConfig(pool_config={"database": "multi_tenant.ddb"})
+   config = DuckDBConfig(connection_config={"database": "multi_tenant.ddb"})
 
    # Create tenants table
    with config.provide_connection() as conn:
@@ -559,7 +559,7 @@ For migrations and programmatic configuration, use ``extension_config``:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
                "session_table": "adk_sessions",

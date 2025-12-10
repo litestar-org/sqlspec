@@ -10,7 +10,7 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
     """Test asyncpg connection components."""
     # Test direct connection
     async_config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "dsn": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "min_size": 1,
             "max_size": 2,
@@ -28,7 +28,7 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
 
     # Test connection pool
     another_config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "dsn": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "min_size": 1,
             "max_size": 5,

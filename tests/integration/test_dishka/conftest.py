@@ -22,7 +22,7 @@ def simple_sqlite_provider() -> "Provider":
     class DatabaseProvider(Provider):  # type: ignore[misc]
         @provide(scope=Scope.APP)  # type: ignore[misc]
         def get_database_config(self) -> SqliteConfig:
-            config = SqliteConfig(pool_config={"database": ":memory:"})
+            config = SqliteConfig(connection_config={"database": ":memory:"})
             config.bind_key = "dishka_sqlite"
             return config
 
@@ -43,7 +43,7 @@ def async_sqlite_provider() -> "Provider":
         async def get_database_config(self) -> SqliteConfig:
             # Simulate some async work (e.g., fetching config from remote service)
             await asyncio.sleep(0.001)
-            config = SqliteConfig(pool_config={"database": ":memory:"})
+            config = SqliteConfig(connection_config={"database": ":memory:"})
             config.bind_key = "async_dishka_sqlite"
             return config
 
@@ -61,14 +61,14 @@ def multi_config_provider() -> "Provider":
     class MultiDatabaseProvider(Provider):  # type: ignore[misc]
         @provide(scope=Scope.APP)  # type: ignore[misc]
         def get_sqlite_config(self) -> SqliteConfig:
-            config = SqliteConfig(pool_config={"database": ":memory:"})
+            config = SqliteConfig(connection_config={"database": ":memory:"})
             config.bind_key = "dishka_multi_sqlite"
             config.migration_config = {"enabled": True, "script_location": "sqlite_migrations"}
             return config
 
         @provide(scope=Scope.APP)  # type: ignore[misc]
         def get_duckdb_config(self) -> DuckDBConfig:
-            config = DuckDBConfig(pool_config={"database": ":memory:"})
+            config = DuckDBConfig(connection_config={"database": ":memory:"})
             config.bind_key = "dishka_multi_duckdb"
             config.migration_config = {"enabled": True, "script_location": "duckdb_migrations"}
             return config
@@ -91,7 +91,7 @@ def async_multi_config_provider() -> "Provider":
         @provide(scope=Scope.APP)  # type: ignore[misc]
         async def get_sqlite_config(self) -> SqliteConfig:
             await asyncio.sleep(0.001)
-            config = SqliteConfig(pool_config={"database": ":memory:"})
+            config = SqliteConfig(connection_config={"database": ":memory:"})
             config.bind_key = "async_multi_sqlite"
             config.migration_config = {"enabled": True}
             return config
@@ -99,7 +99,7 @@ def async_multi_config_provider() -> "Provider":
         @provide(scope=Scope.APP)  # type: ignore[misc]
         async def get_aiosqlite_config(self) -> AiosqliteConfig:
             await asyncio.sleep(0.001)
-            config = AiosqliteConfig(pool_config={"database": ":memory:"})
+            config = AiosqliteConfig(connection_config={"database": ":memory:"})
             config.bind_key = "async_multi_aiosqlite"
             config.migration_config = {"enabled": True}
             return config
@@ -107,7 +107,7 @@ def async_multi_config_provider() -> "Provider":
         @provide(scope=Scope.APP)  # type: ignore[misc]
         async def get_duckdb_config(self) -> DuckDBConfig:
             await asyncio.sleep(0.001)
-            config = DuckDBConfig(pool_config={"database": ":memory:"})
+            config = DuckDBConfig(connection_config={"database": ":memory:"})
             config.bind_key = "async_multi_duckdb"
             config.migration_config = {"enabled": True}
             return config

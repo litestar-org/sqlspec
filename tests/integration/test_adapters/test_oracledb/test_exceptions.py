@@ -15,7 +15,7 @@ pytestmark = pytest.mark.xdist_group("oracle")
 def oracle_sync_exception_session(oracle_service: OracleService) -> Generator[OracleSyncDriver, None, None]:
     """Create an Oracle sync session for exception testing."""
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "user": oracle_service.user,
             "password": oracle_service.password,
             "dsn": f"{oracle_service.host}:{oracle_service.port}/{oracle_service.service_name}",
@@ -33,7 +33,7 @@ def oracle_sync_exception_session(oracle_service: OracleService) -> Generator[Or
 async def oracle_async_exception_session(oracle_service: OracleService) -> AsyncGenerator[OracleAsyncDriver, None]:
     """Create an Oracle async session for exception testing."""
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "user": oracle_service.user,
             "password": oracle_service.password,
             "dsn": f"{oracle_service.host}:{oracle_service.port}/{oracle_service.service_name}",

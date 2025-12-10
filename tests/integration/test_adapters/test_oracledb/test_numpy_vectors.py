@@ -14,14 +14,16 @@ pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.skipif(not NUMPY_IN
 @pytest.fixture
 def oracle_numpy_sync_config(oracle_sync_config: OracleSyncConfig) -> OracleSyncConfig:
     """Create Oracle sync config with NumPy vectors enabled."""
-    return OracleSyncConfig(pool_config=oracle_sync_config.pool_config, driver_features={"enable_numpy_vectors": True})
+    return OracleSyncConfig(
+        connection_config=oracle_sync_config.connection_config, driver_features={"enable_numpy_vectors": True}
+    )
 
 
 @pytest.fixture
 def oracle_numpy_async_config(oracle_async_config: OracleAsyncConfig) -> OracleAsyncConfig:
     """Create Oracle async config with NumPy vectors enabled."""
     return OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, driver_features={"enable_numpy_vectors": True}
+        connection_config=oracle_async_config.connection_config, driver_features={"enable_numpy_vectors": True}
     )
 
 
@@ -273,7 +275,7 @@ async def test_numpy_disabled_by_default(oracle_async_config: OracleAsyncConfig)
     import numpy as np
 
     config_no_numpy = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, driver_features={"enable_numpy_vectors": False}
+        connection_config=oracle_async_config.connection_config, driver_features={"enable_numpy_vectors": False}
     )
 
     async with config_no_numpy.provide_session() as session:

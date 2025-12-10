@@ -11,7 +11,7 @@ pytestmark = pytest.mark.xdist_group("oracle")
 async def test_async_connection(oracle_23ai_service: OracleService) -> None:
     """Test async connection components for OracleDB."""
     async_config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -35,7 +35,7 @@ async def test_async_connection(oracle_23ai_service: OracleService) -> None:
 
     # Test pool with connection parameters
     another_config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -61,7 +61,7 @@ async def test_async_connection(oracle_23ai_service: OracleService) -> None:
 def test_sync_connection(oracle_23ai_service: OracleService) -> None:
     """Test sync connection components for OracleDB."""
     sync_config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -85,7 +85,7 @@ def test_sync_connection(oracle_23ai_service: OracleService) -> None:
 
     # Test pool with connection parameters
     another_config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,

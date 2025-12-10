@@ -9,7 +9,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 from sqlspec.extensions.adk import SQLSpecSessionService
 
-config = AiosqliteConfig(pool_config={"database": ":memory:"})
+config = AiosqliteConfig(connection_config={"database": ":memory:"})
 service: "SQLSpecSessionService | None" = None
 
 

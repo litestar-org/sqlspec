@@ -55,7 +55,7 @@ Basic Setup
    # 2. Add database configuration
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/mydb"},
+           connection_config={"dsn": "postgresql://localhost/mydb"},
            extension_config={"litestar": {"session_table": "litestar_sessions"}},
        )
    )
@@ -276,7 +276,7 @@ Configure custom table names via ``extension_config``:
    spec = SQLSpec()
    config = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/mydb"},
+           connection_config={"dsn": "postgresql://localhost/mydb"},
            extension_config={
                "litestar": {
                    "session_table": "custom_sessions"
@@ -320,7 +320,7 @@ Enable In-Memory for Oracle session stores via ``extension_config``:
    spec = SQLSpec()
    config = spec.add_config(
        OracleAsyncConfig(
-           pool_config={
+           connection_config={
                "user": "app_user",
                "password": "secure_password",
                "dsn": "oracle.example.com:1521/XEPDB1",
@@ -412,7 +412,7 @@ Verify In-Memory status after table creation:
 
    from sqlspec.adapters.oracledb import OracleAsyncConfig
 
-   config = OracleAsyncConfig(pool_config={"dsn": "..."})
+   config = OracleAsyncConfig(connection_config={"dsn": "..."})
 
    async with config.provide_connection() as conn:
        cursor = conn.cursor()
@@ -547,7 +547,7 @@ Session tables can be managed via SQLSpec migrations. The configuration must be 
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/mydb"},
+           connection_config={"dsn": "postgresql://localhost/mydb"},
            extension_config={
                "litestar": {"session_table": "custom_sessions"}
            },

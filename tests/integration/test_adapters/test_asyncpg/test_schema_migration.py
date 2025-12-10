@@ -12,7 +12,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 def _create_config(postgres_service: PostgresService) -> AsyncpgConfig:
     """Create AsyncpgConfig from PostgresService fixture."""
     return AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,

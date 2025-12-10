@@ -290,8 +290,8 @@ from sqlspec import sql, SQLSpec, AsyncpgConfig, SqliteConfig
 
 # Configure multi-database setup
 sqlspec = SQLSpec()
-sqlspec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/main"}))
-sqlspec.add_config(SqliteConfig(pool_config={"database": "cache.db"}))
+sqlspec.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/main"}))
+sqlspec.add_config(SqliteConfig(connection_config={"database": "cache.db"}))
 
 # Use default dialect from factory
 default_upsert = sql.upsert("products")  # Uses first configured dialect

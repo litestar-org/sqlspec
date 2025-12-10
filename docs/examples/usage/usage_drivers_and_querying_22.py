@@ -8,7 +8,7 @@ __all__ = ("test_example_22_batch_operations",)
 
 def test_example_22_batch_operations() -> None:
     spec = SQLSpec()
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(db) as session:
         session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")

@@ -36,7 +36,7 @@ class SQLSpecPlugin:
 
         sqlspec = SQLSpec()
         config = SqliteConfig(
-            pool_config={"database": "app.db"},
+            connection_config={"database": "app.db"},
             extension_config={
                 "flask": {
                     "commit_mode": "autocommit",

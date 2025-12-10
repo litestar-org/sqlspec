@@ -21,7 +21,7 @@ async def test_inmemory_enabled_creates_session_table_with_inmemory_async(
 ) -> None:
     """Test that in_memory=True creates session table with INMEMORY PRIORITY HIGH clause."""
     config = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, extension_config={"litestar": {"in_memory": True}}
+        connection_config=oracle_async_config.connection_config, extension_config={"litestar": {"in_memory": True}}
     )
 
     store = OracleAsyncStore(config)
@@ -61,7 +61,7 @@ async def test_inmemory_enabled_creates_session_table_with_inmemory_async(
 async def test_inmemory_disabled_creates_table_without_inmemory_async(oracle_async_config: OracleAsyncConfig) -> None:
     """Test that in_memory=False (default) creates table without INMEMORY clause."""
     config = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, extension_config={"litestar": {"in_memory": False}}
+        connection_config=oracle_async_config.connection_config, extension_config={"litestar": {"in_memory": False}}
     )
 
     store = OracleAsyncStore(config)
@@ -97,7 +97,9 @@ async def test_inmemory_disabled_creates_table_without_inmemory_async(oracle_asy
 @pytest.mark.oracledb
 async def test_inmemory_default_disabled_async(oracle_async_config: OracleAsyncConfig) -> None:
     """Test that in_memory defaults to False when not specified."""
-    config = OracleAsyncConfig(pool_config=oracle_async_config.pool_config, extension_config={"litestar": {}})
+    config = OracleAsyncConfig(
+        connection_config=oracle_async_config.connection_config, extension_config={"litestar": {}}
+    )
 
     store = OracleAsyncStore(config)
     await store.create_table()
@@ -133,7 +135,7 @@ async def test_inmemory_default_disabled_async(oracle_async_config: OracleAsyncC
 async def test_inmemory_table_functional_async(oracle_async_config: OracleAsyncConfig) -> None:
     """Test that INMEMORY table works correctly for session operations."""
     config = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, extension_config={"litestar": {"in_memory": True}}
+        connection_config=oracle_async_config.connection_config, extension_config={"litestar": {"in_memory": True}}
     )
 
     store = OracleAsyncStore(config)
@@ -172,7 +174,7 @@ async def test_inmemory_table_functional_async(oracle_async_config: OracleAsyncC
 def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that in_memory=True works with sync store."""
     config = OracleSyncConfig(
-        pool_config=oracle_sync_config.pool_config, extension_config={"litestar": {"in_memory": True}}
+        connection_config=oracle_sync_config.connection_config, extension_config={"litestar": {"in_memory": True}}
     )
 
     store = OracleSyncStore(config)
@@ -212,7 +214,7 @@ def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
 def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that in_memory=False works with sync store."""
     config = OracleSyncConfig(
-        pool_config=oracle_sync_config.pool_config, extension_config={"litestar": {"in_memory": False}}
+        connection_config=oracle_sync_config.connection_config, extension_config={"litestar": {"in_memory": False}}
     )
 
     store = OracleSyncStore(config)
@@ -251,7 +253,7 @@ def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
 def test_inmemory_table_functional_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that INMEMORY table works correctly in sync mode."""
     config = OracleSyncConfig(
-        pool_config=oracle_sync_config.pool_config, extension_config={"litestar": {"in_memory": True}}
+        connection_config=oracle_sync_config.connection_config, extension_config={"litestar": {"in_memory": True}}
     )
 
     store = OracleSyncStore(config)

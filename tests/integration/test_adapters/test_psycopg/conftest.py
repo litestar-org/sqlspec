@@ -15,13 +15,13 @@ if TYPE_CHECKING:
 def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[PsycopgSyncConfig, None, None]":
     """Create a psycopg sync configuration."""
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         }
     )
     yield config
 
-    if config.pool_instance:
+    if config.connection_instance:
         config.close_pool()
 
 
@@ -29,12 +29,12 @@ def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[Psycopg
 async def psycopg_async_config(postgres_service: PostgresService) -> "AsyncGenerator[PsycopgAsyncConfig, None]":
     """Create a psycopg async configuration."""
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         }
     )
     try:
         yield config
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()

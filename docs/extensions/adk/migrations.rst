@@ -22,7 +22,7 @@ The simplest approach for development and small deployments:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
-   config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+   config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
    store = AsyncpgADKStore(config)
 
    # Create tables if they don't exist
@@ -50,7 +50,7 @@ Setting Up Migrations
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
                "session_table": "adk_sessions",
@@ -210,7 +210,7 @@ Configure custom table names via ``extension_config``:
 .. code-block:: python
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
                "session_table": "my_custom_sessions",
@@ -256,7 +256,7 @@ To include a owner ID column in your ADK tables, configure it in ``extension_con
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
                "session_table": "adk_sessions",
@@ -367,7 +367,7 @@ For multi-tenant applications, create separate migrations per tenant:
 
    # Tenant A config
    config_a = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
                "session_table": "tenant_a_sessions",
@@ -378,7 +378,7 @@ For multi-tenant applications, create separate migrations per tenant:
 
    # Tenant B config
    config_b = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
                "session_table": "tenant_b_sessions",
@@ -392,7 +392,7 @@ Or use a single database with schema separation (PostgreSQL):
 .. code-block:: python
 
    config_a = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
                "session_table": "tenant_a.sessions",
@@ -573,7 +573,7 @@ Test migrations in a staging environment:
    async def migration_config():
        """Test database configuration."""
        return AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/test_db"}
+           connection_config={"dsn": "postgresql://localhost/test_db"}
        )
 
 

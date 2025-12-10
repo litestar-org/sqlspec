@@ -39,7 +39,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 
         config = AsyncmyConfig(
-            pool_config={"host": "localhost", ...},
+            connection_config={"host": "localhost", ...},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",

@@ -19,7 +19,7 @@ def test_shutdown_closes_sync_pools(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shutdown should dispose sync pools exactly once."""
 
     sqlspec = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
 
     app = Flask(__name__)
@@ -46,7 +46,7 @@ def test_shutdown_closes_async_pools_and_stops_portal(monkeypatch: pytest.Monkey
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
-        config = AiosqliteConfig(pool_config={"database": tmp.name})
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
         sqlspec.add_config(config)
 
         app = Flask(__name__)
@@ -76,7 +76,7 @@ def test_default_session_key_is_db_session() -> None:
 def test_uses_default_session_key_when_not_configured() -> None:
     """Plugin should use DEFAULT_SESSION_KEY when no extension_config provided."""
     sqlspec = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
 
     plugin = SQLSpecPlugin(sqlspec)
@@ -89,7 +89,9 @@ def test_respects_custom_session_key() -> None:
     """Plugin should respect custom session_key in extension_config."""
     custom_key = "custom_db"
     sqlspec = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"}, extension_config={"flask": {"session_key": custom_key}})
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"flask": {"session_key": custom_key}}
+    )
     sqlspec.add_config(config)
 
     plugin = SQLSpecPlugin(sqlspec)

@@ -54,7 +54,7 @@ Basic Setup
 
    # Create configuration with connection pool
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "dsn": "postgresql://user:password@localhost:5432/mydb",
            "max_db_pool_size": 10,
        }
@@ -159,7 +159,7 @@ Basic Configuration
    from sqlspec.adapters.psqlpy import PsqlpyConfig
 
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "dsn": "postgresql://user:password@localhost:5432/mydb",
            "max_db_pool_size": 20,
        }
@@ -171,7 +171,7 @@ Advanced Connection Pooling
 .. code-block:: python
 
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "host": "localhost",
            "port": 5432,
            "username": "user",
@@ -192,7 +192,7 @@ SSL Configuration
 .. code-block:: python
 
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "dsn": "postgresql://user:password@localhost:5432/mydb",
            "ssl_mode": "require",
            "sslrootcert": "/path/to/ca.crt",
@@ -328,7 +328,7 @@ Optimize pool size for your workload:
 
    # For high-concurrency workloads
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "dsn": "postgresql://...",
            "max_db_pool_size": 100,  # Large pool for many concurrent users
        }
@@ -336,7 +336,7 @@ Optimize pool size for your workload:
 
    # For low-latency workloads
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "dsn": "postgresql://...",
            "max_db_pool_size": 20,   # Smaller pool, faster checkout
            "connect_timeout_sec": 5,  # Fail fast
@@ -500,7 +500,7 @@ High-Performance Agent API
 
    # High-performance configuration
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "dsn": "postgresql://localhost:5432/agents",
            "max_db_pool_size": 100,
            "connect_timeout_sec": 5,
@@ -556,7 +556,7 @@ Rust Microservices Integration
    # from pydantic_core import ValidationError  # Rust-based validation
 
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "dsn": "postgresql://localhost:5432/microservices"
        }
    )
@@ -610,7 +610,7 @@ Connection Pool Exhaustion
 
    # Increase pool size
    config = PsqlpyConfig(
-       pool_config={
+       connection_config={
            "dsn": "postgresql://...",
            "max_db_pool_size": 50,  # Increase from default
        }

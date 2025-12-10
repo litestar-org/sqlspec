@@ -48,7 +48,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 def get_config():
     config = SqliteConfig(
         bind_key="migration_test",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={
             "enabled": True,
             "script_location": "migrations"
@@ -79,13 +79,13 @@ from sqlspec.adapters.duckdb.config import DuckDBConfig
 def get_configs():
     sqlite_config = SqliteConfig(
         bind_key="sqlite_migrations",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True, "script_location": "sqlite_migrations"}
     )
 
     duckdb_config = DuckDBConfig(
         bind_key="duckdb_migrations",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True, "script_location": "duckdb_migrations"}
     )
 
@@ -113,7 +113,7 @@ def get_config():
     # Config without migration_config
     config = SqliteConfig(
         bind_key="no_migrations",
-        pool_config={"database": ":memory:"}
+        connection_config={"database": ":memory:"}
     )
     return config
 """
@@ -146,7 +146,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 def get_config():
     config = SqliteConfig(
         bind_key="revision_test",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True, "script_location": "migrations"}
     )
     return config
@@ -177,7 +177,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 def get_config():
     config = SqliteConfig(
         bind_key="verbose_test",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True}
     )
     return config
@@ -208,7 +208,7 @@ def test_init_command(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "init_test"
     config.migration_config = {"script_location": "test_migrations"}
     return config
@@ -237,7 +237,7 @@ def test_init_command_custom_directory(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "custom_init"
     config.migration_config = {"script_location": "migrations"}
     return config
@@ -268,7 +268,7 @@ def test_create_migration_command(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "revision_test"
     config.migration_config = {"enabled": True}
     return config
@@ -300,7 +300,7 @@ def test_make_migration_alias(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "revision_test"
     config.migration_config = {"enabled": True}
     return config
@@ -331,7 +331,7 @@ def test_create_migration_command_with_format(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "revision_test"
     config.migration_config = {"enabled": True}
     return config
@@ -371,7 +371,7 @@ def test_create_migration_command_with_file_type_alias(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "revision_test"
     config.migration_config = {"enabled": True}
     return config
@@ -412,7 +412,7 @@ def test_upgrade_command(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "upgrade_test"
     config.migration_config = {"enabled": True}
     return config
@@ -443,7 +443,7 @@ def test_upgrade_command_specific_revision(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "upgrade_revision_test"
     config.migration_config = {"enabled": True}
     return config
@@ -474,7 +474,7 @@ def test_downgrade_command(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "downgrade_test"
     config.migration_config = {"enabled": True}
     return config
@@ -505,7 +505,7 @@ def test_stamp_command(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "stamp_test"
     config.migration_config = {"enabled": True}
     return config
@@ -535,11 +535,11 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 
 def get_configs():
-    sqlite_config = SqliteConfig(pool_config={"database": ":memory:"})
+    sqlite_config = SqliteConfig(connection_config={"database": ":memory:"})
     sqlite_config.bind_key = "sqlite_multi"
     sqlite_config.migration_config = {"enabled": True}
 
-    duckdb_config = DuckDBConfig(pool_config={"database": ":memory:"})
+    duckdb_config = DuckDBConfig(connection_config={"database": ":memory:"})
     duckdb_config.bind_key = "duckdb_multi"
     duckdb_config.migration_config = {"enabled": True}
 
@@ -573,11 +573,11 @@ def test_dry_run_operations(
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_configs():
-    config1 = SqliteConfig(pool_config={"database": ":memory:"})
+    config1 = SqliteConfig(connection_config={"database": ":memory:"})
     config1.bind_key = "dry_run_test1"
     config1.migration_config = {"enabled": True}
 
-    config2 = SqliteConfig(pool_config={"database": "test.db"})
+    config2 = SqliteConfig(connection_config={"database": "test.db"})
     config2.bind_key = "dry_run_test2"
     config2.migration_config = {"enabled": True}
 
@@ -603,7 +603,7 @@ def test_execution_mode_reporting(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     config.bind_key = "execution_mode_test"
     config.migration_config = {"enabled": True}
     return config
@@ -637,7 +637,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 def get_config():
     return SqliteConfig(
         bind_key="target_config",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True, "script_location": "migrations"}
     )
 """
@@ -666,19 +666,19 @@ from sqlspec.adapters.duckdb.config import DuckDBConfig
 def get_configs():
     sqlite_config = SqliteConfig(
         bind_key="sqlite_db",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True, "script_location": "sqlite_migrations"}
     )
 
     duckdb_config = DuckDBConfig(
         bind_key="duckdb_db",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True, "script_location": "duckdb_migrations"}
     )
 
     postgres_config = SqliteConfig(
         bind_key="postgres_db",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True, "script_location": "postgres_migrations"}
     )
 
@@ -713,7 +713,7 @@ def get_configs():
     return [
         SqliteConfig(
             bind_key="existing_config",
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True}
         )
     ]
@@ -748,12 +748,12 @@ def get_multi_configs():
     return [
         SqliteConfig(
             bind_key="primary_db",
-            pool_config={"database": "primary.db"},
+            connection_config={"database": "primary.db"},
             migration_config={"enabled": True, "script_location": "primary_migrations"}
         ),
         DuckDBConfig(
             bind_key="analytics_db",
-            pool_config={"database": "analytics.duckdb"},
+            connection_config={"database": "analytics.duckdb"},
             migration_config={"enabled": True, "script_location": "analytics_migrations"}
         )
     ]

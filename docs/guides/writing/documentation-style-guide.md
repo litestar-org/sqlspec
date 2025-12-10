@@ -120,7 +120,7 @@ def execute(query: str) -> list[dict[str, Any]]:
 > "The pool size configuration has been updated. It now defaults to 10 instead of the old default of 5."
 
 ✅ **Good - Documentation:**
-> "The pool size defaults to 10 connections. Configure `pool_config={'min_size': 10}` to adjust."
+> "The pool size defaults to 10 connections. Configure `connection_config={'min_size': 10}` to adjust."
 
 **Exceptions (use version annotations):**
 
@@ -471,7 +471,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 # Configure database
 spec = SQLSpec()
 config = spec.add_config(
-    AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"})
+    AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"})
 )
 
 # Create store
@@ -508,7 +508,7 @@ Use inline code for:
 ```python
 # Good: Explains why
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "min_size": 10,  # Keep connections warm for fast response
         "max_size": 50   # Prevent pool exhaustion under load
     }
@@ -516,7 +516,7 @@ config = AsyncpgConfig(
 
 # Bad: Explains obvious what
 config = AsyncpgConfig(  # Create config
-    pool_config={  # Pool config
+    connection_config={  # Pool config
         "min_size": 10,  # Set min size to 10
 ```
 

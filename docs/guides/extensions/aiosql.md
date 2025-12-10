@@ -43,7 +43,7 @@ from sqlspec.extensions.aiosql import AiosqlAsyncAdapter
 
 async def main() -> None:
     spec = SQLSpec()
-    config = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/app"}))
+    config = spec.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/app"}))
 
     async with spec.provide_driver(config) as driver:
         adapter = AiosqlAsyncAdapter(driver)

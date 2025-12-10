@@ -17,7 +17,7 @@ def test_per_instance_cache_config() -> None:
         db_manager.update_cache_config(CacheConfig(sql_cache_enabled=True, sql_cache_size=500))
 
         # Add database config
-        db = db_manager.add_config(SqliteConfig(pool_config={"database": tmp.name}))
+        db = db_manager.add_config(SqliteConfig(connection_config={"database": tmp.name}))
 
         # Use the configured spec
         with db_manager.provide_session(db) as session:

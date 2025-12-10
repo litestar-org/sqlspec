@@ -126,7 +126,7 @@ class FlaskConfig(TypedDict):
         from sqlspec.adapters.asyncpg import AsyncpgConfig
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/mydb"},
+            connection_config={"dsn": "postgresql://localhost/mydb"},
             extension_config={
                 "flask": {
                     "commit_mode": "autocommit",
@@ -214,7 +214,7 @@ class StarletteConfig(TypedDict):
         from sqlspec.adapters.asyncpg import AsyncpgConfig
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/mydb"},
+            connection_config={"dsn": "postgresql://localhost/mydb"},
             extension_config={
                 "starlette": {
                     "commit_mode": "autocommit",
@@ -276,7 +276,7 @@ class FastAPIConfig(StarletteConfig):
         from sqlspec.adapters.asyncpg import AsyncpgConfig
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/mydb"},
+            connection_config={"dsn": "postgresql://localhost/mydb"},
             extension_config={
                 "fastapi": {
                     "commit_mode": "autocommit",
@@ -295,7 +295,7 @@ class ADKConfig(TypedDict):
         from sqlspec.adapters.asyncpg import AsyncpgConfig
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/mydb"},
+            connection_config={"dsn": "postgresql://localhost/mydb"},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",
@@ -388,7 +388,7 @@ class ADKConfig(TypedDict):
     Examples:
         Oracle with in-memory enabled:
             config = OracleAsyncConfig(
-                pool_config={"dsn": "oracle://..."},
+                connection_config={"dsn": "oracle://..."},
                 extension_config={
                     "adk": {
                         "in_memory": True
@@ -495,11 +495,11 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "_observability_runtime",
         "_storage_capabilities",
         "bind_key",
+        "connection_instance",
         "driver_features",
         "extension_config",
         "migration_config",
         "observability_config",
-        "pool_instance",
         "statement_config",
     )
 
@@ -520,7 +520,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     bind_key: "str | None"
     statement_config: "StatementConfig"
-    pool_instance: "PoolT | None"
+    connection_instance: "PoolT | None"
     migration_config: "dict[str, Any] | MigrationConfig"
     extension_config: "ExtensionConfigs"
     driver_features: "dict[str, Any]"
@@ -534,10 +534,15 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, type(self)):
             return False
-        return bool(self.pool_instance == other.pool_instance and self.migration_config == other.migration_config)
+        return bool(
+            self.connection_instance == other.connection_instance and self.migration_config == other.migration_config
+        )
 
     def __repr__(self) -> str:
-        parts = ", ".join([f"pool_instance={self.pool_instance!r}", f"migration_config={self.migration_config!r}"])
+        parts = ", ".join([
+            f"connection_instance={self.connection_instance!r}",
+            f"migration_config={self.migration_config!r}",
+        ])
         return f"{type(self).__name__}({parts})"
 
     def storage_capabilities(self) -> "StorageCapabilities":
@@ -916,6 +921,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self,
         *,
         connection_config: dict[str, Any] | None = None,
+        connection_instance: "Any" = None,
         migration_config: "dict[str, Any] | MigrationConfig | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
@@ -924,7 +930,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
-        self.pool_instance = None
+        self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
@@ -1061,6 +1067,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self,
         *,
         connection_config: "dict[str, Any] | None" = None,
+        connection_instance: "Any" = None,
         migration_config: "dict[str, Any] | MigrationConfig | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
@@ -1069,7 +1076,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
-        self.pool_instance = None
+        self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
@@ -1195,7 +1202,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for sync database configurations with connection pooling."""
 
-    __slots__ = ("pool_config",)
+    __slots__ = ("connection_config",)
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
@@ -1203,8 +1210,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     def __init__(
         self,
         *,
-        pool_config: "dict[str, Any] | None" = None,
-        pool_instance: "PoolT | None" = None,
+        connection_config: "dict[str, Any] | None" = None,
+        connection_instance: "PoolT | None" = None,
         migration_config: "dict[str, Any] | MigrationConfig | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
@@ -1213,8 +1220,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
-        self.pool_instance = pool_instance
-        self.pool_config = pool_config or {}
+        self.connection_instance = connection_instance
+        self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._init_observability(observability_config)
@@ -1239,25 +1246,25 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Returns:
             The created pool.
         """
-        if self.pool_instance is not None:
-            return self.pool_instance
-        self.pool_instance = self._create_pool()
-        self.get_observability_runtime().emit_pool_create(self.pool_instance)
-        return self.pool_instance
+        if self.connection_instance is not None:
+            return self.connection_instance
+        self.connection_instance = self._create_pool()
+        self.get_observability_runtime().emit_pool_create(self.connection_instance)
+        return self.connection_instance
 
     def close_pool(self) -> None:
         """Close the connection pool."""
-        pool = self.pool_instance
+        pool = self.connection_instance
         self._close_pool()
         if pool is not None:
             self.get_observability_runtime().emit_pool_destroy(pool)
-        self.pool_instance = None
+        self.connection_instance = None
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
-        if self.pool_instance is None:
-            self.pool_instance = self.create_pool()
-        return self.pool_instance
+        if self.connection_instance is None:
+            self.connection_instance = self.create_pool()
+        return self.connection_instance
 
     def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -1368,7 +1375,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for async database configurations with connection pooling."""
 
-    __slots__ = ("pool_config",)
+    __slots__ = ("connection_config",)
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
@@ -1376,8 +1383,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     def __init__(
         self,
         *,
-        pool_config: "dict[str, Any] | None" = None,
-        pool_instance: "PoolT | None" = None,
+        connection_config: "dict[str, Any] | None" = None,
+        connection_instance: "PoolT | None" = None,
         migration_config: "dict[str, Any] | MigrationConfig | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
@@ -1386,8 +1393,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
-        self.pool_instance = pool_instance
-        self.pool_config = pool_config or {}
+        self.connection_instance = connection_instance
+        self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._init_observability(observability_config)
@@ -1414,25 +1421,25 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Returns:
             The created pool.
         """
-        if self.pool_instance is not None:
-            return self.pool_instance
-        self.pool_instance = await self._create_pool()
-        self.get_observability_runtime().emit_pool_create(self.pool_instance)
-        return self.pool_instance
+        if self.connection_instance is not None:
+            return self.connection_instance
+        self.connection_instance = await self._create_pool()
+        self.get_observability_runtime().emit_pool_create(self.connection_instance)
+        return self.connection_instance
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
-        pool = self.pool_instance
+        pool = self.connection_instance
         await self._close_pool()
         if pool is not None:
             self.get_observability_runtime().emit_pool_destroy(pool)
-        self.pool_instance = None
+        self.connection_instance = None
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
-        if self.pool_instance is None:
-            self.pool_instance = await self.create_pool()
-        return self.pool_instance
+        if self.connection_instance is None:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
 
     async def create_connection(self) -> ConnectionT:
         """Create a database connection."""

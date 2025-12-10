@@ -26,7 +26,7 @@ def ensure_extensions(connection):
     connection.execute("INSTALL http_client; LOAD http_client;")
 
 config = DuckDBConfig(
-    pool_config={"database": ":memory:"},
+    connection_config={"database": ":memory:"},
     driver_features={
         "extensions": [{"name": "http_client"}],
         "on_connection_create": ensure_extensions,  # promoted to observability runtime

@@ -17,7 +17,7 @@ Example (with extension_config):
     from sqlspec.extensions.adk import SQLSpecSessionService
 
     config = AsyncpgConfig(
-        pool_config={"dsn": "postgresql://..."},
+        connection_config={"dsn": "postgresql://..."},
         extension_config={
             "adk": {
                 "session_table": "my_sessions",

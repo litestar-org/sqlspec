@@ -69,7 +69,7 @@ See :doc:`/extensions/adk/index` for comprehensive documentation including:
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
    from sqlspec.extensions.adk import SQLSpecSessionService
 
-   config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+   config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
    store = AsyncpgADKStore(config)
    await store.create_tables()
 
@@ -147,7 +147,7 @@ Plugin
       sql = SQLSpec()
       db = sql.add_config(
           AsyncpgConfig(
-              pool_config={"dsn": "postgresql://localhost/db"}
+              connection_config={"dsn": "postgresql://localhost/db"}
           )
       )
 

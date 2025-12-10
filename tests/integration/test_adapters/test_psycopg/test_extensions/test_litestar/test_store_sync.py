@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psycopg, pytest.m
 async def psycopg_sync_store(postgres_service: PostgresService) -> AsyncGenerator[PsycopgSyncStore, None]:
     """Create Psycopg sync store with test database."""
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -35,7 +35,7 @@ async def psycopg_sync_store(postgres_service: PostgresService) -> AsyncGenerato
         except Exception:
             pass
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 

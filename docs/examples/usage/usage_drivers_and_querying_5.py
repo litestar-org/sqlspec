@@ -18,7 +18,7 @@ async def test_example_5_construct_config(postgres_service: PostgresService) -> 
     # start-example
     spec = SQLSpec()
     dsn = os.environ.get("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/test")
-    config = PsqlpyConfig(pool_config={"dsn": dsn})
+    config = PsqlpyConfig(connection_config={"dsn": dsn})
     assert config is not None
     async with spec.provide_session(config) as session:
         create_table_query = """CREATE TABLE IF NOT EXISTS usage5_users (

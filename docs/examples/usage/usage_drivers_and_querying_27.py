@@ -8,7 +8,7 @@ __all__ = ("test_example_27_execute_many_dict",)
 
 def test_example_27_execute_many_dict() -> None:
     spec = SQLSpec()
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(db) as session:
         session.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY, action TEXT, user_id INTEGER)")

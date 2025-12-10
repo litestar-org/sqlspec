@@ -64,7 +64,7 @@ class Greeting(BaseModel):
     message: str
 
 spec = SQLSpec()
-db = sql.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(db) as session:
     greeting = session.select_one(

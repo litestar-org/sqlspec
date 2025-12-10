@@ -114,6 +114,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self,
         *,
         connection_config: AdbcConnectionParams | dict[str, Any] | None = None,
+        connection_instance: "Any" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: StatementConfig | None = None,
         driver_features: "AdbcDriverFeatures | dict[str, Any] | None" = None,
@@ -125,6 +126,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         Args:
             connection_config: Connection configuration parameters
+            connection_instance: Pre-created connection instance to use instead of creating new one
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
             driver_features: Driver feature configuration (AdbcDriverFeatures)
@@ -167,6 +169,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         super().__init__(
             connection_config=self.connection_config,
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
             driver_features=processed_driver_features,

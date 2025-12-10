@@ -7,7 +7,7 @@ from sqlspec.migrations.context import MigrationContext
 
 def test_migration_context_from_sqlite_config() -> None:
     """Test creating migration context from SQLite config."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     context = MigrationContext.from_config(config)
 
     assert context.dialect == "sqlite"
@@ -18,7 +18,9 @@ def test_migration_context_from_sqlite_config() -> None:
 
 def test_migration_context_from_postgres_config() -> None:
     """Test creating migration context from PostgreSQL config."""
-    config = PsycopgSyncConfig(pool_config={"host": "localhost", "dbname": "test", "user": "test", "password": "test"})
+    config = PsycopgSyncConfig(
+        connection_config={"host": "localhost", "dbname": "test", "user": "test", "password": "test"}
+    )
     context = MigrationContext.from_config(config)
 
     # PostgreSQL config should have postgres dialect
