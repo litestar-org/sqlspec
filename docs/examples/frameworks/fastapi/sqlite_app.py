@@ -8,14 +8,13 @@ from fastapi import Depends, FastAPI
 
 from docs.examples.shared.configs import sqlite_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core import SQL
 
 __all__ = ("get_session", "list_articles", "main", "on_startup", "seed_database")
 
 
-registry = sqlite_registry()
-config = registry.get_config(SqliteConfig)
+registry, config = sqlite_registry()
 app = FastAPI()
 
 

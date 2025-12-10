@@ -20,17 +20,14 @@ def test_binding_multiple_configs() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         db_manager = SQLSpec()
 
-        # Add multiple configurations
-        sqlite_key = db_manager.add_config(SqliteConfig(pool_config={"database": tmp.name}))
+        # Add multiple configurations - add_config returns the config instance
+        sqlite_config = db_manager.add_config(SqliteConfig(pool_config={"database": tmp.name}))
         dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
-        asyncpg_key = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}))
+        pg_config = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}))
 
-        # Use specific configuration
-        with db_manager.provide_session(sqlite_key) as session:
+        # Use specific configuration - pass the config instance directly
+        with db_manager.provide_session(sqlite_config) as session:
             session.execute("SELECT 1")
-
-        sqlite_config = db_manager.get_config(sqlite_key)
-        pg_config = db_manager.get_config(asyncpg_key)
 
         # end-example
         assert sqlite_config.pool_config["database"] == tmp.name

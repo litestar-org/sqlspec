@@ -71,6 +71,7 @@ make docs                       # Build Sphinx documentation
 ### Adapters Structure
 
 Each adapter in `sqlspec/adapters/` follows this structure:
+
 - `config.py` - Configuration classes with pool settings
 - `driver.py` - Query execution implementation (sync/async)
 - `_types.py` - Adapter-specific type definitions
@@ -88,15 +89,14 @@ Supported adapters: adbc, aiosqlite, asyncmy, asyncpg, bigquery, duckdb, oracled
 ### Database Connection Flow
 
 ```python
-# 1. Create configuration
-config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+# 1. Create SQLSpec manager
+manager = SQLSpec()
 
-# 2. Register with SQLSpec
-sql = SQLSpec()
-sql.add_config(config)
+# 2. Create and register configuration (returns same instance)
+config = manager.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
 
-# 3. Get session via context manager
-async with sql.provide_session(config) as session:
+# 3. Get session via context manager (using config instance)
+async with manager.provide_session(config) as session:
     result = await session.execute("SELECT * FROM users")
 ```
 
@@ -133,6 +133,7 @@ async with sql.provide_session(config) as session:
 ### Mypyc Compatibility
 
 For classes in `sqlspec/core/` and `sqlspec/driver/`:
+
 - Use `__slots__` for data-holding classes
 - Implement explicit `__init__`, `__repr__`, `__eq__`, `__hash__`
 - Avoid dataclasses in performance-critical paths
@@ -257,17 +258,71 @@ def database_to_bytes(value: Any) -> bytes | None:
 ```
 
 **Use this pattern when**:
+
 - Database client library requires specific encoding for binary data
 - Need transparent conversion between Python bytes and database format
 - Want to centralize encoding/decoding logic for reuse
 
 **Key principles**:
+
 - Centralize conversion functions in `_type_handlers.py`
 - Handle None/NULL values explicitly
 - Support both raw and encoded formats on read (graceful handling)
 - Use in `coerce_params_for_database()` and type converter
 
 **Example**: Spanner requires base64-encoded bytes for `param_types.BYTES` parameters, but you work with raw Python bytes in application code.
+
+### Instance-Based Config Registry Pattern
+
+SQLSpec uses config instances as handles for database connections. The registry keys by `id(config)` instead of `type(config)` to support multiple databases of the same adapter type.
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+manager = SQLSpec()
+
+# Config instance IS the handle - add_config returns same instance
+main_db = manager.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://main/..."}))
+analytics_db = manager.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://analytics/..."}))
+
+# Type checker knows: AsyncpgConfig → AsyncContextManager[AsyncpgDriver]
+async with manager.provide_session(main_db) as driver:
+    await driver.execute("SELECT 1")
+
+# Different connection pool! Works correctly now.
+async with manager.provide_session(analytics_db) as driver:
+    await driver.execute("SELECT 1")
+```
+
+**Use this pattern when**:
+
+- Managing multiple databases of the same adapter type (e.g., main + analytics PostgreSQL)
+- Integrating with DI frameworks (config instance is the dependency)
+- Need type-safe session handles without `# type: ignore`
+
+**Key principles**:
+
+- Registry uses `id(config)` as key (not `type(config)`)
+- Multiple configs of same adapter type are stored separately
+- `add_config` returns the same instance passed in
+- All methods require registered config instances
+- Unregistered configs raise `ValueError`
+
+**DI framework integration**:
+
+```python
+# Just pass the config instance - it's already correctly typed
+def get_main_db() -> AsyncpgConfig:
+    return main_db
+
+# DI provider knows this is async from the config type
+async def provide_db_session(db: AsyncpgConfig, manager: SQLSpec):
+    async with manager.provide_session(db) as driver:
+        yield driver
+```
+
+**Reference implementation**: `sqlspec/base.py` (lines 58, 128-151, 435-581)
 
 ### Framework Extension Pattern
 
@@ -323,17 +378,20 @@ _register_with_sqlglot()
 ```
 
 **Use this pattern when**:
+
 - Database syntax varies significantly across dialects
 - Standard SQLGlot expressions don't match any database's native syntax
 - Need operator syntax (e.g., `<->`) vs function calls (e.g., `DISTANCE()`)
 
 **Key principles**:
+
 - Override `.sql()` method for dialect detection
 - Register with SQLGlot's TRANSFORMS for nested expression support
 - Store metadata (like metric) as `exp.Identifier` in `arg_types` for runtime access
 - Provide generic fallback for unsupported dialects
 
 **Example**: `VectorDistance` in `sqlspec/builder/_vector_expressions.py` generates:
+
 - PostgreSQL: `embedding <-> '[0.1,0.2]'` (operator)
 - MySQL: `DISTANCE(embedding, STRING_TO_VECTOR('[0.1,0.2]'), 'EUCLIDEAN')` (function)
 - Oracle: `VECTOR_DISTANCE(embedding, TO_VECTOR('[0.1,0.2]'), EUCLIDEAN)` (function)
@@ -388,17 +446,20 @@ Dialect.classes["custom"] = CustomDialect
 ```
 
 **Create custom dialect when**:
+
 - Database has unique DDL/DML syntax not in existing dialects
 - Need to parse and validate database-specific keywords
 - Need to generate database-specific SQL from AST
 - An existing dialect provides 80%+ compatibility to inherit from
 
 **Do NOT create custom dialect if**:
+
 - Only parameter style differences (use parameter profiles)
 - Only type conversion differences (use type converters)
 - Only connection management differences (use config/driver)
 
 **Key principles**:
+
 - **Inherit from closest dialect**: Spanner inherits BigQuery (both GoogleSQL)
 - **Minimal overrides**: Only override methods that need customization
 - **Store metadata in AST**: Use `expression.set(key, value)` for custom data
@@ -443,17 +504,20 @@ def command(config: str | None):
 ```
 
 **Benefits:**
+
 - Click automatically handles precedence (CLI flag always overrides env var)
 - Help text automatically shows env var name
 - Support for multiple fallback env vars via `envvar=["VAR1", "VAR2"]`
 - Less code, fewer bugs
 
 **For project file discovery (pyproject.toml, etc.):**
+
 - Use custom logic as fallback after Click env var handling
 - Walk filesystem from cwd to find config files
 - Return `None` if not found to trigger helpful error message
 
 **Multi-config support:**
+
 - Split comma-separated values from CLI flag, env var, or pyproject.toml
 - Resolve each config path independently
 - Flatten results if callables return lists
@@ -531,6 +595,7 @@ if async_configs:
 ```
 
 **Key principles:**
+
 - Sync configs must execute outside event loop (direct function calls)
 - Async configs must execute inside event loop (via `run_()`)
 - Multi-config operations should batch sync and async separately for efficiency

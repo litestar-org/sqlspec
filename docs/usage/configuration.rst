@@ -264,9 +264,8 @@ Use bind keys for clearer configuration management:
    :end-before: # end-example
    :dedent: 2
 
-``SQLSpec.add_config()`` returns a key for the registered configuration.
-Store that value (as shown above) and reuse it when calling
-``provide_session()`` or ``get_config()``. The config registry holds a single
+``SQLSpec.add_config()`` returns the config instance itself, which can be used
+directly when calling ``provide_session()``. The config registry holds a single
 instance per config type, so creating multiple variants of the same adapter
 requires defining lightweight subclasses or binding unique config classes for
 each database.

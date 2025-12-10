@@ -62,7 +62,7 @@ def test_example_10_duckdb_config(tmp_path: Path) -> None:
                """)
         finally:
             # Close the pool for the persistent config
-            spec.get_config(in_memory_db).close_pool()
-            spec.get_config(persistent_db).close_pool()
+            in_memory_db.close_pool()
+            persistent_db.close_pool()
             # The TemporaryDirectory context manager handles directory cleanup automatically
     # end-example

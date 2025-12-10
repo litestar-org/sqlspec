@@ -251,8 +251,8 @@ def test_create_migration_file_respects_default_format(tmp_path: Path) -> None:
 
     class DummyConfig:
         migration_config = {"default_format": "py", "author": "Static"}
-        bind_key = None
-        driver_type = None
+        bind_key: str | None = None
+        driver_type: type | None = None
 
     file_path = create_migration_file(
         migrations_dir, "0001", "custom", None, config=cast(DatabaseConfigProtocol[Any, Any, Any], DummyConfig())
@@ -273,8 +273,8 @@ def test_create_migration_file_uses_custom_sql_template(tmp_path: Path) -> None:
                 "sql": {"header": "-- {title} [ACME]", "metadata": ["-- Owner: {author}"], "body": "-- custom body"}
             },
         }
-        bind_key = None
-        driver_type = None
+        bind_key: str | None = None
+        driver_type: type | None = None
 
     file_path = create_migration_file(
         migrations_dir, "0001", "custom", "sql", config=cast(DatabaseConfigProtocol[Any, Any, Any], DummyConfig())

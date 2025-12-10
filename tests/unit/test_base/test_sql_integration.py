@@ -206,13 +206,13 @@ def test_sql_integration_with_existing_functionality() -> None:
     sql_spec = SQLSpec()
 
     config = SqliteConfig(pool_config={"database": ":memory:"})
-    sql_spec.add_config(config)
+    returned_config = sql_spec.add_config(config)
 
     sql_spec.add_named_sql("get_users", "SELECT * FROM users")
     sql_spec.add_named_sql("count_users", "SELECT COUNT(*) FROM users")
 
-    retrieved_config = sql_spec.get_config(SqliteConfig)
-    assert retrieved_config is config
+    # Config instance IS the handle - add_config returns the same instance
+    assert returned_config is config
 
     assert sql_spec.has_sql_query("get_users")
     sql_obj = sql_spec.get_sql("get_users")

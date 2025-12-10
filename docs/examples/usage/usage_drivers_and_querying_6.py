@@ -41,6 +41,6 @@ def test_example_6_sqlite_config(tmp_path: Path) -> None:
                 result.all()
         finally:
             # Clean up the temporary database file
-            spec.get_config(db).close_pool()
+            db.close_pool()
             Path(db_path).unlink()
         # end-example

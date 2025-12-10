@@ -6,12 +6,11 @@ from litestar import Litestar, get
 
 from docs.examples.shared.configs import sqlite_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core import SQL
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
-registry = sqlite_registry()
-config = registry.get_config(SqliteConfig)
+registry, config = sqlite_registry()
 plugin = SQLSpecPlugin(sqlspec=registry)
 
 

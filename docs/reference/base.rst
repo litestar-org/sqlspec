@@ -32,13 +32,13 @@ SQLSpec Registry
       from sqlspec.adapters.asyncpg import AsyncpgConfig
 
       sql = SQLSpec()
-      db = sql.add_config(
+      config = sql.add_config(
           AsyncpgConfig(
               pool_config={"host": "localhost", "database": "mydb"}
           )
       )
 
-      async with sql.provide_session(db) as session:
+      async with sql.provide_session(config) as session:
           result = await session.execute("SELECT * FROM users")
 
 Configuration Types
@@ -98,7 +98,7 @@ Manual lifecycle control:
 .. code-block:: python
 
    sql = SQLSpec()
-   db = sql.add_config(AsyncpgConfig(pool_config={...}))
+   config = sql.add_config(AsyncpgConfig(pool_config={...}))
 
    # Startup pools explicitly
    # Pools created lazily on first use
@@ -136,20 +136,14 @@ SQLSpec supports multiple databases simultaneously:
 Configuration Lookup
 --------------------
 
-Configurations can be retrieved by type or instance:
+Sessions are provided using the config instance returned from ``add_config``:
 
 .. code-block:: python
 
-   # By config type
-   async with sql.provide_session(AsyncpgConfig) as session:
-       ...
-
-   # By config instance
+   # Config instance IS the handle
+   config = sql.add_config(AsyncpgConfig(pool_config={...}))
    async with sql.provide_session(config) as session:
        ...
-
-   # Get config by type
-   config = sql.get_config(AsyncpgConfig)
 
 See Also
 ========
