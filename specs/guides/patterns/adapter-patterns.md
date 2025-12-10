@@ -46,13 +46,13 @@ Each database library has its own configuration style, parameter names, and defa
 Use TypedDict for strongly-typed configuration with three-tier structure:
 1. **ConnectionConfig**: Basic connection parameters
 2. **PoolConfig**: Connection pool settings (inherits ConnectionConfig)
-3. **DatabaseConfig**: SQLSpec wrapper with pool_config, driver_features, bind_key
+3. **DatabaseConfig**: SQLSpec wrapper with connection_config, driver_features, bind_key
 
 **Key principles**:
 1. Use TypedDict with NotRequired fields for optional parameters
 2. Inherit PoolConfig from ConnectionConfig to DRY
-3. Provide explicit pool_config parameter (dict or TypedDict)
-4. Support pool_instance for pre-configured pools
+3. Provide explicit connection_config parameter (dict or TypedDict)
+4. Support connection_instance for pre-configured pools
 5. Include bind_key for multi-database support
 6. Use extension_config for framework-specific settings
 
@@ -128,8 +128,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, Pool, AsyncpgDriver])
     def __init__(
         self,
         *,
-        pool_config: "AsyncpgPoolConfig | dict[str, Any] | None" = None,
-        pool_instance: "Pool | None" = None,
+        connection_config: "AsyncpgPoolConfig | dict[str, Any] | None" = None,
+        connection_instance: "Pool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncpgDriverFeatures | dict[str, Any] | None" = None,
@@ -139,8 +139,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, Pool, AsyncpgDriver])
         """Initialize AsyncPG configuration.
 
         Args:
-            pool_config: Pool configuration (TypedDict or dict)
-            pool_instance: Existing pool to use
+            connection_config: Pool configuration (TypedDict or dict)
+            connection_instance: Existing pool to use
             migration_config: Migration settings
             statement_config: Statement processing overrides
             driver_features: Feature flags (TypedDict or dict)
@@ -153,8 +153,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, Pool, AsyncpgDriver])
         features_dict.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
-            pool_config=dict(pool_config) if pool_config else {},
-            pool_instance=pool_instance,
+            connection_config=dict(connection_config) if connection_config else {},
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
             driver_features=features_dict,
@@ -214,18 +214,18 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, OracleSyncConnec
 
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create sync connection pool."""
-        return oracledb.create_pool(**self.pool_config)
+        return oracledb.create_pool(**self.connection_config)
 
     @contextlib.contextmanager
     def provide_connection(self) -> "Generator[OracleSyncConnection, None, None]":
         """Provide sync connection."""
-        if self.pool_instance is None:
-            self.pool_instance = self.create_pool()
-        conn = self.pool_instance.acquire()
+        if self.connection_instance is None:
+            self.connection_instance = self.create_pool()
+        conn = self.connection_instance.acquire()
         try:
             yield conn
         finally:
-            self.pool_instance.release(conn)
+            self.connection_instance.release(conn)
 ```
 
 #### Variation 2: External Connector (Cloud SQL, AlloyDB)
@@ -560,7 +560,7 @@ class OracleSyncConfig(SyncDatabaseConfig):
 
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create pool with session callback."""
-        config = dict(self.pool_config)
+        config = dict(self.connection_config)
 
         # Register session callback if any handlers enabled
         if self.driver_features.get("enable_numpy_vectors", False):
@@ -961,11 +961,11 @@ Use context managers for automatic resource cleanup with try/finally patterns. L
 
 **Implementation steps**:
 1. Implement `_create_pool()` (private, actual creation)
-2. Implement `create_pool()` (public, sets pool_instance)
+2. Implement `create_pool()` (public, sets connection_instance)
 3. Implement `provide_connection()` context manager
 4. Implement `provide_session()` context manager (wraps connection)
 5. Implement `_close_pool()` for cleanup
-6. Set pool_instance to None after close
+6. Set connection_instance to None after close
 
 ### Code Example
 
@@ -976,31 +976,31 @@ from contextlib import asynccontextmanager
 
 class MinimalAsyncConfig:
     def __init__(self):
-        self.pool_instance = None
+        self.connection_instance = None
 
     async def _create_pool(self):
         """Create the actual pool."""
-        return await library.create_pool(**self.pool_config)
+        return await library.create_pool(**self.connection_config)
 
     async def create_pool(self):
         """Public pool creation."""
-        if self.pool_instance is None:
-            self.pool_instance = await self._create_pool()
-        return self.pool_instance
+        if self.connection_instance is None:
+            self.connection_instance = await self._create_pool()
+        return self.connection_instance
 
     @asynccontextmanager
     async def provide_connection(self):
         """Provide connection with automatic cleanup."""
-        if self.pool_instance is None:
-            self.pool_instance = await self._create_pool()
+        if self.connection_instance is None:
+            self.connection_instance = await self._create_pool()
 
         connection = None
         try:
-            connection = await self.pool_instance.acquire()
+            connection = await self.connection_instance.acquire()
             yield connection
         finally:
             if connection is not None:
-                await self.pool_instance.release(connection)
+                await self.connection_instance.release(connection)
 ```
 
 #### Full Example (AsyncPG)
@@ -1015,10 +1015,10 @@ if TYPE_CHECKING:
 
 
 class AsyncpgConfig(AsyncDatabaseConfig):
-    def __init__(self, *, pool_config=None, pool_instance=None, ...):
+    def __init__(self, *, connection_config=None, connection_instance=None, ...):
         super().__init__(
-            pool_config=dict(pool_config) if pool_config else {},
-            pool_instance=pool_instance,
+            connection_config=dict(connection_config) if connection_config else {},
+            connection_instance=connection_instance,
             ...
         )
 
@@ -1028,7 +1028,7 @@ class AsyncpgConfig(AsyncDatabaseConfig):
         Returns:
             AsyncPG connection pool instance.
         """
-        config = self._get_pool_config_dict()
+        config = self._get_connection_config_dict()
         config.setdefault("init", self._init_connection)
         return await asyncpg_create_pool(**config)
 
@@ -1038,15 +1038,15 @@ class AsyncpgConfig(AsyncDatabaseConfig):
         Returns:
             AsyncPG connection pool.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self._create_pool()
-        return self.pool_instance
+        if self.connection_instance is None:
+            self.connection_instance = await self._create_pool()
+        return self.connection_instance
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
-        if self.pool_instance:
-            await self.pool_instance.close()
-            self.pool_instance = None
+        if self.connection_instance:
+            await self.connection_instance.close()
+            self.connection_instance = None
 
     async def close_pool(self) -> None:
         """Public close method."""
@@ -1068,16 +1068,16 @@ class AsyncpgConfig(AsyncDatabaseConfig):
         Yields:
             AsyncPG connection instance.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self._create_pool()
+        if self.connection_instance is None:
+            self.connection_instance = await self._create_pool()
 
         connection = None
         try:
-            connection = await self.pool_instance.acquire()
+            connection = await self.connection_instance.acquire()
             yield connection
         finally:
             if connection is not None:
-                await self.pool_instance.release(connection)
+                await self.connection_instance.release(connection)
 
     @asynccontextmanager
     async def provide_session(
@@ -1117,7 +1117,7 @@ from typing import Generator
 class OracleSyncConfig(SyncDatabaseConfig):
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create sync connection pool."""
-        config = dict(self.pool_config)
+        config = dict(self.connection_config)
 
         # Add session callback if handlers enabled
         if self.driver_features.get("enable_numpy_vectors", False):
@@ -1127,15 +1127,15 @@ class OracleSyncConfig(SyncDatabaseConfig):
 
     def create_pool(self) -> "OracleSyncConnectionPool":
         """Public pool creation."""
-        if self.pool_instance is None:
-            self.pool_instance = self._create_pool()
-        return self.pool_instance
+        if self.connection_instance is None:
+            self.connection_instance = self._create_pool()
+        return self.connection_instance
 
     def _close_pool(self) -> None:
         """Close sync pool."""
-        if self.pool_instance:
-            self.pool_instance.close()
-            self.pool_instance = None
+        if self.connection_instance:
+            self.connection_instance.close()
+            self.connection_instance = None
 
     @contextlib.contextmanager
     def provide_connection(self) -> "Generator[OracleSyncConnection, None, None]":
@@ -1144,16 +1144,16 @@ class OracleSyncConfig(SyncDatabaseConfig):
         Yields:
             Oracle Connection instance.
         """
-        if self.pool_instance is None:
-            self.pool_instance = self._create_pool()
+        if self.connection_instance is None:
+            self.connection_instance = self._create_pool()
 
         conn = None
         try:
-            conn = self.pool_instance.acquire()
+            conn = self.connection_instance.acquire()
             yield conn
         finally:
             if conn is not None:
-                self.pool_instance.release(conn)
+                self.connection_instance.release(conn)
 
     @contextlib.contextmanager
     def provide_session(
@@ -1181,24 +1181,24 @@ class OracleSyncConfig(SyncDatabaseConfig):
 ```python
 # BAD - No finally block
 async def provide_connection(self):
-    if not self.pool_instance:
-        self.pool_instance = await self._create_pool()
-    connection = await self.pool_instance.acquire()
+    if not self.connection_instance:
+        self.connection_instance = await self._create_pool()
+    connection = await self.connection_instance.acquire()
     yield connection
-    await self.pool_instance.release(connection)  # Skipped if exception!
+    await self.connection_instance.release(connection)  # Skipped if exception!
 
 # BAD - Creating pool in __init__
 class BadConfig:
-    def __init__(self, pool_config):
+    def __init__(self, connection_config):
         # Pool created even if never used!
-        self.pool_instance = asyncio.run(create_pool(**pool_config))
+        self.connection_instance = asyncio.run(create_pool(**connection_config))
 
 # BAD - Manual connection management
-connection = await config.pool_instance.acquire()
+connection = await config.connection_instance.acquire()
 try:
     result = await connection.fetch(sql)
 finally:
-    await config.pool_instance.release(connection)
+    await config.connection_instance.release(connection)
 # Verbose and error-prone
 
 # GOOD - Context manager
@@ -1220,9 +1220,9 @@ async def provide_pool(self) -> "Pool":
     Returns:
         Connection pool instance.
     """
-    if not self.pool_instance:
-        self.pool_instance = await self.create_pool()
-    return self.pool_instance
+    if not self.connection_instance:
+        self.connection_instance = await self.create_pool()
+    return self.connection_instance
 ```
 
 #### Variation 2: External Connector Cleanup
@@ -1232,9 +1232,9 @@ For Google Cloud connectors requiring cleanup:
 ```python
 async def _close_pool(self) -> None:
     """Close pool and cleanup connectors."""
-    if self.pool_instance:
-        await self.pool_instance.close()
-        self.pool_instance = None
+    if self.connection_instance:
+        await self.connection_instance.close()
+        self.connection_instance = None
 
     # Cleanup Cloud SQL connector
     if self._cloud_sql_connector is not None:
@@ -1281,7 +1281,7 @@ async def _close_pool(self) -> None:
 
 **When NOT to use this pattern**:
 - Required features (put in config directly)
-- Pool configuration (use pool_config)
+- Pool configuration (use connection_config)
 - Statement-level overrides (use statement_config)
 
 ### Problem
@@ -1487,25 +1487,25 @@ class OracleSyncConfig(SyncDatabaseConfig):
 ```python
 # Auto-detect (recommended)
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://..."},
+    connection_config={"dsn": "postgresql://..."},
     # driver_features automatically enables pgvector if installed
 )
 
 # Explicit disable
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://..."},
+    connection_config={"dsn": "postgresql://..."},
     driver_features={"enable_pgvector": False}  # Disable even if installed
 )
 
 # Explicit enable (fails if not installed)
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://..."},
+    connection_config={"dsn": "postgresql://..."},
     driver_features={"enable_pgvector": True}  # Will fail if package missing
 )
 
 # Custom serializer
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://..."},
+    connection_config={"dsn": "postgresql://..."},
     driver_features={
         "json_serializer": orjson.dumps,
         "json_deserializer": orjson.loads,
@@ -1514,7 +1514,7 @@ config = AsyncpgConfig(
 
 # Cloud SQL connector
 config = AsyncpgConfig(
-    pool_config={"user": "myuser", "database": "mydb"},
+    connection_config={"user": "myuser", "database": "mydb"},
     driver_features={
         "enable_cloud_sql": True,
         "cloud_sql_instance": "project:region:instance",
@@ -1528,7 +1528,7 @@ config = AsyncpgConfig(
 ```python
 # BAD - Feature flags mixed with pool config
 class BadConfig:
-    def __init__(self, pool_config=None, enable_pgvector=True):
+    def __init__(self, connection_config=None, enable_pgvector=True):
         # Mixed concerns!
         pass
 

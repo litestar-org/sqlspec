@@ -17,14 +17,14 @@ pytestmark = pytest.mark.xdist_group("postgres")
 async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGenerator[PsycopgAsyncDriver, None]:
     """Create a psycopg async session with test table."""
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "autocommit": True,
         }
     )
 
     pool = await config.create_pool()
-    config.pool_instance = pool
+    config.connection_instance = pool
 
     try:
         async with config.provide_session() as session:

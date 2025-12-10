@@ -58,7 +58,7 @@ AsyncPG (Recommended)
    from sqlspec.adapters.asyncpg import AsyncpgConfig
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://user:pass@localhost:5432/agentdb",
        "min_size": 10,
        "max_size": 20,
@@ -122,7 +122,7 @@ Psycopg
    from sqlspec.adapters.psycopg import PsycopgAsyncConfig
    from sqlspec.adapters.psycopg.adk import PsycopgADKStore
 
-   config = PsycopgAsyncConfig(pool_config={
+   config = PsycopgAsyncConfig(connection_config={
        "conninfo": "postgresql://user:pass@localhost/agentdb",
        "min_size": 5,
        "max_size": 20
@@ -155,7 +155,7 @@ Psqlpy
    from sqlspec.adapters.psqlpy import PsqlpyConfig
    from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 
-   config = PsqlpyConfig(pool_config={
+   config = PsqlpyConfig(connection_config={
        "dsn": "postgresql://user:pass@localhost/agentdb",
        "max_db_pool_size": 20
    })
@@ -196,7 +196,7 @@ AsyncMy
    from sqlspec.adapters.asyncmy import AsyncmyConfig
    from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 
-   config = AsyncmyConfig(pool_config={
+   config = AsyncmyConfig(connection_config={
        "host": "localhost",
        "port": 3306,
        "user": "agent_user",
@@ -272,7 +272,7 @@ SQLite (Sync)
    from sqlspec.adapters.sqlite import SqliteConfig
    from sqlspec.adapters.sqlite.adk import SqliteADKStore
 
-   config = SqliteConfig(pool_config={
+   config = SqliteConfig(connection_config={
        "database": "/path/to/agent.db",
        "check_same_thread": False  # Allow multi-threaded access
    })
@@ -327,7 +327,7 @@ AIOSqlite
    from sqlspec.adapters.aiosqlite import AiosqliteConfig
    from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 
-   config = AiosqliteConfig(pool_config={
+   config = AiosqliteConfig(connection_config={
        "database": "/path/to/agent.db"
    })
 
@@ -365,7 +365,7 @@ OracleDB
    from sqlspec.adapters.oracledb import OracleConfig
    from sqlspec.adapters.oracledb.adk import OracleADKStore
 
-   config = OracleConfig(pool_config={
+   config = OracleConfig(connection_config={
        "user": "agent_user",
        "password": "secure_password",
        "dsn": "localhost:1521/ORCLPDB1",
@@ -573,12 +573,12 @@ DuckDB
    from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 
    # File-based database
-   config = DuckDBConfig(pool_config={
+   config = DuckDBConfig(connection_config={
        "database": "/path/to/sessions.duckdb"
    })
 
    # Or in-memory for testing
-   config = DuckDBConfig(pool_config={
+   config = DuckDBConfig(connection_config={
        "database": ":memory:"
    })
 

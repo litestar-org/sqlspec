@@ -51,7 +51,7 @@ spec = SQLSpec()
 # Primary database (PostgreSQL)
 primary_db = spec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/myapp", "min_size": 10, "max_size": 20},
+        connection_config={"dsn": "postgresql://localhost/myapp", "min_size": 10, "max_size": 20},
         extension_config={
             "litestar": {
                 "session_key": "primary_db",  # Custom key
@@ -69,7 +69,7 @@ primary_db = spec.add_config(
 # Analytics database (DuckDB)
 analytics_db = spec.add_config(
     DuckDBConfig(
-        pool_config={"database": "analytics.duckdb", "config": {"memory_limit": "4GB"}},
+        connection_config={"database": "analytics.duckdb", "config": {"memory_limit": "4GB"}},
         extension_config={
             "litestar": {
                 "session_key": "analytics_db",  # Unique key

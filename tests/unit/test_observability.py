@@ -412,7 +412,7 @@ def test_telemetry_snapshot_includes_recent_storage_jobs() -> None:
     reset_storage_bridge_events()
 
     spec = SQLSpec()
-    spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     record_storage_diagnostic_event({
         "destination": "alias://bucket/path",

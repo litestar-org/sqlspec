@@ -28,7 +28,7 @@ async def test_tracker_instance(postgres_service: PostgresService) -> None:
             f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         )
         config = AsyncpgConfig(
-            pool_config={"dsn": dsn},
+            connection_config={"dsn": dsn},
             migration_config={
                 "enabled": True,
                 "script_location": str(migration_dir),

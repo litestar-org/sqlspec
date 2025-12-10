@@ -8,7 +8,7 @@ __all__ = ("test_example_23_select_value",)
 
 def test_example_23_select_value() -> None:
     spec = SQLSpec()
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(db) as session:
         session.execute("CREATE TABLE metrics (id INTEGER PRIMARY KEY, count INTEGER)")

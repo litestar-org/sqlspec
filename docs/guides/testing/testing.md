@@ -99,7 +99,7 @@ from tests.fixtures.sql_utils import apply_ddl
 @pytest.fixture(scope="session")
 def asyncpg_config(postgres_service):
     return AsyncpgConfig(
-        pool_config={"dsn": postgres_service.connection_url()},
+        connection_config={"dsn": postgres_service.connection_url()},
         extension_config={"litestar": {"session_table": "litestar_sessions"}},
     )
 
@@ -181,7 +181,7 @@ def test_starlette_integration() -> None:
     """Test with isolated temporary database."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "autocommit"}}
         )
         # Each test gets its own isolated database file

@@ -48,7 +48,7 @@ Glob(pattern="**/*.py", path="sqlspec/")
 
 For each adapter, identify:
 - Public methods (no leading underscore)
-- Configuration options (driver_features, pool_config)
+- Configuration options (driver_features, connection_config)
 - Type annotations (what's the actual signature?)
 - Dependencies (required vs optional packages)
 
@@ -117,7 +117,7 @@ Grep(pattern=r'def execute_query', path="sqlspec/", output_mode="files_with_matc
 
 # Code reality check:
 Read("sqlspec/adapters/asyncpg/config.py")
-# Find actual pool_config fields
+# Find actual connection_config fields
 # If pool_size doesn't exist → REWRITE guide with correct options
 ```
 

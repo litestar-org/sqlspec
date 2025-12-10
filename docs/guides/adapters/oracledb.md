@@ -78,7 +78,7 @@ The Oracle session stores (`OracleAsyncStore` and `OracleSyncStore`) support opt
 from sqlspec.adapters.oracledb import OracleAsyncConfig
 from sqlspec.adapters.oracledb.litestar import OracleAsyncStore
 
-config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
+config = OracleAsyncConfig(connection_config={"dsn": "oracle://..."})
 
 # Standard table (default)
 store = OracleAsyncStore(config)
@@ -141,7 +141,7 @@ class Article(msgspec.Struct):
     title: str
     content: str  # CLOB column automatically becomes string
 
-config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
+config = OracleAsyncConfig(connection_config={"dsn": "oracle://..."})
 
 async with config.provide_session() as session:
     # Insert large text content
@@ -248,7 +248,7 @@ Oracle returns unquoted identifiers in uppercase (for example `ID`, `PRODUCT_NAM
 from sqlspec.adapters.oracledb import OracleAsyncConfig
 
 config = OracleAsyncConfig(
-    pool_config={"dsn": "oracle://..."},
+    connection_config={"dsn": "oracle://..."},
     driver_features={"enable_lowercase_column_names": True},
 )
 ```
@@ -261,7 +261,7 @@ config = OracleAsyncConfig(
 
 ```python
 config = OracleAsyncConfig(
-    pool_config={"dsn": "oracle://..."},
+    connection_config={"dsn": "oracle://..."},
     driver_features={"enable_lowercase_column_names": False},
 )
 ```
@@ -294,7 +294,7 @@ This feature enables seamless UUID handling with optimal storage efficiency:
 import uuid
 from sqlspec.adapters.oracledb import OracleAsyncConfig
 
-config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
+config = OracleAsyncConfig(connection_config={"dsn": "oracle://..."})
 
 async with config.provide_session() as session:
     # Create table with RAW(16) for UUID storage
@@ -335,7 +335,7 @@ UUID binary conversion is enabled by default (no configuration required):
 
 ```python
 config = OracleAsyncConfig(
-    pool_config={"dsn": "oracle://..."},
+    connection_config={"dsn": "oracle://..."},
     driver_features={
         "enable_uuid_binary": True  # Default: True (stdlib, always available)
     }
@@ -346,7 +346,7 @@ To disable automatic conversion:
 
 ```python
 config = OracleAsyncConfig(
-    pool_config={"dsn": "oracle://..."},
+    connection_config={"dsn": "oracle://..."},
     driver_features={
         "enable_uuid_binary": False  # Revert to manual .bytes conversion
     }
@@ -514,7 +514,7 @@ UUID handlers coexist with other type handlers (e.g., NumPy vectors) through han
 
 ```python
 config = OracleAsyncConfig(
-    pool_config={"dsn": "oracle://..."},
+    connection_config={"dsn": "oracle://..."},
     driver_features={
         "enable_numpy_vectors": True,  # NumPy vector support
         "enable_uuid_binary": True      # UUID binary support
@@ -597,7 +597,7 @@ Enable NumPy vector support via `driver_features`:
 from sqlspec.adapters.oracledb import OracleAsyncConfig
 
 config = OracleAsyncConfig(
-    pool_config={
+    connection_config={
         "dsn": "oracle://host:port/service_name",
         "user": "username",
         "password": "password",

@@ -8,7 +8,7 @@ Guide to optimizing SQLSpec performance.
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://localhost/db",
         "min_size": 10,  # Keep 10 connections ready
         "max_size": 20,  # Allow up to 20 total
@@ -181,10 +181,10 @@ count = result.scalar()
 
 ```python
 # ✅ GOOD - Async for web apps
-config = AsyncpgConfig(pool_config={...})
+config = AsyncpgConfig(connection_config={...})
 
 # ❌ LESS EFFICIENT - Sync blocks threads
-config = PsycopgConfig(pool_config={...})
+config = PsycopgConfig(connection_config={...})
 ```
 
 **Async benefits:**
@@ -241,7 +241,7 @@ print(f"Query took {duration:.3f}s")
 
 # Use observability middleware
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     extension_config={
         "litestar": {
             "enable_correlation_middleware": True  # Request tracking

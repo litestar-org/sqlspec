@@ -75,7 +75,7 @@ def temp_db():
 
 def test_pooled_connection_isolation(temp_db):
     # Test connection pooling with isolated database.
-    config = AiosqliteConfig(pool_config={"database": temp_db})
+    config = AiosqliteConfig(connection_config={"database": temp_db})
     # Test implementation
 ```
 
@@ -124,7 +124,7 @@ async def test_oracle_arrow_conversion(oracle_session):
 ❌ **BAD - Shared Memory Database**:
 ```python
 def test_with_memory_db():
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     # Fails with pytest -n 2 - tables persist across tests!
 ```
 
@@ -135,7 +135,7 @@ import tempfile
 def test_with_isolated_db():
     # Test with isolated temporary database file.
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
-        config = AiosqliteConfig(pool_config={"database": tmp.name})
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
         # Each test gets its own database - no conflicts!
 ```
 
@@ -365,14 +365,14 @@ def test_arrow_conversion_large_dataset(): ...
 
 ❌ **BAD - Memory DB with Pooling**:
 ```python
-config = AiosqliteConfig(pool_config={"database": ":memory:"})
+config = AiosqliteConfig(connection_config={"database": ":memory:"})
 # Breaks with parallel tests!
 ```
 
 ✅ **GOOD - Temporary File with Pooling**:
 ```python
 with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
-    config = AiosqliteConfig(pool_config={"database": tmp.name})
+    config = AiosqliteConfig(connection_config={"database": tmp.name})
     # Safe for parallel tests
 ```
 

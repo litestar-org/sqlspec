@@ -109,7 +109,7 @@ For multi-database setups, use custom dependency keys:
    # Primary database
    primary = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/primary"},
+           connection_config={"dsn": "postgresql://localhost/primary"},
            extension_config={
                "litestar": {"session_key": "primary_session"}
            }
@@ -119,7 +119,7 @@ For multi-database setups, use custom dependency keys:
    # Analytics database
    analytics = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/analytics"},
+           connection_config={"dsn": "postgresql://localhost/analytics"},
            extension_config={
                "litestar": {"session_key": "analytics_session"}
            }
@@ -145,7 +145,7 @@ Customize dependency keys via ``extension_config``:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/mydb"},
+       connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={
            "litestar": {
                "connection_key": "db_connection",  # Raw connection key
@@ -171,7 +171,7 @@ Configure multiple databases with unique dependency keys:
    # Primary PostgreSQL database
    primary = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/app"},
+           connection_config={"dsn": "postgresql://localhost/app"},
            extension_config={
                "litestar": {
                    "connection_key": "primary_connection",

@@ -82,7 +82,7 @@ async def example_postgres_conversion() -> None:
 
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
     db_manager = SQLSpec()
-    asyncpg_db = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}))
+    asyncpg_db = db_manager.add_config(AsyncpgConfig(connection_config={"dsn": dsn}))
 
     async with db_manager.provide_session(asyncpg_db) as session:
         # Create test table with PostgreSQL-specific types
@@ -122,7 +122,7 @@ async def example_pandas_integration() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     db_manager = SQLSpec()
-    sqlite_db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    sqlite_db = db_manager.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with db_manager.provide_session(sqlite_db) as session:
         # Create and populate table
@@ -168,7 +168,7 @@ async def example_polars_integration() -> None:
     from sqlspec.adapters.duckdb import DuckDBConfig
 
     db_manager = SQLSpec()
-    duckdb = db_manager.add_config(DuckDBConfig(pool_config={"database": ":memory:"}))
+    duckdb = db_manager.add_config(DuckDBConfig(connection_config={"database": ":memory:"}))
 
     with db_manager.provide_session(duckdb) as session:
         # Create and populate table
@@ -211,7 +211,7 @@ async def example_return_formats() -> None:
     from sqlspec.adapters.duckdb import DuckDBConfig
 
     db_manager = SQLSpec()
-    duckdb = db_manager.add_config(DuckDBConfig(pool_config={"database": ":memory:"}))
+    duckdb = db_manager.add_config(DuckDBConfig(connection_config={"database": ":memory:"}))
 
     with db_manager.provide_session(duckdb) as session:
         # Create test data
@@ -250,7 +250,7 @@ async def example_parquet_export() -> None:
     from sqlspec.adapters.duckdb import DuckDBConfig
 
     db_manager = SQLSpec()
-    duckdb = db_manager.add_config(DuckDBConfig(pool_config={"database": ":memory:"}))
+    duckdb = db_manager.add_config(DuckDBConfig(connection_config={"database": ":memory:"}))
 
     with db_manager.provide_session(duckdb) as session:
         # Create and populate table
@@ -311,7 +311,7 @@ async def example_native_only_mode() -> None:
         print()
 
     # SQLite does not have native Arrow support
-    sqlite_db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    sqlite_db = db_manager.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with db_manager.provide_session(sqlite_db) as session:
         session.execute("CREATE TABLE test (id INTEGER, name TEXT)")

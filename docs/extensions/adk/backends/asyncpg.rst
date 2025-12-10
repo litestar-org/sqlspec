@@ -78,7 +78,7 @@ Basic Configuration
    async def main():
        # Create configuration with connection pool
        config = AsyncpgConfig(
-           pool_config={
+           connection_config={
                "dsn": "postgresql://user:password@localhost:5432/agentdb",
                "min_size": 5,
                "max_size": 20,
@@ -111,12 +111,12 @@ AsyncPG supports multiple connection string formats:
 .. code-block:: python
 
    # Full DSN
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://user:password@host:5432/database"
    })
 
    # Individual parameters
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "host": "localhost",
        "port": 5432,
        "user": "agent_user",
@@ -125,7 +125,7 @@ AsyncPG supports multiple connection string formats:
    })
 
    # With SSL
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://user:pass@host:5432/db?sslmode=require"
    })
 
@@ -142,7 +142,7 @@ AsyncPG's built-in connection pool is highly configurable:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    config = AsyncpgConfig(
-       pool_config={
+       connection_config={
            # Connection parameters
            "dsn": "postgresql://localhost/agentdb",
            "user": "agent_user",
@@ -306,7 +306,7 @@ Session Management
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
    async def session_example():
-       config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+       config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
        store = AsyncpgADKStore(config)
        await store.create_tables()
 
@@ -354,7 +354,7 @@ Event Management
    from google.genai import types
 
    async def event_example():
-       config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+       config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
        store = AsyncpgADKStore(config)
 
        # Create session first
@@ -421,7 +421,7 @@ Integration with SQLSpecSessionService
    from sqlspec.extensions.adk import SQLSpecSessionService
 
    async def service_example():
-       config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+       config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
        store = AsyncpgADKStore(config)
        await store.create_tables()
 
@@ -487,7 +487,7 @@ Connection Pooling Best Practices
 .. code-block:: python
 
    # Create config and pool once at application startup
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://...",
        "min_size": 10,
        "max_size": 20
@@ -674,7 +674,7 @@ AsyncPG is ideal for async web frameworks:
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
    # Initialize at app startup
-   config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+   config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
    store = AsyncpgADKStore(config)
 
    @get("/session/{session_id:str}")
@@ -694,7 +694,7 @@ Handle thousands of concurrent users:
 
 .. code-block:: python
 
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://...",
        "min_size": 20,
        "max_size": 50,
@@ -845,7 +845,7 @@ Connection Pool Exhausted
 .. code-block:: python
 
    # Increase pool size
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "max_size": 50,  # Increase from default 10
        "command_timeout": 30.0  # Prevent hung connections
    })
@@ -872,7 +872,7 @@ Connection Refused
    psql -h localhost -U postgres -d agentdb
 
    # Check connection parameters
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "host": "localhost",  # Correct host
        "port": 5432,         # Correct port
        "user": "postgres",   # Correct user
@@ -918,7 +918,7 @@ SSL Connection Issues
    import ssl
 
    # Require SSL
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://...",
        "ssl": "require"
    })
@@ -928,7 +928,7 @@ SSL Connection Issues
    ssl_context.check_hostname = False
    ssl_context.verify_mode = ssl.CERT_NONE
 
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://...",
        "ssl": ssl_context
    })
@@ -956,7 +956,7 @@ JSONB Type Codec Errors
        return json.dumps(obj)
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        driver_features={
            "json_serializer": custom_json_serializer
        }
@@ -982,7 +982,7 @@ From SQLite to AsyncPG
    sessions = sqlite_store.list_sessions("app", "user")
 
    # Import to AsyncPG
-   pg_config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+   pg_config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
    pg_store = AsyncpgADKStore(pg_config)
    await pg_store.create_tables()
 
@@ -1010,7 +1010,7 @@ Both use the same SQL schema, so migration is straightforward:
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
    # Just change the config class - SQL is identical
-   config = AsyncpgConfig(pool_config={
+   config = AsyncpgConfig(connection_config={
        "dsn": "postgresql://..."  # Same connection string
    })
 

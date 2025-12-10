@@ -17,7 +17,7 @@ pytestmark = pytest.mark.xdist_group("oracle")
 async def oracle_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleAsyncStore, None]":
     """Create Oracle store with test database."""
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -34,7 +34,7 @@ async def oracle_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[Or
         yield store
         await store.delete_all()
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 

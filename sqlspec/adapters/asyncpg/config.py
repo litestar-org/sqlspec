@@ -102,7 +102,7 @@ class AsyncpgDriverFeatures(TypedDict):
         Required when enable_cloud_sql is True.
     cloud_sql_enable_iam_auth: Enable IAM database authentication.
         Defaults to False for passwordless authentication.
-        When False, requires user/password in pool_config.
+        When False, requires user/password in connection_config.
     cloud_sql_ip_type: IP address type for connection.
         Options: "PUBLIC", "PRIVATE", "PSC"
         Defaults to "PRIVATE".
@@ -149,8 +149,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     def __init__(
         self,
         *,
-        pool_config: "AsyncpgPoolConfig | dict[str, Any] | None" = None,
-        pool_instance: "Pool[Record] | None" = None,
+        connection_config: "AsyncpgPoolConfig | dict[str, Any] | None" = None,
+        connection_instance: "Pool[Record] | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncpgDriverFeatures | dict[str, Any] | None" = None,
@@ -161,8 +161,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """Initialize AsyncPG configuration.
 
         Args:
-            pool_config: Pool configuration parameters (TypedDict or dict)
-            pool_instance: Existing pool instance to use
+            connection_config: Connection and pool configuration parameters (TypedDict or dict)
+            connection_instance: Existing pool instance to use
             migration_config: Migration configuration
             statement_config: Statement configuration override
             driver_features: Driver features configuration (TypedDict or dict)
@@ -184,8 +184,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         )
 
         super().__init__(
-            pool_config=dict(pool_config) if pool_config else {},
-            pool_instance=pool_instance,
+            connection_config=dict(connection_config) if connection_config else {},
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=features_dict,
@@ -247,7 +247,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             Dictionary with pool parameters, filtering out None values.
         """
-        config: dict[str, Any] = dict(self.pool_config)
+        config: dict[str, Any] = dict(self.connection_config)
         extras = config.pop("extra", {})
         config.update(extras)
         return {k: v for k, v in config.items() if v is not None}
@@ -357,8 +357,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool and cleanup connectors."""
-        if self.pool_instance:
-            await self.pool_instance.close()
+        if self.connection_instance:
+            await self.connection_instance.close()
 
         if self._cloud_sql_connector is not None:
             await self._cloud_sql_connector.close_async()
@@ -378,9 +378,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             An AsyncPG connection instance.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self._create_pool()
-        return await self.pool_instance.acquire()
+        if self.connection_instance is None:
+            self.connection_instance = await self._create_pool()
+        return await self.connection_instance.acquire()
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AsyncpgConnection, None]":
@@ -393,15 +393,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Yields:
             An AsyncPG connection instance.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self._create_pool()
+        if self.connection_instance is None:
+            self.connection_instance = await self._create_pool()
         connection = None
         try:
-            connection = await self.pool_instance.acquire()
+            connection = await self.connection_instance.acquire()
             yield connection
         finally:
             if connection is not None:
-                await self.pool_instance.release(connection)
+                await self.connection_instance.release(connection)
 
     @asynccontextmanager
     async def provide_session(
@@ -430,9 +430,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             The async connection pool.
         """
-        if not self.pool_instance:
-            self.pool_instance = await self.create_pool()
-        return self.pool_instance
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AsyncPG types.

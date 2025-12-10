@@ -22,7 +22,7 @@ def test_type_safe_query_execution(tmp_path: Path) -> None:
     query = loader.get_sql("get_user_by_id")
 
     spec = SQLSpec(loader=loader)
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with spec.provide_session(config) as session:
         session.execute("""CREATE TABLE users ( id INTEGER PRIMARY KEY, username TEXT, email TEXT)""")

@@ -22,7 +22,7 @@ async def test_inmemory_enabled_creates_sessions_table_with_inmemory_async(
 ) -> None:
     """Test that in_memory=True creates sessions table with INMEMORY clause."""
     config = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, extension_config={"adk": {"in_memory": True}}
+        connection_config=oracle_async_config.connection_config, extension_config={"adk": {"in_memory": True}}
     )
 
     store = OracleAsyncADKStore(config)
@@ -64,7 +64,7 @@ async def test_inmemory_enabled_creates_events_table_with_inmemory_async(
 ) -> None:
     """Test that in_memory=True creates events table with INMEMORY clause."""
     config = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, extension_config={"adk": {"in_memory": True}}
+        connection_config=oracle_async_config.connection_config, extension_config={"adk": {"in_memory": True}}
     )
 
     store = OracleAsyncADKStore(config)
@@ -102,7 +102,7 @@ async def test_inmemory_enabled_creates_events_table_with_inmemory_async(
 async def test_inmemory_disabled_creates_tables_without_inmemory_async(oracle_async_config: OracleAsyncConfig) -> None:
     """Test that in_memory=False (default) creates tables without INMEMORY clause."""
     config = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, extension_config={"adk": {"in_memory": False}}
+        connection_config=oracle_async_config.connection_config, extension_config={"adk": {"in_memory": False}}
     )
 
     store = OracleAsyncADKStore(config)
@@ -141,7 +141,7 @@ async def test_inmemory_disabled_creates_tables_without_inmemory_async(oracle_as
 @pytest.mark.oracledb
 async def test_inmemory_default_disabled_async(oracle_async_config: OracleAsyncConfig) -> None:
     """Test that in_memory defaults to False when not specified."""
-    config = OracleAsyncConfig(pool_config=oracle_async_config.pool_config, extension_config={"adk": {}})
+    config = OracleAsyncConfig(connection_config=oracle_async_config.connection_config, extension_config={"adk": {}})
 
     store = OracleAsyncADKStore(config)
     await store.create_tables()
@@ -198,7 +198,7 @@ async def test_inmemory_with_owner_id_column_async(oracle_async_config: OracleAs
 
     try:
         config = OracleAsyncConfig(
-            pool_config=oracle_async_config.pool_config,
+            connection_config=oracle_async_config.connection_config,
             extension_config={
                 "adk": {"in_memory": True, "owner_id_column": "owner_id NUMBER(10) NOT NULL REFERENCES test_owners(id)"}
             },
@@ -263,7 +263,7 @@ async def test_inmemory_with_owner_id_column_async(oracle_async_config: OracleAs
 async def test_inmemory_tables_functional_async(oracle_async_config: OracleAsyncConfig) -> None:
     """Test that INMEMORY tables work correctly for session operations."""
     config = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, extension_config={"adk": {"in_memory": True}}
+        connection_config=oracle_async_config.connection_config, extension_config={"adk": {"in_memory": True}}
     )
 
     store = OracleAsyncADKStore(config)
@@ -304,7 +304,9 @@ async def test_inmemory_tables_functional_async(oracle_async_config: OracleAsync
 @pytest.mark.oracledb
 def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that in_memory=True works with sync store."""
-    config = OracleSyncConfig(pool_config=oracle_sync_config.pool_config, extension_config={"adk": {"in_memory": True}})
+    config = OracleSyncConfig(
+        connection_config=oracle_sync_config.connection_config, extension_config={"adk": {"in_memory": True}}
+    )
 
     store = OracleSyncADKStore(config)
     store.create_tables()
@@ -344,7 +346,7 @@ def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
 def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that in_memory=False works with sync store."""
     config = OracleSyncConfig(
-        pool_config=oracle_sync_config.pool_config, extension_config={"adk": {"in_memory": False}}
+        connection_config=oracle_sync_config.connection_config, extension_config={"adk": {"in_memory": False}}
     )
 
     store = OracleSyncADKStore(config)
@@ -382,7 +384,9 @@ def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
 @pytest.mark.oracledb
 def test_inmemory_tables_functional_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that INMEMORY tables work correctly in sync mode."""
-    config = OracleSyncConfig(pool_config=oracle_sync_config.pool_config, extension_config={"adk": {"in_memory": True}})
+    config = OracleSyncConfig(
+        connection_config=oracle_sync_config.connection_config, extension_config={"adk": {"in_memory": True}}
+    )
 
     store = OracleSyncADKStore(config)
     store.create_tables()

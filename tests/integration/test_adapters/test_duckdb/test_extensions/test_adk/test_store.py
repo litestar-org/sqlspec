@@ -30,7 +30,7 @@ def duckdb_adk_store(tmp_path: Path, worker_id: str) -> "Generator[DuckdbADKStor
     db_path = tmp_path / f"test_adk_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(
-            pool_config={"database": str(db_path)},
+            connection_config={"database": str(db_path)},
             extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
         )
         store = DuckdbADKStore(config)
@@ -337,7 +337,7 @@ def test_table_not_found_handling(tmp_path: Path, worker_id: str) -> None:
     """Test graceful handling when tables don't exist."""
     db_path = tmp_path / f"test_no_tables_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
+        config = DuckDBConfig(connection_config={"database": str(db_path)})
         store = DuckdbADKStore(config)
 
         result = store.get_session("nonexistent")
@@ -397,7 +397,7 @@ def test_owner_id_column_with_integer(tmp_path: Path, worker_id: str) -> None:
     """Test owner ID column with INTEGER type."""
     db_path = tmp_path / f"test_owner_id_int_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
+        config = DuckDBConfig(connection_config={"database": str(db_path)})
 
         with config.provide_connection() as conn:
             conn.execute("CREATE TABLE tenants (id INTEGER PRIMARY KEY, name VARCHAR)")
@@ -405,7 +405,7 @@ def test_owner_id_column_with_integer(tmp_path: Path, worker_id: str) -> None:
             conn.commit()
 
         config_with_extension = DuckDBConfig(
-            pool_config={"database": str(db_path)},
+            connection_config={"database": str(db_path)},
             extension_config={
                 "adk": {
                     "session_table": "sessions_with_tenant",
@@ -440,7 +440,7 @@ def test_owner_id_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
     """Test owner ID column with DuckDB UBIGINT type."""
     db_path = tmp_path / f"test_owner_id_ubigint_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
+        config = DuckDBConfig(connection_config={"database": str(db_path)})
 
         with config.provide_connection() as conn:
             conn.execute("CREATE TABLE users (id UBIGINT PRIMARY KEY, email VARCHAR)")
@@ -448,7 +448,7 @@ def test_owner_id_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
             conn.commit()
 
         config_with_extension = DuckDBConfig(
-            pool_config={"database": str(db_path)},
+            connection_config={"database": str(db_path)},
             extension_config={
                 "adk": {
                     "session_table": "sessions_with_user",
@@ -486,7 +486,7 @@ def test_owner_id_column_foreign_key_constraint(tmp_path: Path, worker_id: str) 
     """Test that FK constraint is enforced."""
     db_path = tmp_path / f"test_owner_id_constraint_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
+        config = DuckDBConfig(connection_config={"database": str(db_path)})
 
         with config.provide_connection() as conn:
             conn.execute("CREATE TABLE organizations (id INTEGER PRIMARY KEY, name VARCHAR)")
@@ -494,7 +494,7 @@ def test_owner_id_column_foreign_key_constraint(tmp_path: Path, worker_id: str) 
             conn.commit()
 
         config_with_extension = DuckDBConfig(
-            pool_config={"database": str(db_path)},
+            connection_config={"database": str(db_path)},
             extension_config={
                 "adk": {
                     "session_table": "sessions_with_org",
@@ -529,14 +529,14 @@ def test_owner_id_column_without_value(tmp_path: Path, worker_id: str) -> None:
     """Test creating session without owner_id when column is configured but nullable."""
     db_path = tmp_path / f"test_owner_id_nullable_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
+        config = DuckDBConfig(connection_config={"database": str(db_path)})
 
         with config.provide_connection() as conn:
             conn.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, name VARCHAR)")
             conn.commit()
 
         config_with_extension = DuckDBConfig(
-            pool_config={"database": str(db_path)},
+            connection_config={"database": str(db_path)},
             extension_config={
                 "adk": {
                     "session_table": "sessions_nullable_fk",
@@ -565,7 +565,7 @@ def test_owner_id_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
     """Test owner ID column with VARCHAR type."""
     db_path = tmp_path / f"test_owner_id_varchar_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
+        config = DuckDBConfig(connection_config={"database": str(db_path)})
 
         with config.provide_connection() as conn:
             conn.execute("CREATE TABLE companies (code VARCHAR PRIMARY KEY, name VARCHAR)")
@@ -573,7 +573,7 @@ def test_owner_id_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
             conn.commit()
 
         config_with_extension = DuckDBConfig(
-            pool_config={"database": str(db_path)},
+            connection_config={"database": str(db_path)},
             extension_config={
                 "adk": {
                     "session_table": "sessions_with_company",
@@ -609,7 +609,7 @@ def test_owner_id_column_multiple_sessions(tmp_path: Path, worker_id: str) -> No
     """Test multiple sessions with same FK value."""
     db_path = tmp_path / f"test_owner_id_multiple_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
+        config = DuckDBConfig(connection_config={"database": str(db_path)})
 
         with config.provide_connection() as conn:
             conn.execute("CREATE TABLE departments (id INTEGER PRIMARY KEY, name VARCHAR)")
@@ -617,7 +617,7 @@ def test_owner_id_column_multiple_sessions(tmp_path: Path, worker_id: str) -> No
             conn.commit()
 
         config_with_extension = DuckDBConfig(
-            pool_config={"database": str(db_path)},
+            connection_config={"database": str(db_path)},
             extension_config={
                 "adk": {
                     "session_table": "sessions_with_dept",
@@ -652,7 +652,7 @@ def test_owner_id_column_query_by_fk(tmp_path: Path, worker_id: str) -> None:
     """Test querying sessions by FK column value."""
     db_path = tmp_path / f"test_owner_id_query_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
+        config = DuckDBConfig(connection_config={"database": str(db_path)})
 
         with config.provide_connection() as conn:
             conn.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, name VARCHAR)")
@@ -660,7 +660,7 @@ def test_owner_id_column_query_by_fk(tmp_path: Path, worker_id: str) -> None:
             conn.commit()
 
         config_with_extension = DuckDBConfig(
-            pool_config={"database": str(db_path)},
+            connection_config={"database": str(db_path)},
             extension_config={
                 "adk": {
                     "session_table": "sessions_with_project",

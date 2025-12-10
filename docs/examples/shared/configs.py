@@ -11,7 +11,7 @@ __all__ = ("aiosqlite_registry", "duckdb_registry", "sqlite_registry")
 def sqlite_registry(bind_key: str = "docs_sqlite") -> "tuple[SQLSpec, SqliteConfig]":
     """Return a registry with a single SQLite configuration."""
     registry = SQLSpec()
-    config = registry.add_config(SqliteConfig(bind_key=bind_key, pool_config={"database": ":memory:"}))
+    config = registry.add_config(SqliteConfig(bind_key=bind_key, connection_config={"database": ":memory:"}))
     return registry, config
 
 
@@ -21,7 +21,7 @@ def aiosqlite_registry(bind_key: str = "docs_aiosqlite") -> "tuple[SQLSpec, Aios
     config = registry.add_config(
         AiosqliteConfig(
             bind_key=bind_key,
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             extension_config={"litestar": {"commit_mode": "autocommit"}},
         )
     )
@@ -34,7 +34,7 @@ def duckdb_registry(bind_key: str = "docs_duckdb") -> "tuple[SQLSpec, DuckDBConf
     config = registry.add_config(
         DuckDBConfig(
             bind_key=bind_key,
-            pool_config={"database": ":memory:shared_docs"},
+            connection_config={"database": ":memory:shared_docs"},
             extension_config={"litestar": {"commit_mode": "autocommit"}},
         )
     )

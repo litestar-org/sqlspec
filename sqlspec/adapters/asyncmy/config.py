@@ -99,8 +99,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
     def __init__(
         self,
         *,
-        pool_config: "AsyncmyPoolParams | dict[str, Any] | None" = None,
-        pool_instance: "AsyncmyPool | None" = None,
+        connection_config: "AsyncmyPoolParams | dict[str, Any] | None" = None,
+        connection_instance: "AsyncmyPool | None" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncmyDriverFeatures | dict[str, Any] | None" = None,
@@ -111,8 +111,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Initialize Asyncmy configuration.
 
         Args:
-            pool_config: Pool configuration parameters
-            pool_instance: Existing pool instance to use
+            connection_config: Connection and pool configuration parameters
+            connection_instance: Existing pool instance to use
             migration_config: Migration configuration
             statement_config: Statement configuration override
             driver_features: Driver feature configuration (TypedDict or dict)
@@ -120,13 +120,13 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
-        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in processed_pool_config:
-            extras = processed_pool_config.pop("extra")
-            processed_pool_config.update(extras)
+        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
+        if "extra" in processed_connection_config:
+            extras = processed_connection_config.pop("extra")
+            processed_connection_config.update(extras)
 
-        processed_pool_config.setdefault("host", "localhost")
-        processed_pool_config.setdefault("port", 3306)
+        processed_connection_config.setdefault("host", "localhost")
+        processed_connection_config.setdefault("port", 3306)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = processed_driver_features.setdefault("json_serializer", to_json)
@@ -137,8 +137,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         )
 
         super().__init__(
-            pool_config=processed_pool_config,
-            pool_instance=pool_instance,
+            connection_config=processed_connection_config,
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=processed_driver_features,
@@ -157,12 +157,12 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         Future driver_features can be added here if needed (e.g., custom connection
         initialization, specialized type handling).
         """
-        return await asyncmy.create_pool(**dict(self.pool_config))  # pyright: ignore
+        return await asyncmy.create_pool(**dict(self.connection_config))  # pyright: ignore
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
-        if self.pool_instance:
-            self.pool_instance.close()
+        if self.connection_instance:
+            self.connection_instance.close()
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
@@ -174,9 +174,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         Returns:
             An Asyncmy connection instance.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self.create_pool()
-        return await self.pool_instance.acquire()  # pyright: ignore
+        if self.connection_instance is None:
+            self.connection_instance = await self.create_pool()
+        return await self.connection_instance.acquire()  # pyright: ignore
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncmyConnection, None]:  # pyright: ignore
@@ -189,9 +189,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         Yields:
             An Asyncmy connection instance.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self.create_pool()
-        async with self.pool_instance.acquire() as connection:  # pyright: ignore
+        if self.connection_instance is None:
+            self.connection_instance = await self.create_pool()
+        async with self.connection_instance.acquire() as connection:  # pyright: ignore
             yield connection
 
     @asynccontextmanager
@@ -221,9 +221,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         Returns:
             The async connection pool.
         """
-        if not self.pool_instance:
-            self.pool_instance = await self.create_pool()
-        return self.pool_instance
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Asyncmy types.

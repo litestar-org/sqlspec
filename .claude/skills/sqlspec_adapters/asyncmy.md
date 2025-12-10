@@ -26,7 +26,7 @@ This adapter provides high-performance asynchronous connectivity to MySQL 5.7+, 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriverFeatures
 
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         # Connection parameters:
         "host": "localhost",
         "port": 3306,
@@ -61,7 +61,7 @@ async with config.provide_session() as session:
 
 ```python
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "host": "mysql.example.com",
         "port": 3306,
         "user": "myuser",
@@ -81,7 +81,7 @@ config = AsyncmyConfig(
 
 ```python
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "unix_socket": "/var/run/mysqld/mysqld.sock",
         "user": "myuser",
         "password": "mypass",
@@ -96,7 +96,7 @@ config = AsyncmyConfig(
 from asyncmy.cursors import DictCursor
 
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "host": "localhost",
         "user": "myuser",
         "password": "mypass",
@@ -182,7 +182,7 @@ def orjson_deserializer(s):
     return orjson.loads(s)
 
 config = AsyncmyConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features={
         "json_serializer": orjson_serializer,
         "json_deserializer": orjson_deserializer,
@@ -223,7 +223,7 @@ Asyncmy provides async connection pooling for high concurrency:
 
 ```python
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "host": "localhost",
         "user": "myuser",
         "password": "mypass",
@@ -377,7 +377,7 @@ result = await session.execute("""
 ```python
 # Reduce pool size
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "maxsize": 10,  # Reduce from 20
     }
 )
@@ -394,7 +394,7 @@ config = AsyncmyConfig(
 ```python
 # Increase timeouts
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "connect_timeout": 30,     # Longer connect timeout
         "pool_recycle": 1800,      # Recycle more frequently
     }
@@ -432,7 +432,7 @@ config = AsyncmyConfig(
 ```python
 # Use utf8mb4 for full Unicode support
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "charset": "utf8mb4",
     }
 )
@@ -451,7 +451,7 @@ await session.execute("""
 ```python
 # Verify SSL configuration
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "ssl": {
             "ca": "/path/to/ca-cert.pem",  # Use absolute path
             "check_hostname": True,
@@ -461,7 +461,7 @@ config = AsyncmyConfig(
 
 # OR disable SSL for local development (NOT production!)
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "ssl": None,
     }
 )

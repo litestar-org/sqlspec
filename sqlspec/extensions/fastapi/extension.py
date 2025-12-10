@@ -32,7 +32,7 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         sqlspec = SQLSpec()
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/mydb"},
+            connection_config={"dsn": "postgresql://localhost/mydb"},
             extension_config={
                 "starlette": {
                     "commit_mode": "autocommit",

@@ -21,7 +21,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 def psycopg_sync_exception_session(postgres_service: PostgresService) -> Generator[PsycopgSyncDriver, None, None]:
     """Create a psycopg sync session for exception testing."""
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "kwargs": {"autocommit": True},
         }
@@ -31,7 +31,7 @@ def psycopg_sync_exception_session(postgres_service: PostgresService) -> Generat
         with config.provide_session() as session:
             yield session
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -41,7 +41,7 @@ async def psycopg_async_exception_session(
 ) -> AsyncGenerator[PsycopgAsyncDriver, None]:
     """Create a psycopg async session for exception testing."""
     config = PsycopgAsyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "kwargs": {"autocommit": True},
         }
@@ -51,7 +51,7 @@ async def psycopg_async_exception_session(
         async with config.provide_session() as session:
             yield session
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 

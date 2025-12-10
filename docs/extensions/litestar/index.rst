@@ -86,7 +86,7 @@ Here's a simple example of creating a Litestar application with SQLSpec integrat
    # 2. Configure database
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/mydb"},
+           connection_config={"dsn": "postgresql://localhost/mydb"},
            extension_config={
                "litestar": {"commit_mode": "autocommit"}
            }
@@ -198,7 +198,7 @@ Connect to multiple databases with unique dependency keys:
    # Primary application database
    primary_db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://localhost/app"},
+           connection_config={"dsn": "postgresql://localhost/app"},
            extension_config={
                "litestar": {"session_key": "primary_session"}
            }
@@ -247,7 +247,7 @@ Store user sessions in the database:
 
    # 2. Add database configuration
    db = spec.add_config(
-       AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
+       AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/mydb"})
    )
 
    # 3. Create session store backed by PostgreSQL

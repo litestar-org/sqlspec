@@ -42,7 +42,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         from sqlspec.adapters.psycopg.adk import PsycopgAsyncADKStore
 
         config = PsycopgAsyncConfig(
-            pool_config={"conninfo": "postgresql://..."},
+            connection_config={"conninfo": "postgresql://..."},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",
@@ -497,7 +497,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         from sqlspec.adapters.psycopg.adk import PsycopgSyncADKStore
 
         config = PsycopgSyncConfig(
-            pool_config={"conninfo": "postgresql://..."},
+            connection_config={"conninfo": "postgresql://..."},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",

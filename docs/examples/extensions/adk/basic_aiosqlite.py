@@ -29,7 +29,7 @@ def _event(author: str, text: str) -> Event:
 
 async def main() -> None:
     """Create a session, append two events, and read the transcript."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     store = AiosqliteADKStore(config)
     await store.create_tables()
     service = SQLSpecSessionService(store)

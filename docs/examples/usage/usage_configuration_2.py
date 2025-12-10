@@ -11,7 +11,7 @@ def test_sqlite_config_setup(tmp_path: Path) -> None:
 
     database_file = tmp_path / "myapp.db"
     config = SqliteConfig(
-        pool_config={
+        connection_config={
             "database": database_file.name,  # Database file path
             "timeout": 5.0,  # Lock timeout in seconds
             "check_same_thread": False,  # Allow multi-thread access
@@ -20,4 +20,4 @@ def test_sqlite_config_setup(tmp_path: Path) -> None:
         }
     )
     # end-example
-    assert config.pool_config["database"] == "myapp.db"
+    assert config.connection_config["database"] == "myapp.db"

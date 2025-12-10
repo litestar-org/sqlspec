@@ -16,7 +16,7 @@ pytestmark = pytest.mark.xdist_group("oracle")
 async def oracle_merge_async_session(oracle_23ai_service: OracleService) -> AsyncGenerator[OracleAsyncDriver, None]:
     """Create Oracle async session with test table for MERGE tests."""
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -72,7 +72,7 @@ async def oracle_merge_async_session(oracle_23ai_service: OracleService) -> Asyn
 def oracle_merge_sync_session(oracle_23ai_service: OracleService) -> Generator[OracleSyncDriver, None, None]:
     """Create Oracle sync session with test table for MERGE tests."""
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,

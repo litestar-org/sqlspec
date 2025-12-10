@@ -13,7 +13,7 @@ async def test_example_8_aiosqlite_config(tmp_path: Path) -> None:
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
     database_file = tmp_path / "myapp.db"
-    config = AiosqliteConfig(pool_config={"database": database_file})
+    config = AiosqliteConfig(connection_config={"database": database_file})
     spec = SQLSpec()
 
     async with spec.provide_session(config) as session:

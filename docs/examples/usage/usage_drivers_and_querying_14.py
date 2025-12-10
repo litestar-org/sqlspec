@@ -11,7 +11,7 @@ def test_example_14_placeholder() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     spec = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:", "timeout": 5.0, "check_same_thread": False})
+    config = SqliteConfig(connection_config={"database": ":memory:", "timeout": 5.0, "check_same_thread": False})
     with spec.provide_session(config) as session:
         create_table_query = """create table if not exists users (id default int primary key, name varchar(128), email text, status varchar(32))"""
 

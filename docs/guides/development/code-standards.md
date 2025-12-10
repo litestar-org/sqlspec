@@ -351,7 +351,7 @@ class MyMetadata:
 ```python
 # GOOD - Function-based test
 def test_config_validation():
-    config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
     assert config.is_async is True
 
 # BAD - Class-based test (PROHIBITED)
@@ -370,7 +370,7 @@ import tempfile
 def test_starlette_autocommit_mode() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "autocommit"}}
         )
         # Test logic - each test gets isolated database

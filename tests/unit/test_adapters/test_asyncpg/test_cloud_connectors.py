@@ -53,13 +53,13 @@ def mock_alloydb_module():
 
 def test_cloud_sql_defaults_to_false() -> None:
     """Cloud SQL connector should always default to False (explicit opt-in required)."""
-    config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
     assert config.driver_features["enable_cloud_sql"] is False
 
 
 def test_alloydb_defaults_to_false() -> None:
     """AlloyDB connector should always default to False (explicit opt-in required)."""
-    config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
     assert config.driver_features["enable_alloydb"] is False
 
 
@@ -69,7 +69,7 @@ def test_mutual_exclusion_both_enabled_raises_error() -> None:
         ImproperConfigurationError, match="Cannot enable both Cloud SQL and AlloyDB connectors simultaneously"
     ):
         AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
+            connection_config={"dsn": "postgresql://localhost/test"},
             driver_features={
                 "enable_cloud_sql": True,
                 "cloud_sql_instance": "project:region:instance",
@@ -83,7 +83,7 @@ def test_cloud_sql_missing_package_raises_error() -> None:
     """Enabling Cloud SQL without package installed should raise error."""
     with pytest.raises(ImproperConfigurationError, match="cloud-sql-python-connector package not installed"):
         AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
+            connection_config={"dsn": "postgresql://localhost/test"},
             driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "project:region:instance"},
         )
 
@@ -93,7 +93,7 @@ def test_alloydb_missing_package_raises_error() -> None:
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", False):
         with pytest.raises(ImproperConfigurationError, match="cloud-alloydb-python-connector package not installed"):
             AsyncpgConfig(
-                pool_config={"dsn": "postgresql://localhost/test"},
+                connection_config={"dsn": "postgresql://localhost/test"},
                 driver_features={
                     "enable_alloydb": True,
                     "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
@@ -108,7 +108,7 @@ def test_cloud_sql_missing_instance_raises_error() -> None:
             ImproperConfigurationError, match="cloud_sql_instance required when enable_cloud_sql is True"
         ):
             AsyncpgConfig(
-                pool_config={"dsn": "postgresql://localhost/test"}, driver_features={"enable_cloud_sql": True}
+                connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"enable_cloud_sql": True}
             )
 
 
@@ -118,7 +118,9 @@ def test_alloydb_missing_instance_uri_raises_error() -> None:
         with pytest.raises(
             ImproperConfigurationError, match="alloydb_instance_uri required when enable_alloydb is True"
         ):
-            AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/test"}, driver_features={"enable_alloydb": True})
+            AsyncpgConfig(
+                connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"enable_alloydb": True}
+            )
 
 
 def test_cloud_sql_invalid_instance_format_raises_error() -> None:
@@ -126,7 +128,7 @@ def test_cloud_sql_invalid_instance_format_raises_error() -> None:
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
         with pytest.raises(ImproperConfigurationError, match="Invalid Cloud SQL instance format"):
             AsyncpgConfig(
-                pool_config={"dsn": "postgresql://localhost/test"},
+                connection_config={"dsn": "postgresql://localhost/test"},
                 driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "invalid-format"},
             )
 
@@ -136,7 +138,7 @@ def test_cloud_sql_instance_format_too_many_colons() -> None:
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
         with pytest.raises(ImproperConfigurationError, match="Invalid Cloud SQL instance format"):
             AsyncpgConfig(
-                pool_config={"dsn": "postgresql://localhost/test"},
+                connection_config={"dsn": "postgresql://localhost/test"},
                 driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "project:region:instance:extra"},
             )
 
@@ -146,7 +148,7 @@ def test_alloydb_invalid_instance_uri_format_raises_error() -> None:
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
         with pytest.raises(ImproperConfigurationError, match="Invalid AlloyDB instance URI format"):
             AsyncpgConfig(
-                pool_config={"dsn": "postgresql://localhost/test"},
+                connection_config={"dsn": "postgresql://localhost/test"},
                 driver_features={"enable_alloydb": True, "alloydb_instance_uri": "invalid-format"},
             )
 
@@ -155,7 +157,7 @@ def test_cloud_sql_explicit_disable() -> None:
     """Explicitly disabling Cloud SQL should work even when package installed."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"}, driver_features={"enable_cloud_sql": False}
+            connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"enable_cloud_sql": False}
         )
         assert config.driver_features["enable_cloud_sql"] is False
 
@@ -164,14 +166,14 @@ def test_alloydb_explicit_disable() -> None:
     """Explicitly disabling AlloyDB should work even when package installed."""
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"}, driver_features={"enable_alloydb": False}
+            connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"enable_alloydb": False}
         )
         assert config.driver_features["enable_alloydb"] is False
 
 
 def test_normal_config_without_connectors() -> None:
     """Normal config without connectors should work."""
-    config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
     assert config is not None
     assert config.driver_features.get("enable_cloud_sql", False) is not True
     assert config.driver_features.get("enable_alloydb", False) is not True
@@ -190,7 +192,7 @@ async def test_cloud_sql_connector_initialization(mock_cloud_sql_module) -> None
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "project:region:instance"},
             )
 
@@ -225,7 +227,7 @@ async def test_cloud_sql_iam_auth_enabled(mock_cloud_sql_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "database": "testdb"},
+                connection_config={"user": "testuser", "database": "testdb"},
                 driver_features={
                     "enable_cloud_sql": True,
                     "cloud_sql_instance": "project:region:instance",
@@ -256,7 +258,7 @@ async def test_cloud_sql_iam_auth_disabled(mock_cloud_sql_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={
                     "enable_cloud_sql": True,
                     "cloud_sql_instance": "project:region:instance",
@@ -287,7 +289,7 @@ async def test_cloud_sql_ip_type_configuration(mock_cloud_sql_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={
                     "enable_cloud_sql": True,
                     "cloud_sql_instance": "project:region:instance",
@@ -318,7 +320,7 @@ async def test_cloud_sql_default_ip_type(mock_cloud_sql_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "project:region:instance"},
             )
 
@@ -340,7 +342,7 @@ async def test_alloydb_connector_initialization(mock_alloydb_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={
                     "enable_alloydb": True,
                     "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
@@ -378,7 +380,7 @@ async def test_alloydb_iam_auth_enabled(mock_alloydb_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "database": "testdb"},
+                connection_config={"user": "testuser", "database": "testdb"},
                 driver_features={
                     "enable_alloydb": True,
                     "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
@@ -409,7 +411,7 @@ async def test_alloydb_ip_type_configuration(mock_alloydb_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={
                     "enable_alloydb": True,
                     "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
@@ -437,7 +439,7 @@ async def test_cloud_sql_connector_cleanup(mock_cloud_sql_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "project:region:instance"},
             )
 
@@ -463,7 +465,7 @@ async def test_alloydb_connector_cleanup(mock_alloydb_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={
                     "enable_alloydb": True,
                     "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
@@ -490,7 +492,7 @@ async def test_connection_factory_pattern_cloud_sql(mock_cloud_sql_module) -> No
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "project:region:instance"},
             )
 
@@ -514,7 +516,7 @@ async def test_connection_factory_pattern_alloydb(mock_alloydb_module) -> None:
             mock_create_pool.return_value = mock_pool
 
             config = AsyncpgConfig(
-                pool_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
                 driver_features={
                     "enable_alloydb": True,
                     "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
@@ -531,11 +533,11 @@ async def test_connection_factory_pattern_alloydb(mock_alloydb_module) -> None:
 @pytest.mark.asyncio
 async def test_pool_close_without_connectors() -> None:
     """Closing pool without connectors should not raise errors."""
-    config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
 
     mock_pool = MagicMock()
     mock_pool.close = AsyncMock()
-    config.pool_instance = mock_pool
+    config.connection_instance = mock_pool
 
     await config._close_pool()
 

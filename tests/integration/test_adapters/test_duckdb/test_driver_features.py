@@ -14,7 +14,7 @@ pytestmark = pytest.mark.xdist_group("duckdb")
 @pytest.fixture
 def duckdb_config() -> DuckDBConfig:
     """Create a basic DuckDB configuration."""
-    return DuckDBConfig(pool_config={"database": ":memory:"})
+    return DuckDBConfig(connection_config={"database": ":memory:"})
 
 
 def test_default_uuid_conversion_enabled(duckdb_config: DuckDBConfig) -> None:
@@ -39,7 +39,7 @@ def test_uuid_conversion_can_be_disabled() -> None:
     When disabled, UUID strings are passed as-is to DuckDB without conversion.
     DuckDB still returns UUID objects from UUID columns (native behavior).
     """
-    config = DuckDBConfig(pool_config={"database": ":memory:"}, driver_features={"enable_uuid_conversion": False})
+    config = DuckDBConfig(connection_config={"database": ":memory:"}, driver_features={"enable_uuid_conversion": False})
     try:
         with config.provide_session() as session:
             session.execute("DROP TABLE IF EXISTS test")
@@ -62,7 +62,7 @@ def test_custom_json_serializer_for_dict() -> None:
     def custom_json(obj: dict) -> str:
         return msgspec.json.encode(obj).decode("utf-8")
 
-    config = DuckDBConfig(pool_config={"database": ":memory:"}, driver_features={"json_serializer": custom_json})
+    config = DuckDBConfig(connection_config={"database": ":memory:"}, driver_features={"json_serializer": custom_json})
     try:
         with config.provide_session() as session:
             session.execute("DROP TABLE IF EXISTS test")
@@ -82,7 +82,7 @@ def test_custom_json_serializer_for_list() -> None:
     def custom_json(obj: list) -> str:
         return msgspec.json.encode(obj).decode("utf-8")
 
-    config = DuckDBConfig(pool_config={"database": ":memory:"}, driver_features={"json_serializer": custom_json})
+    config = DuckDBConfig(connection_config={"database": ":memory:"}, driver_features={"json_serializer": custom_json})
     try:
         with config.provide_session() as session:
             session.execute("DROP TABLE IF EXISTS test")
@@ -119,7 +119,7 @@ def test_combined_features_json_and_uuid() -> None:
         return json.dumps(obj, separators=(",", ":"))
 
     config = DuckDBConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         driver_features={"json_serializer": custom_json, "enable_uuid_conversion": False},
     )
     try:
@@ -143,7 +143,7 @@ def test_driver_features_passed_to_driver() -> None:
     custom_json = json.dumps
 
     config = DuckDBConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         driver_features={"json_serializer": custom_json, "enable_uuid_conversion": False},
     )
     try:

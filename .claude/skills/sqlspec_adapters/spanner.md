@@ -22,7 +22,7 @@ Expert guidance for using SQLSpec's Spanner adapter for Google Cloud Spanner. Sp
 from sqlspec.adapters.spanner import SpannerSyncConfig
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "my-gcp-project",
         "instance_id": "my-instance",
         "database_id": "my-database",
@@ -44,7 +44,7 @@ config = SpannerSyncConfig(
 from google.auth.credentials import AnonymousCredentials
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "test-project",
         "instance_id": "test-instance",
         "database_id": "test-database",
@@ -156,7 +156,7 @@ from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.spanner.litestar import SpannerSyncStore
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "my-project",
         "instance_id": "my-instance",
         "database_id": "my-database",
@@ -191,7 +191,7 @@ from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.spanner.adk import SpannerADKStore
 
 config = SpannerSyncConfig(
-    pool_config={
+    connection_config={
         "project": "my-project",
         "instance_id": "my-instance",
         "database_id": "my-database",

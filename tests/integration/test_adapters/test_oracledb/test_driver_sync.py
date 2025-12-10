@@ -449,7 +449,8 @@ def test_sync_lowercase_columns_default(oracle_sync_session: OracleSyncDriver) -
 def test_sync_uppercase_columns_when_disabled(oracle_sync_config: OracleSyncConfig) -> None:
     """Ensure disabling lowercase feature preserves uppercase columns."""
     custom_config = OracleSyncConfig(
-        pool_config=dict(oracle_sync_config.pool_config), driver_features={"enable_lowercase_column_names": False}
+        connection_config=dict(oracle_sync_config.connection_config),
+        driver_features={"enable_lowercase_column_names": False},
     )
 
     with custom_config.provide_session() as session:

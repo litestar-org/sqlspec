@@ -14,7 +14,7 @@ class LitestarConfig(TypedDict):
         from sqlspec.adapters.oracledb import OracleAsyncConfig
 
         config = OracleAsyncConfig(
-            pool_config={"dsn": "oracle://localhost/XEPDB1"},
+            connection_config={"dsn": "oracle://localhost/XEPDB1"},
             extension_config={
                 "litestar": {
                     "session_table": "my_sessions",
@@ -52,7 +52,7 @@ class LitestarConfig(TypedDict):
     Examples:
         Oracle with in-memory enabled:
             config = OracleAsyncConfig(
-                pool_config={"dsn": "oracle://..."},
+                connection_config={"dsn": "oracle://..."},
                 extension_config={
                     "litestar": {
                         "in_memory": True

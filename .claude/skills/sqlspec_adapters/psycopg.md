@@ -27,7 +27,7 @@ Psycopg 3 combines battle-tested reliability with modern features like connectio
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgDriverFeatures
 
 config = PsycopgAsyncConfig(
-    pool_config={
+    connection_config={
         # Connection string (recommended):
         "conninfo": "postgresql://user:pass@localhost:5432/dbname",
         # OR individual parameters:
@@ -75,7 +75,7 @@ config = PsycopgAsyncConfig(
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgDriverFeatures
 
 config = PsycopgSyncConfig(
-    pool_config={
+    connection_config={
         "conninfo": "postgresql://user:pass@localhost:5432/dbname",
         "min_size": 4,
         "max_size": 20,
@@ -129,7 +129,7 @@ from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 
 # Auto-registered if pgvector installed
 config = PsycopgAsyncConfig(
-    pool_config={
+    connection_config={
         "conninfo": "postgresql://localhost/vectordb"
     },
     driver_features={"enable_pgvector": True}  # Auto-detected
@@ -183,7 +183,7 @@ Production-grade connection pooling with extensive configuration:
 
 ```python
 config = PsycopgAsyncConfig(
-    pool_config={
+    connection_config={
         "conninfo": "postgresql://localhost/db",
         "min_size": 10,  # Keep 10 connections ready
         "max_size": 40,  # Allow up to 40 total
@@ -335,7 +335,7 @@ listen_addresses = '*'  # or specific IP
 Increase pool size or reduce connection lifetime:
 ```python
 config = PsycopgAsyncConfig(
-    pool_config={
+    connection_config={
         "max_size": 50,  # Increase from default
         "timeout": 120.0,  # Longer acquisition timeout
         "max_waiting": 100,  # Allow more queued requests
@@ -362,7 +362,7 @@ If error persists, check logs for DEBUG message about graceful degradation.
 Configure SSL in connection string:
 ```python
 config = PsycopgAsyncConfig(
-    pool_config={
+    connection_config={
         "conninfo": "postgresql://user@host/db?sslmode=require",
         # OR:
         "sslmode": "require",

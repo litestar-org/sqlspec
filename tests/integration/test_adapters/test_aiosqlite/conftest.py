@@ -63,7 +63,7 @@ async def aiosqlite_config_file() -> AsyncGenerator[AiosqliteConfig, None]:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 
-    config = AiosqliteConfig(pool_config={"database": db_path, "pool_size": 5})
+    config = AiosqliteConfig(connection_config={"database": db_path, "pool_size": 5})
 
     try:
         yield config

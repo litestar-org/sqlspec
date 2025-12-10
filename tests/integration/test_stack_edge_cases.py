@@ -13,7 +13,7 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 @pytest.fixture()
 def sqlite_stack_session() -> "Generator[SqliteDriver, None, None]":
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     with config.provide_session() as session:
         session.execute_script(
             """

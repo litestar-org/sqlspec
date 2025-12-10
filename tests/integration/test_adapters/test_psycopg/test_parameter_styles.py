@@ -17,7 +17,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 def psycopg_parameters_session(postgres_service: PostgresService) -> "Generator[PsycopgSyncDriver, None, None]":
     """Create a Psycopg session for parameter style testing."""
     config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,

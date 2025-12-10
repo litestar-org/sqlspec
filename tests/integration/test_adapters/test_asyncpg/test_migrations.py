@@ -16,7 +16,7 @@ async def test_asyncpg_migration_full_workflow(tmp_path: Path, postgres_service:
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -79,7 +79,7 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -88,7 +88,7 @@ async def test_asyncpg_multiple_migrations_workflow(tmp_path: Path, postgres_ser
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -183,7 +183,7 @@ def down():
             )
             assert len(users_result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -192,7 +192,7 @@ async def test_asyncpg_migration_current_command(tmp_path: Path, postgres_servic
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -238,7 +238,7 @@ def down():
         current_version = await commands.current()
         assert current_version is None or current_version == "base"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -247,7 +247,7 @@ async def test_asyncpg_migration_error_handling(tmp_path: Path, postgres_service
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -285,7 +285,7 @@ def down():
             except Exception as e:
                 assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -294,7 +294,7 @@ async def test_asyncpg_migration_with_transactions(tmp_path: Path, postgres_serv
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -361,7 +361,7 @@ def down():
             result = await driver.execute("SELECT * FROM users WHERE name = 'Rollback User'")
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -370,7 +370,7 @@ async def test_asyncpg_config_migrate_up_method(tmp_path: Path, postgres_service
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -415,7 +415,7 @@ def down():
             )
             assert len(result.data) == 1
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -424,7 +424,7 @@ async def test_asyncpg_config_migrate_down_method(tmp_path: Path, postgres_servi
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -476,7 +476,7 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -485,7 +485,7 @@ async def test_asyncpg_config_get_current_migration_method(tmp_path: Path, postg
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -521,7 +521,7 @@ def down():
         current_version = await config.get_current_migration()
         assert current_version == "0001"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -530,7 +530,7 @@ async def test_asyncpg_config_create_migration_method(tmp_path: Path, postgres_s
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -551,7 +551,7 @@ async def test_asyncpg_config_create_migration_method(tmp_path: Path, postgres_s
         assert len(migration_files) == 1
         assert "add_users_table" in migration_files[0].name
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -560,7 +560,7 @@ async def test_asyncpg_config_stamp_migration_method(tmp_path: Path, postgres_se
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -599,7 +599,7 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -608,7 +608,7 @@ async def test_asyncpg_config_fix_migrations_dry_run(tmp_path: Path, postgres_se
     migration_dir = tmp_path / "migrations"
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -644,5 +644,5 @@ def down():
         sequential_file = migration_dir / "0001_timestamp_migration.py"
         assert not sequential_file.exists()
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()

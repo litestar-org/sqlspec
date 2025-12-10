@@ -218,7 +218,7 @@ def register_handlers(connection: "Connection") -> None:
 
 ```python
 async def _create_pool(self) -> Pool:
-    config = dict(self.pool_config)
+    config = dict(self.connection_config)
 
     if self.driver_features.get("enable_feature", False):
         config["session_callback"] = self._init_connection
@@ -317,7 +317,7 @@ def _after_request_handler(self, response: "Response") -> "Response":
 
 ```python
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/mydb"},
+    connection_config={"dsn": "postgresql://localhost/mydb"},
     extension_config={
         "starlette": {
             "commit_mode": "autocommit",
@@ -441,8 +441,8 @@ def _setup_cloud_sql_connector(self, config: dict[str, Any]) -> None:
 
 ```python
 async def _close_pool(self) -> None:
-    if self.pool_instance:
-        await self.pool_instance.close()
+    if self.connection_instance:
+        await self.connection_instance.close()
 
     if self._cloud_sql_connector is not None:
         await self._cloud_sql_connector.close_async()

@@ -9,7 +9,7 @@ from sqlspec.migrations.commands import SyncMigrationCommands
 def test_extension_migration_discovery(tmp_path: Path) -> None:
     """Test that extension migrations are discovered when configured."""
     config = SqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={
             "script_location": str(tmp_path),
             "version_table_name": "test_migrations",
@@ -31,7 +31,7 @@ def test_extension_migration_discovery(tmp_path: Path) -> None:
 def test_extension_migration_context(tmp_path: Path) -> None:
     """Test that migration context is created with dialect information."""
     config = SqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"script_location": str(tmp_path), "include_extensions": ["litestar"]},
     )
 
@@ -44,7 +44,9 @@ def test_extension_migration_context(tmp_path: Path) -> None:
 
 def test_no_extensions_by_default(tmp_path: Path) -> None:
     """Test that no extension migrations are included by default."""
-    config = SqliteConfig(pool_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path)})
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path)}
+    )
 
     commands = SyncMigrationCommands(config)
 
@@ -65,7 +67,7 @@ DROP TABLE users;
 """)
 
     config = SqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["litestar"]},
     )
 

@@ -16,7 +16,7 @@ from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 def test_provide_session_method_exists() -> None:
     """Test that provide_session() method exists (not session_dependency())."""
     sqlspec = SQLSpec()
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
 
     plugin = SQLSpecPlugin(sqlspec)
@@ -32,7 +32,7 @@ def test_provide_session_method_exists() -> None:
 def test_provide_connection_method_exists() -> None:
     """Test that provide_connection() method exists (not connection_dependency())."""
     sqlspec = SQLSpec()
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
 
     plugin = SQLSpecPlugin(sqlspec)
@@ -48,7 +48,7 @@ def test_provide_connection_method_exists() -> None:
 def test_uses_starlette_default_session_key() -> None:
     """FastAPI inherits from Starlette and should use same DEFAULT_SESSION_KEY."""
     sqlspec = SQLSpec()
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
 
     plugin = SQLSpecPlugin(sqlspec)
@@ -63,7 +63,7 @@ def test_respects_custom_session_key() -> None:
     custom_key = "custom_db"
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"}, extension_config={"starlette": {"session_key": custom_key}}
+        connection_config={"database": ":memory:"}, extension_config={"starlette": {"session_key": custom_key}}
     )
     sqlspec.add_config(config)
 
@@ -77,7 +77,7 @@ def test_provide_session_works_in_route() -> None:
     """Test that provide_session() works correctly in FastAPI routes."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
+        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
     )
     sqlspec.add_config(config)
 

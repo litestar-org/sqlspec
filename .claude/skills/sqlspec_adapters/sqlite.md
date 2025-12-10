@@ -27,7 +27,7 @@ SQLite provides ACID transactions, full SQL support, and thread-local connection
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriverFeatures
 
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         # Database path
         "database": "app.db",  # File-based database
         # OR: "file:memory_{uuid}?mode=memory&cache=private",  # Default
@@ -83,7 +83,7 @@ result = session.execute(
 ```python
 # SQLite uses thread-local connections for safety
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "database": "app.db",
         "check_same_thread": False,  # Pool handles thread safety
     }
@@ -204,7 +204,7 @@ assert isinstance(result["timestamp"], datetime)
 ```python
 # Shared memory database (multiple connections see same data)
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "database": "file:memdb1?mode=memory&cache=shared",
         "uri": True,
     }
@@ -212,7 +212,7 @@ config = SqliteConfig(
 
 # Private memory database (isolated)
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "database": "file:memdb2?mode=memory&cache=private",
         "uri": True,
     }
@@ -223,7 +223,7 @@ config = SqliteConfig(
 
 ```python
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "database": "file:app.db?mode=ro",
         "uri": True,
     }
@@ -277,7 +277,7 @@ storage.import_arrow("users", data)
 
 ```python
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "cached_statements": 256,  # Cache 256 prepared statements
     }
 )
@@ -304,7 +304,7 @@ except Exception:
 
 # Context manager (autocommit disabled)
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "isolation_level": "DEFERRED",  # Enable transaction mode
     }
 )
@@ -348,7 +348,7 @@ result = session.execute(
 Increase timeout or use WAL mode:
 ```python
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "timeout": 30.0,  # Wait up to 30s for locks
     }
 )
@@ -383,7 +383,7 @@ config = SqliteConfig(
 Explicitly enable URI mode:
 ```python
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "database": "file:app.db?mode=ro",
         "uri": True,  # Required
     }

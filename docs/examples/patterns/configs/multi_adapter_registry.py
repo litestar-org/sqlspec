@@ -15,10 +15,10 @@ def build_registry() -> "SQLSpec":
     """Create a registry with both sync and async adapters."""
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
     registry = SQLSpec()
-    registry.add_config(SqliteConfig(bind_key="sync_sqlite", pool_config={"database": ":memory:"}))
-    registry.add_config(AiosqliteConfig(bind_key="async_sqlite", pool_config={"database": ":memory:"}))
-    registry.add_config(DuckDBConfig(bind_key="duckdb_docs", pool_config={"database": ":memory:docs_duck"}))
-    registry.add_config(AsyncpgConfig(bind_key="asyncpg_docs", pool_config=AsyncpgPoolConfig(dsn=dsn)))
+    registry.add_config(SqliteConfig(bind_key="sync_sqlite", connection_config={"database": ":memory:"}))
+    registry.add_config(AiosqliteConfig(bind_key="async_sqlite", connection_config={"database": ":memory:"}))
+    registry.add_config(DuckDBConfig(bind_key="duckdb_docs", connection_config={"database": ":memory:docs_duck"}))
+    registry.add_config(AsyncpgConfig(bind_key="asyncpg_docs", connection_config=AsyncpgPoolConfig(dsn=dsn)))
     return registry
 
 

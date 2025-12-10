@@ -15,7 +15,7 @@ from sqlspec.utils.version import generate_conversion_map
 @pytest.fixture
 def sqlite_config() -> Generator[SqliteConfig, None, None]:
     """Create SQLite config for migration testing."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     yield config
     config.close_pool()
 

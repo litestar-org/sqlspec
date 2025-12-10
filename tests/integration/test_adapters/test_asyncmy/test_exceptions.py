@@ -21,7 +21,7 @@ pytestmark = pytest.mark.xdist_group("mysql")
 async def asyncmy_exception_session(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyDriver, None]:
     """Create an asyncmy session for exception testing."""
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,

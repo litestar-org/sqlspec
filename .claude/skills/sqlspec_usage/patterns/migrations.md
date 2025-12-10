@@ -117,7 +117,7 @@ def downgrade(driver):
 
 ```python
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     migration_config={
         "script_location": "migrations",
         "version_table": "sqlspec_version",

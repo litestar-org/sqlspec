@@ -8,7 +8,7 @@ __all__ = ("test_example_20_script_execution",)
 
 def test_example_20_script_execution() -> None:
     spec = SQLSpec()
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(db) as session:
         # start-example

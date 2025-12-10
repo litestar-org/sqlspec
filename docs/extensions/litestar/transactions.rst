@@ -24,7 +24,7 @@ Explicit transaction control in route handlers.
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/mydb"},
+       connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={"litestar": {"commit_mode": "manual"}}
    )
 
@@ -63,7 +63,7 @@ Automatic commit on 2XX status codes, rollback on others.
 .. code-block:: python
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/mydb"},
+       connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={"litestar": {"commit_mode": "autocommit"}}
    )
 
@@ -112,7 +112,7 @@ Commits on both 2XX and 3XX redirect status codes.
 .. code-block:: python
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/mydb"},
+       connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={
            "litestar": {"commit_mode": "autocommit_include_redirect"}
        }
@@ -136,7 +136,7 @@ Fine-tune commit/rollback behavior:
 .. code-block:: python
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/mydb"},
+       connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={
            "litestar": {
                "commit_mode": "autocommit",

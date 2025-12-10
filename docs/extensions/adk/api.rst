@@ -35,7 +35,7 @@ SQLSpecSessionService
       from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
       from sqlspec.extensions.adk import SQLSpecSessionService
 
-      config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+      config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
       store = AsyncpgADKStore(config)
       await store.create_tables()
 
@@ -115,7 +115,7 @@ BaseAsyncADKStore
       from sqlspec.adapters.asyncpg import AsyncpgConfig
       from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
-      config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+      config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
       store = AsyncpgADKStore(
           config,
           session_table="custom_sessions",
@@ -166,7 +166,7 @@ BaseSyncADKStore
       from sqlspec.adapters.sqlite import SqliteConfig
       from sqlspec.adapters.sqlite.adk import SqliteADKStore
 
-      config = SqliteConfig(pool_config={"database": "agent.db"})
+      config = SqliteConfig(connection_config={"database": "agent.db"})
       store = SqliteADKStore(config)
       store.create_tables()
 

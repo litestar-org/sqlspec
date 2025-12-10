@@ -21,7 +21,7 @@ async def psqlpy_config(postgres_service: PostgresService) -> AsyncGenerator[Psq
         f"postgres://{postgres_service.user}:{postgres_service.password}@"
         f"{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
     )
-    config = PsqlpyConfig(pool_config={"dsn": dsn, "max_db_pool_size": 5})
+    config = PsqlpyConfig(connection_config={"dsn": dsn, "max_db_pool_size": 5})
     try:
         yield config
     finally:

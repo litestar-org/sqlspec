@@ -19,7 +19,7 @@ def test_fastapi_dependency_injection() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -45,7 +45,7 @@ def test_fastapi_connection_dependency() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -74,7 +74,7 @@ def test_fastapi_manual_commit() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -113,7 +113,7 @@ def test_fastapi_autocommit_mode() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "autocommit", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -149,7 +149,7 @@ def test_fastapi_session_caching_across_dependencies() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -175,7 +175,7 @@ def test_fastapi_complex_route_with_multiple_queries() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -237,7 +237,7 @@ def test_fastapi_inherits_starlette_behavior() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -265,7 +265,7 @@ def test_fastapi_default_session_key() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
-        config = AiosqliteConfig(pool_config={"database": tmp.name}, extension_config={"starlette": {}})
+        config = AiosqliteConfig(connection_config={"database": tmp.name}, extension_config={"starlette": {}})
         sql.add_config(config)
 
         app = FastAPI()

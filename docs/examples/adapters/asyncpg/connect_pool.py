@@ -9,7 +9,7 @@ __all__ = ("main",)
 
 
 DSN = os.getenv("SQLSPEC_ASYNCPG_DSN", "postgresql://postgres:postgres@localhost:5432/postgres")
-config = AsyncpgConfig(bind_key="docs_asyncpg", pool_config=AsyncpgPoolConfig(dsn=DSN, min_size=1, max_size=5))
+config = AsyncpgConfig(bind_key="docs_asyncpg", connection_config=AsyncpgPoolConfig(dsn=DSN, min_size=1, max_size=5))
 
 
 async def main() -> None:

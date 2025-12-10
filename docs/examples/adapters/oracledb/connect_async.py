@@ -12,7 +12,7 @@ USER = os.getenv("SQLSPEC_ORACLE_USER", "system")
 PASSWORD = os.getenv("SQLSPEC_ORACLE_PASSWORD", "oracle")
 DSN = os.getenv("SQLSPEC_ORACLE_DSN", "localhost/FREE")
 config = OracleAsyncConfig(
-    bind_key="docs_oracle_async", pool_config={"user": USER, "password": PASSWORD, "dsn": DSN, "min": 1, "max": 4}
+    bind_key="docs_oracle_async", connection_config={"user": USER, "password": PASSWORD, "dsn": DSN, "min": 1, "max": 4}
 )
 
 

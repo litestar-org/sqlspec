@@ -24,7 +24,7 @@ async def asyncmy_adk_store(mysql_service: MySQLService) -> "AsyncGenerator[Asyn
         Tables are created before test and cleaned up after.
     """
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,
@@ -63,7 +63,7 @@ async def asyncmy_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGenera
         Tests multi-tenant isolation and CASCADE behavior.
     """
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,

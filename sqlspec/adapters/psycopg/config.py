@@ -113,8 +113,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     def __init__(
         self,
         *,
-        pool_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
-        pool_instance: "ConnectionPool | None" = None,
+        connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
+        connection_instance: "ConnectionPool | None" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
@@ -124,18 +124,18 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """Initialize Psycopg synchronous configuration.
 
         Args:
-            pool_config: Pool configuration parameters (TypedDict or dict)
-            pool_instance: Existing pool instance to use
+            connection_config: Connection and pool configuration parameters (TypedDict or dict)
+            connection_instance: Existing pool instance to use
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
-        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in processed_pool_config:
-            extras = processed_pool_config.pop("extra")
-            processed_pool_config.update(extras)
+        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
+        if "extra" in processed_connection_config:
+            extras = processed_connection_config.pop("extra")
+            processed_connection_config.update(extras)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
@@ -143,8 +143,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
-            pool_config=processed_pool_config,
-            pool_instance=pool_instance,
+            connection_config=processed_connection_config,
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config or build_psycopg_statement_config(json_serializer=serializer),
             driver_features=processed_driver_features,
@@ -157,7 +157,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
-            all_config = dict(self.pool_config)
+            all_config = dict(self.connection_config)
 
             pool_parameters = {
                 "min_size": all_config.pop("min_size", 4),
@@ -201,19 +201,19 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
-        if not self.pool_instance:
+        if not self.connection_instance:
             return
 
         logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
-            self.pool_instance.close()
+            self.connection_instance.close()
             logger.info("Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
         except Exception as e:
             logger.exception("Failed to close Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
             raise
         finally:
-            self.pool_instance = None
+            self.connection_instance = None
 
     def create_connection(self) -> "PsycopgSyncConnection":
         """Create a single connection (not from pool).
@@ -221,9 +221,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Returns:
             A psycopg Connection instance configured with DictRow.
         """
-        if self.pool_instance is None:
-            self.pool_instance = self.create_pool()
-        return cast("PsycopgSyncConnection", self.pool_instance.getconn())  # pyright: ignore
+        if self.connection_instance is None:
+            self.connection_instance = self.create_pool()
+        return cast("PsycopgSyncConnection", self.connection_instance.getconn())  # pyright: ignore
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[PsycopgSyncConnection, None, None]":
@@ -236,8 +236,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Yields:
             A psycopg Connection instance.
         """
-        if self.pool_instance:
-            with self.pool_instance.connection() as conn:
+        if self.connection_instance:
+            with self.connection_instance.connection() as conn:
                 yield conn  # type: ignore[misc]
         else:
             conn = self.create_connection()  # type: ignore[assignment]
@@ -273,9 +273,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Returns:
             The connection pool.
         """
-        if not self.pool_instance:
-            self.pool_instance = self.create_pool()
-        return self.pool_instance
+        if not self.connection_instance:
+            self.connection_instance = self.create_pool()
+        return self.connection_instance
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Psycopg types.
@@ -312,8 +312,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     def __init__(
         self,
         *,
-        pool_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
-        pool_instance: "AsyncConnectionPool | None" = None,
+        connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
+        connection_instance: "AsyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
@@ -323,18 +323,18 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Initialize Psycopg asynchronous configuration.
 
         Args:
-            pool_config: Pool configuration parameters (TypedDict or dict)
-            pool_instance: Existing pool instance to use
+            connection_config: Connection and pool configuration parameters (TypedDict or dict)
+            connection_instance: Existing pool instance to use
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
-        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in processed_pool_config:
-            extras = processed_pool_config.pop("extra")
-            processed_pool_config.update(extras)
+        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
+        if "extra" in processed_connection_config:
+            extras = processed_connection_config.pop("extra")
+            processed_connection_config.update(extras)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
@@ -342,8 +342,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
-            pool_config=processed_pool_config,
-            pool_instance=pool_instance,
+            connection_config=processed_connection_config,
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config or build_psycopg_statement_config(json_serializer=serializer),
             driver_features=processed_driver_features,
@@ -354,7 +354,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
 
-        all_config = dict(self.pool_config)
+        all_config = dict(self.connection_config)
 
         pool_parameters = {
             "min_size": all_config.pop("min_size", 4),
@@ -396,13 +396,13 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
-        if not self.pool_instance:
+        if not self.connection_instance:
             return
 
         try:
-            await self.pool_instance.close()
+            await self.connection_instance.close()
         finally:
-            self.pool_instance = None
+            self.connection_instance = None
 
     async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
         """Create a single async connection (not from pool).
@@ -410,9 +410,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Returns:
             A psycopg AsyncConnection instance configured with DictRow.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self.create_pool()
-        return cast("PsycopgAsyncConnection", await self.pool_instance.getconn())  # pyright: ignore
+        if self.connection_instance is None:
+            self.connection_instance = await self.create_pool()
+        return cast("PsycopgAsyncConnection", await self.connection_instance.getconn())  # pyright: ignore
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncConnection, None]":  # pyright: ignore
@@ -425,8 +425,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Yields:
             A psycopg AsyncConnection instance.
         """
-        if self.pool_instance:
-            async with self.pool_instance.connection() as conn:
+        if self.connection_instance:
+            async with self.connection_instance.connection() as conn:
                 yield conn  # type: ignore[misc]
         else:
             conn = await self.create_connection()  # type: ignore[assignment]
@@ -462,9 +462,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Returns:
             The async connection pool.
         """
-        if not self.pool_instance:
-            self.pool_instance = await self.create_pool()
-        return self.pool_instance
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Psycopg async types.

@@ -40,7 +40,7 @@ class User(BaseModel):
 spec = SQLSpec()
 db = spec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/myapp", "min_size": 5, "max_size": 10},
+        connection_config={"dsn": "postgresql://localhost/myapp", "min_size": 5, "max_size": 10},
         extension_config={
             "starlette": {  # FastAPI uses starlette config key
                 "commit_mode": "autocommit",

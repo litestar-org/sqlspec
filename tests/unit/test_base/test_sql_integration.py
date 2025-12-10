@@ -205,7 +205,7 @@ def test_sql_integration_with_existing_functionality() -> None:
 
     sql_spec = SQLSpec()
 
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     returned_config = sql_spec.add_config(config)
 
     sql_spec.add_named_sql("get_users", "SELECT * FROM users")
@@ -267,7 +267,7 @@ def test_backwards_compatibility() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     sql_spec = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     sql_spec.add_config(config)
 
     with sql_spec.provide_session(config) as session:

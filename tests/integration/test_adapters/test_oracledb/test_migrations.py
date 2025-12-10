@@ -22,7 +22,7 @@ def test_oracledb_sync_migration_full_workflow(tmp_path: Path, oracle_23ai_servi
     migration_dir = tmp_path / "migrations"
 
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -81,7 +81,7 @@ def down():
             result = driver.execute(f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'")
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -95,7 +95,7 @@ async def test_oracledb_async_migration_full_workflow(tmp_path: Path, oracle_23a
     migration_dir = tmp_path / "migrations"
 
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -162,7 +162,7 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -177,7 +177,7 @@ def test_oracledb_sync_multiple_migrations_workflow(tmp_path: Path, oracle_23ai_
     migration_dir = tmp_path / "migrations"
 
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -273,7 +273,7 @@ def down():
             )
             assert len(users_result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -288,7 +288,7 @@ async def test_oracledb_async_multiple_migrations_workflow(tmp_path: Path, oracl
     migration_dir = tmp_path / "migrations"
 
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -388,7 +388,7 @@ def down():
             )
             assert len(users_result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -402,7 +402,7 @@ def test_oracledb_sync_migration_current_command(tmp_path: Path, oracle_23ai_ser
     migration_dir = tmp_path / "migrations"
 
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -448,7 +448,7 @@ def down():
         current_version = commands.current()
         assert current_version is None or current_version == "base"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -462,7 +462,7 @@ async def test_oracledb_async_migration_current_command(tmp_path: Path, oracle_2
     migration_dir = tmp_path / "migrations"
 
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -510,7 +510,7 @@ def down():
         current_version = await commands.current()
         assert current_version is None or current_version == "base"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -523,7 +523,7 @@ def test_oracledb_sync_migration_error_handling(tmp_path: Path, oracle_23ai_serv
     migration_dir = tmp_path / "migrations"
 
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -557,7 +557,7 @@ def down():
             count = driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
             assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -570,7 +570,7 @@ async def test_oracledb_async_migration_error_handling(tmp_path: Path, oracle_23
     migration_dir = tmp_path / "migrations"
 
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -606,7 +606,7 @@ def down():
             count = await driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
             assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -620,7 +620,7 @@ def test_oracledb_sync_migration_with_transactions(tmp_path: Path, oracle_23ai_s
     migration_dir = tmp_path / "migrations"
 
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -689,7 +689,7 @@ def down():
             result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()
 
 
@@ -703,7 +703,7 @@ async def test_oracledb_async_migration_with_transactions(tmp_path: Path, oracle
     migration_dir = tmp_path / "migrations"
 
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -774,7 +774,7 @@ def down():
             result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -790,7 +790,7 @@ async def test_oracledb_async_schema_migration_from_old_format(
     migration_table = f"sqlspec_migrations_{test_id}"
 
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -851,7 +851,7 @@ async def test_oracledb_async_schema_migration_from_old_format(
             assert len(migration_data.data) == 1
             assert migration_data.data[0]["version_num"] == "0001"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -865,7 +865,7 @@ def test_oracledb_sync_schema_migration_from_old_format(tmp_path: Path, oracle_2
     migration_table = f"sqlspec_migrations_{test_id}"
 
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,
@@ -923,5 +923,5 @@ def test_oracledb_sync_schema_migration_from_old_format(tmp_path: Path, oracle_2
             assert len(migration_data.data) == 1
             assert migration_data.data[0]["version_num"] == "0001"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             config.close_pool()

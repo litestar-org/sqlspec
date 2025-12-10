@@ -8,7 +8,7 @@ __all__ = ("test_config_structure",)
 # start-example
 dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
 config = AsyncpgConfig(
-    pool_config={"dsn": dsn},
+    connection_config={"dsn": dsn},
     migration_config={
         "enabled": True,
         "script_location": "migrations",
@@ -21,7 +21,7 @@ config = AsyncpgConfig(
 
 def test_config_structure() -> None:
     # Check config attributes
-    assert hasattr(config, "pool_config")
+    assert hasattr(config, "connection_config")
     assert hasattr(config, "migration_config")
     assert config.migration_config["enabled"] is True
     assert config.migration_config["script_location"] == "migrations"

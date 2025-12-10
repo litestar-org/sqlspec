@@ -255,7 +255,7 @@ Google Cloud BigQuery for large-scale analytics.
    from sqlspec.adapters.bigquery import BigQueryConfig
 
    config = BigQueryConfig(
-       pool_config={
+       connection_config={
            "project": "my-project",
            "credentials": credentials_object,
        }
@@ -287,7 +287,7 @@ Globally distributed, horizontally scalable database with strong consistency.
    from sqlspec.adapters.spanner import SpannerSyncConfig
 
    config = SpannerSyncConfig(
-       pool_config={
+       connection_config={
            "project": "my-project",
            "instance": "my-instance",
            "database": "my-database",

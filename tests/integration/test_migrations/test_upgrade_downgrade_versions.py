@@ -18,7 +18,7 @@ def sqlite_config(tmp_path: Path) -> Generator[SqliteConfig, None, None]:
     migrations_dir.mkdir()
 
     config = SqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"script_location": str(migrations_dir), "version_table_name": "ddl_migrations"},
     )
     yield config

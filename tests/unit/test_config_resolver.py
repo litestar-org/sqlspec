@@ -151,12 +151,12 @@ class TestConfigResolver:
     async def test_config_validation_attributes(self) -> None:
         """Test that config validation checks for required attributes."""
 
-        # Test config missing both database_url and pool_config
+        # Test config missing both database_url and connection_config
         class IncompleteConfig:
             def __init__(self) -> None:
                 self.bind_key = "test"
                 self.migration_config: dict[str, Any] = {}
-                # Missing both pool_config and database_url
+                # Missing both connection_config and database_url
 
         def incomplete_config() -> "IncompleteConfig":
             return IncompleteConfig()

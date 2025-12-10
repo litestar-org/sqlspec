@@ -39,18 +39,21 @@ spec = SQLSpec()
 
 # Production database (PostgreSQL)
 production_db = spec.add_config(
-    AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/production", "min_size": 20, "max_size": 50})
+    AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/production", "min_size": 20, "max_size": 50})
 )
 
 # Cache database (SQLite)
 cache_db = spec.add_config(
-    SqliteConfig(pool_config={"database": "/var/lib/myapp/cache.db", "check_same_thread": False})
+    SqliteConfig(connection_config={"database": "/var/lib/myapp/cache.db", "check_same_thread": False})
 )
 
 # Analytics database (DuckDB)
 analytics_db = spec.add_config(
     DuckDBConfig(
-        pool_config={"database": "/var/lib/myapp/analytics.duckdb", "config": {"memory_limit": "8GB", "threads": 4}}
+        connection_config={
+            "database": "/var/lib/myapp/analytics.duckdb",
+            "config": {"memory_limit": "8GB", "threads": 4},
+        }
     )
 )
 

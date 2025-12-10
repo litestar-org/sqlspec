@@ -47,7 +47,7 @@ Create a SQLSpec instance and add a database configuration:
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={
+           connection_config={
                "dsn": "postgresql://user:password@localhost:5432/mydb",
                "min_size": 5,
                "max_size": 20
@@ -72,7 +72,7 @@ For local development with SQLite:
 
    db = spec.add_config(
        AiosqliteConfig(
-           pool_config={"database": "./myapp.db"},
+           connection_config={"database": "./myapp.db"},
            extension_config={
                "litestar": {"commit_mode": "autocommit"}
            }
@@ -167,7 +167,7 @@ Here's a complete working example:
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={
+           connection_config={
                "dsn": "postgresql://user:password@localhost:5432/mydb",
                "min_size": 5,
                "max_size": 20
@@ -303,7 +303,7 @@ Explicit transaction control (default):
 
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={"litestar": {"commit_mode": "manual"}}
        )
    )
@@ -329,7 +329,7 @@ Automatic commit on 2XX responses (recommended):
 
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={"litestar": {"commit_mode": "autocommit"}}
        )
    )
@@ -356,7 +356,7 @@ Commits on both 2XX and 3XX responses:
 
    db = spec.add_config(
        AsyncpgConfig(
-           pool_config={"dsn": "postgresql://..."},
+           connection_config={"dsn": "postgresql://..."},
            extension_config={
                "litestar": {"commit_mode": "autocommit_include_redirect"}
            }

@@ -17,7 +17,7 @@ async def test_manual_pool() -> None:
     pool = await asyncpg.create_pool(
         dsn=os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db"), min_size=10, max_size=20
     )
-    db = AsyncpgConfig(pool_instance=pool)
+    db = AsyncpgConfig(connection_instance=pool)
     # end-example
-    assert db.pool_instance is pool
+    assert db.connection_instance is pool
     await pool.close()

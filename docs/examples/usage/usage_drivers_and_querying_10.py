@@ -24,7 +24,7 @@ def test_example_10_duckdb_config(tmp_path: Path) -> None:
         spec = SQLSpec()
         # In-memory
         in_memory_db = spec.add_config(DuckDBConfig())
-        persistent_db = spec.add_config(DuckDBConfig(pool_config={"database": str(db_path)}))
+        persistent_db = spec.add_config(DuckDBConfig(connection_config={"database": str(db_path)}))
 
         try:
             # Test with in-memory config

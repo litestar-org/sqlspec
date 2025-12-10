@@ -17,7 +17,7 @@ def test_duckdb_migration_full_workflow(tmp_path: Path) -> None:
     db_path = tmp_path / "test.duckdb"
 
     config = DuckDBConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -76,7 +76,7 @@ def test_duckdb_multiple_migrations_workflow(tmp_path: Path) -> None:
     db_path = tmp_path / "test.duckdb"
 
     config = DuckDBConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -170,7 +170,7 @@ def test_duckdb_migration_current_command(tmp_path: Path) -> None:
     db_path = tmp_path / "test.duckdb"
 
     config = DuckDBConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -205,7 +205,7 @@ def test_duckdb_migration_error_handling(tmp_path: Path) -> None:
     db_path = tmp_path / "test.duckdb"
 
     config = DuckDBConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -240,7 +240,7 @@ def test_duckdb_migration_with_transactions(tmp_path: Path) -> None:
     db_path = tmp_path / "test.duckdb"
 
     config = DuckDBConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)

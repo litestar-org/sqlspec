@@ -51,7 +51,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 sql = SQLSpec()
 
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "postgres",
         "password": "secret",
         "database": "mydb",
@@ -72,7 +72,7 @@ async with sql.provide_session(config) as session:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "postgres",
         "password": "secret",
         "database": "mydb",
@@ -140,7 +140,7 @@ The simplest method for GCP deployments. Connectors automatically use credential
 ```python
 # No explicit credentials needed - ADC handles it
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "postgres",
         "password": "secret",
         "database": "mydb",
@@ -158,7 +158,7 @@ Passwordless authentication using Google Cloud IAM:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "my-service-account@my-project.iam",  # IAM principal
         "database": "mydb",
     },
@@ -190,7 +190,7 @@ Traditional username/password authentication:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "postgres",
         "password": "secret",  # From Secret Manager recommended
         "database": "mydb",
@@ -279,7 +279,7 @@ sql = SQLSpec()
 
 # Cloud SQL production database
 cloud_sql_config = AsyncpgConfig(
-    pool_config={"user": "app", "password": "secret", "database": "prod"},
+    connection_config={"user": "app", "password": "secret", "database": "prod"},
     driver_features={
         "enable_cloud_sql": True,
         "cloud_sql_instance": "prod-project:us-central1:prod-db",
@@ -290,7 +290,7 @@ sql.add_config(cloud_sql_config)
 
 # AlloyDB analytics database
 alloydb_config = AsyncpgConfig(
-    pool_config={"user": "analytics", "password": "secret", "database": "warehouse"},
+    connection_config={"user": "analytics", "password": "secret", "database": "warehouse"},
     driver_features={
         "enable_alloydb": True,
         "alloydb_instance_uri": "projects/analytics/locations/us-central1/clusters/warehouse/instances/primary",
@@ -313,7 +313,7 @@ async with sql.provide_session(alloydb_config) as session:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://user:pass@10.0.0.5:5432/mydb",
         "ssl": ssl_context,  # Manual SSL setup
     }
@@ -324,7 +324,7 @@ config = AsyncpgConfig(
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "user",
         "password": "pass",
         "database": "mydb",
@@ -431,7 +431,7 @@ Connectors work seamlessly with AsyncPG connection pooling:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "min_size": 2,
         "max_size": 10,
         "max_inactive_connection_lifetime": 300,
@@ -488,7 +488,7 @@ cloud-sql-proxy my-project:us-central1:my-instance --port 5432
 
 # Connect with any adapter
 config = PsqlpyConfig(  # Or ADBC, psycopg, etc.
-    pool_config={"dsn": "postgresql://localhost:5432/mydb"}
+    connection_config={"dsn": "postgresql://localhost:5432/mydb"}
 )
 ```
 

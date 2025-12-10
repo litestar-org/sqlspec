@@ -21,9 +21,11 @@ def test_named_bindings() -> None:
         db_manager = SQLSpec()
 
         # Add with bind keys - add_config returns the config instance
-        cache_config = db_manager.add_config(SqliteConfig(pool_config={"database": tmp.name}, bind_key="cache_db"))
+        cache_config = db_manager.add_config(
+            SqliteConfig(connection_config={"database": tmp.name}, bind_key="cache_db")
+        )
         dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
-        main_config = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}, bind_key="main_db"))
+        main_config = db_manager.add_config(AsyncpgConfig(connection_config={"dsn": dsn}, bind_key="main_db"))
 
         # Access by config instance directly
         with db_manager.provide_session(cache_config) as session:

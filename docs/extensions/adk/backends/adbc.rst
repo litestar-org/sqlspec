@@ -372,7 +372,7 @@ ADBC uses standard SQL compatible with most databases. To migrate:
    from sqlspec.adapters.adbc.adk import AdbcADKStore
 
    # Source (AsyncPG)
-   source_config = AsyncpgConfig(pool_config={"dsn": "..."})
+   source_config = AsyncpgConfig(connection_config={"dsn": "..."})
    source_store = AsyncpgADKStore(source_config)
 
    # Destination (ADBC)

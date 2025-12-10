@@ -44,7 +44,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 
 config = SqliteConfig(
     bind_key="test",
-    pool_config={"database": ":memory:"},
+    connection_config={"database": ":memory:"},
     migration_config={"enabled": True, "script_location": "migrations"}
 )
 database_config = config
@@ -73,7 +73,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 def get_database_config():
     config = SqliteConfig(
         bind_key="sync_test",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True}
     )
     return config
@@ -105,7 +105,7 @@ async def get_database_config():
     await asyncio.sleep(0.001)
     config = SqliteConfig(
         bind_key="async_test",
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         migration_config={"enabled": True}
     )
     return config
@@ -136,7 +136,7 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 
 config = SqliteConfig(
     bind_key="path_test",
-    pool_config={"database": ":memory:"},
+    connection_config={"database": ":memory:"},
     migration_config={"enabled": True, "script_location": Path("custom_migrations")}
 )
 database_config = config

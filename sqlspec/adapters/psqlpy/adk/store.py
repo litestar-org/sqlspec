@@ -42,7 +42,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 
         config = PsqlpyConfig(
-            pool_config={"dsn": "postgresql://..."},
+            connection_config={"dsn": "postgresql://..."},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",

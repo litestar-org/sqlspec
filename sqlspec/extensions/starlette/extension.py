@@ -39,7 +39,7 @@ class SQLSpecPlugin:
         sqlspec = SQLSpec()
         sqlspec.add_config(AsyncpgConfig(
             bind_key="default",
-            pool_config={"dsn": "postgresql://localhost/mydb"},
+            connection_config={"dsn": "postgresql://localhost/mydb"},
             extension_config={
                 "starlette": {
                     "commit_mode": "autocommit",

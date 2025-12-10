@@ -276,7 +276,7 @@ Show minimal working examples:
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://..."},
+    connection_config={"dsn": "postgresql://..."},
     parameter_profile=ParameterProfile(
         style="numbered",
         prefix="$"
@@ -425,7 +425,7 @@ ParameterProfile definitions and the convert_parameters() function.
 ```python
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
 
 # Input: "SELECT * FROM users WHERE id = :id"
 # Output: "SELECT * FROM users WHERE id = $1"

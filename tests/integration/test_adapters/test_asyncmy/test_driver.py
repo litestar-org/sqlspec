@@ -226,7 +226,7 @@ async def test_asyncmy_driver_features_custom_serializers(mysql_service: MySQLSe
         return decoded
 
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
             "user": mysql_service.user,

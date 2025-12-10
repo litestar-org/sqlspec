@@ -13,10 +13,10 @@ pytestmark = pytest.mark.xdist_group("duckdb")
 def test_shared_memory_pooling() -> None:
     """Test that shared memory databases allow pooling."""
 
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_test", "pool_min_size": 2, "pool_max_size": 5})
+    config = DuckDBConfig(connection_config={"database": ":memory:shared_test", "pool_min_size": 2, "pool_max_size": 5})
 
-    assert config.pool_config["pool_min_size"] == 2
-    assert config.pool_config["pool_max_size"] == 5
+    assert config.connection_config["pool_min_size"] == 2
+    assert config.connection_config["pool_max_size"] == 5
 
     with config.provide_session() as session1:
         session1.execute("DROP TABLE IF EXISTS shared_test")
@@ -37,12 +37,12 @@ def test_shared_memory_pooling() -> None:
 def test_regular_memory_auto_conversion() -> None:
     """Test that regular memory databases are auto-converted to shared memory with pooling enabled."""
 
-    config = DuckDBConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
+    config = DuckDBConfig(connection_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
-    assert config.pool_config["pool_min_size"] == 5
-    assert config.pool_config["pool_max_size"] == 10
+    assert config.connection_config["pool_min_size"] == 5
+    assert config.connection_config["pool_max_size"] == 10
 
-    database = config.pool_config["database"]
+    database = config.connection_config["database"]
     assert database == ":memory:shared_db"
 
     with config.provide_session() as session1:
@@ -67,10 +67,10 @@ def test_file_database_pooling() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp_file:
         db_path = tmp_file.name
 
-    config = DuckDBConfig(pool_config={"database": db_path, "pool_min_size": 2, "pool_max_size": 4})
+    config = DuckDBConfig(connection_config={"database": db_path, "pool_min_size": 2, "pool_max_size": 4})
 
-    assert config.pool_config["pool_min_size"] == 2
-    assert config.pool_config["pool_max_size"] == 4
+    assert config.connection_config["pool_min_size"] == 2
+    assert config.connection_config["pool_max_size"] == 4
 
     with config.provide_session() as session1:
         session1.execute("CREATE TABLE file_test (id INTEGER, data TEXT)")
@@ -91,7 +91,7 @@ def test_file_database_pooling() -> None:
 
 def test_connection_pool_health_checks() -> None:
     """Test that the connection pool performs health checks correctly."""
-    config = DuckDBConfig(pool_config={"database": ":memory:health_test", "pool_min_size": 1, "pool_max_size": 3})
+    config = DuckDBConfig(connection_config={"database": ":memory:health_test", "pool_min_size": 1, "pool_max_size": 3})
     pool = config.provide_pool()
 
     with pool.get_connection() as conn:
@@ -104,9 +104,9 @@ def test_connection_pool_health_checks() -> None:
 
 def test_empty_database_conversion() -> None:
     """Test that empty database string gets converted properly."""
-    config = DuckDBConfig(pool_config={"database": ""})
+    config = DuckDBConfig(connection_config={"database": ""})
 
-    database = config.pool_config["database"]
+    database = config.connection_config["database"]
     assert database.startswith(":memory:")
     assert len(database) == len(":memory:shared_db")
 
@@ -119,7 +119,7 @@ def test_default_config_conversion() -> None:
     """Test that default config (no connection_config) works with shared memory."""
     config = DuckDBConfig()
 
-    database = config.pool_config["database"]
+    database = config.connection_config["database"]
     assert database.startswith(":memory:shared_db")
     assert len(database) == len(":memory:shared_db")
 

@@ -10,6 +10,59 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+v0.33.0 - Configuration Parameter Standardization (BREAKING CHANGE)
+--------------------------------------------------------------------
+
+**Breaking Change:** All adapter configuration parameter names have been standardized for consistency across the entire library.
+
+**What Changed:**
+
+All database adapter configurations now use consistent parameter names:
+
+- ``pool_config`` → ``connection_config`` (configuration dictionary)
+- ``pool_instance`` → ``connection_instance`` (pre-created pool/connection instance)
+
+This affects **all 11 database adapters**: AsyncPG, Psycopg, Asyncmy, Psqlpy, OracleDB, SQLite, AioSQLite, DuckDB, BigQuery, ADBC, and Spanner.
+
+**Migration:**
+
+Simple search and replace in your codebase:
+
+.. code-block:: bash
+
+   # Replace pool_config with connection_config
+   find . -name "*.py" -exec sed -i 's/pool_config=/connection_config=/g' {} +
+
+   # Replace pool_instance with connection_instance
+   find . -name "*.py" -exec sed -i 's/pool_instance=/connection_instance=/g' {} +
+
+**Before:**
+
+.. code-block:: python
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://localhost/db"},
+       pool_instance=my_pool
+   )
+
+**After:**
+
+.. code-block:: python
+
+   config = AsyncpgConfig(
+       connection_config={"dsn": "postgresql://localhost/db"},
+       connection_instance=my_pool
+   )
+
+**Why This Change:**
+
+- Eliminates inconsistency between pooled and non-pooled adapters
+- More intuitive naming (``connection_instance`` works semantically for both pools and single connections)
+- Reduces cognitive load when switching between adapters
+- Clearer API for new users
+
+**See:** :doc:`/guides/migration/connection-config` for detailed migration guide with before/after examples for all adapters.
+
 Query Stack Documentation Suite
 --------------------------------
 
@@ -43,7 +96,7 @@ All database configs (both sync and async) now provide migration methods:
    from sqlspec.migrations.commands import AsyncMigrationCommands
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        migration_config={"script_location": "migrations"}
    )
 
@@ -57,7 +110,7 @@ All database configs (both sync and async) now provide migration methods:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
+       connection_config={"dsn": "postgresql://..."},
        migration_config={"script_location": "migrations"}
    )
 

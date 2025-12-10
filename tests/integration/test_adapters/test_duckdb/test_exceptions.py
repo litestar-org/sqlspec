@@ -20,7 +20,7 @@ pytestmark = pytest.mark.xdist_group("duckdb")
 @pytest.fixture
 def duckdb_exception_session() -> Generator[DuckDBDriver, None, None]:
     """Create a DuckDB session for exception testing."""
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
 
     try:
         with config.provide_session() as session:

@@ -16,7 +16,7 @@ def test_sqlite_migration_full_workflow(tmp_path: Path) -> None:
     migration_dir = tmp_path / "migrations"
     temp_db = str(tmp_path / "test.db")
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -74,7 +74,7 @@ def test_sqlite_multiple_migrations_workflow(tmp_path: Path) -> None:
     migration_dir = tmp_path / "migrations"
     temp_db = str(tmp_path / "test.db")
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -161,7 +161,7 @@ def test_sqlite_migration_current_command(tmp_path: Path) -> None:
     migration_dir = tmp_path / "migrations"
     temp_db = str(tmp_path / "test.db")
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -195,7 +195,7 @@ def test_sqlite_migration_error_handling(tmp_path: Path) -> None:
     migration_dir = tmp_path / "migrations"
     temp_db = str(tmp_path / "test.db")
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -233,7 +233,7 @@ def test_sqlite_migration_with_transactions(tmp_path: Path) -> None:
     migration_dir = tmp_path / "migrations"
     temp_db = str(tmp_path / "test.db")
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
     commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
@@ -283,7 +283,7 @@ def test_sqlite_config_migrate_up_method(tmp_path: Path) -> None:
     temp_db = str(tmp_path / "test.db")
 
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
 
@@ -323,7 +323,7 @@ def test_sqlite_config_migrate_down_method(tmp_path: Path) -> None:
     temp_db = str(tmp_path / "test.db")
 
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
 
@@ -368,7 +368,7 @@ def test_sqlite_config_get_current_migration_method(tmp_path: Path) -> None:
     temp_db = str(tmp_path / "test.db")
 
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
 
@@ -404,7 +404,7 @@ def test_sqlite_config_create_migration_method(tmp_path: Path) -> None:
     temp_db = str(tmp_path / "test.db")
 
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
 
@@ -425,7 +425,7 @@ def test_sqlite_config_stamp_migration_method(tmp_path: Path) -> None:
     temp_db = str(tmp_path / "test.db")
 
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
 
@@ -462,7 +462,7 @@ def test_sqlite_config_fix_migrations_dry_run(tmp_path: Path) -> None:
     temp_db = str(tmp_path / "test.db")
 
     config = SqliteConfig(
-        pool_config={"database": temp_db},
+        connection_config={"database": temp_db},
         migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
     )
 

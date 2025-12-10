@@ -20,7 +20,7 @@ async def test_example_4_async(postgres_service: PostgresService) -> None:
     dsn = os.environ.get("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/test")
 
     # Async version
-    config = PsycopgAsyncConfig(pool_config={"conninfo": dsn, "min_size": 5, "max_size": 10})
+    config = PsycopgAsyncConfig(connection_config={"conninfo": dsn, "min_size": 5, "max_size": 10})
     db = spec.add_config(config)
 
     async with spec.provide_session(db) as session:

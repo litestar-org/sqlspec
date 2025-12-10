@@ -20,7 +20,7 @@ async def test_quickstart_4() -> None:
         email: str
 
     db_manager = SQLSpec()
-    db = db_manager.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
+    db = db_manager.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
     async with db_manager.provide_session(db) as session:
         await session.execute(

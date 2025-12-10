@@ -11,7 +11,7 @@ from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 def duckdb_basic_config() -> Generator[DuckDBConfig, None, None]:
     """Provide an in-memory DuckDB configuration."""
 
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
     try:
         yield config
     finally:

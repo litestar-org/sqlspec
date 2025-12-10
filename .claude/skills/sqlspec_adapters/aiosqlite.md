@@ -30,7 +30,7 @@ from sqlspec.adapters.aiosqlite import (
 )
 
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         # Database path
         "database": "file::memory:?cache=shared",  # Default shared memory
         # OR: "app.db",  # File-based database
@@ -92,7 +92,7 @@ result = await session.execute(
 ```python
 # Configure async pool
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         "database": "app.db",
         "pool_size": 10,  # 10 concurrent connections
         "connect_timeout": 30.0,  # Wait up to 30s for connection
@@ -114,7 +114,7 @@ await config.close_pool()
 ```python
 # Shared memory database (default)
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         "database": "file::memory:?cache=shared",  # All connections see same data
         "uri": True,
     }
@@ -216,7 +216,7 @@ from litestar.contrib.sqlspec import SQLSpecConfig, SQLSpecPlugin
 sqlspec_config = SQLSpecConfig(
     configs=[
         AiosqliteConfig(
-            pool_config={"database": "app.db", "pool_size": 10},
+            connection_config={"database": "app.db", "pool_size": 10},
             extension_config={
                 "litestar": {
                     "commit_mode": "autocommit",
@@ -251,7 +251,7 @@ from fastapi import FastAPI, Depends
 from contextlib import asynccontextmanager
 
 config = AiosqliteConfig(
-    pool_config={"database": "app.db"}
+    connection_config={"database": "app.db"}
 )
 
 @asynccontextmanager
@@ -283,7 +283,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 config = AiosqliteConfig(
-    pool_config={"database": "app.db"},
+    connection_config={"database": "app.db"},
     extension_config={
         "starlette": {
             "commit_mode": "autocommit",
@@ -328,7 +328,7 @@ polars_df = pl.from_arrow(arrow_table)
 ```python
 # Optimize pool for workload
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         "database": "app.db",
         "pool_size": 20,  # High concurrency
         "connect_timeout": 60.0,  # Long timeout for slow startup
@@ -342,7 +342,7 @@ config = AiosqliteConfig(
 
 ```python
 config = AiosqliteConfig(
-    pool_config={"database": "app.db"}
+    connection_config={"database": "app.db"}
 )
 
 # Enable WAL mode on startup
@@ -356,7 +356,7 @@ async with config.provide_session() as session:
 
 ```python
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         "cached_statements": 256,  # Cache 256 prepared statements
     }
 )
@@ -388,7 +388,7 @@ for user_id in range(1000):
 Enable WAL mode or increase timeout:
 ```python
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         "timeout": 30.0,  # Wait longer for locks
     }
 )
@@ -403,7 +403,7 @@ async with config.provide_session() as session:
 Increase pool size:
 ```python
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         "pool_size": 20,  # More connections
         "connect_timeout": 60.0,  # Wait longer
     }
@@ -415,7 +415,7 @@ config = AiosqliteConfig(
 Increase operation timeout for slow queries:
 ```python
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         "operation_timeout": 30.0,  # 30s for slow queries
     }
 )

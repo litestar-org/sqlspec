@@ -16,7 +16,7 @@ class User:
 
 def test_example_28_schema_mapping() -> None:
     spec = SQLSpec()
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(db) as session:
         session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")

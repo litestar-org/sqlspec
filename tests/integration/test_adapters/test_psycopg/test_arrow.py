@@ -14,8 +14,8 @@ pytestmark = [
 @pytest.fixture
 async def psycopg_config(psycopg_async_config: PsycopgAsyncConfig) -> PsycopgAsyncConfig:
     """Create Psycopg async configuration for testing."""
-    psycopg_async_config.pool_config.setdefault("min_size", 1)
-    psycopg_async_config.pool_config.setdefault("max_size", 2)
+    psycopg_async_config.connection_config.setdefault("min_size", 1)
+    psycopg_async_config.connection_config.setdefault("max_size", 2)
     return psycopg_async_config
 
 

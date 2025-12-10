@@ -26,7 +26,7 @@ from sqlspec.extensions.fastapi import SQLSpecPlugin
 
 sqlspec = SQLSpec()
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/mydb"},
+    connection_config={"dsn": "postgresql://localhost/mydb"},
     extension_config={
         "starlette": {
             "commit_mode": "autocommit",
@@ -60,7 +60,7 @@ Configure the plugin via `extension_config["starlette"]` in your database config
 from sqlspec.config import StarletteConfig
 
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/mydb"},
+    connection_config={"dsn": "postgresql://localhost/mydb"},
     extension_config={
         "starlette": StarletteConfig(
             commit_mode="autocommit",
@@ -106,7 +106,7 @@ from sqlspec.extensions.fastapi import SQLSpecPlugin
 sqlspec = SQLSpec()
 sqlspec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/main"},
+        connection_config={"dsn": "postgresql://localhost/main"},
         extension_config={
             "starlette": {
                 "session_key": "primary",
@@ -120,7 +120,7 @@ sqlspec.add_config(
 
 sqlspec.add_config(
     AiosqliteConfig(
-        pool_config={"database": "analytics.db"},
+        connection_config={"database": "analytics.db"},
         extension_config={
             "starlette": {
                 "session_key": "analytics",
@@ -210,7 +210,7 @@ Requires explicit transaction management:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/mydb"},
+    connection_config={"dsn": "postgresql://localhost/mydb"},
     extension_config={"starlette": {"commit_mode": "manual"}}
 )
 
@@ -242,7 +242,7 @@ Automatically commits on 2xx status codes, rolls back otherwise:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/mydb"},
+    connection_config={"dsn": "postgresql://localhost/mydb"},
     extension_config={"starlette": {"commit_mode": "autocommit"}}
 )
 
@@ -273,7 +273,7 @@ Commits on 2xx and 3xx status codes:
 from fastapi.responses import RedirectResponse
 
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/mydb"},
+    connection_config={"dsn": "postgresql://localhost/mydb"},
     extension_config={"starlette": {"commit_mode": "autocommit_include_redirect"}}
 )
 
@@ -309,7 +309,7 @@ from sqlspec.extensions.fastapi import SQLSpecPlugin
 sqlspec = SQLSpec()
 
 pg_config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/main"},
+    connection_config={"dsn": "postgresql://localhost/main"},
     extension_config={
         "starlette": {
             "commit_mode": "autocommit",
@@ -319,7 +319,7 @@ pg_config = AsyncpgConfig(
 )
 
 mysql_config = AsyncmyConfig(
-    pool_config={"dsn": "mysql://localhost/analytics"},
+    connection_config={"dsn": "mysql://localhost/analytics"},
     extension_config={
         "starlette": {
             "commit_mode": "autocommit",
@@ -499,7 +499,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 def test_users_endpoint():
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
+        connection_config={"database": ":memory:"},
         extension_config={"starlette": {"commit_mode": "autocommit"}}
     )
     sqlspec.add_config(config)
@@ -677,7 +677,7 @@ If you're using the old manual pattern, migration is straightforward:
 from collections.abc import AsyncGenerator
 
 spec = SQLSpec()
-db_config = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
+db_config = spec.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://..."}))
 
 
 @asynccontextmanager
@@ -715,7 +715,7 @@ async def create_user(
 ```python
 sqlspec = SQLSpec()
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://..."},
+    connection_config={"dsn": "postgresql://..."},
     extension_config={"starlette": {"commit_mode": "autocommit"}}
 )
 sqlspec.add_config(config)

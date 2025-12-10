@@ -16,7 +16,7 @@ def test_example_11_oracledb_config(oracle_service: OracleService) -> None:
 
     spec = SQLSpec()
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "user": oracle_service.user,
             "password": oracle_service.password,
             "host": oracle_service.host,

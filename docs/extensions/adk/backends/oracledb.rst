@@ -96,7 +96,7 @@ Async Store (Recommended)
 
    # Configure Oracle connection
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": "oracle.example.com:1521/XEPDB1",
@@ -129,7 +129,7 @@ Sync Store
 
    # Configure Oracle connection
    config = OracleSyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": "oracle.example.com:1521/XEPDB1",
@@ -163,7 +163,7 @@ Oracle supports multiple DSN (Data Source Name) formats:
 .. code-block:: python
 
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": "hostname:1521/service_name",
@@ -175,7 +175,7 @@ Oracle supports multiple DSN (Data Source Name) formats:
 .. code-block:: python
 
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": "tcps://hostname:2484/service_name?ssl_server_cert_dn=CN=server",
@@ -187,7 +187,7 @@ Oracle supports multiple DSN (Data Source Name) formats:
 .. code-block:: python
 
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": """(DESCRIPTION=
@@ -201,7 +201,7 @@ Oracle supports multiple DSN (Data Source Name) formats:
 .. code-block:: python
 
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": "PROD_DB",  # Name from tnsnames.ora
@@ -216,7 +216,7 @@ Oracle connection pooling is **mandatory** for production:
 .. code-block:: python
 
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": "oracle.example.com:1521/XEPDB1",
@@ -244,7 +244,7 @@ Configure custom table names via ``extension_config``:
 .. code-block:: python
 
    config = OracleAsyncConfig(
-       pool_config={"dsn": "oracle://..."},
+       connection_config={"dsn": "oracle://..."},
        extension_config={
            "adk": {
                "session_table": "agent_sessions",
@@ -280,7 +280,7 @@ Enable In-Memory via ``extension_config``:
    from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore
 
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": "oracle.example.com:1521/XEPDB1",
@@ -847,7 +847,7 @@ Security Best Practices
    import os
 
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": os.environ["ORACLE_USER"],
            "password": os.environ["ORACLE_PASSWORD"],
            "dsn": os.environ["ORACLE_DSN"],
@@ -857,7 +857,7 @@ Security Best Practices
    # 2. Use Oracle Wallet (thick mode)
    oracledb.init_oracle_client()
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "dsn": "wallet_alias",
            # No user/password needed - from wallet
        }
@@ -865,7 +865,7 @@ Security Best Practices
 
    # 3. Limit connection pool size
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "max": 10,  # Prevent resource exhaustion
        }
    )
@@ -911,7 +911,7 @@ Enterprise AI Agent Platform
 
    # Production configuration
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": os.environ["ORACLE_USER"],
            "password": os.environ["ORACLE_PASSWORD"],
            "dsn": "prod-oracle.example.com:1521/PROD",
@@ -966,7 +966,7 @@ High-Availability Setup
 
    # Oracle RAC (Real Application Clusters)
    config = OracleAsyncConfig(
-       pool_config={
+       connection_config={
            "user": "agent_user",
            "password": "secure_password",
            "dsn": """(DESCRIPTION=

@@ -8,7 +8,7 @@ __all__ = ("test_example_24_select_one_or_none",)
 
 def test_example_24_select_one_or_none() -> None:
     spec = SQLSpec()
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(db) as session:
         session.execute("CREATE TABLE emails (id INTEGER PRIMARY KEY, address TEXT)")

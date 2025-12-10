@@ -10,7 +10,7 @@ __all__ = ("main",)
 def main() -> None:
     """Create a table, insert demo rows, and fetch results with the builder API."""
     registry = SQLSpec()
-    config = registry.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    config = registry.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
     with registry.provide_session(config) as session:
         session.execute(
             """

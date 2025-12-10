@@ -18,7 +18,7 @@ def test_litestar_disable_di_disables_providers() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"disable_di": True}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"disable_di": True}}
         )
         sql.add_config(config)
         plugin = SQLSpecPlugin(sqlspec=sql)
@@ -49,7 +49,7 @@ def test_litestar_default_di_enabled() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}, extension_config={"litestar": {"session_key": "db"}}
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"session_key": "db"}}
         )
         sql.add_config(config)
         plugin = SQLSpecPlugin(sqlspec=sql)

@@ -6,6 +6,6 @@ def test_thread_local_connections() -> None:
     # start-example
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    config = SqliteConfig(pool_config={"database": "test.db"})
+    config = SqliteConfig(connection_config={"database": "test.db"})
     # end-example
-    assert config.pool_config["database"] == "test.db"
+    assert config.connection_config["database"] == "test.db"

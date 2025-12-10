@@ -53,7 +53,7 @@ Basic Async Connection
    from sqlspec.extensions.adk import SQLSpecSessionService
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "host": "localhost",
            "port": 3306,
            "user": "myuser",
@@ -83,7 +83,7 @@ AsyncMy's built-in connection pool is production-ready:
 .. code-block:: python
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "host": "mysql.example.com",
            "port": 3306,
            "user": "agent_user",
@@ -182,7 +182,7 @@ Basic Configuration
    from sqlspec.adapters.asyncmy import AsyncmyConfig
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "host": "localhost",
            "port": 3306,
            "user": "myuser",
@@ -197,7 +197,7 @@ Advanced Configuration
 .. code-block:: python
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "host": "mysql-primary.example.com",
            "port": 3306,
            "user": "agent_app",
@@ -326,13 +326,13 @@ Connection Pool Tuning
 .. code-block:: python
 
    # Low traffic (< 100 concurrent users)
-   pool_config = {"minsize": 5, "maxsize": 20}
+   connection_config = {"minsize": 5, "maxsize": 20}
 
    # Medium traffic (100-1000 concurrent users)
-   pool_config = {"minsize": 20, "maxsize": 100}
+   connection_config = {"minsize": 20, "maxsize": 100}
 
    # High traffic (> 1000 concurrent users)
-   pool_config = {"minsize": 50, "maxsize": 200}
+   connection_config = {"minsize": 50, "maxsize": 200}
 
 **Connection Recycling:**
 
@@ -341,7 +341,7 @@ Prevent stale connections with ``pool_recycle``:
 .. code-block:: python
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "host": "mysql.example.com",
            "pool_recycle": 3600,  # Recycle after 1 hour
            # ...
@@ -390,7 +390,7 @@ MySQL 8.0+ removed query cache. Use connection pooling instead:
 
    # Proper connection pooling is more effective than query cache
    config = AsyncmyConfig(
-       pool_config={"minsize": 20, "maxsize": 100}
+       connection_config={"minsize": 20, "maxsize": 100}
    )
 
 Index Usage Verification
@@ -459,7 +459,7 @@ Always use ``utf8mb4`` for full Unicode support:
 .. code-block:: python
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "charset": "utf8mb4",  # NOT "utf8" (only 3 bytes)
            # ...
        }
@@ -478,7 +478,7 @@ Force UTC timezone for consistency:
 .. code-block:: python
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "init_command": "SET time_zone='+00:00'",
            # ...
        }
@@ -497,7 +497,7 @@ Enable SSL for production:
 .. code-block:: python
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "host": "mysql-prod.example.com",
            "ssl": {
                "ca": "/etc/ssl/certs/ca-cert.pem",
@@ -526,7 +526,7 @@ AsyncMy excels in async web frameworks:
    @asynccontextmanager
    async def lifespan(app: FastAPI):
        # Startup
-       config = AsyncmyConfig(pool_config={...})
+       config = AsyncmyConfig(connection_config={...})
        await config.create_pool()
        yield
        # Shutdown
@@ -551,7 +551,7 @@ Connection pooling with tenant isolation:
    # Separate databases per tenant
    async def get_tenant_config(tenant_id: str) -> AsyncmyConfig:
        return AsyncmyConfig(
-           pool_config={
+           connection_config={
                "host": "mysql.example.com",
                "database": f"tenant_{tenant_id}",
                "minsize": 5,
@@ -591,7 +591,7 @@ Leverage existing MySQL deployments:
 
    # Connect to existing MySQL instance
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "host": "existing-mysql.company.com",
            "port": 3306,
            "user": "agent_app",
@@ -637,7 +637,7 @@ Connection Pool Exhausted
 
    # Increase pool size
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "maxsize": 100,  # Increase from default
            # ...
        }
@@ -701,7 +701,7 @@ Connection Timeout Errors
 .. code-block:: python
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "host": "mysql.example.com",
            "connect_timeout": 30,  # Increase from default 10s
            # ...
@@ -720,7 +720,7 @@ UTF-8 Encoding Issues
 .. code-block:: python
 
    config = AsyncmyConfig(
-       pool_config={
+       connection_config={
            "charset": "utf8mb4",  # NOT "utf8"
            # ...
        }

@@ -29,7 +29,7 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
     """Test sync connection components."""
     # Test direct connection
     sync_config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}"
         }
     )
@@ -48,7 +48,7 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
 
     # Test connection pool
     another_config = PsycopgSyncConfig(
-        pool_config={
+        connection_config={
             "conninfo": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "min_size": 1,
             "max_size": 5,

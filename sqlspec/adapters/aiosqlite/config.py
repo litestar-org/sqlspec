@@ -89,8 +89,8 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
     def __init__(
         self,
         *,
-        pool_config: "AiosqlitePoolParams | dict[str, Any] | None" = None,
-        pool_instance: "AiosqliteConnectionPool | None" = None,
+        connection_config: "AiosqlitePoolParams | dict[str, Any] | None" = None,
+        connection_instance: "AiosqliteConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "AiosqliteDriverFeatures | dict[str, Any] | None" = None,
@@ -101,8 +101,8 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         """Initialize AioSQLite configuration.
 
         Args:
-            pool_config: Pool configuration parameters (TypedDict or dict)
-            pool_instance: Optional pre-configured connection pool instance.
+            connection_config: Connection and pool configuration parameters (TypedDict or dict)
+            connection_instance: Optional pre-configured connection pool instance.
             migration_config: Optional migration configuration.
             statement_config: Optional statement configuration.
             driver_features: Optional driver feature configuration.
@@ -110,7 +110,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
-        config_dict = dict(pool_config) if pool_config else {}
+        config_dict = dict(connection_config) if connection_config else {}
 
         if "database" not in config_dict or config_dict["database"] == ":memory:":
             config_dict["database"] = "file::memory:?cache=shared"
@@ -138,8 +138,8 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
 
         super().__init__(
-            pool_config=config_dict,
-            pool_instance=pool_instance,
+            connection_config=config_dict,
+            connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=processed_driver_features,
@@ -154,7 +154,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Returns:
             Dictionary with pool parameters, filtering out None values.
         """
-        config: dict[str, Any] = dict(self.pool_config)
+        config: dict[str, Any] = dict(self.connection_config)
         extras = config.pop("extra", {})
         config.update(extras)
         return {k: v for k, v in config.items() if v is not None}
@@ -177,7 +177,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             "pool_timeout",
             "pool_recycle_seconds",
         }
-        return {k: v for k, v in self.pool_config.items() if k not in excluded_keys}
+        return {k: v for k, v in self.connection_config.items() if k not in excluded_keys}
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AiosqliteConnection, None]":
@@ -190,9 +190,9 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Yields:
             An aiosqlite connection instance.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self._create_pool()
-        async with self.pool_instance.get_connection() as connection:
+        if self.connection_instance is None:
+            self.connection_instance = await self._create_pool()
+        async with self.connection_instance.get_connection() as connection:
             yield connection
 
     @asynccontextmanager
@@ -259,8 +259,8 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
-        if self.pool_instance and not self.pool_instance.is_closed:
-            await self.pool_instance.close()
+        if self.connection_instance and not self.connection_instance.is_closed:
+            await self.connection_instance.close()
 
     async def create_connection(self) -> "AiosqliteConnection":
         """Create a single async connection from the pool.
@@ -268,9 +268,9 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Returns:
             An aiosqlite connection instance.
         """
-        if self.pool_instance is None:
-            self.pool_instance = await self._create_pool()
-        pool_connection = await self.pool_instance.acquire()
+        if self.connection_instance is None:
+            self.connection_instance = await self._create_pool()
+        pool_connection = await self.connection_instance.acquire()
         return pool_connection.connection
 
     async def provide_pool(self) -> AiosqliteConnectionPool:
@@ -279,9 +279,9 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Returns:
             The async connection pool.
         """
-        if not self.pool_instance:
-            self.pool_instance = await self.create_pool()
-        return self.pool_instance
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for aiosqlite types.

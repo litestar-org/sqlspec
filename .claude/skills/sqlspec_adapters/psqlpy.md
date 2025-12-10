@@ -25,7 +25,7 @@ Built on Rust's tokio async runtime and the native PostgreSQL protocol, Psqlpy d
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriverFeatures
 
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         # Connection DSN (recommended):
         "dsn": "postgresql://user:pass@localhost:5432/dbname",
         # OR individual parameters:
@@ -105,7 +105,7 @@ import numpy as np
 
 # Auto-registered if pgvector installed
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://localhost/vectordb"
     },
     driver_features={"enable_pgvector": True}  # Auto-detected
@@ -165,7 +165,7 @@ Built-in connection pooling with Rust's tokio runtime:
 
 ```python
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://localhost/db",
         "max_db_pool_size": 30,  # Maximum connections
         "conn_recycling_method": "fast",  # Fast connection recycling
@@ -232,14 +232,14 @@ Two connection recycling strategies:
 ```python
 # Fast recycling (default) - minimal overhead
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "conn_recycling_method": "fast"
     }
 )
 
 # Auto recycling - more thorough cleanup
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "conn_recycling_method": "auto"
     }
 )
@@ -251,7 +251,7 @@ Built-in load balancing for PostgreSQL replicas:
 
 ```python
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "hosts": ["primary.db.local", "replica1.db.local", "replica2.db.local"],
         "ports": [5432, 5432, 5432],
         "load_balance_hosts": "random",  # Random selection
@@ -351,7 +351,7 @@ psql "postgresql://user@localhost/db" -c "SELECT 1"
 Verify connection parameters:
 ```python
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://user:pass@localhost:5432/dbname",
         "connect_timeout_sec": 30,  # Increase timeout
     }
@@ -363,7 +363,7 @@ config = PsqlpyConfig(
 Increase pool size:
 ```python
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "max_db_pool_size": 50,  # Increase from default
     }
 )
@@ -397,7 +397,7 @@ await session.execute("SELECT * FROM users WHERE id = :id", {"id": user_id})
 Increase connection and TCP timeouts:
 ```python
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "connect_timeout_sec": 30,
         "tcp_user_timeout_sec": 60,
         "keepalives": True,

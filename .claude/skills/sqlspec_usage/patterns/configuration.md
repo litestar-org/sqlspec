@@ -13,7 +13,7 @@ from sqlspec.adapters.{adapter} import {Adapter}Config
 spec = SQLSpec()
 db = spec.add_config(
     {Adapter}Config(
-        pool_config={...},           # Tier 1: Connection parameters
+        connection_config={...},           # Tier 1: Connection parameters
         statement_config={...},      # Tier 2: SQL processing (optional)
         extension_config={...},      # Tier 3: Framework integration (optional)
         driver_features={...},       # Tier 4: Adapter-specific features (optional)
@@ -22,7 +22,7 @@ db = spec.add_config(
 )
 ```
 
-## Tier 1: pool_config (Connection Parameters)
+## Tier 1: connection_config (Connection Parameters)
 
 Adapter-specific connection settings. Each adapter has different parameters.
 
@@ -33,7 +33,7 @@ Adapter-specific connection settings. Each adapter has different parameters.
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://user:pass@localhost:5432/dbname",
         # OR individual parameters:
         "host": "localhost",
@@ -57,7 +57,7 @@ from sqlspec.adapters.psycopg import PsycopgConfig, PsycopgAsyncConfig
 
 # Sync
 config = PsycopgConfig(
-    pool_config={
+    connection_config={
         "conninfo": "postgresql://localhost/db",
         "min_size": 4,
         "max_size": 10,
@@ -66,7 +66,7 @@ config = PsycopgConfig(
 
 # Async
 config = PsycopgAsyncConfig(
-    pool_config={
+    connection_config={
         "conninfo": "postgresql://localhost/db",
         "min_size": 4,
         "max_size": 10,
@@ -79,7 +79,7 @@ config = PsycopgAsyncConfig(
 from sqlspec.adapters.psqlpy import PsqlpyConfig
 
 config = PsqlpyConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://localhost/db",
         "max_db_pool_size": 20,
     }
@@ -93,7 +93,7 @@ config = PsqlpyConfig(
 from sqlspec.adapters.sqlite import SqliteConfig
 
 config = SqliteConfig(
-    pool_config={
+    connection_config={
         "database": "/path/to/database.db",  # or ":memory:"
         "timeout": 5.0,
         "check_same_thread": False,  # For multi-threaded use
@@ -106,7 +106,7 @@ config = SqliteConfig(
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
 config = AiosqliteConfig(
-    pool_config={
+    connection_config={
         "database": "/path/to/database.db",
         "timeout": 5.0,
     }
@@ -119,7 +119,7 @@ config = AiosqliteConfig(
 from sqlspec.adapters.duckdb import DuckDBConfig
 
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "database": "/path/to/database.duckdb",  # or ":memory:"
         "read_only": False,
         "config": {
@@ -137,7 +137,7 @@ from sqlspec.adapters.oracledb import OracleConfig, OracleAsyncConfig
 
 # Sync
 config = OracleConfig(
-    pool_config={
+    connection_config={
         "user": "myuser",
         "password": "mypass",
         "dsn": "localhost:1521/ORCLPDB1",
@@ -149,7 +149,7 @@ config = OracleConfig(
 
 # Async
 config = OracleAsyncConfig(
-    pool_config={
+    connection_config={
         "user": "myuser",
         "password": "mypass",
         "dsn": "localhost:1521/ORCLPDB1",
@@ -166,7 +166,7 @@ config = OracleAsyncConfig(
 from sqlspec.adapters.asyncmy import AsyncmyConfig
 
 config = AsyncmyConfig(
-    pool_config={
+    connection_config={
         "host": "localhost",
         "port": 3306,
         "user": "myuser",
@@ -184,7 +184,7 @@ config = AsyncmyConfig(
 from sqlspec.adapters.bigquery import BigQueryConfig
 
 config = BigQueryConfig(
-    pool_config={
+    connection_config={
         "project": "my-gcp-project",
         "dataset": "my_dataset",
         "credentials": "/path/to/service-account.json",  # or None for ADC
@@ -198,7 +198,7 @@ config = BigQueryConfig(
 from sqlspec.adapters.adbc import ADBCConfig
 
 config = ADBCConfig(
-    pool_config={
+    connection_config={
         "driver": "adbc_driver_postgresql",
         "uri": "postgresql://localhost/db",
         # Driver-specific options
@@ -218,7 +218,7 @@ Controls SQL statement parsing, validation, and transformation:
 from sqlspec.core import StatementConfig
 
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     statement_config=StatementConfig(
         enable_validation=True,        # Validate SQL syntax
         enable_transformations=True,   # Apply SQL transformations
@@ -241,7 +241,7 @@ Framework-specific settings keyed by framework name.
 
 ```python
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     extension_config={
         "litestar": {
             "connection_key": "postgres_connection",
@@ -261,7 +261,7 @@ config = AsyncpgConfig(
 
 ```python
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     extension_config={
         "starlette": {  # Same key for FastAPI
             "connection_key": "postgres_connection",
@@ -280,7 +280,7 @@ config = AsyncpgConfig(
 
 ```python
 config = SqliteConfig(
-    pool_config={...},
+    connection_config={...},
     extension_config={
         "flask": {
             "connection_key": "db_connection",
@@ -307,7 +307,7 @@ Optional features that require additional dependencies or control adapter behavi
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriverFeatures
 
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features=AsyncpgDriverFeatures(
         enable_pgvector=True,  # Auto-detected if pgvector installed
         enable_json_codecs=True,  # Register JSON codecs
@@ -330,7 +330,7 @@ config = AsyncpgConfig(
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgDriverFeatures
 
 config = PsycopgAsyncConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features=PsycopgDriverFeatures(
         enable_pgvector=True,
         enable_json_codecs=True,
@@ -345,7 +345,7 @@ config = PsycopgAsyncConfig(
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriverFeatures
 
 config = DuckDBConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features=DuckDBDriverFeatures(
         enable_uuid_conversion=True,  # Convert UUID strings to UUID objects
         json_serializer=orjson.dumps,  # Use orjson for performance
@@ -363,7 +363,7 @@ config = DuckDBConfig(
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleDriverFeatures
 
 config = OracleAsyncConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features=OracleDriverFeatures(
         enable_numpy_vectors=True,  # NumPy array ↔ Oracle VECTOR conversion
         enable_uuid_binary=True,  # UUID ↔ RAW(16) conversion
@@ -377,7 +377,7 @@ config = OracleAsyncConfig(
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriverFeatures
 
 config = AiosqliteConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features=AiosqliteDriverFeatures(
         enable_json_detection=True,  # Detect and parse JSON strings
         json_serializer=json.dumps,
@@ -399,7 +399,7 @@ spec = SQLSpec()
 # Primary PostgreSQL database
 primary = spec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/main"},
+        connection_config={"dsn": "postgresql://localhost/main"},
         extension_config={
             "litestar": {"session_key": "primary_db"}
         }
@@ -409,7 +409,7 @@ primary = spec.add_config(
 # Analytics DuckDB database
 analytics = spec.add_config(
     DuckDBConfig(
-        pool_config={"database": "analytics.duckdb"},
+        connection_config={"database": "analytics.duckdb"},
         extension_config={
             "litestar": {"session_key": "analytics_db"}
         }
@@ -435,7 +435,7 @@ Configure migration behavior:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     migration_config={
         "script_location": "migrations",  # Directory for migration files
         "version_table": "sqlspec_version",  # Version tracking table
@@ -483,12 +483,12 @@ Most adapters auto-detect optional features:
 
 ```python
 # pgvector auto-enabled if package installed
-config = AsyncpgConfig(pool_config={...})
+config = AsyncpgConfig(connection_config={...})
 # driver_features["enable_pgvector"] auto-set based on import
 
 # Explicit override
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features={"enable_pgvector": False}  # Force disable
 )
 ```
@@ -511,7 +511,7 @@ cache = spec.add_config(SqliteConfig(
 import os
 
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "dsn": os.getenv("DATABASE_URL"),
         "min_size": int(os.getenv("DB_POOL_MIN", "10")),
         "max_size": int(os.getenv("DB_POOL_MAX", "20")),
@@ -524,19 +524,19 @@ config = AsyncpgConfig(
 
 ## Common Configuration Errors
 
-### Error: "Invalid pool_config parameter"
+### Error: "Invalid connection_config parameter"
 
 **Cause:** Using wrong parameter name for adapter
 
 ```python
 # WRONG - using asyncpg params for psycopg
 config = PsycopgConfig(
-    pool_config={"dsn": "...", "min_size": 10}
+    connection_config={"dsn": "...", "min_size": 10}
 )
 
 # CORRECT
 config = PsycopgConfig(
-    pool_config={"conninfo": "...", "min_size": 10}
+    connection_config={"conninfo": "...", "min_size": 10}
 )
 ```
 

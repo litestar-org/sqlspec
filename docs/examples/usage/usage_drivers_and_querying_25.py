@@ -8,7 +8,7 @@ __all__ = ("test_example_25_sql_result_helpers",)
 
 def test_example_25_sql_result_helpers() -> None:
     spec = SQLSpec()
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(db) as session:
         session.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, status TEXT)")

@@ -13,19 +13,25 @@ pytestmark = [pytest.mark.xdist_group("oracle")]
 @pytest.fixture
 def oracle_uuid_sync_config(oracle_sync_config: OracleSyncConfig) -> OracleSyncConfig:
     """Create Oracle sync config with UUID binary enabled."""
-    return OracleSyncConfig(pool_config=oracle_sync_config.pool_config, driver_features={"enable_uuid_binary": True})
+    return OracleSyncConfig(
+        connection_config=oracle_sync_config.connection_config, driver_features={"enable_uuid_binary": True}
+    )
 
 
 @pytest.fixture
 def oracle_uuid_async_config(oracle_async_config: OracleAsyncConfig) -> OracleAsyncConfig:
     """Create Oracle async config with UUID binary enabled."""
-    return OracleAsyncConfig(pool_config=oracle_async_config.pool_config, driver_features={"enable_uuid_binary": True})
+    return OracleAsyncConfig(
+        connection_config=oracle_async_config.connection_config, driver_features={"enable_uuid_binary": True}
+    )
 
 
 @pytest.fixture
 def oracle_uuid_disabled_async_config(oracle_async_config: OracleAsyncConfig) -> OracleAsyncConfig:
     """Create Oracle async config with UUID binary explicitly disabled."""
-    return OracleAsyncConfig(pool_config=oracle_async_config.pool_config, driver_features={"enable_uuid_binary": False})
+    return OracleAsyncConfig(
+        connection_config=oracle_async_config.connection_config, driver_features={"enable_uuid_binary": False}
+    )
 
 
 async def test_create_uuid_table(oracle_async_session: OracleAsyncDriver) -> None:
@@ -217,7 +223,7 @@ async def test_uuid_numpy_coexistence(oracle_async_config: OracleAsyncConfig) ->
     import numpy as np
 
     config = OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config,
+        connection_config=oracle_async_config.connection_config,
         driver_features={"enable_numpy_vectors": True, "enable_uuid_binary": True},
     )
 

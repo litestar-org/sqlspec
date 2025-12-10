@@ -445,7 +445,7 @@ When your prototype becomes production, migrate to PostgreSQL:
    from sqlspec.adapters.asyncpg import AsyncpgConfig
    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
-   pg_config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+   pg_config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
    pg_store = AsyncpgADKStore(pg_config)
    await pg_store.create_tables()
 

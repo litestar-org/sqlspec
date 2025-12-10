@@ -23,7 +23,7 @@ def test_basic_statement_config() -> None:
 
     # Apply to adapter
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
-    config = AsyncpgConfig(pool_config={"dsn": dsn}, statement_config=statement_config)
+    config = AsyncpgConfig(connection_config={"dsn": dsn}, statement_config=statement_config)
     # end-example
     assert config.statement_config.dialect == "postgres"
     assert config.statement_config.enable_parsing is True

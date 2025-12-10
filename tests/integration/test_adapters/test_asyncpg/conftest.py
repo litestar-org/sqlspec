@@ -8,7 +8,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 
 
 @pytest.fixture(scope="function")
-def asyncpg_pool_config(postgres_service: PostgresService) -> "dict[str, Any]":
+def asyncpg_connection_config(postgres_service: PostgresService) -> "dict[str, Any]":
     """Base pool configuration for AsyncPG tests."""
 
     return {
@@ -21,14 +21,14 @@ def asyncpg_pool_config(postgres_service: PostgresService) -> "dict[str, Any]":
 
 
 @pytest.fixture(scope="function")
-async def asyncpg_config(asyncpg_pool_config: "dict[str, Any]") -> "AsyncGenerator[AsyncpgConfig, None]":
+async def asyncpg_config(asyncpg_connection_config: "dict[str, Any]") -> "AsyncGenerator[AsyncpgConfig, None]":
     """Provide an AsyncpgConfig instance with shared pool settings."""
 
-    config = AsyncpgConfig(pool_config=dict(asyncpg_pool_config))
+    config = AsyncpgConfig(connection_config=dict(asyncpg_connection_config))
     try:
         yield config
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 

@@ -359,7 +359,7 @@ Database-specific implementation for {adapter_name}.
 from sqlspec.adapters.{adapter_name} import {adapter_name.capitalize()}Config
 
 config = {adapter_name.capitalize()}Config(
-    pool_config={{"dsn": "..."}},
+    connection_config={{"dsn": "..."}},
     driver_features={{}}
 )
 ```
@@ -419,7 +419,7 @@ pip install sqlspec[{adapter_name}]
 from sqlspec.adapters.{adapter_name} import {adapter_name.capitalize()}Config
 
 config = {adapter_name.capitalize()}Config(
-    pool_config={{"dsn": "..."}}
+    connection_config={{"dsn": "..."}}
 )
 ```
 

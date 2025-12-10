@@ -16,7 +16,7 @@ def test_basic_migration_config() -> None:
 
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
     config = AsyncpgConfig(
-        pool_config={"dsn": dsn},
+        connection_config={"dsn": dsn},
         extension_config={
             "litestar": {"session_table": "custom_sessions"}  # Extension settings
         },

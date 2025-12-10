@@ -25,7 +25,7 @@ async def asyncpg_adk_store(postgres_service: PostgresService) -> "AsyncGenerato
         Pool is properly closed to avoid threading issues.
     """
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -46,7 +46,7 @@ async def asyncpg_adk_store(postgres_service: PostgresService) -> "AsyncGenerato
             await conn.execute("DROP TABLE IF EXISTS adk_events CASCADE")
             await conn.execute("DROP TABLE IF EXISTS adk_sessions CASCADE")
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 

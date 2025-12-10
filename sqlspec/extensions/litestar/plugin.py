@@ -194,7 +194,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
     Example:
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/db"},
+            connection_config={"dsn": "postgresql://localhost/db"},
             extension_config={
                 "litestar": {
                     "session_table": "custom_sessions"  # Optional custom table name

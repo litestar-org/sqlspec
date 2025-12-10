@@ -14,7 +14,7 @@ MIGRATIONS_PATH = Path(__file__).with_name("files")
 def _config() -> "SqliteConfig":
     """Return a SQLite config pointing at the bundled migration files."""
     return SqliteConfig(
-        pool_config={"database": ":memory:"}, migration_config={"script_location": str(MIGRATIONS_PATH)}
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(MIGRATIONS_PATH)}
     )
 
 

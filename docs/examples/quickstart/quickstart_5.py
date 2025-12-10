@@ -24,7 +24,7 @@ async def test_quickstart_5() -> None:
         name: str
         email: str
 
-    def pool_config() -> "dict[str, Any]":
+    def get_connection_config() -> "dict[str, Any]":
         return {
             "host": os.getenv("SQLSPEC_QUICKSTART_PG_HOST", "localhost"),
             "port": int(os.getenv("SQLSPEC_QUICKSTART_PG_PORT", "5432")),
@@ -49,7 +49,7 @@ async def test_quickstart_5() -> None:
         )
 
     db_manager = SQLSpec()
-    db = db_manager.add_config(AsyncpgConfig(pool_config=pool_config()))
+    db = db_manager.add_config(AsyncpgConfig(connection_config=get_connection_config()))
 
     async with db_manager.provide_session(db) as session:
         await seed_users(session)

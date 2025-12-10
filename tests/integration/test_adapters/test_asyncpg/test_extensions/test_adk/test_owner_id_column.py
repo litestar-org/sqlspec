@@ -26,7 +26,7 @@ def _make_config_with_owner_id(
         adk_settings["owner_id_column"] = owner_id_column
 
     return AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -47,7 +47,7 @@ async def asyncpg_config_for_fk(postgres_service: Any) -> "AsyncGenerator[Asyncp
     try:
         yield config
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -137,7 +137,7 @@ async def test_create_tables_with_owner_id_column(
             assert result["data_type"] == "integer"
             assert result["is_nullable"] == "NO"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -162,7 +162,7 @@ async def test_create_session_with_owner_id(tenants_table: Any, postgres_service
             assert result is not None
             assert result["tenant_id"] == 1
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -177,7 +177,7 @@ async def test_create_session_without_owner_id_when_configured(tenants_table: An
 
         assert session["id"] == "session-1"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -193,7 +193,7 @@ async def test_fk_constraint_enforcement_not_null(tenants_table: Any, postgres_s
         with pytest.raises(asyncpg.ForeignKeyViolationError):
             await store.create_session("session-invalid", "app-1", "user-1", {"data": "test"}, owner_id=999)
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -224,7 +224,7 @@ async def test_cascade_delete_behavior(tenants_table: Any, postgres_service: Any
         assert session2 is None
         assert session3 is not None
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -246,7 +246,7 @@ async def test_nullable_owner_id_column(tenants_table: Any, postgres_service: An
             assert result is not None
             assert result["tenant_id"] is None
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -272,7 +272,7 @@ async def test_set_null_on_delete_behavior(tenants_table: Any, postgres_service:
             assert result is not None
             assert result["tenant_id"] is None
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -298,7 +298,7 @@ async def test_uuid_owner_id_column(users_table: Any, postgres_service: Any) -> 
             assert result is not None
             assert result["account_id"] == user_uuid
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -316,7 +316,7 @@ async def test_deferrable_initially_deferred_fk(tenants_table: Any, postgres_ser
 
         assert session is not None
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -350,7 +350,7 @@ async def test_owner_id_column_name_property(tenants_table: Any, postgres_servic
         assert store.owner_id_column_name == "tenant_id"
         assert store.owner_id_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -379,7 +379,7 @@ async def test_multiple_sessions_same_tenant(tenants_table: Any, postgres_servic
             assert len(result) == 5
             assert [r["id"] for r in result] == [f"session-{i}" for i in range(5)]
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -407,5 +407,5 @@ async def test_owner_id_with_custom_table_names(tenants_table: Any, postgres_ser
             await conn.execute("DROP TABLE IF EXISTS custom_events CASCADE")
             await conn.execute("DROP TABLE IF EXISTS custom_sessions CASCADE")
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()

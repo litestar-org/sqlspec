@@ -121,7 +121,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore
 
         config = OracleAsyncConfig(
-            pool_config={"dsn": "oracle://..."},
+            connection_config={"dsn": "oracle://..."},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",
@@ -881,7 +881,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         from sqlspec.adapters.oracledb.adk import OracleSyncADKStore
 
         config = OracleSyncConfig(
-            pool_config={"dsn": "oracle://..."},
+            connection_config={"dsn": "oracle://..."},
             extension_config={
                 "adk": {
                     "session_table": "my_sessions",

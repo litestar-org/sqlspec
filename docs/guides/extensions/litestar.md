@@ -43,7 +43,7 @@ from sqlspec.extensions.litestar import SQLSpecPlugin
 spec = SQLSpec()
 db = spec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/app"},
+        connection_config={"dsn": "postgresql://localhost/app"},
         extension_config={
             "litestar": {
                 "commit_mode": "autocommit",
@@ -86,7 +86,7 @@ Override dependency keys for multi-tenant setups:
 
 ```python
 config = AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/primary"},
+    connection_config={"dsn": "postgresql://localhost/primary"},
     extension_config={
         "litestar": {
             "session_key": "primary_db",
@@ -127,7 +127,7 @@ from sqlspec.extensions.litestar import SQLSpecPlugin
 spec = SQLSpec()
 db = spec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/app"},
+        connection_config={"dsn": "postgresql://localhost/app"},
         extension_config={"litestar": {"session_table": "litestar_sessions"}},
     )
 )

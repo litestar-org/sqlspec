@@ -24,7 +24,7 @@ async def test_async_methods(postgres_service: PostgresService) -> None:
             f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         )
         config = AsyncpgConfig(
-            pool_config={"dsn": dsn}, migration_config={"enabled": True, "script_location": str(migration_dir)}
+            connection_config={"dsn": dsn}, migration_config={"enabled": True, "script_location": str(migration_dir)}
         )
 
         # Initialize migrations directory (creates __init__.py if package=True)

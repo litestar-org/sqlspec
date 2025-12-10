@@ -10,7 +10,7 @@ def test_example_1(tmp_path: Path) -> None:
     db = SQLSpec()
     database = tmp_path / "example1.db"  # Database file path
     config = SqliteConfig(
-        pool_config={
+        connection_config={
             "database": database.name,
             "timeout": 5.0,  # Lock timeout in seconds
             "check_same_thread": False,  # Allow multi-thread access

@@ -6,7 +6,7 @@ def test_asyncmy_config_setup() -> None:
     from sqlspec.adapters.asyncmy import AsyncmyConfig
 
     config = AsyncmyConfig(
-        pool_config={
+        connection_config={
             "host": "localhost",
             "port": 3306,
             "user": "myuser",
@@ -19,4 +19,4 @@ def test_asyncmy_config_setup() -> None:
         }
     )
     # end-example
-    assert config.pool_config["port"] == 3306
+    assert config.connection_config["port"] == 3306

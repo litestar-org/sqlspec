@@ -33,7 +33,7 @@ def get_config_from_dishka():
         @provide(scope=Scope.APP)
         def get_database_config(self) -> SqliteConfig:
             return SqliteConfig(
-                pool_config={"database": ":memory:"},
+                connection_config={"database": ":memory:"},
                 migration_config={"enabled": True, "script_location": "migrations"},
                 bind_key="dishka_sqlite"
             )
@@ -70,7 +70,7 @@ class AsyncDatabaseProvider(Provider):
         # Simulate some async work
         await asyncio.sleep(0.001)
         return SqliteConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True, "script_location": "migrations"},
             bind_key="async_dishka_sqlite"
         )
@@ -107,7 +107,7 @@ class MultiDatabaseProvider(Provider):
     @provide(scope=Scope.APP)
     def get_sqlite_config(self) -> SqliteConfig:
         return SqliteConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True, "script_location": "sqlite_migrations"},
             bind_key="dishka_multi_sqlite"
         )
@@ -115,7 +115,7 @@ class MultiDatabaseProvider(Provider):
     @provide(scope=Scope.APP)
     def get_duckdb_config(self) -> DuckDBConfig:
         return DuckDBConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True, "script_location": "duckdb_migrations"},
             bind_key="dishka_multi_duckdb"
         )
@@ -158,7 +158,7 @@ class AsyncMultiDatabaseProvider(Provider):
     async def get_sqlite_config(self) -> SqliteConfig:
         await asyncio.sleep(0.001)
         return SqliteConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True},
             bind_key="async_multi_sqlite"
         )
@@ -167,7 +167,7 @@ class AsyncMultiDatabaseProvider(Provider):
     async def get_aiosqlite_config(self) -> AiosqliteConfig:
         await asyncio.sleep(0.001)
         return AiosqliteConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True},
             bind_key="async_multi_aiosqlite"
         )
@@ -176,7 +176,7 @@ class AsyncMultiDatabaseProvider(Provider):
     async def get_duckdb_config(self) -> DuckDBConfig:
         await asyncio.sleep(0.001)
         return DuckDBConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True},
             bind_key="async_multi_duckdb"
         )
@@ -227,7 +227,7 @@ class DatabaseProvider(Provider):
     @provide(scope=Scope.APP)
     def get_database_config(self, database_url: str, bind_key: str) -> SqliteConfig:
         return SqliteConfig(
-            pool_config={"database": database_url},
+            connection_config={"database": database_url},
             migration_config={"enabled": True, "script_location": "complex_migrations"},
             bind_key=bind_key
         )
@@ -296,7 +296,7 @@ class MigrationProvider(Provider):
     async def get_database_config(self) -> SqliteConfig:
         await asyncio.sleep(0.001)
         return SqliteConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={
                 "enabled": True,
                 "script_location": "dishka_migrations"
@@ -338,7 +338,7 @@ class ValidatedProvider(Provider):
     async def get_database_config(self) -> DuckDBConfig:
         await asyncio.sleep(0.001)
         return DuckDBConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True},
             bind_key="validated_dishka"
         )
@@ -387,7 +387,7 @@ class DatabaseConfigProvider(Provider):
         # Simulate loading config from environment or remote service
         await asyncio.sleep(0.002)  # Simulate I/O
         return SqliteConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={
                 "enabled": True,
                 "script_location": "migrations/primary"
@@ -399,7 +399,7 @@ class DatabaseConfigProvider(Provider):
     async def get_analytics_db_config(self) -> DuckDBConfig:
         await asyncio.sleep(0.002)
         return DuckDBConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={
                 "enabled": True,
                 "script_location": "migrations/analytics"
@@ -446,7 +446,7 @@ class CleanupProvider(Provider):
     async def get_database_config(self) -> SqliteConfig:
         await asyncio.sleep(0.001)
         return SqliteConfig(
-            pool_config={"database": ":memory:"},
+            connection_config={"database": ":memory:"},
             migration_config={"enabled": True},
             bind_key="cleanup_test"
         )

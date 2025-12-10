@@ -21,7 +21,7 @@ async def test_aiosqlite_migration_full_workflow(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
 
     config = AiosqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -74,7 +74,7 @@ def down():
             result = await driver.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{users_table}'")
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -90,7 +90,7 @@ async def test_aiosqlite_multiple_migrations_workflow(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
 
     config = AiosqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -178,7 +178,7 @@ def down():
             table_names = [t["name"] for t in tables_result.data if not t["name"].startswith("sqlspec_")]
             assert len(table_names) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -193,7 +193,7 @@ async def test_aiosqlite_migration_current_command(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
 
     config = AiosqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -222,7 +222,7 @@ def down():
 
         await commands.current(verbose=True)
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -236,7 +236,7 @@ async def test_aiosqlite_migration_error_handling(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
 
     config = AiosqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -269,7 +269,7 @@ def down():
             except Exception as e:
                 assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()
 
 
@@ -284,7 +284,7 @@ async def test_aiosqlite_migration_with_transactions(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
 
     config = AiosqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -330,5 +330,5 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.pool_instance:
+        if config.connection_instance:
             await config.close_pool()

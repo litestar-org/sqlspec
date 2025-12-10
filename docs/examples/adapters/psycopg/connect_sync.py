@@ -9,7 +9,7 @@ __all__ = ("main",)
 
 
 DSN = os.getenv("SQLSPEC_PSYCOPG_DSN", "postgresql://postgres:postgres@localhost:5432/postgres")
-config = PsycopgSyncConfig(bind_key="docs_psycopg", pool_config={"conninfo": DSN, "min_size": 1, "max_size": 4})
+config = PsycopgSyncConfig(bind_key="docs_psycopg", connection_config={"conninfo": DSN, "min_size": 1, "max_size": 4})
 
 
 def main() -> None:

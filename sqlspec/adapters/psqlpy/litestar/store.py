@@ -32,7 +32,7 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         from sqlspec.adapters.psqlpy import PsqlpyConfig
         from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
 
-        config = PsqlpyConfig(pool_config={"dsn": "postgresql://..."})
+        config = PsqlpyConfig(connection_config={"dsn": "postgresql://..."})
         store = PsqlpyStore(config)
         await store.create_table()
     """

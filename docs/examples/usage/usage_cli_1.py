@@ -7,7 +7,7 @@ def test_single_and_multiple_configs() -> None:
     # start-example
     # Single config
     db_config = AsyncpgConfig(
-        pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
+        connection_config={"dsn": "postgresql://user:pass@localhost/mydb"},
         migration_config={"script_location": "migrations", "enabled": True},
     )
 
@@ -15,7 +15,7 @@ def test_single_and_multiple_configs() -> None:
     configs = [
         AsyncpgConfig(
             bind_key="postgres",
-            pool_config={"dsn": "postgresql://..."},
+            connection_config={"dsn": "postgresql://..."},
             migration_config={"script_location": "migrations/postgres"},
         )
         # ... more configs

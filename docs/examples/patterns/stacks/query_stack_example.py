@@ -64,7 +64,7 @@ async def _seed_async_tables(session: "Any", user_id: int, roles: "tuple[str, ..
 def run_sync_example() -> None:
     """Execute the stack with the synchronous SQLite adapter."""
     registry = SQLSpec()
-    config = registry.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    config = registry.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
     with registry.provide_session(config) as session:
         _seed_sync_tables(session, 1, ("admin", "editor"))
         results = session.execute_stack(build_stack(user_id=1, action="sync-login"))
@@ -81,7 +81,7 @@ def run_async_example() -> None:
 
     async def _inner() -> None:
         registry = SQLSpec()
-        config = registry.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
+        config = registry.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
         async with registry.provide_session(config) as session:
             await _seed_async_tables(session, 2, ("viewer",))
             results = await session.execute_stack(build_stack(user_id=2, action="async-login"))

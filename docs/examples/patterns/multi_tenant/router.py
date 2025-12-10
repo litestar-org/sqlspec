@@ -13,7 +13,9 @@ class TenantRouter:
     """Maintain isolated SqliteConfig instances for each tenant slug."""
 
     def __init__(self, tenants: "tuple[str, ...]") -> None:
-        self._configs = {slug: SqliteConfig(pool_config={"database": ":memory:"}, bind_key=slug) for slug in tenants}
+        self._configs = {
+            slug: SqliteConfig(connection_config={"database": ":memory:"}, bind_key=slug) for slug in tenants
+        }
 
     def insert_article(self, slug: str, title: str) -> None:
         config = self._configs[slug]

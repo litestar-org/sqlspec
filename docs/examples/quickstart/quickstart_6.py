@@ -18,8 +18,8 @@ def test_quickstart_6(tmp_path: Path) -> None:
     analytics_db = tmp_path / "analytics.duckdb"
 
     db_manager = SQLSpec()
-    sqlite_db = db_manager.add_config(SqliteConfig(pool_config={"database": app_db.name}))
-    duckdb_db = db_manager.add_config(DuckDBConfig(pool_config={"database": analytics_db.name}))
+    sqlite_db = db_manager.add_config(SqliteConfig(connection_config={"database": app_db.name}))
+    duckdb_db = db_manager.add_config(DuckDBConfig(connection_config={"database": analytics_db.name}))
 
     with db_manager.provide_session(sqlite_db) as sqlite_session:
         users = sqlite_session.select("SELECT 1")

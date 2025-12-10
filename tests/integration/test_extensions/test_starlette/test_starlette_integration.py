@@ -21,7 +21,7 @@ def test_starlette_basic_query() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -47,7 +47,7 @@ def test_starlette_manual_commit_mode() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -84,7 +84,7 @@ def test_starlette_autocommit_mode() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "autocommit", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -119,7 +119,7 @@ def test_starlette_autocommit_rolls_back_on_error() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "autocommit", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -157,7 +157,7 @@ def test_starlette_session_caching() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -182,7 +182,7 @@ def test_starlette_connection_pool_lifecycle() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
@@ -207,7 +207,7 @@ def test_starlette_default_session_key() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
-        config = AiosqliteConfig(pool_config={"database": tmp.name}, extension_config={"starlette": {}})
+        config = AiosqliteConfig(connection_config={"database": tmp.name}, extension_config={"starlette": {}})
         sql.add_config(config)
         db_ext = SQLSpecPlugin(sql)
 
