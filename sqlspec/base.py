@@ -2,7 +2,7 @@ import asyncio
 import atexit
 from collections.abc import AsyncIterator, Awaitable, Coroutine, Iterator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, TypeGuard, Union, cast, overload
+from typing import TYPE_CHECKING, Any, TypeGuard, cast, overload
 
 from sqlspec.config import (
     AsyncConfigT,
@@ -55,7 +55,7 @@ class SQLSpec:
     def __init__(
         self, *, loader: "SQLFileLoader | None" = None, observability_config: "ObservabilityConfig | None" = None
     ) -> None:
-        self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
+        self._configs: dict[int, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_sync_pools)
         self._instance_cache_config: CacheConfig | None = None
         self._sql_loader: SQLFileLoader | None = loader
@@ -73,13 +73,13 @@ class SQLSpec:
         """Clean up only synchronous connection pools at exit."""
         cleaned_count = 0
 
-        for config_type, config in self._configs.items():
+        for config in self._configs.values():
             if config.supports_connection_pooling and not config.is_async:
                 try:
                     config.close_pool()
                     cleaned_count += 1
                 except Exception as e:
-                    logger.debug("Failed to clean up sync pool for config %s: %s", config_type.__name__, e)
+                    logger.debug("Failed to clean up sync pool for config %s: %s", config.__class__.__name__, e)
 
         if cleaned_count > 0:
             logger.debug("Sync pool cleanup completed. Cleaned %d pools.", cleaned_count)
@@ -92,7 +92,7 @@ class SQLSpec:
         cleanup_tasks = []
         sync_configs = []
 
-        for config_type, config in self._configs.items():
+        for config in self._configs.values():
             if config.supports_connection_pooling:
                 try:
                     if config.is_async:
@@ -100,9 +100,9 @@ class SQLSpec:
                         if close_pool_awaitable is not None:
                             cleanup_tasks.append(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
                     else:
-                        sync_configs.append((config_type, config))
+                        sync_configs.append(config)
                 except Exception as e:
-                    logger.debug("Failed to prepare cleanup for config %s: %s", config_type.__name__, e)
+                    logger.debug("Failed to prepare cleanup for config %s: %s", config.__class__.__name__, e)
 
         if cleanup_tasks:
             try:
@@ -111,7 +111,7 @@ class SQLSpec:
             except Exception as e:
                 logger.debug("Failed to complete async pool cleanup: %s", e)
 
-        for _config_type, config in sync_configs:
+        for config in sync_configs:
             config.close_pool()
 
         if sync_configs:
@@ -126,29 +126,27 @@ class SQLSpec:
         await self.close_all_pools()
 
     @overload
-    def add_config(self, config: "SyncConfigT") -> "type[SyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
-        ...
+    def add_config(self, config: "SyncConfigT") -> "SyncConfigT": ...
 
     @overload
-    def add_config(self, config: "AsyncConfigT") -> "type[AsyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
-        ...
+    def add_config(self, config: "AsyncConfigT") -> "AsyncConfigT": ...
 
-    def add_config(self, config: "SyncConfigT | AsyncConfigT") -> "type[SyncConfigT | AsyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
+    def add_config(self, config: "SyncConfigT | AsyncConfigT") -> "SyncConfigT | AsyncConfigT":
         """Add a configuration instance to the registry.
 
         Args:
             config: The configuration instance to add.
 
         Returns:
-            The type of the added configuration for use as a registry key.
+            The same configuration instance (it IS the handle).
         """
-        config_type = type(config)
-        if config_type in self._configs:
-            logger.debug("Configuration for %s already exists. Overwriting.", config_type.__name__)
+        config_id = id(config)
+        if config_id in self._configs:
+            logger.debug("Configuration for %s already exists. Overwriting.", config.__class__.__name__)
         if hasattr(config, "attach_observability"):
             config.attach_observability(self._observability_config)
-        self._configs[config_type] = config
-        return config_type
+        self._configs[config_id] = config
+        return config
 
     @overload
     def get_config(self, name: "type[SyncConfigT]") -> "SyncConfigT": ...
@@ -159,10 +157,13 @@ class SQLSpec:
     def get_config(
         self, name: "type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]] | Any"
     ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]":
-        """Retrieve a configuration instance by its type or a key.
+        """Retrieve a configuration instance by its type (deprecated pattern).
+
+        Warning: This method is deprecated. Use config instances directly.
+        If multiple configs of same type exist, returns arbitrary one.
 
         Args:
-            name: The type of the configuration or a key associated with it.
+            name: The type of the configuration.
 
         Returns:
             The configuration instance.
@@ -170,21 +171,47 @@ class SQLSpec:
         Raises:
             KeyError: If the configuration is not found.
         """
-        config = self._configs.get(name)
-        if not config:
-            logger.error("No configuration found for %s", name)
-            msg = f"No configuration found for {name}"
-            raise KeyError(msg)
+        for config in self._configs.values():
+            if isinstance(config, name):
+                logger.debug("Retrieved configuration: %s", self._get_config_name(name))
+                return config
 
-        logger.debug("Retrieved configuration: %s", self._get_config_name(name))
-        return config
+        logger.error("No configuration found for %s", name)
+        msg = f"No configuration found for {name}"
+        raise KeyError(msg)
+
+    def get_config_by_type(
+        self, config_type: "type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]]"
+    ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]":
+        """Get first config of given type (deprecated pattern).
+
+        Warning: If multiple configs of same type exist, returns arbitrary one.
+        Use config instances directly instead.
+
+        Args:
+            config_type: The configuration class to search for.
+
+        Returns:
+            The configuration instance.
+
+        Raises:
+            KeyError: If no config of the given type is found.
+        """
+        for config in self._configs.values():
+            if isinstance(config, config_type):
+                logger.debug("Retrieved configuration: %s", config_type.__name__)
+                return config
+
+        logger.error("No configuration found for %s", config_type.__name__)
+        msg = f"No configuration found for {config_type.__name__}"
+        raise KeyError(msg)
 
     @property
-    def configs(self) -> "dict[type, DatabaseConfigProtocol[Any, Any, Any]]":
+    def configs(self) -> "dict[int, DatabaseConfigProtocol[Any, Any, Any]]":
         """Access the registry of database configurations.
 
         Returns:
-            Dictionary mapping config types to config instances.
+            Dictionary mapping config instance IDs to config instances.
         """
         return self._configs
 
@@ -214,110 +241,70 @@ class SQLSpec:
 
     @overload
     def get_connection(
-        self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "ConnectionT": ...
 
     @overload
     def get_connection(
-        self,
-        name: Union[
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        self, config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "Awaitable[ConnectionT]": ...
 
     def get_connection(
         self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
     ) -> "ConnectionT | Awaitable[ConnectionT]":
         """Get a database connection for the specified configuration.
 
         Args:
-            name: The configuration name or instance.
+            config: The configuration instance.
 
         Returns:
             A database connection or an awaitable yielding a connection.
-        """
-        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
-            config = name
-            config_name = config.__class__.__name__
-        else:
-            config = self.get_config(name)
-            config_name = self._get_config_name(name)
 
+        Raises:
+            ValueError: If the configuration is not registered.
+        """
+        if id(config) not in self._configs:
+            msg = "Config not registered. Call manager.add_config(config) first."
+            raise ValueError(msg)
+
+        config_name = config.__class__.__name__
         logger.debug("Getting connection for config: %s", config_name, extra={"config_type": config_name})
         return config.create_connection()
 
     @overload
     def get_session(
-        self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "DriverT": ...
 
     @overload
     def get_session(
-        self,
-        name: Union[
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        self, config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "Awaitable[DriverT]": ...
 
     def get_session(
         self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
     ) -> "DriverT | Awaitable[DriverT]":
         """Get a database session (driver adapter) for the specified configuration.
 
         Args:
-            name: The configuration name or instance.
+            config: The configuration instance.
 
         Returns:
             A driver adapter instance or an awaitable yielding one.
-        """
-        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
-            config = name
-            config_name = config.__class__.__name__
-        else:
-            config = self.get_config(name)
-            config_name = self._get_config_name(name)
 
+        Raises:
+            ValueError: If the configuration is not registered.
+        """
+        if id(config) not in self._configs:
+            msg = "Config not registered. Call manager.add_config(config) first."
+            raise ValueError(msg)
+
+        config_name = config.__class__.__name__
         logger.debug("Getting session for config: %s", config_name, extra={"config_type": config_name})
 
-        connection_obj = self.get_connection(name)
+        connection_obj = self.get_connection(config)
 
         if isinstance(connection_obj, Awaitable):
 
@@ -340,12 +327,7 @@ class SQLSpec:
     @overload
     def provide_connection(
         self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractContextManager[ConnectionT]": ...
@@ -353,48 +335,35 @@ class SQLSpec:
     @overload
     def provide_connection(
         self,
-        name: Union[
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[ConnectionT]": ...
 
     def provide_connection(
         self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
         """Create and provide a database connection from the specified configuration.
 
         Args:
-            name: The configuration name or instance.
+            config: The configuration instance.
             *args: Positional arguments to pass to the config's provide_connection.
             **kwargs: Keyword arguments to pass to the config's provide_connection.
 
         Returns:
             A sync or async context manager yielding a connection.
-        """
-        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
-            config = name
-            config_name = config.__class__.__name__
-        else:
-            config = self.get_config(name)
-            config_name = self._get_config_name(name)
 
+        Raises:
+            ValueError: If the configuration is not registered.
+        """
+        if id(config) not in self._configs:
+            msg = "Config not registered. Call manager.add_config(config) first."
+            raise ValueError(msg)
+
+        config_name = config.__class__.__name__
         logger.debug("Providing connection context for config: %s", config_name, extra={"config_type": config_name})
         connection_context = config.provide_connection(*args, **kwargs)
         runtime = config.get_observability_runtime()
@@ -435,12 +404,7 @@ class SQLSpec:
     @overload
     def provide_session(
         self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]": ...
@@ -448,48 +412,35 @@ class SQLSpec:
     @overload
     def provide_session(
         self,
-        name: Union[
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]": ...
 
     def provide_session(
         self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]":
         """Create and provide a database session from the specified configuration.
 
         Args:
-            name: The configuration name or instance.
+            config: The configuration instance.
             *args: Positional arguments to pass to the config's provide_session.
             **kwargs: Keyword arguments to pass to the config's provide_session.
 
         Returns:
             A sync or async context manager yielding a driver adapter instance.
-        """
-        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
-            config = name
-            config_name = config.__class__.__name__
-        else:
-            config = self.get_config(name)
-            config_name = self._get_config_name(name)
 
+        Raises:
+            ValueError: If the configuration is not registered.
+        """
+        if id(config) not in self._configs:
+            msg = "Config not registered. Call manager.add_config(config) first."
+            raise ValueError(msg)
+
+        config_name = config.__class__.__name__
         logger.debug("Providing session context for config: %s", config_name, extra={"config_type": config_name})
         session_context = config.provide_session(*args, **kwargs)
         runtime = config.get_observability_runtime()
@@ -541,46 +492,32 @@ class SQLSpec:
 
     @overload
     def get_pool(
-        self,
-        name: "type[NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT]] | NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT]",
+        self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT]"
     ) -> "None": ...
     @overload
-    def get_pool(
-        self,
-        name: "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-    ) -> "type[PoolT]": ...
+    def get_pool(self, config: "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]") -> "type[PoolT]": ...
     @overload
-    def get_pool(
-        self,
-        name: "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-    ) -> "Awaitable[type[PoolT]]": ...
+    def get_pool(self, config: "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]") -> "Awaitable[type[PoolT]]": ...
 
     def get_pool(
         self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
     ) -> "type[PoolT] | Awaitable[type[PoolT]] | None":
         """Get the connection pool for the specified configuration.
 
         Args:
-            name: The configuration name or instance.
+            config: The configuration instance.
 
         Returns:
             The connection pool, an awaitable yielding the pool, or None if not supported.
+
+        Raises:
+            ValueError: If the configuration is not registered.
         """
-        config = (
-            name
-            if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig))
-            else self.get_config(name)
-        )
+        if id(config) not in self._configs:
+            msg = "Config not registered. Call manager.add_config(config) first."
+            raise ValueError(msg)
+
         config_name = config.__class__.__name__
 
         if config.supports_connection_pooling:
@@ -592,53 +529,34 @@ class SQLSpec:
 
     @overload
     def close_pool(
-        self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "None": ...
 
     @overload
     def close_pool(
-        self,
-        name: Union[
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        self, config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "Awaitable[None]": ...
 
     def close_pool(
         self,
-        name: Union[
-            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-            "NoPoolSyncConfig[ConnectionT, DriverT]",
-            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-            "NoPoolAsyncConfig[ConnectionT, DriverT]",
-            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
-        ],
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
     ) -> "Awaitable[None] | None":
         """Close the connection pool for the specified configuration.
 
         Args:
-            name: The configuration name or instance.
+            config: The configuration instance.
 
         Returns:
             None, or an awaitable if closing an async pool.
+
+        Raises:
+            ValueError: If the configuration is not registered.
         """
-        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
-            config = name
-            config_name = config.__class__.__name__
-        else:
-            config = self.get_config(name)
-            config_name = self._get_config_name(name)
+        if id(config) not in self._configs:
+            msg = "Config not registered. Call manager.add_config(config) first."
+            raise ValueError(msg)
+
+        config_name = config.__class__.__name__
 
         if config.supports_connection_pooling:
             logger.debug("Closing pool for config: %s", config_name, extra={"config_type": config_name})
