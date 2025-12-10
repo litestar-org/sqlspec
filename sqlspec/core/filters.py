@@ -658,7 +658,7 @@ class SearchFilter(StatementFilter):
 
     __slots__ = ("_field_name", "_ignore_case", "_value")
 
-    def __init__(self, field_name: str | set[str], value: str, ignore_case: bool | None = False) -> None:
+    def __init__(self, field_name: str | set[str], value: str | None, ignore_case: bool | None = False) -> None:
         self._field_name = field_name
         self._value = value
         self._ignore_case = ignore_case
@@ -668,7 +668,7 @@ class SearchFilter(StatementFilter):
         return self._field_name
 
     @property
-    def value(self) -> str:
+    def value(self) -> str | None:
         return self._value
 
     @property
