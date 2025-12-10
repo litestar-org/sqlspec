@@ -108,46 +108,6 @@ def test_registry_uses_id_as_key() -> None:
     assert id(config) in manager.configs
 
 
-def test_get_config_by_type_returns_first_match() -> None:
-    """Test backward compat helper returns first matching config."""
-    manager = SQLSpec()
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
-
-    manager.add_config(config1)
-    manager.add_config(config2)
-
-    result = manager.get_config_by_type(DuckDBConfig)
-    assert result in (config1, config2)
-
-
-def test_get_config_by_type_raises_for_not_found() -> None:
-    """Test that get_config_by_type raises KeyError if no config of type found."""
-    manager = SQLSpec()
-
-    with pytest.raises(KeyError, match="No configuration found"):
-        manager.get_config_by_type(DuckDBConfig)
-
-
-def test_get_config_returns_instance_of_type() -> None:
-    """Test backward compat get_config returns instance of type (deprecated)."""
-    manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
-
-    manager.add_config(config)
-
-    result = manager.get_config(DuckDBConfig)
-    assert result is config
-
-
-def test_get_config_raises_for_not_found() -> None:
-    """Test that get_config raises KeyError if no config of type found."""
-    manager = SQLSpec()
-
-    with pytest.raises(KeyError, match="No configuration found"):
-        manager.get_config(DuckDBConfig)
-
-
 def test_mixed_adapter_types_stored_separately() -> None:
     """Test that different adapter types are stored separately."""
     manager = SQLSpec()
@@ -373,21 +333,6 @@ def test_three_configs_same_type_all_stored() -> None:
     assert id(config3) in manager.configs
 
 
-def test_get_config_by_type_with_multiple_same_type() -> None:
-    """Test get_config_by_type returns one config when multiple of same type exist."""
-    manager = SQLSpec()
-    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
-    config3 = DuckDBConfig(pool_config={"database": ":memory:"})
-
-    manager.add_config(config1)
-    manager.add_config(config2)
-    manager.add_config(config3)
-
-    result = manager.get_config_by_type(DuckDBConfig)
-    assert result in (config1, config2, config3)
-
-
 def test_registry_clear_on_fresh_instance() -> None:
     """Test that fresh SQLSpec instance has empty registry."""
     manager = SQLSpec()
@@ -407,17 +352,6 @@ def test_config_instance_is_handle_pattern() -> None:
 
     with manager.provide_session(handle) as session:
         assert hasattr(session, "execute")
-
-
-def test_backwards_compat_get_config_still_works() -> None:
-    """Test backward compatibility for get_config(Type) pattern."""
-    manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
-
-    manager.add_config(config)
-
-    retrieved = manager.get_config(DuckDBConfig)
-    assert retrieved is config
 
 
 def test_multiple_sqlite_configs_stored_separately() -> None:

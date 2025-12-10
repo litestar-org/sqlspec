@@ -148,64 +148,6 @@ class SQLSpec:
         self._configs[config_id] = config
         return config
 
-    @overload
-    def get_config(self, name: "type[SyncConfigT]") -> "SyncConfigT": ...
-
-    @overload
-    def get_config(self, name: "type[AsyncConfigT]") -> "AsyncConfigT": ...
-
-    def get_config(
-        self, name: "type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]] | Any"
-    ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]":
-        """Retrieve a configuration instance by its type (deprecated pattern).
-
-        Warning: This method is deprecated. Use config instances directly.
-        If multiple configs of same type exist, returns arbitrary one.
-
-        Args:
-            name: The type of the configuration.
-
-        Returns:
-            The configuration instance.
-
-        Raises:
-            KeyError: If the configuration is not found.
-        """
-        for config in self._configs.values():
-            if isinstance(config, name):
-                logger.debug("Retrieved configuration: %s", self._get_config_name(name))
-                return config
-
-        logger.error("No configuration found for %s", name)
-        msg = f"No configuration found for {name}"
-        raise KeyError(msg)
-
-    def get_config_by_type(
-        self, config_type: "type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]]"
-    ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]":
-        """Get first config of given type (deprecated pattern).
-
-        Warning: If multiple configs of same type exist, returns arbitrary one.
-        Use config instances directly instead.
-
-        Args:
-            config_type: The configuration class to search for.
-
-        Returns:
-            The configuration instance.
-
-        Raises:
-            KeyError: If no config of the given type is found.
-        """
-        for config in self._configs.values():
-            if isinstance(config, config_type):
-                logger.debug("Retrieved configuration: %s", config_type.__name__)
-                return config
-
-        logger.error("No configuration found for %s", config_type.__name__)
-        msg = f"No configuration found for {config_type.__name__}"
-        raise KeyError(msg)
-
     @property
     def configs(self) -> "dict[int, DatabaseConfigProtocol[Any, Any, Any]]":
         """Access the registry of database configurations.
