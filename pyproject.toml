@@ -25,7 +25,7 @@ asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
 attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery", "google-cloud-storage"]
-cli = ["rich-click"]
+cli = ["rich-click", "tomli>=2.0.0; python_version < '3.11'"]
 cloud-sql = ["cloud-sql-python-connector"]
 duckdb = ["duckdb"]
 fastapi = ["fastapi"]
@@ -107,7 +107,7 @@ lint = [
   "asyncpg-stubs",
   "pyarrow-stubs",
   "pandas-stubs",
-
+  "tomli>=2.0.0",
 ]
 test = [
   "aiohttp",

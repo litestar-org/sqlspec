@@ -204,17 +204,27 @@ that generate static completion files (system-wide bash, zsh completion director
 Available Commands
 ==================
 
-The SQLSpec CLI provides commands for managing database migrations. All commands
-require a ``--config`` option pointing to your SQLSpec configuration.
+The SQLSpec CLI provides commands for managing database migrations. Configure the CLI
+using ``--config`` flag, ``SQLSPEC_CONFIG`` environment variable, or ``[tool.sqlspec]``
+section in pyproject.toml.
 
 Configuration Loading
 ---------------------
 
-The ``--config`` option accepts a dotted path to either:
+SQLSpec CLI supports three ways to specify your database configuration, in order of precedence:
 
-1. **A single config object**: ``myapp.config.db_config``
-2. **A config list**: ``myapp.config.configs``
-3. **A callable function**: ``myapp.config.get_configs()``
+1. **CLI Flag** (``--config``) - Explicit override for one-off commands
+2. **Environment Variable** (``SQLSPEC_CONFIG``) - Convenient for development workflows
+3. **pyproject.toml** (``[tool.sqlspec]``) - Project-wide default configuration
+
+The ``--config`` option and ``SQLSPEC_CONFIG`` environment variable accept:
+
+- **A single config object**: ``myapp.config.db_config``
+- **A config list**: ``myapp.config.configs``
+- **A callable function**: ``myapp.config.get_configs()``
+- **Multiple config paths (comma-separated)**: ``myapp.config.primary_config,myapp.config.analytics_config``
+
+Each config path is resolved independently, and if a callable returns a list of configs, all configs are collected.
 
 Example configuration file (``myapp/config.py``):
 
@@ -225,13 +235,128 @@ Example configuration file (``myapp/config.py``):
    :end-before: # end-example
    :caption: `configuration loading`
 
+Config Discovery Methods
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Method 1: CLI Flag (Highest Priority)**
+
+.. code-block:: bash
+
+   sqlspec --config myapp.config.get_configs upgrade head
+
+Use for one-off commands or to override other config sources.
+
+**Method 2: Environment Variable**
+
+.. code-block:: bash
+
+   export SQLSPEC_CONFIG=myapp.config.get_configs
+   sqlspec upgrade head  # Uses environment variable
+
+Convenient for development. Add to your shell profile:
+
+.. code-block:: bash
+
+   # ~/.bashrc or ~/.zshrc
+   export SQLSPEC_CONFIG=myapp.config.get_configs
+
+Multiple configs (comma-separated):
+
+.. code-block:: bash
+
+   export SQLSPEC_CONFIG="app.db.primary_config,app.db.analytics_config"
+
+**Method 3: pyproject.toml (Project Default)**
+
+.. code-block:: toml
+
+   [tool.sqlspec]
+   config = "myapp.config.get_configs"
+
+Best for team projects - config is version controlled.
+
+Multiple configs (array):
+
+.. code-block:: toml
+
+   [tool.sqlspec]
+   config = [
+       "myapp.config.primary_config",
+       "myapp.config.analytics_config"
+   ]
+
+**Precedence:** CLI flag > Environment variable > pyproject.toml
+
+If no config is found from any source, SQLSpec will show a helpful error message with examples.
+
+Multi-Config Resolution Details
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When using comma-separated config paths or list format in pyproject.toml, SQLSpec:
+
+1. **Resolves each path independently**: Each dotted path is imported and resolved
+2. **Flattens callable results**: If a callable returns a list, all configs are collected
+3. **Deduplicates by bind_key**: Later configs override earlier ones with the same ``bind_key``
+4. **Validates final list**: Empty config lists result in an error
+
+**Deduplication Example:**
+
+.. code-block:: bash
+
+   # If primary_config has bind_key="db" and backup_config has bind_key="db"
+   export SQLSPEC_CONFIG="app.primary_config,app.backup_config"
+
+   # Result: Only backup_config is used (last wins)
+
+**Combined callable and list:**
+
+.. code-block:: python
+
+   # myapp/config.py
+   def get_all_configs():
+       """Returns list of configs."""
+       return [primary_config, analytics_config]
+
+   single_config = AsyncpgConfig(bind_key="backup", ...)
+
+.. code-block:: bash
+
+   # This resolves to 3 configs: primary, analytics, and backup
+   export SQLSPEC_CONFIG="myapp.config.get_all_configs,myapp.config.single_config"
+
+**Deduplication with callables:**
+
+.. code-block:: python
+
+   # myapp/config.py
+   primary = AsyncpgConfig(bind_key="db", ...)
+   updated = AsyncpgConfig(bind_key="db", ...)  # Same bind_key
+
+   def get_primary():
+       return primary
+
+   def get_updated():
+       return updated
+
+.. code-block:: bash
+
+   # Only updated config is used (last wins for bind_key="db")
+   sqlspec --config "myapp.config.get_primary,myapp.config.get_updated" upgrade
+
 Global Options
 --------------
 
 ``--config PATH``
-   **Required**. Dotted path to SQLSpec config(s) or callable function.
+   Dotted path to SQLSpec config(s) or callable function. Supports comma-separated
+   multiple paths. Optional when using environment variable or pyproject.toml config discovery.
 
-   Example: ``--config myapp.config.get_configs``
+   Examples:
+
+   - Single config: ``--config myapp.config.db_config``
+   - Callable: ``--config myapp.config.get_configs``
+   - Multiple paths: ``--config "myapp.config.primary_config,myapp.config.analytics_config"``
+
+   Configs with duplicate ``bind_key`` values are deduplicated (last wins).
 
 ``--validate-config``
    Validate configuration before executing migrations. Shows loaded configs
@@ -746,6 +871,41 @@ Multi-Config Operations
 When you have multiple database configurations, SQLSpec provides options to manage
 them collectively or selectively.
 
+Quick Reference: Multi-Config Patterns
+---------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Pattern
+     - Example
+     - Behavior
+   * - Single config
+     - ``--config "app.config.db"``
+     - Load one config
+   * - Config list
+     - ``--config "app.config.configs"``
+     - Load all configs in list
+   * - Callable returning list
+     - ``--config "app.config.get_configs"``
+     - Call function, load returned configs
+   * - Comma-separated paths
+     - ``--config "app.config.db1,app.config.db2"``
+     - Load multiple configs, deduplicate by bind_key
+   * - Env var (comma-separated)
+     - ``SQLSPEC_CONFIG="app.config.db1,app.config.db2"``
+     - Same as comma-separated CLI flag
+   * - pyproject.toml (list)
+     - ``config = ["app.config.db1", "app.config.db2"]``
+     - Load all paths in array
+   * - Mixed callables and configs
+     - ``--config "app.config.get_configs,app.config.backup"``
+     - Flatten callable results + direct configs
+   * - Duplicate bind_key
+     - ``--config "app.config.old,app.config.new"``
+     - Later config overrides (new wins)
+
 Scenario: Multiple Databases
 -----------------------------
 
@@ -891,6 +1051,38 @@ Best Practices
    .. code-block:: bash
 
       sqlspec --config myapp.config upgrade --dry-run
+
+7. **Use Unique bind_key for Multi-Config**
+
+   When managing multiple databases, always specify unique ``bind_key`` values:
+
+   .. code-block:: python
+
+      # Good - unique bind_keys
+      configs = [
+          AsyncpgConfig(bind_key="primary", ...),
+          AsyncpgConfig(bind_key="analytics", ...),
+      ]
+
+      # Problematic - configs will overwrite each other
+      configs = [
+          AsyncpgConfig(bind_key="db", ...),  # Same key
+          AsyncmyConfig(bind_key="db", ...),  # Will override above
+      ]
+
+8. **Prefer pyproject.toml for Team Projects**
+
+   Store config paths in version control for consistency:
+
+   .. code-block:: toml
+
+      [tool.sqlspec]
+      config = [
+          "myapp.config.primary_db",
+          "myapp.config.analytics_db"
+      ]
+
+   Team members automatically use the same config without manual setup.
 
 Framework Integration
 =====================
