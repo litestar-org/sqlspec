@@ -226,12 +226,7 @@ def _create_statement_filters(
             ),
         ) -> SearchFilter:
             field_names = set(search_fields.split(",")) if isinstance(search_fields, str) else set(search_fields)
-
-            return SearchFilter(
-                field_name=field_names,
-                value=search_string,  # type: ignore[arg-type]
-                ignore_case=ignore_case or False,
-            )
+            return SearchFilter(field_name=field_names, value=search_string, ignore_case=ignore_case or False)
 
         filters[dep_defaults.SEARCH_FILTER_DEPENDENCY_KEY] = Provide(provide_search_filter, sync_to_thread=False)
 

@@ -310,6 +310,8 @@ class UpdateSetClauseMixin:
         return placeholder
 
     def set(self, *args: Any, **kwargs: Any) -> Self:
+        if not args and not kwargs:
+            return self
         current_expr = self.get_expression()
         if current_expr is None:
             self.set_expression(exp.Update())
