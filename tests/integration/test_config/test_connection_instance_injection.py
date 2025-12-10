@@ -260,10 +260,7 @@ async def test_asyncpg_connection_instance_overrides_connection_config_pool_para
         merged_config = dict(asyncpg_connection_config)
         merged_config["min_size"] = 10  # This should be ignored
         merged_config["max_size"] = 20  # This should be ignored
-        config = AsyncpgConfig(
-            connection_config=merged_config,
-            connection_instance=pool,
-        )
+        config = AsyncpgConfig(connection_config=merged_config, connection_instance=pool)
 
         # The injected pool should be used, not a new one with config params
         retrieved_pool = await config.provide_pool()
