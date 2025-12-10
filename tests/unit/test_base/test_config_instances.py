@@ -441,32 +441,47 @@ def test_provide_session_with_correct_config_after_multiple_adds() -> None:
 
 def test_all_methods_auto_register_configs() -> None:
     """Test that all methods auto-register configs on first use."""
-    # Test each method independently to ensure auto-registration works
-    test_cases = [
-        ("provide_session", lambda m, c: m.provide_session(c)),
-        ("provide_connection", lambda m, c: m.provide_connection(c)),
-        ("get_connection", lambda m, c: m.get_connection(c)),
-        ("get_session", lambda m, c: m.get_session(c)),
-        ("get_pool", lambda m, c: m.get_pool(c)),
-        ("close_pool", lambda m, c: m.close_pool(c)),
-    ]
+    # Test provide_session
+    manager1 = SQLSpec()
+    config1 = DuckDBConfig(pool_config={"database": ":memory:"})
+    assert id(config1) not in manager1.configs
+    with manager1.provide_session(config1):
+        pass
+    assert id(config1) in manager1.configs
 
-    for method_name, method_fn in test_cases:
-        manager = SQLSpec()
-        config = DuckDBConfig(pool_config={"database": ":memory:"})
+    # Test provide_connection
+    manager2 = SQLSpec()
+    config2 = DuckDBConfig(pool_config={"database": ":memory:"})
+    assert id(config2) not in manager2.configs
+    with manager2.provide_connection(config2):
+        pass
+    assert id(config2) in manager2.configs
 
-        # Config should not be registered initially
-        assert id(config) not in manager.configs, f"Config should not be registered before calling {method_name}"
+    # Test get_connection
+    manager3 = SQLSpec()
+    config3 = DuckDBConfig(pool_config={"database": ":memory:"})
+    assert id(config3) not in manager3.configs
+    conn = manager3.get_connection(config3)
+    conn.close()
+    assert id(config3) in manager3.configs
 
-        # Call the method (may need to handle context managers)
-        if method_name in ("provide_session", "provide_connection"):
-            with method_fn(manager, config):
-                pass
-        elif method_name == "get_connection":
-            conn = method_fn(manager, config)
-            conn.close()
-        else:
-            method_fn(manager, config)
+    # Test get_session
+    manager4 = SQLSpec()
+    config4 = DuckDBConfig(pool_config={"database": ":memory:"})
+    assert id(config4) not in manager4.configs
+    manager4.get_session(config4)
+    assert id(config4) in manager4.configs
 
-        # Config should now be registered
-        assert id(config) in manager.configs, f"Config should be auto-registered after calling {method_name}"
+    # Test get_pool
+    manager5 = SQLSpec()
+    config5 = DuckDBConfig(pool_config={"database": ":memory:"})
+    assert id(config5) not in manager5.configs
+    manager5.get_pool(config5)
+    assert id(config5) in manager5.configs
+
+    # Test close_pool
+    manager6 = SQLSpec()
+    config6 = DuckDBConfig(pool_config={"database": ":memory:"})
+    assert id(config6) not in manager6.configs
+    manager6.close_pool(config6)
+    assert id(config6) in manager6.configs
