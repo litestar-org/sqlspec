@@ -427,4 +427,4 @@ def test_unregistered_config_error_all_methods() -> None:
 
     for method in methods_to_test:
         with pytest.raises(ValueError, match="Config not registered"):
-            method()
+            method()  # type: ignore[no-untyped-call]
