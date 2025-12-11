@@ -9,12 +9,7 @@ from sqlspec.exceptions import SQLBuilderError
 def test_merge_factory_sets_target_table_from_positional_arg() -> None:
     """sql.merge(table) should set INTO target without separate into()."""
 
-    query = (
-        sql.merge("products")
-        .using("staging", alias="s")
-        .on("products.id = s.id")
-        .when_matched_then_delete()
-    )
+    query = sql.merge("products").using("staging", alias="s").on("products.id = s.id").when_matched_then_delete()
 
     stmt = query.build()
 
