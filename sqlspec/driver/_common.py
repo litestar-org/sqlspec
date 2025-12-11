@@ -1193,8 +1193,12 @@ class CommonDriverAttributesMixin:
         WHERE, HAVING, and GROUP BY clauses but removing ORDER BY, LIMIT, and OFFSET.
         """
         if not original_sql.expression:
+            original_sql.compile()
+
+        if not original_sql.expression:
             msg = "Cannot create COUNT query from empty SQL expression"
             raise ImproperConfigurationError(msg)
+
         expr = original_sql.expression
 
         if isinstance(expr, exp.Select):
