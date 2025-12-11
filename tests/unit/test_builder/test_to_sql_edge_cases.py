@@ -160,6 +160,19 @@ def test_to_sql_delete_statement() -> None:
     assert "DELETE" in sql_str
 
 
+def test_to_sql_delete_statement_with_table_arg() -> None:
+    """Test sql.delete(table) sets target table without explicit from()."""
+
+    query = sql.delete("products").where("id = :id")
+    query.add_parameter(999, "id")
+
+    sql_str = query.to_sql(show_parameters=True)
+
+    assert "products" in sql_str.lower()
+    assert "delete" in sql_str.lower()
+    assert "999" in sql_str
+
+
 def test_to_sql_same_parameter_name_multiple_times() -> None:
     """Test to_sql() handles same parameter name used multiple times."""
     query = sql.select("*").from_("products").where("price >= :threshold").where("discount >= :threshold")

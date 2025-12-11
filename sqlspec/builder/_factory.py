@@ -335,8 +335,8 @@ class SQLFactory:
 
     def delete(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Delete":
         builder_dialect = dialect or self.dialect
-        builder = Delete(dialect=builder_dialect)
         if table_or_sql and self._looks_like_sql(table_or_sql):
+            builder = Delete(dialect=builder_dialect)
             detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
             if detected != "DELETE":
                 msg = (
@@ -345,23 +345,23 @@ class SQLFactory:
                 )
                 raise SQLBuilderError(msg)
             return self._populate_delete_from_sql(builder, table_or_sql)
-        return builder
+
+        return Delete(table_or_sql, dialect=builder_dialect) if table_or_sql else Delete(dialect=builder_dialect)
 
     def merge(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Merge":
         builder_dialect = dialect or self.dialect
-        builder = Merge(dialect=builder_dialect)
-        if table_or_sql:
-            if self._looks_like_sql(table_or_sql):
-                detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
-                if detected != "MERGE":
-                    msg = (
-                        f"sql.merge() expects MERGE statement, got {detected}. "
-                        f"Use sql.{detected.lower()}() if a dedicated builder exists."
-                    )
-                    raise SQLBuilderError(msg)
-                return self._populate_merge_from_sql(builder, table_or_sql)
-            return builder.into(table_or_sql)
-        return builder
+        if table_or_sql and self._looks_like_sql(table_or_sql):
+            builder = Merge(dialect=builder_dialect)
+            detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
+            if detected != "MERGE":
+                msg = (
+                    f"sql.merge() expects MERGE statement, got {detected}. "
+                    f"Use sql.{detected.lower()}() if a dedicated builder exists."
+                )
+                raise SQLBuilderError(msg)
+            return self._populate_merge_from_sql(builder, table_or_sql)
+
+        return Merge(table_or_sql, dialect=builder_dialect) if table_or_sql else Merge(dialect=builder_dialect)
 
     @property
     def merge_(self) -> "Merge":

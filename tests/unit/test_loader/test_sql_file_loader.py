@@ -205,6 +205,27 @@ UPDATE users SET email = ? WHERE id = ?;
     assert "update_user_email" in statements
 
 
+def test_get_sql_parses_expression_when_missing() -> None:
+    """SQL objects from get_sql should carry parsed expressions for count queries."""
+
+    loader = SQLFileLoader()
+    content = """
+-- name: list_users
+SELECT id, email FROM user_account WHERE active = true;
+"""
+
+    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    loader._queries = statements
+
+    sql_obj = loader.get_sql("list_users")
+
+    assert sql_obj.expression is None
+
+    sql_obj.compile()
+
+    assert sql_obj.expression is not None
+
+
 def test_parse_skips_files_without_named_statements() -> None:
     """Test that files without named statements return empty dict."""
     content = "SELECT * FROM users;"
