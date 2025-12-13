@@ -15,6 +15,16 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.extensions.fastapi.providers import DependencyDefaults, FilterConfig
 
+    # Type aliases for static analysis - IDEs see the real types
+    _AsyncSession = AsyncDriverAdapterBase
+    _SyncSession = SyncDriverAdapterBase
+    _Session = AsyncDriverAdapterBase | SyncDriverAdapterBase
+else:
+    # Runtime fallback - FastAPI sees Any (avoids NameError)
+    _AsyncSession = Any
+    _SyncSession = Any
+    _Session = Any
+
 __all__ = ("SQLSpecPlugin",)
 
 
@@ -122,8 +132,8 @@ class SQLSpecPlugin(_StarlettePlugin):
         # Extract string key if provided, ignore config types/instances (used only for type narrowing)
         session_key = key if isinstance(key, str) or key is None else None
 
-        def dependency(request: Request) -> "AsyncDriverAdapterBase | SyncDriverAdapterBase":
-            return self.get_session(request, session_key)  # type: ignore[no-any-return]
+        def dependency(request: Request) -> _Session:
+            return self.get_session(request, session_key)
 
         return dependency
 
@@ -151,8 +161,8 @@ class SQLSpecPlugin(_StarlettePlugin):
                 return await db.execute("SELECT * FROM products")
         """
 
-        def dependency(request: Request) -> "AsyncDriverAdapterBase":
-            return self.get_session(request, key)  # type: ignore[no-any-return]
+        def dependency(request: Request) -> _AsyncSession:
+            return self.get_session(request, key)
 
         return dependency
 
@@ -175,8 +185,8 @@ class SQLSpecPlugin(_StarlettePlugin):
                 return db.execute("SELECT * FROM users")
         """
 
-        def dependency(request: Request) -> "SyncDriverAdapterBase":
-            return self.get_session(request, key)  # type: ignore[no-any-return]
+        def dependency(request: Request) -> _SyncSession:
+            return self.get_session(request, key)
 
         return dependency
 
