@@ -191,6 +191,8 @@ jobs:
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        # Pre-release versions (alpha, beta, rc) are automatically detected by PyPI
+        # based on PEP 440 version format (e.g., 0.33.0a1, 0.33.0b1, 0.33.0rc1)
         with:
           packages-dir: dist/
           verbose: true
