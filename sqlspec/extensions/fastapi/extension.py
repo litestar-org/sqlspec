@@ -133,7 +133,7 @@ class SQLSpecPlugin(_StarlettePlugin):
         session_key = key if isinstance(key, str) or key is None else None
 
         def dependency(request: Request) -> _Session:
-            return self.get_session(request, session_key)
+            return self.get_session(request, session_key)  # type: ignore[no-any-return]
 
         return dependency
 
@@ -162,7 +162,7 @@ class SQLSpecPlugin(_StarlettePlugin):
         """
 
         def dependency(request: Request) -> _AsyncSession:
-            return self.get_session(request, key)
+            return self.get_session(request, key)  # type: ignore[no-any-return]
 
         return dependency
 
@@ -186,7 +186,7 @@ class SQLSpecPlugin(_StarlettePlugin):
         """
 
         def dependency(request: Request) -> _SyncSession:
-            return self.get_session(request, key)
+            return self.get_session(request, key)  # type: ignore[no-any-return]
 
         return dependency
 
