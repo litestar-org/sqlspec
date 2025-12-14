@@ -1,7 +1,6 @@
 """Psycopg database configuration with direct field-based configuration."""
 
 import contextlib
-import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
@@ -23,6 +22,8 @@ from sqlspec.adapters.psycopg.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
 
-logger = logging.getLogger("sqlspec.adapters.psycopg")
+logger = get_logger("adapters.psycopg")
 
 
 class PsycopgConnectionParams(TypedDict):
@@ -120,6 +121,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
@@ -131,11 +133,13 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance)
         """
-        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
-        if "extra" in processed_connection_config:
-            extras = processed_connection_config.pop("extra")
-            processed_connection_config.update(extras)
+        connection_config, connection_instance = apply_pool_deprecations(
+            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
+        )
+
+        processed_connection_config = normalize_connection_config(connection_config)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
@@ -150,68 +154,54 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            **kwargs,
         )
 
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
-        logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
+        all_config = dict(self.connection_config)
 
-        try:
-            all_config = dict(self.connection_config)
+        pool_parameters = {
+            "min_size": all_config.pop("min_size", 4),
+            "max_size": all_config.pop("max_size", None),
+            "name": all_config.pop("name", None),
+            "timeout": all_config.pop("timeout", 30.0),
+            "max_waiting": all_config.pop("max_waiting", 0),
+            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_idle": all_config.pop("max_idle", 600.0),
+            "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "num_workers": all_config.pop("num_workers", 3),
+        }
 
-            pool_parameters = {
-                "min_size": all_config.pop("min_size", 4),
-                "max_size": all_config.pop("max_size", None),
-                "name": all_config.pop("name", None),
-                "timeout": all_config.pop("timeout", 30.0),
-                "max_waiting": all_config.pop("max_waiting", 0),
-                "max_lifetime": all_config.pop("max_lifetime", 3600.0),
-                "max_idle": all_config.pop("max_idle", 600.0),
-                "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
-                "num_workers": all_config.pop("num_workers", 3),
-            }
+        autocommit_setting = all_config.get("autocommit")
 
-            autocommit_setting = all_config.get("autocommit")
+        def configure_connection(conn: "PsycopgSyncConnection") -> None:
+            conn.row_factory = dict_row
+            if autocommit_setting is not None:
+                conn.autocommit = autocommit_setting
 
-            def configure_connection(conn: "PsycopgSyncConnection") -> None:
-                conn.row_factory = dict_row
-                if autocommit_setting is not None:
-                    conn.autocommit = autocommit_setting
+            if self.driver_features.get("enable_pgvector", False):
+                register_pgvector_sync(conn)
 
-                if self.driver_features.get("enable_pgvector", False):
-                    register_pgvector_sync(conn)
+        pool_parameters["configure"] = all_config.pop("configure", configure_connection)
 
-            pool_parameters["configure"] = all_config.pop("configure", configure_connection)
+        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
-            pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
+        conninfo = all_config.pop("conninfo", None)
+        if conninfo:
+            return ConnectionPool(conninfo, open=True, **pool_parameters)
 
-            conninfo = all_config.pop("conninfo", None)
-            if conninfo:
-                pool = ConnectionPool(conninfo, open=True, **pool_parameters)
-            else:
-                kwargs = all_config.pop("kwargs", {})
-                all_config.update(kwargs)
-                pool = ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
-
-            logger.info("Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
-        except Exception as e:
-            logger.exception("Failed to create Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
-            raise
-        return pool
+        kwargs = all_config.pop("kwargs", {})
+        all_config.update(kwargs)
+        return ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
 
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
         if not self.connection_instance:
             return
 
-        logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
-
         try:
             self.connection_instance.close()
-            logger.info("Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
-        except Exception as e:
-            logger.exception("Failed to close Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
-            raise
         finally:
             self.connection_instance = None
 
@@ -319,6 +309,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -330,11 +321,13 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance)
         """
-        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
-        if "extra" in processed_connection_config:
-            extras = processed_connection_config.pop("extra")
-            processed_connection_config.update(extras)
+        connection_config, connection_instance = apply_pool_deprecations(
+            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
+        )
+
+        processed_connection_config = normalize_connection_config(connection_config)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
@@ -349,6 +342,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            **kwargs,
         )
 
     async def _create_pool(self) -> "AsyncConnectionPool":

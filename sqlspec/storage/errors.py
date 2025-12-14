@@ -1,10 +1,10 @@
 """Storage error normalization helpers."""
 
 import errno
-import logging
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from sqlspec.exceptions import FileNotFoundInStorageError, StorageOperationFailedError
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 __all__ = ("StorageError", "execute_async_storage_operation", "execute_sync_storage_operation", "raise_storage_error")
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 

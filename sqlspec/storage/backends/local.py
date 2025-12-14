@@ -8,7 +8,7 @@ import shutil
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, overload
 from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
@@ -304,9 +304,35 @@ class LocalStore:
             )
             yield from parquet_file.iter_batches()  # pyright: ignore
 
-    def sign(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
-        """Generate a signed URL (returns file:// URI for local files)."""
-        return self._resolve_path(path).as_uri()
+    @property
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing.
+
+        Local file storage does not support URL signing.
+        Local files are accessed directly via file:// URIs.
+
+        Returns:
+            Always False for local storage.
+        """
+        return False
+
+    @overload
+    def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    def sign_sync(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s).
+
+        Raises:
+            NotImplementedError: Local file storage does not require URL signing.
+                Local files are accessed directly via file:// URIs.
+        """
+        msg = "URL signing is not applicable to local file storage. Use file:// URIs directly."
+        raise NotImplementedError(msg)
 
     # Async methods using sync_tools.async_
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
@@ -372,6 +398,18 @@ class LocalStore:
         """
         return _LocalArrowIterator(self.stream_arrow(pattern, **kwargs))
 
-    async def sign_async(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
-        """Generate a signed URL asynchronously (returns file:// URI for local files)."""
-        return await async_(self.sign)(path, expires_in, for_upload)
+    @overload
+    async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    async def sign_async(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) asynchronously.
+
+        Raises:
+            NotImplementedError: Local file storage does not require URL signing.
+        """
+        return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]

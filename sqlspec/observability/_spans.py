@@ -10,6 +10,32 @@ from sqlspec.utils.module_loader import ensure_opentelemetry
 
 logger = get_logger("sqlspec.observability.spans")
 
+_DB_SYSTEM_MAP: tuple[tuple[str, str], ...] = (
+    ("asyncpg", "postgresql"),
+    ("psycopg", "postgresql"),
+    ("psqlpy", "postgresql"),
+    ("postgres", "postgresql"),
+    ("asyncmy", "mysql"),
+    ("mysql", "mysql"),
+    ("mariadb", "mysql"),
+    ("aiosqlite", "sqlite"),
+    ("sqlite", "sqlite"),
+    ("duckdb", "duckdb"),
+    ("bigquery", "bigquery"),
+    ("spanner", "spanner"),
+    ("oracle", "oracle"),
+    ("oracledb", "oracle"),
+    ("adbc", "adbc"),
+)
+
+
+def _resolve_db_system(adapter: str) -> str:
+    normalized = adapter.lower()
+    for needle, system in _DB_SYSTEM_MAP:
+        if needle in normalized:
+            return system
+    return "other_sql"
+
 
 class SpanManager:
     """Lazy OpenTelemetry span manager with graceful degradation."""
@@ -61,11 +87,12 @@ class SpanManager:
         if not self._enabled:
             return None
         attributes: dict[str, Any] = {
-            "db.system": adapter.lower(),
+            "db.system": _resolve_db_system(adapter),
             "db.operation": operation,
-            "db.statement": sql,
             "sqlspec.driver": driver,
         }
+        if sql:
+            attributes["db.statement"] = sql
         if bind_key:
             attributes["sqlspec.bind_key"] = bind_key
         if storage_backend:

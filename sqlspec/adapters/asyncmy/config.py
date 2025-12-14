@@ -1,6 +1,5 @@
 """Asyncmy database configuration."""
 
-import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
@@ -19,6 +18,8 @@ from sqlspec.adapters.asyncmy.driver import (
     build_asyncmy_statement_config,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams")
 
-logger = logging.getLogger(__name__)
+logger = get_logger("adapters.asyncmy")
 
 
 class AsyncmyConnectionParams(TypedDict):
@@ -107,6 +108,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Asyncmy configuration.
 
@@ -119,11 +121,13 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
+            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance)
         """
-        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
-        if "extra" in processed_connection_config:
-            extras = processed_connection_config.pop("extra")
-            processed_connection_config.update(extras)
+        connection_config, connection_instance = apply_pool_deprecations(
+            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
+        )
+
+        processed_connection_config = normalize_connection_config(connection_config)
 
         processed_connection_config.setdefault("host", "localhost")
         processed_connection_config.setdefault("port", 3306)
@@ -145,6 +149,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
+            **kwargs,
         )
 
     async def _create_pool(self) -> "AsyncmyPool":  # pyright: ignore

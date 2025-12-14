@@ -10,10 +10,10 @@ Note:
     custom type handlers on pool initialization.
 """
 
-import logging
 from typing import TYPE_CHECKING
 
 from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from psqlpy import Connection
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 __all__ = ("register_pgvector",)
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def register_pgvector(connection: "Connection") -> None:

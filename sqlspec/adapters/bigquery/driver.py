@@ -7,7 +7,6 @@ type coercion, error handling, and query job management.
 
 import datetime
 import io
-import logging
 import os
 from collections.abc import Callable
 from decimal import Decimal
@@ -42,6 +41,7 @@ from sqlspec.exceptions import (
     StorageCapabilityError,
     UniqueViolationError,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -60,7 +60,7 @@ if TYPE_CHECKING:
     )
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 __all__ = (
     "BigQueryCursor",

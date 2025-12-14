@@ -6,11 +6,15 @@ SQLSpec provides StructuredFormatter for JSON-formatted logs if desired.
 """
 
 import logging
-from contextvars import ContextVar
 from logging import LogRecord
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlspec._serialization import encode_json
+from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.correlation import correlation_id_var as _correlation_id_var
+
+if TYPE_CHECKING:
+    from contextvars import ContextVar
 
 __all__ = (
     "SqlglotCommandFallbackFilter",
@@ -22,7 +26,20 @@ __all__ = (
     "suppress_erroneous_sqlglot_log_messages",
 )
 
-correlation_id_var: "ContextVar[str | None]" = ContextVar("correlation_id", default=None)
+_BASE_RECORD_KEYS = set(
+    logging.LogRecord(
+        name="sqlspec",
+        level=logging.INFO,
+        pathname="(unknown file)",
+        lineno=0,
+        msg="",
+        args=(),
+        exc_info=None,
+    ).__dict__.keys()
+)
+_BASE_RECORD_KEYS.update({"message", "asctime"})
+
+correlation_id_var: "ContextVar[str | None]" = _correlation_id_var
 
 
 def set_correlation_id(correlation_id: "str | None") -> None:
@@ -31,7 +48,7 @@ def set_correlation_id(correlation_id: "str | None") -> None:
     Args:
         correlation_id: The correlation ID to set, or None to clear
     """
-    correlation_id_var.set(correlation_id)
+    CorrelationContext.set(correlation_id)
 
 
 def get_correlation_id() -> "str | None":
@@ -40,7 +57,7 @@ def get_correlation_id() -> "str | None":
     Returns:
         The current correlation ID or None if not set
     """
-    return correlation_id_var.get()
+    return CorrelationContext.get()
 
 
 class StructuredFormatter(logging.Formatter):
@@ -65,11 +82,20 @@ class StructuredFormatter(logging.Formatter):
             "line": record.lineno,
         }
 
-        if correlation_id := get_correlation_id():
+        correlation_id = getattr(record, "correlation_id", None) or get_correlation_id()
+        if correlation_id:
             log_entry["correlation_id"] = correlation_id
 
         if hasattr(record, "extra_fields"):
             log_entry.update(record.extra_fields)  # pyright: ignore
+
+        extras = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in _BASE_RECORD_KEYS and key not in {"extra_fields", "correlation_id"}
+        }
+        if extras:
+            log_entry.update(extras)
 
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
@@ -154,9 +180,7 @@ def log_with_context(logger: logging.Logger, level: int, message: str, **extra_f
         message: Log message
         **extra_fields: Additional fields to include in structured logs
     """
-    record = logger.makeRecord(logger.name, level, "(unknown file)", 0, message, (), None)
-    record.extra_fields = extra_fields
-    logger.handle(record)
+    logger.log(level, message, extra={"extra_fields": extra_fields}, stacklevel=2)
 
 
 def suppress_erroneous_sqlglot_log_messages() -> None:

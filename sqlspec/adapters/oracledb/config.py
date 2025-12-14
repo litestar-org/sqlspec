@@ -1,7 +1,6 @@
 """OracleDB database configuration with direct field-based configuration."""
 
 import contextlib
-import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
@@ -28,6 +27,8 @@ from sqlspec.adapters.oracledb.driver import (
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.typing import NUMPY_INSTALLED
+from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
@@ -45,7 +46,7 @@ __all__ = (
     "OracleSyncConfig",
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger("adapters.oracledb")
 
 
 class OracleConnectionParams(TypedDict):
@@ -136,6 +137,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
@@ -147,12 +149,13 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             driver_features: Optional driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
+            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance).
         """
+        connection_config, connection_instance = apply_pool_deprecations(
+            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
+        )
 
-        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
-        if "extra" in processed_connection_config:
-            extras = processed_connection_config.pop("extra")
-            processed_connection_config.update(extras)
+        processed_connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or oracledb_statement_config
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
@@ -168,6 +171,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            **kwargs,
         )
 
     def _create_pool(self) -> "OracleSyncConnectionPool":
@@ -313,6 +317,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
@@ -324,12 +329,13 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             driver_features: Optional driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
+            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance).
         """
+        connection_config, connection_instance = apply_pool_deprecations(
+            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
+        )
 
-        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
-        if "extra" in processed_connection_config:
-            extras = processed_connection_config.pop("extra")
-            processed_connection_config.update(extras)
+        processed_connection_config = normalize_connection_config(connection_config)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
@@ -344,6 +350,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            **kwargs,
         )
 
     async def _create_pool(self) -> "OracleAsyncConnectionPool":

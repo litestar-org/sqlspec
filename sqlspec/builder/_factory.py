@@ -3,7 +3,6 @@
 Provides statement builders (select, insert, update, etc.) and column expressions.
 """
 
-import logging
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Union, cast
 
@@ -45,6 +44,7 @@ from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctio
 from sqlspec.builder._update import Update
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -82,7 +82,7 @@ __all__ = (
     "sql",
 )
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("builder.factory")
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2

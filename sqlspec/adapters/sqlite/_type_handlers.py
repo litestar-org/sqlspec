@@ -5,16 +5,17 @@ custom type handling. All handlers are optional and must be explicitly enabled
 via SqliteDriverFeatures configuration.
 """
 
-import logging
 import sqlite3
 from typing import TYPE_CHECKING, Any
+
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 __all__ = ("json_adapter", "json_converter", "register_type_handlers", "unregister_type_handlers")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_JSON_TYPE = "JSON"
 
@@ -65,16 +66,12 @@ def register_type_handlers(
         json_serializer: Optional custom JSON serializer (e.g., orjson.dumps).
         json_deserializer: Optional custom JSON deserializer (e.g., orjson.loads).
     """
-    try:
-        sqlite3.register_adapter(dict, lambda v: json_adapter(v, json_serializer))
-        sqlite3.register_adapter(list, lambda v: json_adapter(v, json_serializer))
+    sqlite3.register_adapter(dict, lambda v: json_adapter(v, json_serializer))
+    sqlite3.register_adapter(list, lambda v: json_adapter(v, json_serializer))
 
-        sqlite3.register_converter(DEFAULT_JSON_TYPE, lambda v: json_converter(v, json_deserializer))
+    sqlite3.register_converter(DEFAULT_JSON_TYPE, lambda v: json_converter(v, json_deserializer))
 
-        logger.debug("Registered SQLite custom type handlers (JSON dict/list adapters)")
-    except Exception:
-        logger.exception("Failed to register SQLite type handlers")
-        raise
+    logger.debug("Registered SQLite custom type handlers (JSON dict/list adapters)")
 
 
 def unregister_type_handlers() -> None:

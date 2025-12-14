@@ -13,6 +13,8 @@ from typing import Any, ClassVar
 
 __all__ = ("CorrelationContext", "correlation_context", "get_correlation_adapter")
 
+correlation_id_var: "ContextVar[str | None]" = ContextVar("sqlspec_correlation_id", default=None)
+
 
 class CorrelationContext:
     """Context manager for correlation ID tracking.
@@ -21,7 +23,7 @@ class CorrelationContext:
     across async and sync operations.
     """
 
-    _correlation_id: ClassVar[ContextVar[str | None]] = ContextVar("sqlspec_correlation_id", default=None)
+    _correlation_id: ClassVar["ContextVar[str | None]"] = correlation_id_var
 
     @classmethod
     def get(cls) -> str | None:

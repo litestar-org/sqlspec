@@ -1,5 +1,6 @@
 """Runtime helpers that bundle lifecycle, observer, and span orchestration."""
 
+import hashlib
 import re
 from typing import TYPE_CHECKING, Any, cast
 
@@ -243,13 +244,23 @@ class ObservabilityRuntime:
     def start_query_span(self, sql: str, operation: str, driver: str) -> Any:
         """Start a query span with runtime metadata."""
 
+        sql_hash = _hash_sql(sql)
+        connection_info = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}
+        sql_payload = ""
+        if self.config.print_sql:
+            sql_payload = self._redact_sql(sql)
+            sql_payload, truncated = _truncate_text(sql_payload, max_chars=4096)
+            if truncated:
+                connection_info["sqlspec.statement.truncated"] = True
+
         correlation_id = CorrelationContext.get()
         return self.span_manager.start_query_span(
             driver=driver,
             adapter=self.config_name,
             bind_key=self.bind_key,
-            sql=sql,
+            sql=sql_payload,
             operation=operation,
+            connection_info=connection_info,
             correlation_id=correlation_id,
         )
 
@@ -376,6 +387,16 @@ def _mask_parameters(value: Any, allow_list: set[str]) -> Any:
     if isinstance(value, tuple):
         return tuple(_mask_parameters(item, allow_list) for item in value)
     return "***"
+
+
+def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
+    if len(value) <= max_chars:
+        return value, False
+    return value[:max_chars], True
+
+
+def _hash_sql(sql: str) -> str:
+    return hashlib.sha256(sql.encode("utf-8")).hexdigest()[:16]
 
 
 __all__ = ("ObservabilityRuntime",)

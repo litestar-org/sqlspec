@@ -4,9 +4,10 @@ Provides automatic conversion between Python UUID objects and Oracle RAW(16)
 via connection type handlers. Uses stdlib uuid (no external dependencies).
 """
 
-import logging
 import uuid
 from typing import TYPE_CHECKING, Any
+
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 __all__ = ("register_uuid_handlers", "uuid_converter_in", "uuid_converter_out")
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 UUID_BINARY_SIZE = 16

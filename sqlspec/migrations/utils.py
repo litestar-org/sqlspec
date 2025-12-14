@@ -2,7 +2,6 @@
 
 import importlib
 import inspect
-import logging
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateValidationError, build_template_settings
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 __all__ = ("create_migration_file", "drop_all", "get_author")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def create_migration_file(

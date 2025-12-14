@@ -1,7 +1,6 @@
 """Multi-connection pool for aiosqlite."""
 
 import asyncio
-import logging
 import time
 import uuid
 from contextlib import asynccontextmanager, suppress
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import aiosqlite
 
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     import threading
@@ -24,7 +24,7 @@ __all__ = (
     "AiosqlitePoolConnection",
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AiosqlitePoolClosedError(SQLSpecError):

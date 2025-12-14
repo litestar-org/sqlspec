@@ -1,12 +1,12 @@
 # pyright: reportPrivateUsage=false
-import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.storage._utils import import_pyarrow_parquet, resolve_storage_path
 from sqlspec.storage.errors import execute_sync_storage_operation
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 __all__ = ("FSSpecBackend",)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class _ArrowStreamer:
@@ -307,10 +307,38 @@ class FSSpecBackend:
                 "type": info.type,
             }
 
-    def sign(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
-        """Generate a signed URL for the file."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
-        return f"{self._fs_uri}{resolved_path}"
+    @property
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing.
+
+        FSSpec backends do not support URL signing. Use ObStoreBackend
+        for S3, GCS, or Azure if you need signed URLs.
+
+        Returns:
+            Always False for fsspec backends.
+        """
+        return False
+
+    @overload
+    def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    def sign_sync(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s).
+
+        Raises:
+            NotImplementedError: fsspec backends do not support URL signing.
+                Use obstore backend for S3, GCS, or Azure if you need signed URLs.
+        """
+        msg = (
+            f"URL signing is not supported for fsspec backend (protocol: {self.protocol}). "
+            "For S3, GCS, or Azure signed URLs, use ObStoreBackend instead."
+        )
+        raise NotImplementedError(msg)
 
     def _stream_file_batches(self, obj_path: str | Path) -> "Iterator[ArrowRecordBatch]":
         pq = import_pyarrow_parquet()
@@ -385,9 +413,21 @@ class FSSpecBackend:
         """Get object metadata from storage asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
-    async def sign_async(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
-        """Generate a signed URL asynchronously."""
-        return await async_(self.sign)(path, expires_in, for_upload)
+    @overload
+    async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    async def sign_async(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) asynchronously.
+
+        Raises:
+            NotImplementedError: fsspec backends do not support URL signing.
+        """
+        return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]
 
     async def read_arrow_async(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage asynchronously."""

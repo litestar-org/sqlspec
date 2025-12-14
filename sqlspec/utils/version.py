@@ -4,12 +4,13 @@ Provides structured parsing of migration versions supporting both legacy sequent
 (0001) and timestamp-based (20251011120000) formats with type-safe comparison.
 """
 
-import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+from sqlspec.utils.logging import get_logger
 
 __all__ = (
     "MigrationVersion",
@@ -23,7 +24,7 @@ __all__ = (
     "parse_version",
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 SEQUENTIAL_PATTERN = re.compile(r"^(?!\d{14}$)\d+$")
 TIMESTAMP_PATTERN = re.compile(r"^(\d{14})$")

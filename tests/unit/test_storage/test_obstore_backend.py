@@ -232,16 +232,19 @@ def test_stream_arrow(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
-def test_sign_returns_uri(tmp_path: Path) -> None:
-    """Test sign returns URI for files."""
+def test_sign_raises_not_implemented_for_local_files(tmp_path: Path) -> None:
+    """Test sign_sync raises NotImplementedError for local file protocol."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
     store = ObStoreBackend(f"file://{tmp_path}")
 
     store.write_text("test.txt", "content")
-    signed_url = store.sign("test.txt")
 
-    assert "test.txt" in signed_url
+    # Local file protocol does not support URL signing
+    assert store.supports_signing is False
+
+    with pytest.raises(NotImplementedError, match="URL signing is not supported for protocol 'file'"):
+        store.sign_sync("test.txt")
 
 
 def test_obstore_not_installed() -> None:
@@ -425,16 +428,17 @@ async def test_async_stream_arrow(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
-async def test_async_sign(tmp_path: Path) -> None:
-    """Test async sign returns URI for files."""
+async def test_async_sign_raises_not_implemented_for_local_files(tmp_path: Path) -> None:
+    """Test sign_async raises NotImplementedError for local file protocol."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
     store = ObStoreBackend(f"file://{tmp_path}")
 
     await store.write_text_async("async_test.txt", "content")
-    signed_url = await store.sign_async("async_test.txt")
 
-    assert "async_test.txt" in signed_url
+    # Local file protocol does not support URL signing
+    with pytest.raises(NotImplementedError, match="URL signing is not supported for protocol 'file'"):
+        await store.sign_async("async_test.txt")
 
 
 def test_obstore_operations_without_obstore() -> None:

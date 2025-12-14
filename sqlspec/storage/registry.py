@@ -5,7 +5,6 @@ pattern with automatic backend detection, ObStore preferred with FSSpec fallback
 scheme-based routing, and named aliases for common configurations.
 """
 
-import logging
 import re
 from pathlib import Path
 from typing import Any, Final, cast
@@ -15,11 +14,12 @@ from mypy_extensions import mypyc_attr
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_local_path
 
 __all__ = ("StorageRegistry", "storage_registry")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 SCHEME_REGEX: Final = re.compile(r"([a-zA-Z0-9+.-]+)://")
 

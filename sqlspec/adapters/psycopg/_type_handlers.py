@@ -4,12 +4,12 @@ Provides automatic conversion between NumPy arrays and PostgreSQL vector types
 via pgvector-python library. Supports both sync and async connections.
 """
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from psycopg import ProgrammingError, errors
 
 from sqlspec.typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from psycopg import AsyncConnection, Connection
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 __all__ = ("register_pgvector_async", "register_pgvector_sync")
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_missing_vector_error(error: Exception) -> bool:

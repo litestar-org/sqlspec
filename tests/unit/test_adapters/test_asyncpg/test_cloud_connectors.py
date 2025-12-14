@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 
 
 @pytest.fixture(autouse=True)
@@ -81,7 +81,7 @@ def test_mutual_exclusion_both_enabled_raises_error() -> None:
 
 def test_cloud_sql_missing_package_raises_error() -> None:
     """Enabling Cloud SQL without package installed should raise error."""
-    with pytest.raises(ImproperConfigurationError, match="cloud-sql-python-connector package not installed"):
+    with pytest.raises(MissingDependencyError, match="cloud-sql-python-connector"):
         AsyncpgConfig(
             connection_config={"dsn": "postgresql://localhost/test"},
             driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "project:region:instance"},
@@ -91,7 +91,7 @@ def test_cloud_sql_missing_package_raises_error() -> None:
 def test_alloydb_missing_package_raises_error() -> None:
     """Enabling AlloyDB without package installed should raise error."""
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", False):
-        with pytest.raises(ImproperConfigurationError, match="cloud-alloydb-python-connector package not installed"):
+        with pytest.raises(MissingDependencyError, match="google-cloud-alloydb-connector"):
             AsyncpgConfig(
                 connection_config={"dsn": "postgresql://localhost/test"},
                 driver_features={

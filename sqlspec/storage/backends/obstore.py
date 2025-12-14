@@ -6,12 +6,11 @@ and local file storage.
 
 import fnmatch
 import io
-import logging
 import re
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import Any, Final, cast
+from typing import Any, Final, cast, overload
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
@@ -20,12 +19,13 @@ from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_obstore
 from sqlspec.utils.sync_tools import async_
 
 __all__ = ("ObStoreBackend",)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class _AsyncArrowIterator:
@@ -431,10 +431,80 @@ class ObStoreBackend:
             )
             yield from parquet_file.iter_batches()
 
-    def sign(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
-        """Generate a signed URL for the object."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        return f"{self.store_uri}/{resolved_path}"
+    @property
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing.
+
+        Only S3, GCS, and Azure backends support pre-signed URLs.
+        Local file storage does not support URL signing.
+
+        Returns:
+            True if the protocol supports signing, False otherwise.
+        """
+        signable_protocols = {"s3", "gs", "gcs", "az", "azure"}
+        return self.protocol in signable_protocols
+
+    @overload
+    def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    def sign_sync(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) for the object(s).
+
+        Args:
+            paths: Single object path or list of paths to sign.
+            expires_in: URL expiration time in seconds (default: 3600, max: 604800 = 7 days).
+            for_upload: Whether the URL is for upload (PUT) vs download (GET).
+
+        Returns:
+            Single signed URL string if paths is a string, or list of signed URLs
+            if paths is a list. Preserves input type for convenience.
+
+        Raises:
+            NotImplementedError: If the backend protocol does not support signing.
+            ValueError: If expires_in exceeds maximum (604800 seconds).
+        """
+        import obstore as obs
+
+        signable_protocols = {"s3", "gs", "gcs", "az", "azure"}
+        if self.protocol not in signable_protocols:
+            msg = (
+                f"URL signing is not supported for protocol '{self.protocol}'. "
+                f"Only S3, GCS, and Azure backends support pre-signed URLs."
+            )
+            raise NotImplementedError(msg)
+
+        max_expires = 604800  # 7 days max per obstore/object_store limits
+        if expires_in > max_expires:
+            msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
+            raise ValueError(msg)
+
+        from datetime import timedelta
+
+        method = "PUT" if for_upload else "GET"
+        expires_delta = timedelta(seconds=expires_in)
+
+        if isinstance(paths, str):
+            path_list = [paths]
+            is_single = True
+        else:
+            path_list = list(paths)
+            is_single = False
+
+        resolved_paths = [
+            resolve_storage_path(p, self.base_path, self.protocol, strip_file_scheme=True) for p in path_list
+        ]
+
+        try:
+            signed_urls: list[str] = obs.sign(self.store, method, resolved_paths, expires_delta)  # type: ignore[call-overload]
+            return signed_urls[0] if is_single else signed_urls
+        except Exception as exc:
+            msg = f"Failed to generate signed URL(s) for {resolved_paths}"
+            raise StorageOperationFailedError(msg) from exc
 
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes from storage asynchronously."""
@@ -574,7 +644,64 @@ class ObStoreBackend:
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
         return _AsyncArrowIterator(self, resolved_pattern, **kwargs)
 
-    async def sign_async(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
-        """Generate a signed URL asynchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        return f"{self.store_uri}/{resolved_path}"
+    @overload
+    async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    async def sign_async(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) asynchronously.
+
+        Args:
+            paths: Single object path or list of paths to sign.
+            expires_in: URL expiration time in seconds (default: 3600, max: 604800 = 7 days).
+            for_upload: Whether the URL is for upload (PUT) vs download (GET).
+
+        Returns:
+            Single signed URL string if paths is a string, or list of signed URLs
+            if paths is a list. Preserves input type for convenience.
+
+        Raises:
+            NotImplementedError: If the backend protocol does not support signing.
+            ValueError: If expires_in exceeds maximum (604800 seconds).
+        """
+        import obstore as obs
+
+        signable_protocols = {"s3", "gs", "gcs", "az", "azure"}
+        if self.protocol not in signable_protocols:
+            msg = (
+                f"URL signing is not supported for protocol '{self.protocol}'. "
+                f"Only S3, GCS, and Azure backends support pre-signed URLs."
+            )
+            raise NotImplementedError(msg)
+
+        max_expires = 604800  # 7 days max per obstore/object_store limits
+        if expires_in > max_expires:
+            msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
+            raise ValueError(msg)
+
+        from datetime import timedelta
+
+        method = "PUT" if for_upload else "GET"
+        expires_delta = timedelta(seconds=expires_in)
+
+        if isinstance(paths, str):
+            path_list = [paths]
+            is_single = True
+        else:
+            path_list = list(paths)
+            is_single = False
+
+        resolved_paths = [
+            resolve_storage_path(p, self.base_path, self.protocol, strip_file_scheme=True) for p in path_list
+        ]
+
+        try:
+            signed_urls: list[str] = await obs.sign_async(self.store, method, resolved_paths, expires_delta)  # type: ignore[call-overload]
+            return signed_urls[0] if is_single else signed_urls
+        except Exception as exc:
+            msg = f"Failed to generate signed URL(s) for {resolved_paths}"
+            raise StorageOperationFailedError(msg) from exc

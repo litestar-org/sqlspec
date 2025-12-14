@@ -5,7 +5,7 @@ and runtime isinstance() checks.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, overload, runtime_checkable
 
 from typing_extensions import Self
 
@@ -333,6 +333,68 @@ class ObjectStoreProtocol(Protocol):
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
         """Async stream Arrow record batches from matching objects."""
         msg = "Async arrow streaming not implemented"
+        raise NotImplementedError(msg)
+
+    @property
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing.
+
+        Returns:
+            True if the backend supports generating signed URLs, False otherwise.
+            Only S3, GCS, and Azure backends via obstore support signing.
+        """
+        return False
+
+    @overload
+    def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    def sign_sync(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) for object(s).
+
+        Args:
+            paths: Single object path or list of paths to sign.
+            expires_in: URL expiration time in seconds (default: 3600, max: 604800 = 7 days).
+            for_upload: Whether the URL is for upload (PUT) vs download (GET).
+
+        Returns:
+            Single signed URL string if paths is a string, or list of signed URLs
+            if paths is a list. Preserves input type for convenience.
+
+        Raises:
+            NotImplementedError: If the backend does not support URL signing.
+        """
+        msg = "URL signing not supported by this backend"
+        raise NotImplementedError(msg)
+
+    @overload
+    async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    async def sign_async(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) asynchronously.
+
+        Args:
+            paths: Single object path or list of paths to sign.
+            expires_in: URL expiration time in seconds (default: 3600, max: 604800 = 7 days).
+            for_upload: Whether the URL is for upload (PUT) vs download (GET).
+
+        Returns:
+            Single signed URL string if paths is a string, or list of signed URLs
+            if paths is a list. Preserves input type for convenience.
+
+        Raises:
+            NotImplementedError: If the backend does not support URL signing.
+        """
+        msg = "URL signing not supported by this backend"
         raise NotImplementedError(msg)
 
 

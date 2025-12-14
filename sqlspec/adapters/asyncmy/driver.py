@@ -4,7 +4,6 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
-import logging
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncmy.errors  # pyright: ignore
@@ -32,6 +31,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -57,7 +57,7 @@ __all__ = (
     "build_asyncmy_statement_config",
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 json_type_value = (
     ASYNC_MY_FIELD_TYPE.JSON if ASYNC_MY_FIELD_TYPE is not None and hasattr(ASYNC_MY_FIELD_TYPE, "JSON") else None

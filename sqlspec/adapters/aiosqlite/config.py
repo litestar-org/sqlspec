@@ -1,6 +1,5 @@
 """Aiosqlite database configuration."""
 
-import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
@@ -21,6 +20,8 @@ from sqlspec.adapters.aiosqlite.pool import (
 )
 from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.utils.config_normalization import normalize_connection_config
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatures", "AiosqlitePoolParams")
 
-logger = logging.getLogger(__name__)
+logger = get_logger("adapters.aiosqlite")
 
 
 class AiosqliteConnectionParams(TypedDict):
@@ -97,6 +98,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize AioSQLite configuration.
 
@@ -109,8 +111,9 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
+            **kwargs: Additional keyword arguments passed to the base configuration.
         """
-        config_dict = dict(connection_config) if connection_config else {}
+        config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
 
         if "database" not in config_dict or config_dict["database"] == ":memory:":
             config_dict["database"] = "file::memory:?cache=shared"
@@ -124,6 +127,8 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
                     database_path,
                 )
                 config_dict["uri"] = True
+
+        config_dict = normalize_connection_config(config_dict)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         processed_driver_features.setdefault("enable_custom_adapters", True)
@@ -146,6 +151,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
+            **kwargs,
         )
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":
@@ -154,10 +160,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Returns:
             Dictionary with pool parameters, filtering out None values.
         """
-        config: dict[str, Any] = dict(self.connection_config)
-        extras = config.pop("extra", {})
-        config.update(extras)
-        return {k: v for k, v in config.items() if v is not None}
+        return {k: v for k, v in self.connection_config.items() if v is not None}
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation.

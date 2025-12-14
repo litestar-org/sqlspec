@@ -1,5 +1,6 @@
 """Statement observer primitives for SQL execution events."""
 
+import logging
 from collections.abc import Callable
 from time import time
 from typing import Any
@@ -10,6 +11,9 @@ __all__ = ("StatementEvent", "create_event", "default_statement_observer", "form
 
 
 logger = get_logger("sqlspec.observability")
+
+_LOG_SQL_MAX_CHARS = 2000
+_LOG_PARAMETERS_MAX_ITEMS = 100
 
 
 StatementObserver = Callable[["StatementEvent"], None]
@@ -140,7 +144,83 @@ def format_statement_event(event: StatementEvent) -> str:
 def default_statement_observer(event: StatementEvent) -> None:
     """Log statement execution payload when no custom observer is supplied."""
 
-    logger.info(format_statement_event(event), extra={"correlation_id": event.correlation_id})
+    sql_preview, sql_truncated, sql_length = _truncate_text(event.sql, max_chars=_LOG_SQL_MAX_CHARS)
+    sql_preview = sql_preview.replace("\n", " ").strip()
+
+    extra: dict[str, Any] = {
+        "driver": event.driver,
+        "adapter": event.adapter,
+        "bind_key": event.bind_key,
+        "operation": event.operation,
+        "execution_mode": event.execution_mode,
+        "is_many": event.is_many,
+        "is_script": event.is_script,
+        "rows_affected": event.rows_affected,
+        "duration_s": event.duration_s,
+        "started_at": event.started_at,
+        "correlation_id": event.correlation_id,
+        "storage_backend": event.storage_backend,
+        "sql": sql_preview,
+        "sql_length": sql_length,
+        "sql_truncated": sql_truncated,
+    }
+
+    params_summary = _summarize_parameters(event.parameters)
+    if params_summary:
+        extra.update(params_summary)
+
+    if logger.isEnabledFor(logging.DEBUG):
+        params, params_truncated = _maybe_truncate_parameters(event.parameters, max_items=_LOG_PARAMETERS_MAX_ITEMS)
+        if params_truncated:
+            extra["parameters_truncated"] = True
+        extra["parameters"] = params
+
+    rows_label = event.rows_affected if event.rows_affected is not None else "unknown"
+    logger.info(
+        "[%s] %s duration=%.3fms rows=%s sql=%s",
+        event.driver,
+        event.operation,
+        event.duration_s * 1000,
+        rows_label,
+        sql_preview,
+        extra=extra,
+    )
+
+
+def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool, int]:
+    length = len(value)
+    if length <= max_chars:
+        return value, False, length
+    return value[:max_chars], True, length
+
+
+def _summarize_parameters(parameters: Any) -> dict[str, Any]:
+    if parameters is None:
+        return {"parameters_type": None, "parameters_size": None}
+    if isinstance(parameters, dict):
+        return {"parameters_type": "dict", "parameters_size": len(parameters)}
+    if isinstance(parameters, list):
+        return {"parameters_type": "list", "parameters_size": len(parameters)}
+    if isinstance(parameters, tuple):
+        return {"parameters_type": "tuple", "parameters_size": len(parameters)}
+    return {"parameters_type": type(parameters).__name__, "parameters_size": None}
+
+
+def _maybe_truncate_parameters(parameters: Any, *, max_items: int) -> tuple[Any, bool]:
+    if isinstance(parameters, dict):
+        if len(parameters) <= max_items:
+            return parameters, False
+        truncated = dict(list(parameters.items())[:max_items])
+        return truncated, True
+    if isinstance(parameters, list):
+        if len(parameters) <= max_items:
+            return parameters, False
+        return parameters[:max_items], True
+    if isinstance(parameters, tuple):
+        if len(parameters) <= max_items:
+            return parameters, False
+        return parameters[:max_items], True
+    return parameters, False
 
 
 def create_event(
