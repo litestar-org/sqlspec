@@ -1,6 +1,7 @@
 """Multi-connection pool for aiosqlite."""
 
 import asyncio
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager, suppress
@@ -12,7 +13,6 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    import threading
     from collections.abc import AsyncGenerator
 
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
@@ -160,7 +160,7 @@ class AiosqliteConnectionPool:
         self._operation_timeout = operation_timeout
 
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
-        self._tracked_threads: set[threading.Thread | AiosqliteConnection] = set()
+        self._tracked_threads: set[threading.Thread] = set()
         self._wal_initialized = False
 
         self._queue_instance: asyncio.Queue[AiosqlitePoolConnection] | None = None
@@ -218,10 +218,14 @@ class AiosqliteConnectionPool:
     def _track_aiosqlite_thread(self, connection: "AiosqliteConnection") -> None:
         """Track the background thread associated with an aiosqlite connection.
 
+        Only tracks if the connection is a Thread subclass (aiosqlite < 0.22.0).
+        In aiosqlite 0.22.0+, Connection no longer inherits from Thread.
+
         Args:
             connection: The aiosqlite connection whose thread to track
         """
-        self._tracked_threads.add(connection)
+        if isinstance(connection, threading.Thread):
+            self._tracked_threads.add(connection)
 
     async def _create_connection(self) -> AiosqlitePoolConnection:
         """Create a new connection.
@@ -230,7 +234,8 @@ class AiosqliteConnectionPool:
             New pool connection instance
         """
         connection = aiosqlite.connect(**self._connection_parameters)
-        connection.daemon = True
+        if hasattr(connection, "daemon"):
+            connection.daemon = True  # pyright: ignore[reportAttributeAccessIssue]
         connection = await connection
 
         database_path = str(self._connection_parameters.get("database", ""))
