@@ -10,6 +10,16 @@ from sqlspec.extensions.litestar import SQLSpecPlugin
 from sqlspec.utils.correlation import CorrelationContext
 
 
+def setup_function() -> None:
+    """Clear correlation context before each test to prevent pollution."""
+    CorrelationContext.clear()
+
+
+def teardown_function() -> None:
+    """Clear correlation context after each test to prevent pollution."""
+    CorrelationContext.clear()
+
+
 @get("/correlation")
 async def correlation_handler() -> dict[str, str | None]:
     return {"correlation_id": CorrelationContext.get()}
