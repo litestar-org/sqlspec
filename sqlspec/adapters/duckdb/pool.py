@@ -20,6 +20,7 @@ DEFAULT_MIN_POOL: Final[int] = 1
 DEFAULT_MAX_POOL: Final[int] = 4
 POOL_TIMEOUT: Final[float] = 30.0
 POOL_RECYCLE: Final[int] = 86400
+HEALTH_CHECK_INTERVAL: Final[float] = 30.0
 
 __all__ = ("DuckDBConnectionPool",)
 
@@ -41,6 +42,7 @@ class DuckDBConnectionPool:
         "_created_connections",
         "_extension_flags",
         "_extensions",
+        "_health_check_interval",
         "_lock",
         "_on_connection_create",
         "_recycle",
@@ -52,6 +54,7 @@ class DuckDBConnectionPool:
         self,
         connection_config: "dict[str, Any]",
         pool_recycle_seconds: int = POOL_RECYCLE,
+        health_check_interval: float = HEALTH_CHECK_INTERVAL,
         extensions: "list[dict[str, Any]] | None" = None,
         extension_flags: "dict[str, Any] | None" = None,
         secrets: "list[dict[str, Any]] | None" = None,
@@ -63,6 +66,7 @@ class DuckDBConnectionPool:
         Args:
             connection_config: DuckDB connection configuration
             pool_recycle_seconds: Connection recycle time in seconds
+            health_check_interval: Seconds of idle time before running health check
             extensions: List of extensions to install/load
             extension_flags: Connection-level SET statements applied after creation
             secrets: List of secrets to create
@@ -71,6 +75,7 @@ class DuckDBConnectionPool:
         """
         self._connection_config = connection_config
         self._recycle = pool_recycle_seconds
+        self._health_check_interval = health_check_interval
         self._extensions = extensions or []
         self._extension_flags = extension_flags or {}
         self._secrets = secrets or []
@@ -191,13 +196,26 @@ class DuckDBConnectionPool:
         if not hasattr(self._thread_local, "connection"):
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
+            self._thread_local.last_used = time.time()
+            return cast("DuckDBConnection", self._thread_local.connection)
 
         if self._recycle > 0 and time.time() - self._thread_local.created_at > self._recycle:
             with suppress(Exception):
                 self._thread_local.connection.close()
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
+            self._thread_local.last_used = time.time()
+            return cast("DuckDBConnection", self._thread_local.connection)
 
+        idle_time = time.time() - getattr(self._thread_local, "last_used", 0)
+        if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
+            logger.debug("DuckDB connection failed health check after %.1fs idle, recreating", idle_time)
+            with suppress(Exception):
+                self._thread_local.connection.close()
+            self._thread_local.connection = self._create_connection()
+            self._thread_local.created_at = time.time()
+
+        self._thread_local.last_used = time.time()
         return cast("DuckDBConnection", self._thread_local.connection)
 
     def _close_thread_connection(self) -> None:
@@ -208,6 +226,8 @@ class DuckDBConnectionPool:
             del self._thread_local.connection
             if hasattr(self._thread_local, "created_at"):
                 del self._thread_local.created_at
+            if hasattr(self._thread_local, "last_used"):
+                del self._thread_local.last_used
 
     def _is_connection_alive(self, connection: DuckDBConnection) -> bool:
         """Check if a connection is still alive and usable.

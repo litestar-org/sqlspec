@@ -23,16 +23,12 @@ from sqlspec.adapters.psycopg.driver import (
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
     from sqlspec.core import StatementConfig
-
-
-logger = get_logger("adapters.psycopg")
 
 
 class PsycopgConnectionParams(TypedDict):
