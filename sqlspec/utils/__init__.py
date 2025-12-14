@@ -5,29 +5,3 @@ fixture loading, logging, module loading (including dependency checking),
 portal pattern for async bridging, singleton patterns, sync/async conversion,
 text processing, and type guards.
 """
-
-from sqlspec.utils import (
-    config_discovery,
-    deprecation,
-    fixtures,
-    logging,
-    module_loader,
-    portal,
-    singleton,
-    sync_tools,
-    text,
-    type_guards,
-)
-
-__all__ = (
-    "config_discovery",
-    "deprecation",
-    "fixtures",
-    "logging",
-    "module_loader",
-    "portal",
-    "singleton",
-    "sync_tools",
-    "text",
-    "type_guards",
-)
