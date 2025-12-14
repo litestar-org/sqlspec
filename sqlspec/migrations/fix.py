@@ -5,16 +5,17 @@ sequential format, supporting the hybrid versioning workflow where development
 uses timestamps and production uses sequential numbers.
 """
 
-import logging
 import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlspec.utils.logging import get_logger
+
 __all__ = ("MigrationFixer", "MigrationRename")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

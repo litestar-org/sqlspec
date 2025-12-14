@@ -342,6 +342,28 @@ def test_driver_dispatch_records_query_span() -> None:
     assert span_manager.finished[0].closed is True
 
 
+def test_runtime_query_span_omits_sql_unless_print_sql_enabled() -> None:
+    """Query spans should only include SQL when print_sql is enabled."""
+
+    span_manager = _FakeSpanManager()
+    runtime = ObservabilityRuntime(ObservabilityConfig(print_sql=False), config_name="DummyAdapter")
+    runtime.span_manager = cast(Any, span_manager)
+
+    runtime.start_query_span("SELECT 1", "SELECT", "DummyDriver")
+
+    assert span_manager.started[0].attributes["sql"] == ""
+    assert span_manager.started[0].attributes["connection_info"]["sqlspec.statement.hash"]
+    assert span_manager.started[0].attributes["connection_info"]["sqlspec.statement.length"] == len("SELECT 1")
+
+    span_manager_enabled = _FakeSpanManager()
+    runtime_enabled = ObservabilityRuntime(ObservabilityConfig(print_sql=True), config_name="DummyAdapter")
+    runtime_enabled.span_manager = cast(Any, span_manager_enabled)
+
+    runtime_enabled.start_query_span("SELECT 1", "SELECT", "DummyDriver")
+
+    assert span_manager_enabled.started[0].attributes["sql"] == "SELECT 1"
+
+
 def test_storage_span_records_telemetry_attributes() -> None:
     """Storage spans should capture telemetry attributes when ending."""
 

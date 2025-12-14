@@ -630,7 +630,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print("[green]✓ Conversion complete![/]")
 
         except Exception as e:
-            logger.exception("Fix command failed")
             console.print(f"[red]✗ Error: {e}[/]")
             fixer.rollback()
             console.print("[yellow]Restored files from backup[/]")
@@ -1117,7 +1116,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             console.print("[green]✓ Conversion complete![/]")
 
         except Exception as e:
-            logger.exception("Fix command failed")
             console.print(f"[red]✗ Error: {e}[/]")
             fixer.rollback()
             console.print("[yellow]Restored files from backup[/]")

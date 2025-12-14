@@ -510,6 +510,53 @@ class AdapterConfig(AsyncDatabaseConfig):  # or SyncDatabaseConfig
 
 - v0.33.0+: `pool_config` → `connection_config`, `pool_instance` → `connection_instance`
 
+### Parameter Deprecation Pattern
+
+For backwards-compatible parameter renames in configuration classes:
+
+```python
+def __init__(
+    self,
+    *,
+    new_param: dict[str, Any] | None = None,
+    **kwargs: Any,  # Capture old parameter names
+) -> None:
+    from sqlspec.utils.deprecation import warn_deprecation
+
+    if "old_param" in kwargs:
+        warn_deprecation(
+            version="0.33.0",
+            deprecated_name="old_param",
+            kind="parameter",
+            removal_in="0.34.0",
+            alternative="new_param",
+            info="Parameter renamed for consistency across pooled and non-pooled adapters",
+        )
+        if new_param is None:
+            new_param = kwargs.pop("old_param")
+        else:
+            kwargs.pop("old_param")  # Discard if new param provided
+
+    # Continue with initialization using new_param
+```
+
+**Use this pattern when:**
+
+- Renaming configuration parameters for consistency
+- Need backwards compatibility during migration period
+- Want clear deprecation warnings for users
+
+**Key principles:**
+
+- Use `**kwargs` to capture old parameter names without changing signature
+- Import `warn_deprecation` inside function to avoid circular imports
+- New parameter takes precedence when both old and new provided
+- Use `kwargs.pop()` to remove handled parameters and avoid `**kwargs` passing issues
+- Provide clear migration path (version, alternative, removal timeline)
+- Set removal timeline (typically next minor or major version)
+
+**Reference implementation:** `sqlspec/config.py` (lines 920-1517, all 4 base config classes)
+
 ### Error Handling
 
 - Custom exceptions inherit from `SQLSpecError` in `sqlspec/exceptions.py`

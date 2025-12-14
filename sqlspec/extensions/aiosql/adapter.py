@@ -5,7 +5,6 @@ while using SQLSpec drivers under the hood. This enables users to load SQL queri
 from files using aiosql while using SQLSpec's features for execution and type mapping.
 """
 
-import logging
 from collections.abc import AsyncGenerator, Generator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from typing import Any, ClassVar, Generic, TypeVar
@@ -13,9 +12,10 @@ from typing import Any, ClassVar, Generic, TypeVar
 from sqlspec.core import SQL, SQLResult, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.typing import AiosqlAsyncProtocol, AiosqlParamType, AiosqlSQLOperationType, AiosqlSyncProtocol
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_aiosql
 
-logger = logging.getLogger("sqlspec.extensions.aiosql")
+logger = get_logger("extensions.aiosql")
 
 __all__ = ("AiosqlAsyncAdapter", "AiosqlSyncAdapter")
 

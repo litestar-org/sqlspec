@@ -383,6 +383,7 @@ class SQLFileLoader:
         error: Exception | None = None
         start_time = time.perf_counter()
         path_count = len(paths)
+        previous_correlation_id = CorrelationContext.get()
         if runtime is not None:
             runtime.increment_metric("loader.load.invocations")
             runtime.increment_metric("loader.paths.requested", path_count)
@@ -390,8 +391,6 @@ class SQLFileLoader:
                 "sqlspec.loader.load",
                 attributes={"sqlspec.loader.path_count": path_count, "sqlspec.loader.encoding": self.encoding},
             )
-
-        correlation_id = CorrelationContext.get()
 
         try:
             for path in paths:
@@ -409,16 +408,6 @@ class SQLFileLoader:
 
         except Exception as exc:
             error = exc
-            duration = time.perf_counter() - start_time
-            logger.exception(
-                "Failed to load SQL files after %.3fms",
-                duration * 1000,
-                extra={
-                    "error_type": type(exc).__name__,
-                    "duration_ms": duration * 1000,
-                    "correlation_id": correlation_id,
-                },
-            )
             if runtime is not None:
                 runtime.increment_metric("loader.load.errors")
             raise
@@ -428,7 +417,7 @@ class SQLFileLoader:
                 runtime.record_metric("loader.last_load_ms", duration_ms)
                 runtime.increment_metric("loader.load.duration_ms", duration_ms)
                 runtime.end_span(span, error=error)
-            CorrelationContext.clear()
+            CorrelationContext.set(previous_correlation_id)
 
     def _load_directory(self, dir_path: Path) -> None:
         """Load all SQL files from a directory.
@@ -690,22 +679,10 @@ class SQLFileLoader:
         Raises:
             SQLFileNotFoundError: If statement name not found.
         """
-        correlation_id = CorrelationContext.get()
-
         safe_name = _normalize_query_name(name)
 
         if safe_name not in self._queries:
             available = ", ".join(sorted(self._queries.keys())) if self._queries else "none"
-            logger.error(
-                "Statement not found: %s",
-                name,
-                extra={
-                    "statement_name": name,
-                    "safe_name": safe_name,
-                    "available_statements": len(self._queries),
-                    "correlation_id": correlation_id,
-                },
-            )
             raise SQLFileNotFoundError(name, path=f"Statement '{name}' not found. Available statements: {available}")
 
         parsed_statement = self._queries[safe_name]
@@ -713,4 +690,9 @@ class SQLFileLoader:
         if parsed_statement.dialect:
             sqlglot_dialect = _normalize_dialect(parsed_statement.dialect)
 
-        return SQL(parsed_statement.sql, dialect=sqlglot_dialect)
+        sql = SQL(parsed_statement.sql, dialect=sqlglot_dialect)
+        try:
+            sql.compile()
+        except Exception as exc:
+            raise SQLFileParseError(name=name, path="<statement>", original_error=exc) from exc
+        return sql

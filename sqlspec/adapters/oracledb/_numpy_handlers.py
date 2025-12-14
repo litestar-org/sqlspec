@@ -5,10 +5,10 @@ via connection type handlers. Requires Oracle Database 23ai or higher.
 """
 
 import array
-import logging
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.typing import NUMPY_INSTALLED
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
@@ -22,7 +22,7 @@ __all__ = (
 )
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 DTYPE_TO_ARRAY_CODE: dict[str, str] = {"float64": "d", "float32": "f", "uint8": "B", "int8": "b"}

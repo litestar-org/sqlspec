@@ -1,6 +1,5 @@
 """DuckDB connection pool with thread-local connections."""
 
-import logging
 import threading
 import time
 from contextlib import contextmanager, suppress
@@ -9,12 +8,13 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import duckdb
 
 from sqlspec.adapters.duckdb._types import DuckDBConnection
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_MIN_POOL: Final[int] = 1
 DEFAULT_MAX_POOL: Final[int] = 4

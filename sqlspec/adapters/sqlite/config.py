@@ -1,9 +1,8 @@
 """SQLite database configuration with thread-local connections."""
 
-import logging
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -12,9 +11,10 @@ from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, sqlite_statement_config
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
-logger = logging.getLogger(__name__)
+logger = get_logger("adapters.sqlite")
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -80,6 +80,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize SQLite configuration.
 
@@ -92,21 +93,21 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             bind_key: Optional bind key for the configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
+            **kwargs: Additional keyword arguments passed to the base configuration.
         """
-        if connection_config is None:
-            connection_config = {}
-        if "database" not in connection_config or connection_config["database"] == ":memory:":
-            connection_config["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
-            connection_config["uri"] = True
-        elif "database" in connection_config:
-            database_path = str(connection_config["database"])
-            if database_path.startswith("file:") and not connection_config.get("uri"):
+        config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
+        if "database" not in config_dict or config_dict["database"] == ":memory:":
+            config_dict["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
+            config_dict["uri"] = True
+        elif "database" in config_dict:
+            database_path = str(config_dict["database"])
+            if database_path.startswith("file:") and not config_dict.get("uri"):
                 logger.debug(
                     "Database URI detected (%s) but uri=True not set. "
                     "Auto-enabling URI mode to prevent physical file creation.",
                     database_path,
                 )
-                connection_config["uri"] = True
+                config_dict["uri"] = True
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         processed_driver_features.setdefault("enable_custom_adapters", True)
@@ -123,12 +124,13 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         super().__init__(
             bind_key=bind_key,
             connection_instance=connection_instance,
-            connection_config=cast("dict[str, Any]", connection_config),
+            connection_config=config_dict,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=processed_driver_features,
             extension_config=extension_config,
             observability_config=observability_config,
+            **kwargs,
         )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":

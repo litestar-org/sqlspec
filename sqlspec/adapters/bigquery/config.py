@@ -1,7 +1,6 @@
 """BigQuery database configuration."""
 
 import contextlib
-import logging
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
@@ -18,6 +17,8 @@ from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
+from sqlspec.utils.config_normalization import normalize_connection_config
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger("adapters.bigquery")
 
 
 class BigQueryConnectionParams(TypedDict):
@@ -124,6 +125,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize BigQuery configuration.
 
@@ -136,12 +138,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
+            **kwargs: Additional keyword arguments passed to the base configuration.
         """
 
-        self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
-        if "extra" in self.connection_config:
-            extras = self.connection_config.pop("extra")
-            self.connection_config.update(extras)
+        self.connection_config = normalize_connection_config(connection_config)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         user_connection_hook = processed_driver_features.pop("on_connection_create", None)
@@ -176,6 +176,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=local_observability,
+            **kwargs,
         )
 
         self.driver_features = processed_driver_features

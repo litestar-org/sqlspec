@@ -33,6 +33,11 @@ def setup_function() -> None:
     correlation_id_var.set(None)
 
 
+def teardown_function() -> None:
+    """Clear correlation ID after each test to prevent pollution."""
+    correlation_id_var.set(None)
+
+
 def test_correlation_id_initial_state() -> None:
     """Test that initial correlation ID is None."""
     assert get_correlation_id() is None

@@ -3,6 +3,7 @@
 Provides statement builders (select, insert, update, etc.) and column expressions.
 """
 
+import hashlib
 import logging
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Union, cast
@@ -45,6 +46,7 @@ from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctio
 from sqlspec.builder._update import Update
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -82,7 +84,7 @@ __all__ = (
     "sql",
 )
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("builder.factory")
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
@@ -112,6 +114,11 @@ SQL_STARTERS = {
     "VACUUM",
     "COPY",
 }
+
+
+def _fingerprint_sql(sql: str) -> str:
+    digest = hashlib.sha256(sql.encode("utf-8", errors="replace")).hexdigest()
+    return digest[:12]
 
 
 def _normalize_copy_dialect(dialect: DialectType | None) -> str:
@@ -219,9 +226,18 @@ class SQLFactory:
                     return str(parsed_expr.this).upper()
                 return command_type
         except SQLGlotParseError:
-            logger.debug("Failed to parse SQL for type detection: %s", sql[:100])
-        except (ValueError, TypeError, AttributeError) as e:
-            logger.warning("Unexpected error during SQL type detection for '%s...': %s", sql[:50], e)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Failed to parse SQL for type detection",
+                    extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
+                )
+        except (ValueError, TypeError, AttributeError):
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Unexpected error during SQL type detection",
+                    exc_info=True,
+                    extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
+                )
         return "UNKNOWN"
 
     def __init__(self, dialect: DialectType = None) -> None:
@@ -659,13 +675,23 @@ class SQLFactory:
                 return builder
 
             if isinstance(parsed_expr, exp.Select):
-                logger.info("Detected SELECT statement for INSERT - may need target table specification")
+                logger.debug(
+                    "Detected SELECT statement for INSERT; builder requires explicit target table",
+                    extra={"builder": "insert"},
+                )
                 return builder
 
-            logger.warning("Cannot create INSERT from %s statement", type(parsed_expr).__name__)
+            logger.debug(
+                "Cannot create INSERT from parsed statement type",
+                extra={"builder": "insert", "parsed_type": type(parsed_expr).__name__},
+            )
 
-        except Exception as e:
-            logger.warning("Failed to parse INSERT SQL, falling back to traditional mode: %s", e)
+        except Exception:
+            logger.debug(
+                "Failed to parse INSERT SQL; falling back to traditional mode",
+                exc_info=True,
+                extra={"builder": "insert"},
+            )
         return builder
 
     def _populate_select_from_sql(self, builder: "Select", sql_string: str) -> "Select":
@@ -677,10 +703,17 @@ class SQLFactory:
                 builder.set_expression(parsed_expr)
                 return builder
 
-            logger.warning("Cannot create SELECT from %s statement", type(parsed_expr).__name__)
+            logger.debug(
+                "Cannot create SELECT from parsed statement type",
+                extra={"builder": "select", "parsed_type": type(parsed_expr).__name__},
+            )
 
-        except Exception as e:
-            logger.warning("Failed to parse SELECT SQL, falling back to traditional mode: %s", e)
+        except Exception:
+            logger.debug(
+                "Failed to parse SELECT SQL; falling back to traditional mode",
+                exc_info=True,
+                extra={"builder": "select"},
+            )
         return builder
 
     def _populate_update_from_sql(self, builder: "Update", sql_string: str) -> "Update":
@@ -692,10 +725,17 @@ class SQLFactory:
                 builder.set_expression(parsed_expr)
                 return builder
 
-            logger.warning("Cannot create UPDATE from %s statement", type(parsed_expr).__name__)
+            logger.debug(
+                "Cannot create UPDATE from parsed statement type",
+                extra={"builder": "update", "parsed_type": type(parsed_expr).__name__},
+            )
 
-        except Exception as e:
-            logger.warning("Failed to parse UPDATE SQL, falling back to traditional mode: %s", e)
+        except Exception:
+            logger.debug(
+                "Failed to parse UPDATE SQL; falling back to traditional mode",
+                exc_info=True,
+                extra={"builder": "update"},
+            )
         return builder
 
     def _populate_delete_from_sql(self, builder: "Delete", sql_string: str) -> "Delete":
@@ -707,10 +747,17 @@ class SQLFactory:
                 builder.set_expression(parsed_expr)
                 return builder
 
-            logger.warning("Cannot create DELETE from %s statement", type(parsed_expr).__name__)
+            logger.debug(
+                "Cannot create DELETE from parsed statement type",
+                extra={"builder": "delete", "parsed_type": type(parsed_expr).__name__},
+            )
 
-        except Exception as e:
-            logger.warning("Failed to parse DELETE SQL, falling back to traditional mode: %s", e)
+        except Exception:
+            logger.debug(
+                "Failed to parse DELETE SQL; falling back to traditional mode",
+                exc_info=True,
+                extra={"builder": "delete"},
+            )
         return builder
 
     def _populate_merge_from_sql(self, builder: "Merge", sql_string: str) -> "Merge":
@@ -722,10 +769,15 @@ class SQLFactory:
                 builder.set_expression(parsed_expr)
                 return builder
 
-            logger.warning("Cannot create MERGE from %s statement", type(parsed_expr).__name__)
+            logger.debug(
+                "Cannot create MERGE from parsed statement type",
+                extra={"builder": "merge", "parsed_type": type(parsed_expr).__name__},
+            )
 
-        except Exception as e:
-            logger.warning("Failed to parse MERGE SQL, falling back to traditional mode: %s", e)
+        except Exception:
+            logger.debug(
+                "Failed to parse MERGE SQL; falling back to traditional mode", exc_info=True, extra={"builder": "merge"}
+            )
         return builder
 
     def column(self, name: str, table: str | None = None) -> Column:

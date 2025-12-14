@@ -12,6 +12,7 @@ from sqlspec.adapters.spanner._types import SpannerConnection
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver, spanner_statement_config
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -78,8 +79,13 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
-        self.connection_config = dict(connection_config) if connection_config else {}
+        connection_config, connection_instance = apply_pool_deprecations(
+            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
+        )
+
+        self.connection_config = normalize_connection_config(connection_config)
 
         self.connection_config.setdefault("min_sessions", 1)
         self.connection_config.setdefault("max_sessions", 10)
@@ -101,6 +107,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
+            **kwargs,
         )
 
         self._client: Client | None = None

@@ -5,10 +5,10 @@ for asyncpg connections. Supports custom JSON serializers/deserializers
 and optional vector type support.
 """
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 __all__ = ("register_json_codecs", "register_pgvector_support")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_missing_vector_error(error: Exception) -> bool:

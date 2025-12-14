@@ -568,7 +568,6 @@ class AdbcDriver(SyncDriverAdapterBase):
                     last_rowcount = cursor.rowcount
         except Exception:
             self._handle_postgres_rollback(cursor)
-            logger.exception("Script execution failed")
             raise
 
         return self.create_execution_result(

@@ -395,7 +395,7 @@ class SQLProcessor:
         except sqlspec.exceptions.SQLSpecError:
             raise
         except Exception as e:
-            logger.warning("Compilation failed, using fallback: %s", e)
+            logger.debug("Compilation failed, using fallback: %s", e)
             return CompiledSQL(
                 compiled_sql=sql,
                 execution_parameters=parameters,

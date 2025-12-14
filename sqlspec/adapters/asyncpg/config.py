@@ -1,6 +1,5 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
-import logging
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
@@ -21,8 +20,10 @@ from sqlspec.adapters.asyncpg.driver import (
     build_asyncpg_statement_config,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
+from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgDriverFeatures", "AsyncpgPoolConfig")
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("adapters.asyncpg")
 
 
 class AsyncpgConnectionConfig(TypedDict):
@@ -157,6 +158,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize AsyncPG configuration.
 
@@ -169,7 +171,12 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
+            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance)
         """
+        connection_config, connection_instance = apply_pool_deprecations(
+            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
+        )
+
         features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
         serializer = features_dict.setdefault("json_serializer", to_json)
@@ -184,7 +191,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         )
 
         super().__init__(
-            connection_config=dict(connection_config) if connection_config else {},
+            connection_config=normalize_connection_config(connection_config),
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
@@ -192,6 +199,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
+            **kwargs,
         )
 
         self._cloud_sql_connector: Any | None = None
@@ -204,42 +212,51 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         Raises:
             ImproperConfigurationError: If configuration is invalid.
+            MissingDependencyError: If required connector packages are not installed.
         """
         enable_cloud_sql = self.driver_features.get("enable_cloud_sql", False)
         enable_alloydb = self.driver_features.get("enable_alloydb", False)
 
-        if enable_cloud_sql and enable_alloydb:
-            msg = "Cannot enable both Cloud SQL and AlloyDB connectors simultaneously. Use separate configs for each database."
-            raise ImproperConfigurationError(msg)
-
-        if enable_cloud_sql:
-            if not CLOUD_SQL_CONNECTOR_INSTALLED:
-                msg = "cloud-sql-python-connector package not installed. Install with: pip install cloud-sql-python-connector"
+        match (enable_cloud_sql, enable_alloydb):
+            case (True, True):
+                msg = (
+                    "Cannot enable both Cloud SQL and AlloyDB connectors simultaneously. "
+                    "Use separate configs for each database."
+                )
                 raise ImproperConfigurationError(msg)
+            case (False, False):
+                return
+            case (True, False):
+                if not CLOUD_SQL_CONNECTOR_INSTALLED:
+                    raise MissingDependencyError(package="cloud-sql-python-connector", install_package="cloud-sql")
 
-            instance = self.driver_features.get("cloud_sql_instance")
-            if not instance:
-                msg = "cloud_sql_instance required when enable_cloud_sql is True. Format: 'project:region:instance'"
-                raise ImproperConfigurationError(msg)
+                instance = self.driver_features.get("cloud_sql_instance")
+                if not instance:
+                    msg = "cloud_sql_instance required when enable_cloud_sql is True. Format: 'project:region:instance'"
+                    raise ImproperConfigurationError(msg)
 
-            cloud_sql_instance_parts_expected = 2
-            if instance.count(":") != cloud_sql_instance_parts_expected:
-                msg = f"Invalid Cloud SQL instance format: {instance}. Expected format: 'project:region:instance'"
-                raise ImproperConfigurationError(msg)
+                cloud_sql_instance_parts_expected = 2
+                if instance.count(":") != cloud_sql_instance_parts_expected:
+                    msg = f"Invalid Cloud SQL instance format: {instance}. Expected format: 'project:region:instance'"
+                    raise ImproperConfigurationError(msg)
+            case (False, True):
+                if not ALLOYDB_CONNECTOR_INSTALLED:
+                    raise MissingDependencyError(package="google-cloud-alloydb-connector", install_package="alloydb")
 
-        elif enable_alloydb:
-            if not ALLOYDB_CONNECTOR_INSTALLED:
-                msg = "cloud-alloydb-python-connector package not installed. Install with: pip install cloud-alloydb-python-connector"
-                raise ImproperConfigurationError(msg)
+                instance_uri = self.driver_features.get("alloydb_instance_uri")
+                if not instance_uri:
+                    msg = (
+                        "alloydb_instance_uri required when enable_alloydb is True. "
+                        "Format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+                    )
+                    raise ImproperConfigurationError(msg)
 
-            instance_uri = self.driver_features.get("alloydb_instance_uri")
-            if not instance_uri:
-                msg = "alloydb_instance_uri required when enable_alloydb is True. Format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
-                raise ImproperConfigurationError(msg)
-
-            if not instance_uri.startswith("projects/"):
-                msg = f"Invalid AlloyDB instance URI format: {instance_uri}. Expected format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
-                raise ImproperConfigurationError(msg)
+                if not instance_uri.startswith("projects/"):
+                    msg = (
+                        f"Invalid AlloyDB instance URI format: {instance_uri}. Expected format: "
+                        "'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+                    )
+                    raise ImproperConfigurationError(msg)
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":
         """Get pool configuration as plain dict for external library.
@@ -247,10 +264,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             Dictionary with pool parameters, filtering out None values.
         """
-        config: dict[str, Any] = dict(self.connection_config)
-        extras = config.pop("extra", {})
-        config.update(extras)
-        return {k: v for k, v in config.items() if v is not None}
+        return {k: v for k, v in self.connection_config.items() if v is not None}
 
     def _setup_cloud_sql_connector(self, config: "dict[str, Any]") -> None:
         """Setup Cloud SQL connector and configure pool for connection factory pattern.

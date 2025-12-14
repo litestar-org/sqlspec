@@ -16,6 +16,7 @@ from sqlspec.adapters.duckdb.driver import (
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.observability import ObservabilityConfig
+from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -215,6 +216,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize DuckDB configuration.
 
@@ -228,18 +230,18 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
+            **kwargs: Additional keyword arguments passed to the base configuration.
         """
-        if connection_config is None:
-            connection_config = {}
-        connection_config.setdefault("database", ":memory:shared_db")
+        processed_connection_config = normalize_connection_config(connection_config)
+        processed_connection_config.setdefault("database", ":memory:shared_db")
 
-        if connection_config.get("database") in {":memory:", ""}:
-            connection_config["database"] = ":memory:shared_db"
+        if processed_connection_config.get("database") in {":memory:", ""}:
+            processed_connection_config["database"] = ":memory:shared_db"
 
         extension_flags: dict[str, Any] = {}
-        for key in tuple(connection_config.keys()):
+        for key in tuple(processed_connection_config.keys()):
             if key in EXTENSION_FLAG_KEYS:
-                extension_flags[key] = connection_config.pop(key)  # type: ignore[misc]
+                extension_flags[key] = processed_connection_config.pop(key)
 
         processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         user_connection_hook = cast(
@@ -271,13 +273,14 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         super().__init__(
             bind_key=bind_key,
-            connection_config=dict(connection_config),
+            connection_config=processed_connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=processed_features,
             extension_config=extension_config,
             observability_config=local_observability,
+            **kwargs,
         )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":

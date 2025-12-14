@@ -205,8 +205,12 @@ UPDATE users SET email = ? WHERE id = ?;
     assert "update_user_email" in statements
 
 
-def test_get_sql_parses_expression_when_missing() -> None:
-    """SQL objects from get_sql should carry parsed expressions for count queries."""
+def test_get_sql_eagerly_compiles_expression() -> None:
+    """SQL objects from get_sql should have expressions eagerly compiled.
+
+    This ensures that SQL objects from get_sql() can be used with pagination
+    and count queries without additional compile() calls (fixes issue #283).
+    """
 
     loader = SQLFileLoader()
     content = """
@@ -219,11 +223,9 @@ SELECT id, email FROM user_account WHERE active = true;
 
     sql_obj = loader.get_sql("list_users")
 
-    assert sql_obj.expression is None
-
-    sql_obj.compile()
-
+    # get_sql() now eagerly compiles the SQL, so expression is populated
     assert sql_obj.expression is not None
+    assert sql_obj.expression.key == "select"
 
 
 def test_parse_skips_files_without_named_statements() -> None:

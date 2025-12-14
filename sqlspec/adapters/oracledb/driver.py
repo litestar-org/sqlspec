@@ -45,7 +45,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
-from sqlspec.utils.logging import log_with_context
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
 
@@ -84,7 +84,7 @@ if TYPE_CHECKING:
         def _get_compiled_sql(self, statement: SQL, statement_config: StatementConfig) -> "tuple[str, Any]": ...
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Oracle-specific constants
 LARGE_STRING_THRESHOLD = 4000  # Threshold for large string parameters to avoid ORA-01704

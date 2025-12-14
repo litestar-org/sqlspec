@@ -220,26 +220,17 @@ def test_stream_arrow(tmp_path: Path) -> None:
     assert reconstructed.equals(table)
 
 
-def test_sign_returns_file_uri(tmp_path: Path) -> None:
-    """Test sign returns file:// URI for local files."""
-    store = LocalStore(str(tmp_path))
-
-    store.write_text("test.txt", "content")
-    signed_url = store.sign("test.txt")
-
-    assert signed_url.startswith("file://")
-    assert "test.txt" in signed_url
-
-
-def test_sign_with_options(tmp_path: Path) -> None:
-    """Test sign with expires_in and for_upload options."""
+def test_sign_sync_raises_not_implemented(tmp_path: Path) -> None:
+    """Test sign_sync raises NotImplementedError for local files."""
     store = LocalStore(str(tmp_path))
 
     store.write_text("test.txt", "content")
 
-    # Options are ignored for local files but should not error
-    signed_url = store.sign("test.txt", expires_in=7200, for_upload=True)
-    assert signed_url.startswith("file://")
+    # Local storage does not support URL signing
+    assert store.supports_signing is False
+
+    with pytest.raises(NotImplementedError, match="URL signing is not applicable"):
+        store.sign_sync("test.txt")
 
 
 def test_resolve_path_absolute(tmp_path: Path) -> None:
@@ -428,15 +419,14 @@ async def test_async_stream_arrow(tmp_path: Path) -> None:
     assert reconstructed.equals(table)
 
 
-async def test_async_sign(tmp_path: Path) -> None:
-    """Test async sign returns file:// URI for local files."""
+async def test_async_sign_raises_not_implemented(tmp_path: Path) -> None:
+    """Test sign_async raises NotImplementedError for local files."""
     store = LocalStore(str(tmp_path))
 
     await store.write_text_async("async_test.txt", "content")
-    signed_url = await store.sign_async("async_test.txt")
 
-    assert signed_url.startswith("file://")
-    assert "async_test.txt" in signed_url
+    with pytest.raises(NotImplementedError, match="URL signing is not applicable"):
+        await store.sign_async("async_test.txt")
 
 
 def test_arrow_operations_without_pyarrow(tmp_path: Path) -> None:

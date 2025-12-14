@@ -242,15 +242,18 @@ def test_stream_arrow(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
 def test_sign_returns_uri(tmp_path: Path) -> None:
-    """Test sign returns URI for files."""
+    """Test sign_sync raises NotImplementedError for fsspec backends."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     store = FSSpecBackend("file", base_path=str(tmp_path))
 
     store.write_text("test.txt", "content")
-    signed_url = store.sign("test.txt")
 
-    assert "test.txt" in signed_url
+    # FSSpec backends do not support URL signing
+    assert store.supports_signing is False
+
+    with pytest.raises(NotImplementedError, match="URL signing is not supported for fsspec backend"):
+        store.sign_sync("test.txt")
 
 
 def test_fsspec_not_installed() -> None:
@@ -437,16 +440,16 @@ async def test_async_stream_arrow(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
-async def test_async_sign(tmp_path: Path) -> None:
-    """Test async sign returns URI for local files."""
+async def test_async_sign_raises_not_implemented(tmp_path: Path) -> None:
+    """Test async sign_async raises NotImplementedError for fsspec backends."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     store = FSSpecBackend("file", base_path=str(tmp_path))
 
     await store.write_text_async("async_test.txt", "content")
-    signed_url = await store.sign_async("async_test.txt")
 
-    assert "async_test.txt" in signed_url
+    with pytest.raises(NotImplementedError, match="URL signing is not supported for fsspec backend"):
+        await store.sign_async("async_test.txt")
 
 
 def test_fsspec_operations_without_fsspec() -> None:

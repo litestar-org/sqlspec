@@ -147,6 +147,7 @@ class CorrelationMiddleware:
         if not header_value:
             header_value = CorrelationContext.generate()
 
+        previous_correlation_id = CorrelationContext.get()
         CorrelationContext.set(header_value)
         set_sqlspec_scope_state(scope, CORRELATION_STATE_KEY, header_value)
         try:
@@ -154,7 +155,7 @@ class CorrelationMiddleware:
         finally:
             with suppress(KeyError):
                 delete_sqlspec_scope_state(scope, CORRELATION_STATE_KEY)
-            CorrelationContext.clear()
+            CorrelationContext.set(previous_correlation_id)
 
 
 @dataclass

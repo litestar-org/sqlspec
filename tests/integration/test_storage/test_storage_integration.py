@@ -135,16 +135,17 @@ def test_local_store_listing_operations(local_test_setup: Path) -> None:
 
 
 @pytest.mark.xdist_group("storage")
-def test_local_store_url_signing(local_test_setup: Path) -> None:
-    """Test LocalStore URL signing functionality."""
+def test_local_store_url_signing_not_supported(local_test_setup: Path) -> None:
+    """Test LocalStore URL signing raises NotImplementedError."""
     from sqlspec.storage.backends.local import LocalStore
 
     store = LocalStore(str(local_test_setup))
 
-    # Test sign method
-    signed_url = store.sign("test.txt", expires_in=3600)
-    assert signed_url.startswith("file://")
-    assert "test.txt" in signed_url
+    # Local storage does not support URL signing
+    assert store.supports_signing is False
+
+    with pytest.raises(NotImplementedError, match="URL signing is not applicable"):
+        store.sign_sync("test.txt", expires_in=3600)
 
 
 @pytest.mark.xdist_group("storage")
@@ -533,10 +534,14 @@ def test_backend_consistency(request: pytest.FixtureRequest, backend_name: str) 
     # Test exists consistency
     assert backend.exists(test_path)
 
-    # Test URL signing consistency (all should return some form of URL)
-    signed_url = backend.sign(test_path, expires_in=3600)
-    assert isinstance(signed_url, str)
-    assert len(signed_url) > 0
+    # Test URL signing consistency (only for backends that support signing)
+    if backend.supports_signing:
+        signed_url = backend.sign_sync(test_path, expires_in=3600)
+        assert isinstance(signed_url, str)
+        assert len(signed_url) > 0
+    else:
+        with pytest.raises(NotImplementedError):
+            backend.sign_sync(test_path, expires_in=3600)
 
 
 @pytest.mark.xdist_group("storage")

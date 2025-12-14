@@ -13,6 +13,7 @@ Supported dialects include Oracle PL/SQL, T-SQL, PostgreSQL,
 MySQL, SQLite, DuckDB, and BigQuery.
 """
 
+import logging
 import re
 import threading
 from abc import ABC, abstractmethod
@@ -38,6 +39,9 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.core.splitter")
+
+_TOKENIZE_DEBUG_SAMPLE_LIMIT: Final[int] = 3
+_TOKENIZE_SNIPPET_LENGTH: Final[int] = 20
 
 DEFAULT_PATTERN_CACHE_SIZE: Final = 1000
 DEFAULT_RESULT_CACHE_SIZE: Final = 5000
@@ -703,6 +707,9 @@ class StatementSplitter:
         pos = 0
         line = 1
         line_start = 0
+        unmatched_count = 0
+        first_unmatched_pos: int | None = None
+        first_unmatched_snippet: str | None = None
 
         while pos < len(sql):
             matched = False
@@ -740,8 +747,23 @@ class StatementSplitter:
                         break
 
             if not matched:
-                logger.error("Failed to tokenize at position %d: %s", pos, sql[pos : pos + 20])
+                if unmatched_count == 0:
+                    first_unmatched_pos = pos
+                    first_unmatched_snippet = sql[pos : pos + _TOKENIZE_SNIPPET_LENGTH]
+                unmatched_count += 1
+                if unmatched_count <= _TOKENIZE_DEBUG_SAMPLE_LIMIT and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Failed to tokenize at position %d: %s", pos, sql[pos : pos + _TOKENIZE_SNIPPET_LENGTH]
+                    )
                 pos += 1
+
+        if unmatched_count and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Tokenization skipped %d unmatched characters (first at %s: %s)",
+                unmatched_count,
+                first_unmatched_pos,
+                first_unmatched_snippet,
+            )
 
     def split(self, sql: str) -> list[str]:
         """Split SQL script into individual statements.

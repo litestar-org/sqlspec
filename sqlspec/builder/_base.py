@@ -554,7 +554,6 @@ class QueryBuilder(ABC):
                 sql_string = str(final_expression)
         except Exception as e:
             err_msg = f"Error generating SQL from expression: {e!s}"
-            logger.exception("SQL generation failed")
             self._raise_sql_builder_error(err_msg, e)
 
         return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=dialect or self.dialect)

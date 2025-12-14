@@ -528,7 +528,7 @@ class SQL:
         return new_sql
 
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
-        logger.warning("Processing failed, using fallback: %s", error)
+        logger.debug("Processing failed, using fallback: %s", error)
         return ProcessedState(
             compiled_sql=self._raw_sql,
             execution_parameters=self._named_parameters or self._positional_parameters,

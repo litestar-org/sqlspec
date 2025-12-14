@@ -1,6 +1,5 @@
 """Psqlpy database configuration."""
 
-import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
@@ -18,13 +17,15 @@ from sqlspec.adapters.psqlpy.driver import (
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import StatementConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-logger = logging.getLogger("sqlspec.adapters.psqlpy")
+logger = get_logger("adapters.psqlpy")
 
 
 class PsqlpyConnectionParams(TypedDict):
@@ -120,6 +121,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
         extension_config: "ExtensionConfigs | None" = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Psqlpy configuration.
 
@@ -131,11 +133,13 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             driver_features: Driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
+            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance).
         """
-        processed_connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
-        if "extra" in processed_connection_config:
-            extras = processed_connection_config.pop("extra")
-            processed_connection_config.update(extras)
+        connection_config, connection_instance = apply_pool_deprecations(
+            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
+        )
+
+        processed_connection_config = normalize_connection_config(connection_config)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = processed_driver_features.get("json_serializer")
@@ -151,6 +155,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            **kwargs,
         )
 
     def _get_pool_config_dict(self) -> dict[str, Any]:
@@ -163,31 +168,15 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        logger.info("Creating psqlpy connection pool", extra={"adapter": "psqlpy"})
-
-        try:
-            config = self._get_pool_config_dict()
-
-            pool = ConnectionPool(**config)
-            logger.info("Psqlpy connection pool created successfully", extra={"adapter": "psqlpy"})
-        except Exception as e:
-            logger.exception("Failed to create psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
-            raise
-        return pool
+        config = self._get_pool_config_dict()
+        return ConnectionPool(**config)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
         if not self.connection_instance:
             return
 
-        logger.info("Closing psqlpy connection pool", extra={"adapter": "psqlpy"})
-
-        try:
-            self.connection_instance.close()
-            logger.info("Psqlpy connection pool closed successfully", extra={"adapter": "psqlpy"})
-        except Exception as e:
-            logger.exception("Failed to close psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
-            raise
+        self.connection_instance.close()
 
     async def close_pool(self) -> None:
         """Close the connection pool."""

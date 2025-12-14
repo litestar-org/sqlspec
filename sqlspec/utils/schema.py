@@ -1,7 +1,6 @@
 """Schema transformation utilities for converting data to various schema types."""
 
 import datetime
-import logging
 from collections.abc import Callable, Sequence
 from enum import Enum
 from functools import lru_cache, partial
@@ -23,6 +22,7 @@ from sqlspec.typing import (
     get_type_adapter,
 )
 from sqlspec.utils.data_transformation import transform_dict_keys
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
     get_msgspec_rename_config,
@@ -45,7 +45,7 @@ __all__ = (
 
 DataT = TypeVar("DataT", default=dict[str, Any])
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
 
