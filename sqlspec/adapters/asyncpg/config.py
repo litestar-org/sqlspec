@@ -241,10 +241,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     raise ImproperConfigurationError(msg)
             case (False, True):
                 if not ALLOYDB_CONNECTOR_INSTALLED:
-                    raise MissingDependencyError(
-                        package="google-cloud-alloydb-connector",
-                        install_package="alloydb",
-                    )
+                    raise MissingDependencyError(package="google-cloud-alloydb-connector", install_package="alloydb")
 
                 instance_uri = self.driver_features.get("alloydb_instance_uri")
                 if not instance_uri:

@@ -28,13 +28,7 @@ __all__ = (
 
 _BASE_RECORD_KEYS = set(
     logging.LogRecord(
-        name="sqlspec",
-        level=logging.INFO,
-        pathname="(unknown file)",
-        lineno=0,
-        msg="",
-        args=(),
-        exc_info=None,
+        name="sqlspec", level=logging.INFO, pathname="(unknown file)", lineno=0, msg="", args=(), exc_info=None
     ).__dict__.keys()
 )
 _BASE_RECORD_KEYS.update({"message", "asctime"})
