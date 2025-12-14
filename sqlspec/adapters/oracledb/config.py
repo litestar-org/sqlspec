@@ -28,7 +28,6 @@ from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, Or
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
@@ -45,8 +44,6 @@ __all__ = (
     "OraclePoolParams",
     "OracleSyncConfig",
 )
-
-logger = get_logger("adapters.oracledb")
 
 
 class OracleConnectionParams(TypedDict):

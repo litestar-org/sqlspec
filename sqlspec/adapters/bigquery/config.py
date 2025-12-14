@@ -18,7 +18,6 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
 from sqlspec.utils.config_normalization import normalize_connection_config
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -29,9 +28,6 @@ if TYPE_CHECKING:
     from google.auth.credentials import Credentials
 
     from sqlspec.core import StatementConfig
-
-
-logger = get_logger("adapters.bigquery")
 
 
 class BigQueryConnectionParams(TypedDict):

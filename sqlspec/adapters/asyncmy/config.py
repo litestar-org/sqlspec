@@ -19,7 +19,6 @@ from sqlspec.adapters.asyncmy.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -33,8 +32,6 @@ if TYPE_CHECKING:
 
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams")
-
-logger = get_logger("adapters.asyncmy")
 
 
 class AsyncmyConnectionParams(TypedDict):
