@@ -61,5 +61,6 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
     changelog
     contribution-guide
     releases
+    migration-guides/v0.33.0
     Code of Conduct <https://github.com/litestar-org/.github?tab=coc-ov-file#readme>
     Security <https://github.com/litestar-org/.github?tab=coc-ov-file#security-ov-file>
