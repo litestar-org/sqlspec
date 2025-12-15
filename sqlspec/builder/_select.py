@@ -879,32 +879,6 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.is_(exp.null()).not_()
         return self.where(condition)
 
-    def where_null(self, column: str | exp.Column) -> Self:
-        """Add WHERE column IS NULL clause.
-
-        Alias for where_is_null() for consistency with other SQL builders.
-
-        Args:
-            column: Column name or expression to check for NULL.
-
-        Returns:
-            Self for method chaining.
-        """
-        return self.where_is_null(column)
-
-    def where_not_null(self, column: str | exp.Column) -> Self:
-        """Add WHERE column IS NOT NULL clause.
-
-        Alias for where_is_not_null() for consistency with other SQL builders.
-
-        Args:
-            column: Column name or expression to check for NOT NULL.
-
-        Returns:
-            Self for method chaining.
-        """
-        return self.where_is_not_null(column)
-
     def where_in(self, column: str | exp.Column, values: Any) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
