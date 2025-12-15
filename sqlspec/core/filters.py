@@ -45,6 +45,8 @@ __all__ = (
     "NotAnyCollectionFilter",
     "NotInCollectionFilter",
     "NotInSearchFilter",
+    "NotNullFilter",
+    "NullFilter",
     "OffsetPagination",
     "OnBeforeAfterFilter",
     "OrderByFilter",
@@ -728,6 +730,73 @@ class SearchFilter(StatementFilter):
         return ("SearchFilter", field_names, self.value, self.ignore_case)
 
 
+class NullFilter(StatementFilter):
+    """Filter for IS NULL queries.
+
+    Constructs WHERE field_name IS NULL clauses.
+    """
+
+    __slots__ = ("_field_name",)
+
+    def __init__(self, field_name: str) -> None:
+        self._field_name = field_name
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters.
+
+        Returns empty parameters since IS NULL requires no values.
+        """
+        return [], {}
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        """Apply IS NULL filter to SQL expression."""
+        col_expr = exp.column(self.field_name)
+        is_null_condition = exp.Is(this=col_expr, expression=exp.Null())
+        return statement.where(is_null_condition)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        return ("NullFilter", self.field_name)
+
+
+class NotNullFilter(StatementFilter):
+    """Filter for IS NOT NULL queries.
+
+    Constructs WHERE field_name IS NOT NULL clauses.
+    """
+
+    __slots__ = ("_field_name",)
+
+    def __init__(self, field_name: str) -> None:
+        self._field_name = field_name
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters.
+
+        Returns empty parameters since IS NOT NULL requires no values.
+        """
+        return [], {}
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        """Apply IS NOT NULL filter to SQL expression."""
+        col_expr = exp.column(self.field_name)
+        is_null_condition = exp.Is(this=col_expr, expression=exp.Null())
+        is_not_null_condition = exp.Not(this=is_null_condition)
+        return statement.where(is_not_null_condition)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        return ("NotNullFilter", self.field_name)
+
+
 class NotInSearchFilter(SearchFilter):
     """Filter for negated text search queries.
 
@@ -836,6 +905,8 @@ FilterTypes: TypeAlias = (
     | NotInSearchFilter
     | AnyCollectionFilter[Any]
     | NotAnyCollectionFilter[Any]
+    | NullFilter
+    | NotNullFilter
 )
 
 
