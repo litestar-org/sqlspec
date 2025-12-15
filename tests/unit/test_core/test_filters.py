@@ -15,6 +15,8 @@ from sqlspec.core import (
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
+    NotNullFilter,
+    NullFilter,
     OrderByFilter,
     SearchFilter,
     apply_filter,
@@ -335,3 +337,173 @@ def test_find_filter_with_mixed_parameter_types() -> None:
 
     found_order = CommonDriverAttributesMixin.find_filter(OrderByFilter, filters)
     assert found_order is None
+
+
+def test_null_filter_generates_is_null_clause() -> None:
+    """Test that NullFilter generates correct IS NULL SQL clause."""
+    sql_stmt = SQL("SELECT * FROM users")
+
+    null_filter = NullFilter("email")
+    result = apply_filter(sql_stmt, null_filter)
+
+    sql_text = result.sql.upper()
+    assert "SELECT" in sql_text
+    assert "FROM" in sql_text
+    assert "WHERE" in sql_text
+    assert "EMAIL IS NULL" in sql_text
+
+
+def test_not_null_filter_generates_is_not_null_clause() -> None:
+    """Test that NotNullFilter generates correct IS NOT NULL SQL clause."""
+    sql_stmt = SQL("SELECT * FROM users")
+
+    not_null_filter = NotNullFilter("email_verified_at")
+    result = apply_filter(sql_stmt, not_null_filter)
+
+    sql_text = result.sql.upper()
+    assert "SELECT" in sql_text
+    assert "FROM" in sql_text
+    assert "WHERE" in sql_text
+    # NotNullFilter generates "NOT column IS NULL" which is equivalent to "column IS NOT NULL"
+    assert "NOT EMAIL_VERIFIED_AT IS NULL" in sql_text
+
+
+def test_null_filter_extract_parameters_returns_empty() -> None:
+    """Test that NullFilter returns empty parameters since IS NULL needs no values."""
+    null_filter = NullFilter("status")
+
+    positional, named = null_filter.extract_parameters()
+
+    assert positional == []
+    assert named == {}
+
+
+def test_not_null_filter_extract_parameters_returns_empty() -> None:
+    """Test that NotNullFilter returns empty parameters since IS NOT NULL needs no values."""
+    not_null_filter = NotNullFilter("status")
+
+    positional, named = not_null_filter.extract_parameters()
+
+    assert positional == []
+    assert named == {}
+
+
+def test_null_filter_cache_key() -> None:
+    """Test that NullFilter generates proper cache key."""
+    null_filter = NullFilter("email")
+
+    cache_key = null_filter.get_cache_key()
+
+    assert cache_key[0] == "NullFilter"
+    assert cache_key[1] == "email"
+    assert len(cache_key) == 2
+
+
+def test_not_null_filter_cache_key() -> None:
+    """Test that NotNullFilter generates proper cache key."""
+    not_null_filter = NotNullFilter("email_verified_at")
+
+    cache_key = not_null_filter.get_cache_key()
+
+    assert cache_key[0] == "NotNullFilter"
+    assert cache_key[1] == "email_verified_at"
+    assert len(cache_key) == 2
+
+
+def test_null_filter_field_name_property() -> None:
+    """Test that NullFilter field_name property works correctly."""
+    null_filter = NullFilter("deleted_at")
+
+    assert null_filter.field_name == "deleted_at"
+
+
+def test_not_null_filter_field_name_property() -> None:
+    """Test that NotNullFilter field_name property works correctly."""
+    not_null_filter = NotNullFilter("created_at")
+
+    assert not_null_filter.field_name == "created_at"
+
+
+def test_null_filter_with_other_filters() -> None:
+    """Test that NullFilter can be combined with other filters."""
+    sql_stmt = SQL("SELECT * FROM users")
+
+    status_filter = InCollectionFilter("status", ["active", "pending"])
+    null_filter = NullFilter("deleted_at")
+
+    result = apply_filter(sql_stmt, status_filter)
+    result = apply_filter(result, null_filter)
+
+    sql_text = result.sql.upper()
+    assert "STATUS IN" in sql_text
+    assert "DELETED_AT IS NULL" in sql_text
+
+    params = result.parameters
+    assert "status_in_0" in params
+    assert "status_in_1" in params
+    assert params["status_in_0"] == "active"
+    assert params["status_in_1"] == "pending"
+
+
+def test_not_null_filter_with_other_filters() -> None:
+    """Test that NotNullFilter can be combined with other filters."""
+    sql_stmt = SQL("SELECT * FROM users")
+
+    search_filter = SearchFilter("name", "john")
+    not_null_filter = NotNullFilter("email_verified_at")
+
+    result = apply_filter(sql_stmt, search_filter)
+    result = apply_filter(result, not_null_filter)
+
+    sql_text = result.sql.upper()
+    assert "NAME LIKE" in sql_text
+    # NotNullFilter generates "NOT column IS NULL" which is equivalent to "column IS NOT NULL"
+    assert "NOT EMAIL_VERIFIED_AT IS NULL" in sql_text
+
+    params = result.parameters
+    assert "name_search" in params
+    assert params["name_search"] == "%john%"
+
+
+def test_null_and_not_null_filters_together() -> None:
+    """Test that NullFilter and NotNullFilter can be used together for different columns."""
+    sql_stmt = SQL("SELECT * FROM users")
+
+    null_filter = NullFilter("deleted_at")
+    not_null_filter = NotNullFilter("email_verified_at")
+
+    result = apply_filter(sql_stmt, null_filter)
+    result = apply_filter(result, not_null_filter)
+
+    sql_text = result.sql.upper()
+    assert "DELETED_AT IS NULL" in sql_text
+    # NotNullFilter generates "NOT column IS NULL" which is equivalent to "column IS NOT NULL"
+    assert "NOT EMAIL_VERIFIED_AT IS NULL" in sql_text
+
+
+def test_null_filter_cache_key_uniqueness() -> None:
+    """Test that NullFilter cache keys are unique per field name."""
+    filter1 = NullFilter("email")
+    filter2 = NullFilter("phone")
+    filter3 = NullFilter("email")
+
+    key1 = filter1.get_cache_key()
+    key2 = filter2.get_cache_key()
+    key3 = filter3.get_cache_key()
+
+    assert key1 != key2
+    assert key1 == key3
+
+
+def test_not_null_filter_cache_key_uniqueness() -> None:
+    """Test that NotNullFilter cache keys are unique per field name."""
+    filter1 = NotNullFilter("email")
+    filter2 = NotNullFilter("phone")
+    filter3 = NotNullFilter("email")
+
+    key1 = filter1.get_cache_key()
+    key2 = filter2.get_cache_key()
+    key3 = filter3.get_cache_key()
+
+    assert key1 != key2
+    assert key1 == key3

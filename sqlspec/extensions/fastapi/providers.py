@@ -19,6 +19,8 @@ from sqlspec.core import (
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
+    NotNullFilter,
+    NullFilter,
     OrderByFilter,
     SearchFilter,
 )
@@ -108,6 +110,10 @@ class FilterConfig(TypedDict):
     """Fields that support not-in collection filtering. Can be single field or set of fields with type info."""
     in_fields: NotRequired[FieldNameType | set[FieldNameType]]
     """Fields that support in-collection filtering. Can be single field or set of fields with type info."""
+    null_fields: NotRequired[str | set[str]]
+    """Fields that support IS NULL filtering. Can be single field name or set of field names."""
+    not_null_fields: NotRequired[str | set[str]]
+    """Fields that support IS NOT NULL filtering. Can be single field name or set of field names."""
 
 
 class DependencyCache(metaclass=SingletonMeta):
@@ -187,6 +193,8 @@ def provide_filters(
         "sort_field",
         "not_in_fields",
         "in_fields",
+        "null_fields",
+        "not_null_fields",
     }
 
     has_filters = False
@@ -511,6 +519,58 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
                 )
             )
             annotations[param_name] = Annotated["InCollectionFilter[Any] | None", Depends(in_provider)]
+
+    if null_fields := config.get("null_fields"):
+        null_fields = {null_fields} if isinstance(null_fields, str) else null_fields
+        for field_name in null_fields:
+
+            def create_null_filter_provider(fname: str = field_name) -> "Callable[..., NullFilter | None]":
+                def provide_null_filter(
+                    is_null: Annotated[
+                        bool | None,
+                        Query(alias=camelize(f"{fname}_is_null"), description=f"Filter where {fname} IS NULL"),
+                    ] = None,
+                ) -> "NullFilter | None":
+                    return NullFilter(field_name=fname) if is_null else None
+
+                return provide_null_filter
+
+            null_provider = create_null_filter_provider()
+            param_name = f"{field_name}_null_filter"
+            params.append(
+                inspect.Parameter(
+                    name=param_name,
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    annotation=Annotated["NullFilter | None", Depends(null_provider)],
+                )
+            )
+            annotations[param_name] = Annotated["NullFilter | None", Depends(null_provider)]
+
+    if not_null_fields := config.get("not_null_fields"):
+        not_null_fields = {not_null_fields} if isinstance(not_null_fields, str) else not_null_fields
+        for field_name in not_null_fields:
+
+            def create_not_null_filter_provider(fname: str = field_name) -> "Callable[..., NotNullFilter | None]":
+                def provide_not_null_filter(
+                    is_not_null: Annotated[
+                        bool | None,
+                        Query(alias=camelize(f"{fname}_is_not_null"), description=f"Filter where {fname} IS NOT NULL"),
+                    ] = None,
+                ) -> "NotNullFilter | None":
+                    return NotNullFilter(field_name=fname) if is_not_null else None
+
+                return provide_not_null_filter
+
+            not_null_provider = create_not_null_filter_provider()
+            param_name = f"{field_name}_not_null_filter"
+            params.append(
+                inspect.Parameter(
+                    name=param_name,
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    annotation=Annotated["NotNullFilter | None", Depends(not_null_provider)],
+                )
+            )
+            annotations[param_name] = Annotated["NotNullFilter | None", Depends(not_null_provider)]
 
     _aggregate_filter_function.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
         parameters=params, return_annotation=Annotated["list[FilterTypes]", _aggregate_filter_function]

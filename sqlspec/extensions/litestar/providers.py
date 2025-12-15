@@ -20,6 +20,8 @@ from sqlspec.core import (
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
+    NotNullFilter,
+    NullFilter,
     OrderByFilter,
     SearchFilter,
 )
@@ -91,6 +93,10 @@ class FilterConfig(TypedDict):
     updated_at: NotRequired[bool]
     not_in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
     in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
+    null_fields: NotRequired[str | set[str] | list[str]]
+    """Fields that support IS NULL filtering."""
+    not_null_fields: NotRequired[str | set[str] | list[str]]
+    """Fields that support IS NOT NULL filtering."""
 
 
 class DependencyCache(metaclass=SingletonMeta):
@@ -152,7 +158,7 @@ def _make_hashable(value: Any) -> HashableType:
     return str(value)
 
 
-def _create_statement_filters(
+def _create_statement_filters(  # noqa: C901
     config: FilterConfig, dep_defaults: DependencyDefaults = DEPENDENCY_DEFAULTS
 ) -> dict[str, Provide]:
     """Create filter dependencies based on configuration.
@@ -294,6 +300,40 @@ def _create_statement_filters(
             provider = create_in_filter_provider(field_def)  # type: ignore
             filters[f"{field_def.name}_in_filter"] = Provide(provider, sync_to_thread=False)  # pyright: ignore
 
+    if null_fields := config.get("null_fields"):
+        null_fields = {null_fields} if isinstance(null_fields, str) else set(null_fields)
+
+        for field_name in null_fields:
+
+            def create_null_filter_provider(fname: str) -> Callable[..., NullFilter | None]:
+                def provide_null_filter(
+                    is_null: bool | None = Parameter(query=camelize(f"{fname}_is_null"), default=None, required=False),
+                ) -> NullFilter | None:
+                    return NullFilter(field_name=fname) if is_null else None
+
+                return provide_null_filter
+
+            null_provider = create_null_filter_provider(field_name)
+            filters[f"{field_name}_null_filter"] = Provide(null_provider, sync_to_thread=False)
+
+    if not_null_fields := config.get("not_null_fields"):
+        not_null_fields = {not_null_fields} if isinstance(not_null_fields, str) else set(not_null_fields)
+
+        for field_name in not_null_fields:
+
+            def create_not_null_filter_provider(fname: str) -> Callable[..., NotNullFilter | None]:
+                def provide_not_null_filter(
+                    is_not_null: bool | None = Parameter(
+                        query=camelize(f"{fname}_is_not_null"), default=None, required=False
+                    ),
+                ) -> NotNullFilter | None:
+                    return NotNullFilter(field_name=fname) if is_not_null else None
+
+                return provide_not_null_filter
+
+            not_null_provider = create_not_null_filter_provider(field_name)
+            filters[f"{field_name}_not_null_filter"] = Provide(not_null_provider, sync_to_thread=False)
+
     if filters:
         filters[dep_defaults.FILTERS_DEPENDENCY_KEY] = Provide(
             _create_filter_aggregate_function(config), sync_to_thread=False
@@ -302,7 +342,7 @@ def _create_statement_filters(
     return filters
 
 
-def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., list[FilterTypes]]:
+def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., list[FilterTypes]]:  # noqa: C901
     """Create filter aggregation function based on configuration.
 
     Args:
@@ -391,6 +431,28 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
             )
             annotations[f"{field_def.name}_in_filter"] = InCollectionFilter[field_def.type_hint]  # type: ignore
 
+    if null_fields := config.get("null_fields"):
+        null_fields = {null_fields} if isinstance(null_fields, str) else set(null_fields)
+        for field_name in null_fields:
+            parameters[f"{field_name}_null_filter"] = inspect.Parameter(
+                name=f"{field_name}_null_filter",
+                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Dependency(skip_validation=True),
+                annotation=NullFilter | None,
+            )
+            annotations[f"{field_name}_null_filter"] = NullFilter | None
+
+    if not_null_fields := config.get("not_null_fields"):
+        not_null_fields = {not_null_fields} if isinstance(not_null_fields, str) else set(not_null_fields)
+        for field_name in not_null_fields:
+            parameters[f"{field_name}_not_null_filter"] = inspect.Parameter(
+                name=f"{field_name}_not_null_filter",
+                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Dependency(skip_validation=True),
+                annotation=NotNullFilter | None,
+            )
+            annotations[f"{field_name}_not_null_filter"] = NotNullFilter | None
+
     def provide_filters(**kwargs: FilterTypes) -> list[FilterTypes]:
         """Aggregate filter dependencies based on configuration.
 
@@ -438,6 +500,21 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
                 filter_ = kwargs.get(f"{field_def.name}_in_filter")
                 if filter_ is not None:
                     filters.append(filter_)
+
+        if null_fields := config.get("null_fields"):
+            null_fields = {null_fields} if isinstance(null_fields, str) else set(null_fields)
+            for field_name in null_fields:
+                filter_ = kwargs.get(f"{field_name}_null_filter")
+                if filter_ is not None:
+                    filters.append(filter_)
+
+        if not_null_fields := config.get("not_null_fields"):
+            not_null_fields = {not_null_fields} if isinstance(not_null_fields, str) else set(not_null_fields)
+            for field_name in not_null_fields:
+                filter_ = kwargs.get(f"{field_name}_not_null_filter")
+                if filter_ is not None:
+                    filters.append(filter_)
+
         return filters
 
     provide_filters.__signature__ = inspect.Signature(  # type: ignore
