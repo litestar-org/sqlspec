@@ -1,6 +1,8 @@
 """PostgreSQL LISTEN/NOTIFY event channel tests for psqlpy adapter."""
 
 import asyncio
+from typing import Any
+
 import pytest
 
 from sqlspec import SQLSpec
@@ -22,7 +24,7 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
     """Native LISTEN/NOTIFY path delivers payloads."""
 
     config = PsqlpyConfig(
-        pool_config={"dsn": _dsn(postgres_service)},
+        connection_config={"dsn": _dsn(postgres_service)},
         driver_features={"events_backend": "listen_notify", "enable_events": True},
     )
 
@@ -35,18 +37,26 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
     async def _handler(msg):
         received.append(msg)
 
-    listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
-    event_id = await channel.publish_async("alerts", {"action": "native"})
-    for _ in range(200):
-        if received:
-            break
-        await asyncio.sleep(0.05)
-    await channel.stop_listener_async(listener.id)
+    try:
+        listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
+        await asyncio.sleep(0.1)
+        event_id = await channel.publish_async("alerts", {"action": "native"})
+        for _ in range(200):
+            if received:
+                break
+            await asyncio.sleep(0.05)
+        await channel.stop_listener_async(listener.id)
 
-    assert received, "listener did not receive message"
-    message = received[0]
-    assert message.event_id == event_id
-    assert message.payload["action"] == "native"
+        assert received, "listener did not receive message"
+        message = received[0]
+        assert message.event_id == event_id
+        assert message.payload["action"] == "native"
+    finally:
+        backend = getattr(channel, "_backend", None)
+        if backend and hasattr(backend, "shutdown"):
+            await backend.shutdown()
+        if config.connection_instance:
+            await config.close_pool()
 
 
 @pytest.mark.asyncio
@@ -57,7 +67,7 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
     migrations.mkdir()
 
     config = PsqlpyConfig(
-        pool_config={"dsn": _dsn(postgres_service)},
+        connection_config={"dsn": _dsn(postgres_service)},
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
         driver_features={"events_backend": "listen_notify_durable", "enable_events": True},
         extension_config={"events": {}},
@@ -74,15 +84,23 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
     async def _handler(msg):
         received.append(msg)
 
-    listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
-    event_id = await channel.publish_async("alerts", {"action": "hybrid"})
-    for _ in range(200):
-        if received:
-            break
-        await asyncio.sleep(0.05)
-    await channel.stop_listener_async(listener.id)
+    try:
+        listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
+        await asyncio.sleep(0.1)
+        event_id = await channel.publish_async("alerts", {"action": "hybrid"})
+        for _ in range(200):
+            if received:
+                break
+            await asyncio.sleep(0.05)
+        await channel.stop_listener_async(listener.id)
 
-    assert received, "listener did not receive message"
-    message = received[0]
-    assert message.event_id == event_id
-    assert message.payload["action"] == "hybrid"
+        assert received, "listener did not receive message"
+        message = received[0]
+        assert message.event_id == event_id
+        assert message.payload["action"] == "hybrid"
+    finally:
+        backend = getattr(channel, "_backend", None)
+        if backend and hasattr(backend, "shutdown"):
+            await backend.shutdown()
+        if config.connection_instance:
+            await config.close_pool()

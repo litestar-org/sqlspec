@@ -1,6 +1,5 @@
 """Psycopg LISTEN/NOTIFY and hybrid event backends."""
 
-import asyncio
 import contextlib
 import uuid
 from datetime import datetime, timezone
@@ -89,10 +88,7 @@ class PsycopgEventsBackend:
         if self._listen_connection_async is None:
             self._listen_connection_async_cm = self._config.provide_connection()
             self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()
-            try:
-                await self._listen_connection_async.set_autocommit(True)  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            await self._listen_connection_async.set_autocommit(True)
             await self._listen_connection_async.execute(f"LISTEN {channel}")
         return self._listen_connection_async
 
@@ -100,10 +96,7 @@ class PsycopgEventsBackend:
         if self._listen_connection_sync is None:
             self._listen_connection_sync_cm = self._config.provide_connection()
             self._listen_connection_sync = self._listen_connection_sync_cm.__enter__()
-            try:
-                self._listen_connection_sync.autocommit = True
-            except Exception:
-                pass
+            self._listen_connection_sync.autocommit = True
             self._listen_connection_sync.execute(f"LISTEN {channel}")
         return self._listen_connection_sync
 
@@ -170,6 +163,10 @@ class PsycopgHybridEventsBackend:
         self._config = config
         self._queue = queue_backend
         self._runtime = config.get_observability_runtime()
+        self._listen_connection_async: Any | None = None
+        self._listen_connection_async_cm: Any | None = None
+        self._listen_connection_sync: Any | None = None
+        self._listen_connection_sync_cm: Any | None = None
 
     async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid.uuid4().hex
@@ -184,31 +181,33 @@ class PsycopgHybridEventsBackend:
         return event_id
 
     async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
-        connection_cm = self._config.provide_connection()
-        connection = await connection_cm.__aenter__()
-        try:
-            await connection.execute(f"LISTEN {channel}")
-            async for _notify in connection.notifies(timeout=poll_interval, stop_after=1):
-                break
-            return await self._queue.dequeue_async(channel)
-        finally:
-            with contextlib.suppress(Exception):
-                await connection.execute(f"UNLISTEN {channel}")
-                await connection_cm.__aexit__(None, None, None)
+        connection = await self._ensure_async_listener(channel)
+        async for _notify in connection.notifies(timeout=poll_interval, stop_after=1):
+            break
+        return await self._queue.dequeue_async(channel)
 
     def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
-        connection_cm = self._config.provide_connection()
-        connection = connection_cm.__enter__()
-        try:
-            connection.execute(f"LISTEN {channel}")
-            notify_iter = connection.notifies(timeout=poll_interval, stop_after=1)
-            with contextlib.suppress(StopIteration):
-                next(notify_iter)
-            return self._queue.dequeue(channel)
-        finally:
-            with contextlib.suppress(Exception):
-                connection.execute(f"UNLISTEN {channel}")
-                connection_cm.__exit__(None, None, None)
+        connection = self._ensure_sync_listener(channel)
+        notify_iter = connection.notifies(timeout=poll_interval, stop_after=1)
+        with contextlib.suppress(StopIteration):
+            next(notify_iter)
+        return self._queue.dequeue(channel)
+
+    async def _ensure_async_listener(self, channel: str) -> Any:
+        if self._listen_connection_async is None:
+            self._listen_connection_async_cm = self._config.provide_connection()
+            self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()
+            await self._listen_connection_async.set_autocommit(True)
+            await self._listen_connection_async.execute(f"LISTEN {channel}")
+        return self._listen_connection_async
+
+    def _ensure_sync_listener(self, channel: str) -> Any:
+        if self._listen_connection_sync is None:
+            self._listen_connection_sync_cm = self._config.provide_connection()
+            self._listen_connection_sync = self._listen_connection_sync_cm.__enter__()
+            self._listen_connection_sync.autocommit = True
+            self._listen_connection_sync.execute(f"LISTEN {channel}")
+        return self._listen_connection_sync
 
     async def ack_async(self, event_id: str) -> None:
         await self._queue.ack_async(event_id)

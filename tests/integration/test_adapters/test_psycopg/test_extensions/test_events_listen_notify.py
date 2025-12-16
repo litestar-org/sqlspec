@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from typing import Any
 
 import pytest
 
@@ -23,7 +24,7 @@ def test_psycopg_sync_listen_notify(postgres_service: "Any") -> None:
     """Sync psycopg adapter delivers NOTIFY payloads via EventChannel."""
 
     config = PsycopgSyncConfig(
-        pool_config={"conninfo": _conninfo(postgres_service)},
+        connection_config={"conninfo": _conninfo(postgres_service)},
         driver_features={"events_backend": "listen_notify", "enable_events": True},
     )
 
@@ -53,7 +54,7 @@ async def test_psycopg_async_listen_notify(postgres_service: "Any") -> None:
     """Async psycopg adapter delivers NOTIFY payloads via EventChannel."""
 
     config = PsycopgAsyncConfig(
-        pool_config={"conninfo": _conninfo(postgres_service)},
+        connection_config={"conninfo": _conninfo(postgres_service)},
         driver_features={"events_backend": "listen_notify", "enable_events": True},
     )
 
@@ -88,7 +89,7 @@ def test_psycopg_sync_hybrid_listen_notify_durable(postgres_service: "Any", tmp_
     migrations.mkdir()
 
     config = PsycopgSyncConfig(
-        pool_config={"conninfo": _conninfo(postgres_service)},
+        connection_config={"conninfo": _conninfo(postgres_service)},
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
         driver_features={"events_backend": "listen_notify_durable", "enable_events": True},
         extension_config={"events": {}},
@@ -124,7 +125,7 @@ async def test_psycopg_async_hybrid_listen_notify_durable(postgres_service: "Any
     migrations.mkdir()
 
     config = PsycopgAsyncConfig(
-        pool_config={"conninfo": _conninfo(postgres_service)},
+        connection_config={"conninfo": _conninfo(postgres_service)},
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
         driver_features={"events_backend": "listen_notify_durable", "enable_events": True},
         extension_config={"events": {}},

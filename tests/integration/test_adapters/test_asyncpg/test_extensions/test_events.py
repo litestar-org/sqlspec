@@ -15,7 +15,7 @@ async def test_asyncpg_native_event_channel(postgres_service: PostgresService) -
     """AsyncPG configs surface native LISTEN/NOTIFY events."""
 
     config = AsyncpgConfig(
-        pool_config={
+        connection_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
@@ -33,5 +33,5 @@ async def test_asyncpg_native_event_channel(postgres_service: PostgresService) -
     event_id = await channel.publish_async("notifications", {"action": "native"})
     await channel.ack_async(event_id)
 
-    if config.pool_instance:
+    if config.connection_instance:
         await config.close_pool()

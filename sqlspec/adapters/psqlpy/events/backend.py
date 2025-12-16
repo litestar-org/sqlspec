@@ -14,6 +14,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from psqlpy import Listener
+
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
 
@@ -27,7 +29,11 @@ __all__ = (
 
 
 class PsqlpyEventsBackend:
-    """Native LISTEN/NOTIFY backend for psqlpy adapters."""
+    """Native LISTEN/NOTIFY backend for psqlpy adapters.
+
+    Uses psqlpy's Listener API which provides a dedicated connection for
+    receiving PostgreSQL NOTIFY messages via callbacks or async iteration.
+    """
 
     supports_sync = False
     supports_async = True
@@ -39,8 +45,8 @@ class PsqlpyEventsBackend:
             raise ImproperConfigurationError(msg)
         self._config = config
         self._runtime = config.get_observability_runtime()
-        self._listen_connection_async: Any | None = None
-        self._listen_connection_async_cm: Any | None = None
+        self._listener: Any | None = None
+        self._listener_started: bool = False
 
     async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid.uuid4().hex
@@ -56,25 +62,36 @@ class PsqlpyEventsBackend:
         raise ImproperConfigurationError(msg)
 
     async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
-        connection = await self._ensure_async_listener(channel)
-        await connection.execute(f"LISTEN {channel}")
-        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        listener = await self._ensure_listener(channel)
+        received_payload: str | None = None
+        event = asyncio.Event()
 
-        def _callback(_conn: Any, _pid: int, notified_channel: str, payload: str) -> None:
-            if notified_channel != channel or future.done():
-                return
-            future.set_result(payload)
+        async def _callback(
+            _connection: Any,
+            payload: str,
+            notified_channel: str,
+            _process_id: int,
+        ) -> None:
+            nonlocal received_payload
+            if notified_channel == channel and received_payload is None:
+                received_payload = payload
+                event.set()
 
-        connection.add_listener(channel, _callback)
-        try:
-            try:
-                payload = await asyncio.wait_for(future, timeout=poll_interval)
-            except asyncio.TimeoutError:
-                return None
-            return self._decode_payload(channel, payload)
-        finally:
-            with contextlib.suppress(Exception):
-                connection.remove_listener(channel, _callback)
+        await listener.add_callback(channel=channel, callback=_callback)
+
+        if not self._listener_started:
+            listener.listen()
+            self._listener_started = True
+            await asyncio.sleep(0.05)
+
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(event.wait(), timeout=poll_interval)
+
+        await listener.clear_channel_callbacks(channel=channel)
+
+        if received_payload is not None:
+            return self._decode_payload(channel, received_payload)
+        return None
 
     def dequeue(self, *_: Any, **__: Any) -> EventMessage | None:
         msg = "dequeue is not supported for sync Psqlpy backends"
@@ -87,15 +104,21 @@ class PsqlpyEventsBackend:
         msg = "ack is not supported for sync Psqlpy backends"
         raise ImproperConfigurationError(msg)
 
-    async def _ensure_async_listener(self, channel: str) -> Any:
-        if self._listen_connection_async is None:
-            self._listen_connection_async_cm = self._config.provide_connection()
-            self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()
-            try:
-                await self._listen_connection_async.set_autocommit(True)  # type: ignore[attr-defined]
-            except Exception:
-                pass
-        return self._listen_connection_async
+    async def _ensure_listener(self, channel: str) -> "Listener":
+        if self._listener is None:
+            pool = await self._config.provide_pool()
+            self._listener = pool.listener()
+            await self._listener.startup()
+        return self._listener
+
+    async def shutdown(self) -> None:
+        """Shutdown the listener and release resources."""
+        if self._listener is not None:
+            if self._listener_started:
+                self._listener.abort_listen()
+                self._listener_started = False
+            await self._listener.shutdown()
+            self._listener = None
 
     @staticmethod
     def _encode_payload(event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> str:
@@ -147,7 +170,11 @@ class PsqlpyEventsBackend:
 
 
 class PsqlpyHybridEventsBackend:
-    """Durable hybrid backend combining queue storage with LISTEN/NOTIFY wakeups."""
+    """Durable hybrid backend combining queue storage with LISTEN/NOTIFY wakeups.
+
+    Uses psqlpy's Listener API for real-time notifications while persisting
+    events to a durable queue table.
+    """
 
     supports_sync = False
     supports_async = True
@@ -160,6 +187,8 @@ class PsqlpyHybridEventsBackend:
         self._config = config
         self._queue = queue_backend
         self._runtime = config.get_observability_runtime()
+        self._listener: Any | None = None
+        self._listener_started: bool = False
 
     async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid.uuid4().hex
@@ -172,31 +201,30 @@ class PsqlpyHybridEventsBackend:
         raise ImproperConfigurationError(msg)
 
     async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
-        connection_cm = self._config.provide_connection()
-        connection = await connection_cm.__aenter__()
-        try:
-            listener = getattr(connection, "add_listener", None)
-            if listener is None:
-                return await self._queue.dequeue_async(channel)
-            future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        listener = await self._ensure_listener(channel)
+        event = asyncio.Event()
 
-            def _callback(_conn: Any, _pid: int, notified_channel: str, payload: str) -> None:
-                if notified_channel != channel or future.done():
-                    return
-                future.set_result(payload)
+        async def _callback(
+            _connection: Any,
+            _payload: str,
+            notified_channel: str,
+            _process_id: int,
+        ) -> None:
+            if notified_channel == channel:
+                event.set()
 
-            listener(channel, _callback)
-            try:
-                await asyncio.wait_for(future, timeout=poll_interval)
-            except asyncio.TimeoutError:
-                return await self._queue.dequeue_async(channel)
-            return await self._queue.dequeue_async(channel)
-        finally:
-            with contextlib.suppress(Exception):
-                remove = getattr(connection, "remove_listener", None)
-                if remove:
-                    remove(channel, _callback)
-                await connection_cm.__aexit__(None, None, None)
+        await listener.add_callback(channel=channel, callback=_callback)
+
+        if not self._listener_started:
+            listener.listen()
+            self._listener_started = True
+            await asyncio.sleep(0.05)
+
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(event.wait(), timeout=poll_interval)
+
+        await listener.clear_channel_callbacks(channel=channel)
+        return await self._queue.dequeue_async(channel)
 
     async def ack_async(self, event_id: str) -> None:
         await self._queue.ack_async(event_id)
@@ -205,6 +233,22 @@ class PsqlpyHybridEventsBackend:
     def ack(self, _event_id: str) -> None:
         msg = "ack is not supported for sync Psqlpy backends"
         raise ImproperConfigurationError(msg)
+
+    async def _ensure_listener(self, channel: str) -> "Listener":
+        if self._listener is None:
+            pool = await self._config.provide_pool()
+            self._listener = pool.listener()
+            await self._listener.startup()
+        return self._listener
+
+    async def shutdown(self) -> None:
+        """Shutdown the listener and release resources."""
+        if self._listener is not None:
+            if self._listener_started:
+                self._listener.abort_listen()
+                self._listener_started = False
+            await self._listener.shutdown()
+            self._listener = None
 
     async def _publish_durable_async(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
