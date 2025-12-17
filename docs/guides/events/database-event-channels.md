@@ -14,7 +14,7 @@ from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
 config = SqliteConfig(
-    pool_config={"database": ":memory:"},
+    connection_config={"database": ":memory:"},
     migration_config={
         "script_location": "migrations",
         "include_extensions": ["events"],
@@ -37,16 +37,17 @@ for message in channel.iter_events("notifications"):
 
 ## PostgreSQL native notifications
 
-Async PostgreSQL adapters (AsyncPG today, with psycopg/psqlpy on deck) default
-to `events_backend="listen_notify"`, which means no migrations are required;
-events flow directly through `LISTEN/NOTIFY`.
+All async PostgreSQL adapters (AsyncPG, Psycopg async, and Psqlpy) support
+native `LISTEN/NOTIFY` via `events_backend="listen_notify"`. When enabled,
+events flow directly through PostgreSQL's notification system with no
+migrations required.
 
 ```python
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 spec = SQLSpec()
-config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"})
+config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"})
 spec.add_config(config)
 channel = spec.event_channel(config)
 
@@ -217,6 +218,7 @@ against accidental sync usage.
 | Asyncmy (MySQL) | Queue fallback | `0.25s` | `5s` | Adds `FOR UPDATE SKIP LOCKED` to reduce contention. |
 | DuckDB | Queue fallback | `0.15s` | `15s` | Favor short leases/poll windows so embedded engines do not spin. |
 | BigQuery / ADBC | Queue fallback | `2.0s` | `60s` | Coarser cadence avoids hammering remote warehouses; still safe to override. |
+| Spanner | Queue fallback | `1.0s` | `30s` | Uses Spanner-native JSON and TIMESTAMP types; requires separate DDL execution. |
 | SQLite / AioSQLite | Queue fallback | `1.0s` | `30s` | General-purpose defaults that suit most local deployments. |
 
 ## Telemetry & observability
@@ -230,6 +232,84 @@ also opens a span (`sqlspec.events.publish`, `sqlspec.events.dequeue`,
 exports structured traces. The counters and spans flow through
 `SQLSpec.telemetry_snapshot()` plus the Prometheus helper when
 `extension_config["prometheus"]` is enabled.
+
+## Architecture
+
+The events extension consists of two layers that work together:
+
+### Event Backends
+
+Backends handle the actual pub/sub communication mechanism. SQLSpec supports
+three backend types:
+
+| Backend | Description | When to use |
+| --- | --- | --- |
+| `listen_notify` | Native PostgreSQL LISTEN/NOTIFY | Real-time, fire-and-forget events |
+| `listen_notify_durable` | Hybrid: queue table + NOTIFY wakeups | Real-time with durability and retries |
+| `advanced_queue` | Oracle Advanced Queuing | Enterprise Oracle deployments |
+| `table_queue` | Polling-based queue table | Universal fallback for any database |
+
+Configure the backend via `driver_features["events_backend"]`:
+
+```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+# Native LISTEN/NOTIFY (default for PostgreSQL adapters)
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://localhost/db"},
+    driver_features={"events_backend": "listen_notify"},
+)
+
+# Hybrid: durable queue with NOTIFY wakeups
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://localhost/db"},
+    driver_features={"events_backend": "listen_notify_durable"},
+)
+```
+
+### Event Queue Stores
+
+Stores generate adapter-specific DDL for the queue table. Each adapter has
+a store class in `sqlspec/adapters/{adapter}/events/store.py` that handles:
+
+- Column type mapping (JSON, JSONB, CLOB, etc.)
+- Timestamp types (TIMESTAMPTZ, DATETIME, TIMESTAMP)
+- Index creation strategies
+- Database-specific DDL wrapping (IF NOT EXISTS, PL/SQL blocks, etc.)
+
+Example store implementations:
+
+| Adapter | Payload Type | Timestamp Type | Special Handling |
+| --- | --- | --- | --- |
+| AsyncPG / Psycopg / Psqlpy | JSONB | TIMESTAMPTZ | Standard PostgreSQL |
+| Oracle | CLOB | TIMESTAMP | PL/SQL exception blocks for idempotent DDL |
+| MySQL / Asyncmy | JSON | DATETIME(6) | FOR UPDATE SKIP LOCKED |
+| DuckDB | JSON | TIMESTAMP | Short poll intervals |
+| BigQuery | JSON | TIMESTAMP | CLUSTER BY for partitioning |
+| Spanner | JSON | TIMESTAMP | Separate DDL execution (no IF NOT EXISTS) |
+| ADBC | Dialect-detected | Dialect-detected | Multi-dialect support based on connection URI |
+| SQLite / AioSQLite | TEXT | TIMESTAMP | General-purpose defaults |
+
+### ADBC Multi-Dialect Support
+
+The ADBC adapter auto-detects the underlying database from the connection URI
+and generates appropriate DDL:
+
+```python
+from sqlspec.adapters.adbc import AdbcConfig
+
+# Connects to PostgreSQL via ADBC - uses JSONB columns
+config = AdbcConfig(
+    connection_config={"uri": "postgresql://localhost/db"},
+    extension_config={"events": {}},
+)
+
+# Connects to BigQuery via ADBC - uses JSON with CLUSTER BY
+config = AdbcConfig(
+    connection_config={"driver_name": "bigquery"},
+    extension_config={"events": {}},
+)
+```
 
 ## Litestar/ADK integration
 
@@ -246,7 +326,7 @@ from sqlspec.extensions.litestar import SQLSpecPlugin
 sql = SQLSpec()
 config = sql.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/db"},
+        connection_config={"dsn": "postgresql://localhost/db"},
         extension_config={"events": {"queue_table": "app_events"}},
     )
 )

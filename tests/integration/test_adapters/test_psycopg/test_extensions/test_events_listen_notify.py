@@ -14,10 +14,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 def _conninfo(service: "Any") -> str:
-    return (
-        f"postgresql://{service.user}:{service.password}"
-        f"@{service.host}:{service.port}/{service.database}"
-    )
+    return f"postgresql://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
 
 
 def test_psycopg_sync_listen_notify(postgres_service: "Any") -> None:
@@ -31,11 +28,12 @@ def test_psycopg_sync_listen_notify(postgres_service: "Any") -> None:
     spec = SQLSpec()
     spec.add_config(config)
     channel = spec.event_channel(config)
-    assert hasattr(channel._backend, "_ensure_sync_listener")
+    backend = channel._backend
+    assert "_ensure_sync_listener" in dir(backend)
 
     received: list[Any] = []
     listener = channel.listen("alerts", lambda msg: received.append(msg), poll_interval=0.2)
-    event_id = channel.publish("alerts", {"action": "ping"})
+    event_id = channel.publish_sync("alerts", {"action": "ping"})
     for _ in range(200):
         if received:
             break
@@ -103,7 +101,7 @@ def test_psycopg_sync_hybrid_listen_notify_durable(postgres_service: "Any", tmp_
 
     received: list[Any] = []
     listener = channel.listen("alerts", lambda msg: received.append(msg), poll_interval=0.2)
-    event_id = channel.publish("alerts", {"action": "hybrid"})
+    event_id = channel.publish_sync("alerts", {"action": "hybrid"})
     for _ in range(200):
         if received:
             break

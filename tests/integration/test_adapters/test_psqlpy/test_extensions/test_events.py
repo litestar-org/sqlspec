@@ -25,7 +25,7 @@ async def test_psqlpy_event_channel_queue_fallback(tmp_path, postgres_service: P
         f"{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
     )
     config = PsqlpyConfig(
-        pool_config={"dsn": dsn, "max_db_pool_size": 4},
+        connection_config={"dsn": dsn, "max_db_pool_size": 4},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 

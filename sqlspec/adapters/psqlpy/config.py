@@ -158,7 +158,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
         # Auto-detect events support based on extension_config
         processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_driver_features.setdefault("events_backend", "table_queue")
+        processed_driver_features.setdefault("events_backend", "listen_notify")
 
         super().__init__(
             connection_config=processed_connection_config,

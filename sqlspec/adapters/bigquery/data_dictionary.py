@@ -19,19 +19,18 @@ class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
     def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get BigQuery version information.
 
-        BigQuery is a cloud service without traditional versioning.
-        Returns a fixed version to indicate feature availability.
+        BigQuery is a fully managed cloud service that doesn't expose
+        traditional version information. Feature availability is determined
+        by the service itself, not version numbers.
 
         Args:
             driver: BigQuery driver instance
 
         Returns:
-            Fixed version info indicating current BigQuery capabilities
+            None - BigQuery doesn't provide version information.
         """
-        # BigQuery is a cloud service - return a fixed version
-        # indicating modern feature support
-        logger.debug("BigQuery cloud service - using fixed version")
-        return VersionInfo(1, 0, 0)
+        _ = driver
+        return None
 
     def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
         """Check if BigQuery supports a specific feature.

@@ -1,16 +1,18 @@
 """OracleDB integration tests for the EventChannel queue backend."""
 
-from __future__ import annotations
-
 import asyncio
 import os
 from textwrap import dedent
+from typing import TYPE_CHECKING
 
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.exceptions import SQLSpecError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
@@ -35,7 +37,10 @@ def _prepare_queue_table() -> None:
     except ImportError as error:  # pragma: no cover - optional dependency guard
         _maybe_skip(f"oracledb not installed: {error}")
 
-    connection = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=_build_dsn())
+    try:
+        connection = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=_build_dsn())
+    except oracledb.Error as error:  # pragma: no cover - connection error guard
+        raise SQLSpecError(f"Cannot connect to Oracle: {error}") from error
     try:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -79,7 +84,7 @@ def _prepare_queue_table() -> None:
 
 
 @pytest.mark.oracle
-def test_oracle_sync_event_channel_queue_fallback(tmp_path) -> None:
+def test_oracle_sync_event_channel_queue_fallback(tmp_path: "Path") -> None:
     """Queue-backed events work on Oracle via the extension migrations."""
 
     try:
@@ -88,7 +93,7 @@ def test_oracle_sync_event_channel_queue_fallback(tmp_path) -> None:
         _maybe_skip(f"oracle service unavailable: {error}")
 
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "dsn": _build_dsn(),
             "user": ORACLE_USER,
             "password": ORACLE_PASSWORD,
@@ -102,10 +107,10 @@ def test_oracle_sync_event_channel_queue_fallback(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish("notifications", {"action": "oracle"})
-    iterator = channel.iter_events("notifications", poll_interval=0.5)
+    event_id = channel.publish_sync("notifications", {"action": "oracle"})
+    iterator = channel.iter_events_sync("notifications", poll_interval=0.5)
     message = next(iterator)
-    channel.ack(message.event_id)
+    channel.ack_sync(message.event_id)
 
     with config.provide_session() as driver:
         row = driver.select_one(
@@ -119,7 +124,7 @@ def test_oracle_sync_event_channel_queue_fallback(tmp_path) -> None:
 
 @pytest.mark.oracle
 @pytest.mark.asyncio
-async def test_oracle_async_event_channel_queue_fallback(tmp_path) -> None:
+async def test_oracle_async_event_channel_queue_fallback(tmp_path: "Path") -> None:
     """Async Oracle configs also use the queue fallback."""
 
     try:
@@ -128,7 +133,7 @@ async def test_oracle_async_event_channel_queue_fallback(tmp_path) -> None:
         _maybe_skip(f"oracle service unavailable: {error}")
 
     config = OracleAsyncConfig(
-        pool_config={
+        connection_config={
             "dsn": _build_dsn(),
             "user": ORACLE_USER,
             "password": ORACLE_PASSWORD,

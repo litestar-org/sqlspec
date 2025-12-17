@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from google.cloud.spanner_v1 import Client
 from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
@@ -48,12 +48,25 @@ class SpannerPoolParams(SpannerConnectionParams):
 
 
 class SpannerDriverFeatures(TypedDict):
-    """Driver feature flags for Spanner."""
+    """Driver feature flags for Spanner.
+
+    Attributes:
+        enable_uuid_conversion: Enable automatic UUID string conversion.
+        json_serializer: Custom JSON serializer for parameter conversion.
+        json_deserializer: Custom JSON deserializer for result conversion.
+        session_labels: Labels to apply to Spanner sessions.
+        enable_events: Enable database event channel support.
+            Defaults to True when extension_config["events"] is configured.
+        events_backend: Backend type for event handling.
+            Spanner only supports "table_queue" (no native pub/sub).
+    """
 
     enable_uuid_conversion: "NotRequired[bool]"
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     session_labels: "NotRequired[dict[str, str]]"
+    enable_events: "NotRequired[bool]"
+    events_backend: "NotRequired[Literal['table_queue']]"
 
 
 class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSessionPool", SpannerSyncDriver]):
@@ -95,6 +108,11 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         features.setdefault("enable_uuid_conversion", True)
         features.setdefault("json_serializer", to_json)
         features.setdefault("json_deserializer", from_json)
+        events_configured = extension_config is not None and "events" in extension_config
+        if "enable_events" not in features:
+            features["enable_events"] = events_configured
+        if "events_backend" not in features:
+            features["events_backend"] = "table_queue"
 
         base_statement_config = statement_config or spanner_statement_config
 

@@ -42,7 +42,7 @@ def test_event_channel_publish_and_ack_sync(tmp_path) -> None:
     db_path = tmp_path / "events.db"
 
     config = SqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
         extension_config={"events": {"queue_table": "app_events"}},
     )
@@ -54,14 +54,14 @@ def test_event_channel_publish_and_ack_sync(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish("notifications", {"action": "refresh"})
-    iterator = channel.iter_events("notifications", poll_interval=0.01)
+    event_id = channel.publish_sync("notifications", {"action": "refresh"})
+    iterator = channel.iter_events_sync("notifications", poll_interval=0.01)
     message = next(iterator)
 
     assert message.event_id == event_id
     assert message.payload["action"] == "refresh"
 
-    channel.ack(message.event_id)
+    channel.ack_sync(message.event_id)
 
     with config.provide_session() as driver:
         row = driver.select_one("SELECT status FROM app_events WHERE event_id = :event_id", {"event_id": event_id})
@@ -82,7 +82,7 @@ async def test_event_channel_async_iteration(tmp_path) -> None:
     db_path = tmp_path / "events_async.db"
 
     config = AiosqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -110,6 +110,7 @@ async def test_event_channel_async_iteration(tmp_path) -> None:
         )
 
     assert row["status"] == "acked"
+    await config.close_pool()
 
 
 def test_event_channel_backend_fallback(tmp_path) -> None:
@@ -120,7 +121,7 @@ def test_event_channel_backend_fallback(tmp_path) -> None:
     db_path = tmp_path / "events_backend.db"
 
     config = SqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
         driver_features={"events_backend": "advanced_queue"},
     )
@@ -132,10 +133,10 @@ def test_event_channel_backend_fallback(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish("notifications", {"payload": "fallback"})
-    iterator = channel.iter_events("notifications", poll_interval=0.01)
+    event_id = channel.publish_sync("notifications", {"payload": "fallback"})
+    iterator = channel.iter_events_sync("notifications", poll_interval=0.01)
     message = next(iterator)
-    channel.ack(message.event_id)
+    channel.ack_sync(message.event_id)
 
     assert message.event_id == event_id
 
@@ -156,7 +157,7 @@ async def test_event_channel_portal_bridge_sync_api(tmp_path) -> None:
     db_path = tmp_path / "events_portal.db"
 
     config = AiosqliteConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -167,13 +168,13 @@ async def test_event_channel_portal_bridge_sync_api(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish("notifications", {"action": "portal"})
+    event_id = channel.publish_sync("notifications", {"action": "portal"})
 
-    iterator = channel.iter_events("notifications", poll_interval=0.01)
+    iterator = channel.iter_events_sync("notifications", poll_interval=0.01)
     message = next(iterator)
 
     assert message.event_id == event_id
-    channel.ack(message.event_id)
+    channel.ack_sync(message.event_id)
 
     async with config.provide_session() as driver:
         row = await driver.select_one(
@@ -181,13 +182,14 @@ async def test_event_channel_portal_bridge_sync_api(tmp_path) -> None:
         )
 
     assert row["status"] == "acked"
+    await config.close_pool()
 
 
 def test_event_channel_runtime_hints_for_asyncmy(tmp_path) -> None:
     """Asyncmy adapters inherit poll/lease hints and locking flags."""
 
     db_path = tmp_path / "fake_asyncmy.db"
-    config = _FakeAsyncmyConfig(pool_config={"database": str(db_path)})
+    config = _FakeAsyncmyConfig(connection_config={"database": str(db_path)})
 
     channel = EventChannel(config)
 
@@ -203,7 +205,7 @@ def test_event_channel_runtime_hints_for_asyncmy(tmp_path) -> None:
 def test_event_channel_runtime_hints_for_duckdb(tmp_path) -> None:
     """DuckDB adapters receive shorter poll intervals by default."""
 
-    config = _FakeDuckDBConfig(pool_config={"database": str(tmp_path / "duck.db")})
+    config = _FakeDuckDBConfig(connection_config={"database": str(tmp_path / "duck.db")})
     channel = EventChannel(config)
 
     assert channel._adapter_name == "duckdb"
@@ -214,7 +216,7 @@ def test_event_channel_extension_config_overrides_hints(tmp_path) -> None:
     """Explicit extension settings take precedence over hint defaults."""
 
     config = _FakeDuckDBConfig(
-        pool_config={"database": str(tmp_path / "duck_override.db")},
+        connection_config={"database": str(tmp_path / "duck_override.db")},
         extension_config={"events": {"poll_interval": 3.5, "lease_seconds": 42, "retention_seconds": 99}},
     )
 
@@ -229,7 +231,7 @@ def test_event_channel_extension_config_overrides_hints(tmp_path) -> None:
 def test_table_event_queue_locking_clause(tmp_path) -> None:
     """Locking hints are embedded when select_for_update/skip_locked are enabled."""
 
-    config = SqliteConfig(pool_config={"database": str(tmp_path / "locks.db")})
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "locks.db")})
     queue = TableEventQueue(config, select_for_update=True, skip_locked=True)
 
     assert "FOR UPDATE SKIP LOCKED" in queue._select_sql.upper()

@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
-__all__ = ("BaseEventQueueStore", "normalize_queue_table_name")
+__all__ = ("BaseEventQueueStore", "normalize_event_channel_name", "normalize_queue_table_name")
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -22,6 +22,15 @@ def normalize_queue_table_name(name: str) -> str:
         if not _IDENTIFIER_PATTERN.match(segment):
             msg = f"Invalid events table name: {name}"
             raise ValueError(msg)
+    return name
+
+
+def normalize_event_channel_name(name: str) -> str:
+    """Validate event channel identifiers and return normalized name."""
+
+    if not _IDENTIFIER_PATTERN.match(name):
+        msg = f"Invalid events channel name: {name}"
+        raise ValueError(msg)
     return name
 
 

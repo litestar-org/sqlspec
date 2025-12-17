@@ -1,5 +1,7 @@
 """Fallback table-backed queue implementation for EventChannel."""
 
+import asyncio
+import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
@@ -164,7 +166,7 @@ class TableEventQueue:
         self._runtime.increment_metric("events.publish")
         return event_id
 
-    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         """Insert a new event row using synchronous drivers."""
 
         event_id = uuid.uuid4().hex
@@ -186,7 +188,7 @@ class TableEventQueue:
         self._runtime.increment_metric("events.publish")
         return event_id
 
-    async def dequeue_async(self, channel: str, _poll_interval: float | None = None) -> "QueueEvent | None":
+    async def dequeue_async(self, channel: str, poll_interval: float | None = None) -> "QueueEvent | None":
         """Fetch the next available event for the given channel asynchronously."""
 
         attempt = 0
@@ -194,8 +196,11 @@ class TableEventQueue:
             attempt += 1
             row = await self._fetch_candidate_async(channel)
             if row is None:
+                if poll_interval is not None and poll_interval > 0:
+                    await asyncio.sleep(poll_interval)
                 return None
-            leased_until = self._utcnow() + timedelta(seconds=self._lease_seconds)
+            now = self._utcnow()
+            leased_until = now + timedelta(seconds=self._lease_seconds)
             claimed = await self._execute_async(
                 self._claim_sql,
                 {
@@ -204,14 +209,14 @@ class TableEventQueue:
                     "event_id": row["event_id"],
                     "pending_status": _PENDING_STATUS,
                     "leased_status": _LEASED_STATUS,
-                    "lease_reentry_cutoff": self._utcnow(),
+                    "lease_reentry_cutoff": now,
                 },
             )
             if claimed:
                 return self._hydrate_event(row, leased_until)
         return None
 
-    def dequeue(self, channel: str, _poll_interval: float | None = None) -> "QueueEvent | None":
+    def dequeue_sync(self, channel: str, poll_interval: float | None = None) -> "QueueEvent | None":
         """Fetch the next available event synchronously."""
 
         attempt = 0
@@ -219,8 +224,11 @@ class TableEventQueue:
             attempt += 1
             row = self._fetch_candidate_sync(channel)
             if row is None:
+                if poll_interval is not None and poll_interval > 0:
+                    time.sleep(poll_interval)
                 return None
-            leased_until = self._utcnow() + timedelta(seconds=self._lease_seconds)
+            now = self._utcnow()
+            leased_until = now + timedelta(seconds=self._lease_seconds)
             claimed = self._execute_sync(
                 self._claim_sql,
                 {
@@ -229,7 +237,7 @@ class TableEventQueue:
                     "event_id": row["event_id"],
                     "pending_status": _PENDING_STATUS,
                     "leased_status": _LEASED_STATUS,
-                    "lease_reentry_cutoff": self._utcnow(),
+                    "lease_reentry_cutoff": now,
                 },
             )
             if claimed:
@@ -244,7 +252,7 @@ class TableEventQueue:
         await self._cleanup_async(now)
         self._runtime.increment_metric("events.ack")
 
-    def ack(self, event_id: str) -> None:
+    def ack_sync(self, event_id: str) -> None:
         """Mark an event as acknowledged using synchronous drivers."""
 
         now = self._utcnow()
@@ -380,17 +388,17 @@ class QueueEventBackend:
     ) -> str:
         return await self._queue.publish_async(channel, payload, metadata)
 
-    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
-        return self._queue.publish(channel, payload, metadata)
+    def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        return self._queue.publish_sync(channel, payload, metadata)
 
-    async def dequeue_async(self, channel: str, _poll_interval: float | None = None) -> "EventMessage | None":
-        event = await self._queue.dequeue_async(channel)
+    async def dequeue_async(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
+        event = await self._queue.dequeue_async(channel, poll_interval=poll_interval)
         if event is None:
             return None
         return self._to_message(event)
 
-    def dequeue(self, channel: str, _poll_interval: float | None = None) -> "EventMessage | None":
-        event = self._queue.dequeue(channel)
+    def dequeue_sync(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
+        event = self._queue.dequeue_sync(channel, poll_interval=poll_interval)
         if event is None:
             return None
         return self._to_message(event)
@@ -398,8 +406,8 @@ class QueueEventBackend:
     async def ack_async(self, event_id: str) -> None:
         await self._queue.ack_async(event_id)
 
-    def ack(self, event_id: str) -> None:
-        self._queue.ack(event_id)
+    def ack_sync(self, event_id: str) -> None:
+        self._queue.ack_sync(event_id)
 
     @staticmethod
     def _to_message(event: QueueEvent) -> EventMessage:

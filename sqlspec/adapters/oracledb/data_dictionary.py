@@ -337,22 +337,30 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
     def get_version(self, driver: SyncDriverAdapterBase) -> "OracleVersionInfo | None":
         """Get Oracle database version information.
 
+        Uses caching to avoid repeated database queries within the same
+        driver session.
+
         Args:
-            driver: Database driver instance
+            driver: Database driver instance.
 
         Returns:
-            Oracle version information or None if detection fails
+            Oracle version information or None if detection fails.
         """
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
+        if was_cached:
+            return cast("OracleVersionInfo | None", cached_version)
+
         oracle_driver = cast("OracleSyncDriver", driver)
         version_info = self._get_oracle_version(oracle_driver)
         if version_info:
-            # Enhance with additional information
             compatible = self._get_oracle_compatible(oracle_driver)
             is_autonomous = self._is_oracle_autonomous(oracle_driver)
 
             version_info.compatible = compatible
             version_info.is_autonomous = is_autonomous
 
+        self.cache_version(driver_id, version_info)
         return version_info
 
     def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
@@ -507,17 +515,26 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
     async def get_version(self, driver: AsyncDriverAdapterBase) -> "OracleVersionInfo | None":
         """Get Oracle database version information.
 
+        Uses caching to avoid repeated database queries within the same
+        driver session.
+
         Args:
-            driver: Async database driver instance
+            driver: Async database driver instance.
 
         Returns:
-            Oracle version information or None if detection fails
+            Oracle version information or None if detection fails.
         """
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
+        if was_cached:
+            return cast("OracleVersionInfo | None", cached_version)
+
         oracle_driver = cast("OracleAsyncDriver", driver)
         row = await self._select_component_version_row_async(oracle_driver)
         version_info = self._build_version_info_from_row(row)
 
         if not version_info:
+            self.cache_version(driver_id, None)
             return None
 
         compatible = await self._get_oracle_compatible_async(oracle_driver)
@@ -527,6 +544,7 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         version_info.is_autonomous = is_autonomous
 
         logger.debug("Detected Oracle version: %s", version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
     async def _get_oracle_compatible_async(self, driver: "OracleAsyncDriver") -> "str | None":

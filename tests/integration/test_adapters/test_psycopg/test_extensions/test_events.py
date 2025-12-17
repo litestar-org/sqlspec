@@ -24,7 +24,7 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
     migrations_dir.mkdir()
 
     config = PsycopgSyncConfig(
-        pool_config={"conninfo": _build_conninfo(postgres_service)},
+        connection_config={"conninfo": _build_conninfo(postgres_service)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -35,10 +35,10 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish("notifications", {"action": "queue"})
-    iterator = channel.iter_events("notifications", poll_interval=0.1)
+    event_id = channel.publish_sync("notifications", {"action": "queue"})
+    iterator = channel.iter_events_sync("notifications", poll_interval=0.1)
     message = next(iterator)
-    channel.ack(message.event_id)
+    channel.ack_sync(message.event_id)
 
     with config.provide_session() as driver:
         row = driver.select_one(
@@ -47,7 +47,7 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
 
     assert row["status"] == "acked"
 
-    if config.pool_instance:
+    if config.connection_instance:
         config.close_pool()
 
 
@@ -60,7 +60,7 @@ async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_ser
     migrations_dir.mkdir()
 
     config = PsycopgAsyncConfig(
-        pool_config={"conninfo": _build_conninfo(postgres_service)},
+        connection_config={"conninfo": _build_conninfo(postgres_service)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -86,5 +86,5 @@ async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_ser
 
     assert row["status"] == "acked"
 
-    if config.pool_instance:
+    if config.connection_instance:
         await config.close_pool()

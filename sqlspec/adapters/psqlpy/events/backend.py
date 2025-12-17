@@ -21,11 +21,10 @@ if TYPE_CHECKING:
 
 logger = get_logger("events.psqlpy")
 
-__all__ = (
-    "PsqlpyEventsBackend",
-    "PsqlpyHybridEventsBackend",
-    "create_event_backend",
-)
+__all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
+
+
+MAX_NOTIFY_BYTES = 8000
 
 
 class PsqlpyEventsBackend:
@@ -34,6 +33,8 @@ class PsqlpyEventsBackend:
     Uses psqlpy's Listener API which provides a dedicated connection for
     receiving PostgreSQL NOTIFY messages via callbacks or async iteration.
     """
+
+    __slots__ = ("_config", "_listener", "_listener_started", "_runtime")
 
     supports_sync = False
     supports_async = True
@@ -48,17 +49,22 @@ class PsqlpyEventsBackend:
         self._listener: Any | None = None
         self._listener_started: bool = False
 
-    async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    async def publish_async(
+        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
+    ) -> str:
         event_id = uuid.uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
+        if len(envelope.encode("utf-8")) > MAX_NOTIFY_BYTES:
+            msg = "PostgreSQL NOTIFY payload exceeds 8 KB limit"
+            raise EventChannelError(msg)
         async with self._config.provide_session() as driver:
             await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, envelope))
             await driver.commit()
         self._runtime.increment_metric("events.publish.native")
         return event_id
 
-    def publish(self, *_: Any, **__: Any) -> str:
-        msg = "publish is not supported for sync Psqlpy backends"
+    def publish_sync(self, *_: Any, **__: Any) -> str:
+        msg = "publish_sync is not supported for async-only Psqlpy backend"
         raise ImproperConfigurationError(msg)
 
     async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
@@ -66,12 +72,7 @@ class PsqlpyEventsBackend:
         received_payload: str | None = None
         event = asyncio.Event()
 
-        async def _callback(
-            _connection: Any,
-            payload: str,
-            notified_channel: str,
-            _process_id: int,
-        ) -> None:
+        async def _callback(_connection: Any, payload: str, notified_channel: str, _process_id: int) -> None:
             nonlocal received_payload
             if notified_channel == channel and received_payload is None:
                 received_payload = payload
@@ -93,25 +94,34 @@ class PsqlpyEventsBackend:
             return self._decode_payload(channel, received_payload)
         return None
 
-    def dequeue(self, *_: Any, **__: Any) -> EventMessage | None:
-        msg = "dequeue is not supported for sync Psqlpy backends"
+    def dequeue_sync(self, *_: Any, **__: Any) -> EventMessage | None:
+        msg = "dequeue_sync is not supported for async-only Psqlpy backend"
         raise ImproperConfigurationError(msg)
 
     async def ack_async(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
 
-    def ack(self, _event_id: str) -> None:
-        msg = "ack is not supported for sync Psqlpy backends"
+    def ack_sync(self, _event_id: str) -> None:
+        msg = "ack_sync is not supported for async-only Psqlpy backend"
         raise ImproperConfigurationError(msg)
 
     async def _ensure_listener(self, channel: str) -> "Listener":
+        """Ensure a listener is created for receiving notifications.
+
+        Args:
+            channel: The channel name (used for context but subscription
+                happens via add_callback in the calling method).
+
+        Returns:
+            The initialized psqlpy Listener instance.
+        """
         if self._listener is None:
             pool = await self._config.provide_pool()
             self._listener = pool.listener()
             await self._listener.startup()
         return self._listener
 
-    async def shutdown(self) -> None:
+    async def shutdown_async(self) -> None:
         """Shutdown the listener and release resources."""
         if self._listener is not None:
             if self._listener_started:
@@ -122,14 +132,12 @@ class PsqlpyEventsBackend:
 
     @staticmethod
     def _encode_payload(event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> str:
-        return to_json(
-            {
-                "event_id": event_id,
-                "payload": payload,
-                "metadata": metadata,
-                "published_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
+        return to_json({
+            "event_id": event_id,
+            "payload": payload,
+            "metadata": metadata,
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     @staticmethod
     def _decode_payload(channel: str, payload: str) -> EventMessage:
@@ -158,6 +166,11 @@ class PsqlpyEventsBackend:
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
+        """Parse a timestamp value into a timezone-aware datetime.
+
+        Handles ISO format strings, datetime objects, and falls back to
+        current UTC time for invalid or missing values.
+        """
         if isinstance(value, datetime):
             return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
         if isinstance(value, str):
@@ -176,11 +189,13 @@ class PsqlpyHybridEventsBackend:
     events to a durable queue table.
     """
 
+    __slots__ = ("_config", "_listener", "_listener_started", "_queue", "_runtime")
+
     supports_sync = False
     supports_async = True
     backend_name = "listen_notify_durable"
 
-    def __init__(self, config: "PsqlpyConfig", queue_backend: QueueEventBackend) -> None:
+    def __init__(self, config: "PsqlpyConfig", queue_backend: "QueueEventBackend") -> None:
         if "psqlpy" not in type(config).__module__:
             msg = "Psqlpy hybrid backend requires a Psqlpy adapter"
             raise ImproperConfigurationError(msg)
@@ -190,26 +205,23 @@ class PsqlpyHybridEventsBackend:
         self._listener: Any | None = None
         self._listener_started: bool = False
 
-    async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    async def publish_async(
+        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
+    ) -> str:
         event_id = uuid.uuid4().hex
         await self._publish_durable_async(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
         return event_id
 
-    def publish(self, *_: Any, **__: Any) -> str:
-        msg = "publish is not supported for sync Psqlpy backends"
+    def publish_sync(self, *_: Any, **__: Any) -> str:
+        msg = "publish_sync is not supported for async-only Psqlpy backend"
         raise ImproperConfigurationError(msg)
 
     async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
         listener = await self._ensure_listener(channel)
         event = asyncio.Event()
 
-        async def _callback(
-            _connection: Any,
-            _payload: str,
-            notified_channel: str,
-            _process_id: int,
-        ) -> None:
+        async def _callback(_connection: Any, _payload: str, notified_channel: str, _process_id: int) -> None:
             if notified_channel == channel:
                 event.set()
 
@@ -224,24 +236,37 @@ class PsqlpyHybridEventsBackend:
             await asyncio.wait_for(event.wait(), timeout=poll_interval)
 
         await listener.clear_channel_callbacks(channel=channel)
-        return await self._queue.dequeue_async(channel)
+        return await self._queue.dequeue_async(channel, poll_interval=poll_interval)
+
+    def dequeue_sync(self, *_: Any, **__: Any) -> EventMessage | None:
+        msg = "dequeue_sync is not supported for async-only Psqlpy backend"
+        raise ImproperConfigurationError(msg)
 
     async def ack_async(self, event_id: str) -> None:
         await self._queue.ack_async(event_id)
         self._runtime.increment_metric("events.ack")
 
-    def ack(self, _event_id: str) -> None:
-        msg = "ack is not supported for sync Psqlpy backends"
+    def ack_sync(self, _event_id: str) -> None:
+        msg = "ack_sync is not supported for async-only Psqlpy backend"
         raise ImproperConfigurationError(msg)
 
     async def _ensure_listener(self, channel: str) -> "Listener":
+        """Ensure a listener is created for receiving notifications.
+
+        Args:
+            channel: The channel name (used for context but subscription
+                happens via add_callback in the calling method).
+
+        Returns:
+            The initialized psqlpy Listener instance.
+        """
         if self._listener is None:
             pool = await self._config.provide_pool()
             self._listener = pool.listener()
             await self._listener.startup()
         return self._listener
 
-    async def shutdown(self) -> None:
+    async def shutdown_async(self) -> None:
         """Shutdown the listener and release resources."""
         if self._listener is not None:
             if self._listener_started:
@@ -261,12 +286,12 @@ class PsqlpyHybridEventsBackend:
         async with self._config.provide_session() as driver:
             await driver.execute(
                 SQL(
-                    queue._upsert_sql,  # type: ignore[attr-defined]
+                    queue._upsert_sql,
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": queue._encode_json(payload),  # type: ignore[attr-defined]
-                        "metadata_json": queue._encode_json(metadata),  # type: ignore[attr-defined]
+                        "payload_json": queue._encode_json(payload),
+                        "metadata_json": queue._encode_json(metadata),
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
@@ -283,6 +308,7 @@ class PsqlpyHybridEventsBackend:
 def create_event_backend(
     config: "PsqlpyConfig", backend_name: str, extension_settings: dict[str, Any]
 ) -> PsqlpyEventsBackend | PsqlpyHybridEventsBackend | None:
+    """Factory used by EventChannel to create the native psqlpy backend."""
     if backend_name == "listen_notify":
         try:
             return PsqlpyEventsBackend(config)
@@ -296,7 +322,7 @@ def create_event_backend(
             retention_seconds=extension_settings.get("retention_seconds"),
             select_for_update=extension_settings.get("select_for_update"),
             skip_locked=extension_settings.get("skip_locked"),
-            json_passthrough=extension_settings.get("json_passthrough", True),
+            json_passthrough=extension_settings.get("json_passthrough"),
         )
         queue_backend = QueueEventBackend(queue)
         try:

@@ -459,7 +459,43 @@ class VersionInfo:
 
 @trait
 class DataDictionaryMixin:
-    """Mixin providing common data dictionary functionality."""
+    """Mixin providing common data dictionary functionality.
+
+    Includes version caching to avoid repeated database queries when checking
+    feature flags or optimal types.
+    """
+
+    _version_cache: "dict[int, VersionInfo | None]"
+    _version_fetch_attempted: "set[int]"
+
+    def __init__(self) -> None:
+        self._version_cache = {}
+        self._version_fetch_attempted = set()
+
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver.
+
+        Args:
+            driver_id: The id() of the driver instance.
+
+        Returns:
+            Tuple of (was_cached, version_info). If was_cached is False,
+            the caller should fetch the version and call cache_version().
+        """
+        if driver_id in self._version_fetch_attempted:
+            return True, self._version_cache.get(driver_id)
+        return False, None
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        """Cache version info for a driver.
+
+        Args:
+            driver_id: The id() of the driver instance.
+            version: The version info to cache (can be None if detection failed).
+        """
+        self._version_fetch_attempted.add(driver_id)
+        if version is not None:
+            self._version_cache[driver_id] = version
 
     def parse_version_string(self, version_str: str) -> "VersionInfo | None":
         """Parse version string into VersionInfo.

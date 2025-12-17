@@ -321,6 +321,7 @@ For detailed implementation patterns, consult these guides:
 | Parameter Profiles | `docs/guides/adapters/parameter-profile-registry.md` |
 | Adapter Guides | `docs/guides/adapters/{adapter}.md` |
 | Framework Extensions | `docs/guides/extensions/{framework}.md` |
+| Database Events | `docs/guides/events/database-event-channels.md` |
 | Quick Reference | `docs/guides/quick-reference/quick-reference.md` |
 | Code Standards | `docs/guides/development/code-standards.md` |
 | Implementation Patterns | `docs/guides/development/implementation-patterns.md` |
@@ -856,6 +857,70 @@ if async_configs:
 - Use `cast()` in async contexts for type safety with migration commands
 
 **Reference implementation:** `sqlspec/cli.py` (lines 218-255, 311-724)
+
+### Events Extension Pattern
+
+The events extension provides database-agnostic pub/sub via two layers:
+
+**Backends** handle communication (LISTEN/NOTIFY, Oracle AQ, table polling):
+
+```python
+# Backend selection via driver_features
+class AdapterDriverFeatures(TypedDict):
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["listen_notify", "listen_notify_durable", "table_queue", "advanced_queue"]]
+
+# Auto-detection in config __init__
+if "enable_events" not in driver_features:
+    driver_features["enable_events"] = extension_config.get("events") is not None
+if "events_backend" not in driver_features:
+    driver_features["events_backend"] = "listen_notify"  # or adapter-specific default
+```
+
+**Stores** generate adapter-specific DDL for the queue table:
+
+```python
+# In sqlspec/adapters/{adapter}/events/store.py
+class AdapterEventQueueStore(BaseEventQueueStore[AdapterConfig]):
+    __slots__ = ()
+
+    def _column_types(self) -> tuple[str, str, str]:
+        # Return (payload_type, metadata_type, timestamp_type)
+        return "JSONB", "JSONB", "TIMESTAMPTZ"  # PostgreSQL
+
+    def _build_create_table_sql(self) -> str:
+        # Override for database-specific DDL syntax
+        return super()._build_create_table_sql()
+
+    def _wrap_create_statement(self, statement: str, object_type: str) -> str:
+        # Wrap with IF NOT EXISTS, PL/SQL blocks, etc.
+        return statement.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+```
+
+**Backend factory pattern** for native backends:
+
+```python
+# In sqlspec/adapters/{adapter}/events/backend.py
+def create_event_backend(
+    config: "AdapterConfig", backend_name: str, extension_settings: dict[str, Any]
+) -> AdapterEventsBackend | None:
+    if backend_name == "listen_notify":
+        return AdapterEventsBackend(config)
+    if backend_name == "listen_notify_durable":
+        queue = TableEventQueue(config, **extension_settings)
+        return AdapterHybridEventsBackend(config, QueueEventBackend(queue))
+    return None  # Falls back to table_queue
+```
+
+**Key principles:**
+
+- Backends implement `publish_async`, `dequeue_async`, `ack_async` (and sync variants)
+- Stores inherit from `BaseEventQueueStore` and override `_column_types()`
+- Use `driver_features` for backend selection, `extension_config["events"]` for settings
+- Always support `table_queue` fallback for databases without native pub/sub
+- Separate DDL execution for databases without transactional DDL (Spanner, BigQuery)
+
+**Reference implementation:** `sqlspec/extensions/events/`, `sqlspec/adapters/*/events/`
 
 ## Collaboration Guidelines
 

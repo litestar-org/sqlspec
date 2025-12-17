@@ -3,7 +3,6 @@
 from collections.abc import Generator
 
 import pytest
-from oracledb import DatabaseError
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec import SQLSpec
@@ -103,11 +102,11 @@ def test_oracle_aq_publish_receive(oracle_aq_config: OracleSyncConfig) -> None:
 
     assert isinstance(channel, EventChannel)
 
-    event_id = channel.publish("alerts", {"action": "refresh"})
-    iterator = channel.iter_events("alerts", poll_interval=1.0)
+    event_id = channel.publish_sync("alerts", {"action": "refresh"})
+    iterator = channel.iter_events_sync("alerts", poll_interval=1.0)
     message = next(iterator)
 
     assert message.event_id == event_id
     assert message.payload["action"] == "refresh"
 
-    channel.ack(message.event_id)
+    channel.ack_sync(message.event_id)

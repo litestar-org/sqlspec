@@ -25,26 +25,36 @@ class AiosqliteAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get SQLite database version information.
 
+        Uses caching to avoid repeated database queries within the same
+        driver session.
+
         Args:
-            driver: Async database driver instance
+            driver: Async database driver instance.
 
         Returns:
-            SQLite version information or None if detection fails
+            SQLite version information or None if detection fails.
         """
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
+        if was_cached:
+            return cached_version
+
         version_str = await cast("AiosqliteDriver", driver).select_value("SELECT sqlite_version()")
         if not version_str:
             logger.warning("No SQLite version information found")
+            self.cache_version(driver_id, None)
             return None
 
-        # Parse version like "3.45.0"
         version_match = SQLITE_VERSION_PATTERN.match(str(version_str))
         if not version_match:
             logger.warning("Could not parse SQLite version: %s", version_str)
+            self.cache_version(driver_id, None)
             return None
 
         major, minor, patch = map(int, version_match.groups())
         version_info = VersionInfo(major, minor, patch)
         logger.debug("Detected SQLite version: %s", version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
     async def get_feature_flag(self, driver: AsyncDriverAdapterBase, feature: str) -> bool:

@@ -7,9 +7,14 @@ __all__ = ("PsqlpyEventQueueStore",)
 
 
 class PsqlpyEventQueueStore(BaseEventQueueStore[PsqlpyConfig]):
-    """Provide PostgreSQL column mappings for the queue table."""
+    """Provide PostgreSQL column mappings for the queue table.
+
+    PostgreSQL uses JSONB for efficient binary JSON storage with indexing support,
+    and TIMESTAMPTZ for timezone-aware timestamps.
+    """
 
     __slots__ = ()
 
     def _column_types(self) -> tuple[str, str, str]:
+        """Return PostgreSQL-optimized column types for the event queue."""
         return "JSONB", "JSONB", "TIMESTAMPTZ"

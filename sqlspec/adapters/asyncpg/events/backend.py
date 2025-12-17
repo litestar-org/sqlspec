@@ -15,7 +15,6 @@ from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-    from sqlspec.extensions.events._queue import QueueEventBackend
 
 logger = get_logger("events.postgres")
 
@@ -26,6 +25,8 @@ MAX_NOTIFY_BYTES = 8000
 
 class AsyncpgHybridEventsBackend:
     """Hybrid backend combining durable queue with LISTEN/NOTIFY wakeups."""
+
+    __slots__ = ("_config", "_listen_connection", "_listen_connection_cm", "_queue", "_runtime")
 
     supports_sync = False
     supports_async = True
@@ -38,70 +39,78 @@ class AsyncpgHybridEventsBackend:
         self._config = config
         self._runtime = config.get_observability_runtime()
         self._queue = queue
+        self._listen_connection: Any | None = None
+        self._listen_connection_cm: Any | None = None
 
     async def publish_async(
         self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
     ) -> str:
         event_id = uuid.uuid4().hex
-        envelope = {
-            "event_id": event_id,
-            "payload": payload,
-            "metadata": metadata,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-        }
-        encoded_payload = to_json(envelope)
         await self._publish_durable(channel, event_id, payload, metadata)
-        await self._notify(channel, encoded_payload)
         self._runtime.increment_metric("events.publish.native")
         return event_id
 
     async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
-        connection_cm = self._config.provide_connection()
-        connection = await connection_cm.__aenter__()
-        try:
-            if hasattr(connection, "notifies"):
-                message = await self._dequeue_with_notifies(connection, channel, poll_interval)
-            else:
-                message = await self._queue.dequeue_async(channel)
-        finally:
-            with contextlib.suppress(Exception):
-                await connection_cm.__aexit__(None, None, None)
+        connection = await self._ensure_listener(channel)
+        notifies_queue = getattr(connection, "notifies", None)
+        if notifies_queue is not None:
+            message = await self._dequeue_with_notifies(connection, channel, poll_interval)
+        else:
+            message = await self._queue.dequeue_async(channel, poll_interval=poll_interval)
         return message
+
+    async def _ensure_listener(self, channel: str) -> Any:
+        """Ensure a dedicated connection is listening on the given channel.
+
+        Creates and caches a connection for LISTEN operations. The connection
+        is reused across dequeue calls to maintain the subscription.
+        """
+        if self._listen_connection is None:
+            self._listen_connection_cm = self._config.provide_connection()
+            self._listen_connection = await self._listen_connection_cm.__aenter__()
+            await self._listen_connection.execute(f"LISTEN {channel}")
+        return self._listen_connection
 
     async def ack_async(self, event_id: str) -> None:
         await self._queue.ack_async(event_id)
         self._runtime.increment_metric("events.ack")
 
-    def publish(self, *_: Any, **__: Any) -> str:
-        msg = "publish is not supported for async-only Postgres backend"
+    def publish_sync(self, *_: Any, **__: Any) -> str:
+        msg = "publish_sync is not supported for async-only Postgres backend"
         raise ImproperConfigurationError(msg)
 
-    def dequeue(self, *_: Any, **__: Any) -> EventMessage | None:
-        msg = "dequeue is not supported for async-only Postgres backend"
+    def dequeue_sync(self, *_: Any, **__: Any) -> EventMessage | None:
+        msg = "dequeue_sync is not supported for async-only Postgres backend"
         raise ImproperConfigurationError(msg)
 
-    def ack(self, _event_id: str) -> None:
-        msg = "ack is not supported for async-only backend"
+    def ack_sync(self, _event_id: str) -> None:
+        msg = "ack_sync is not supported for async-only backend"
         raise ImproperConfigurationError(msg)
+
+    async def shutdown_async(self) -> None:
+        """Shutdown the listener connection and release resources."""
+        if self._listen_connection_cm is not None:
+            with contextlib.suppress(Exception):
+                await self._listen_connection_cm.__aexit__(None, None, None)
+            self._listen_connection = None
+            self._listen_connection_cm = None
 
     async def _publish_durable(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
     ) -> None:
+        """Insert event into durable queue and send NOTIFY wakeup signal."""
         now = datetime.now(timezone.utc)
+        queue_backend = self._get_queue_backend()
+        statement_config = queue_backend.statement_config
         async with self._config.provide_session() as driver:
-            queue_backend = getattr(self._queue, "_queue", None)
-            if queue_backend is None:
-                msg = "Hybrid queue backend missing queue reference"
-                raise EventChannelError(msg)
-            statement_config = queue_backend.statement_config
             await driver.execute(
                 SQL(
-                    queue_backend._upsert_sql,  # type: ignore[attr-defined]
+                    queue_backend._upsert_sql,
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": queue_backend._encode_json(payload),  # type: ignore[attr-defined]
-                        "metadata_json": queue_backend._encode_json(metadata),  # type: ignore[attr-defined]
+                        "payload_json": queue_backend._encode_json(payload),
+                        "metadata_json": queue_backend._encode_json(metadata),
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
@@ -114,26 +123,42 @@ class AsyncpgHybridEventsBackend:
             await driver.execute(SQL("SELECT pg_notify($1, $2)", channel, to_json({"event_id": event_id})))
             await driver.commit()
 
+    def _get_queue_backend(self) -> "TableEventQueue":
+        """Return the underlying TableEventQueue from the wrapper.
+
+        Raises:
+            EventChannelError: If the queue backend reference is missing.
+        """
+        queue_backend = self._queue._queue if hasattr(self._queue, "_queue") else None
+        if queue_backend is None:
+            msg = "Hybrid queue backend missing queue reference"
+            raise EventChannelError(msg)
+        return queue_backend
+
     async def _dequeue_with_notifies(self, connection: Any, channel: str, poll_interval: float) -> EventMessage | None:
-        listen_sql = f"LISTEN {channel}"
-        unlisten_sql = f"UNLISTEN {channel}"
-        await connection.execute(listen_sql)
+        """Wait for a NOTIFY wakeup then dequeue from the durable table.
+
+        The connection is already listening from _ensure_listener. This method
+        waits for a notification signal, then fetches the event from storage.
+        """
         try:
-            try:
-                notify = await asyncio.wait_for(connection.notifies.get(), timeout=poll_interval)
-            except asyncio.TimeoutError:
-                return None
-            payload = getattr(notify, "payload", None)
-            if payload:
-                return await self._queue.dequeue_async(channel)
+            notify = await asyncio.wait_for(connection.notifies.get(), timeout=poll_interval)
+        except asyncio.TimeoutError:
             return None
-        finally:
-            with contextlib.suppress(Exception):
-                await connection.execute(unlisten_sql)
+        notify_payload = notify.payload if hasattr(notify, "payload") else None
+        if notify_payload:
+            return await self._queue.dequeue_async(channel)
+        return None
 
 
 class AsyncpgEventsBackend:
-    """Async backend that relies on PostgreSQL LISTEN/NOTIFY primitives."""
+    """Async backend that relies on PostgreSQL LISTEN/NOTIFY primitives.
+
+    This backend uses asyncpg's native LISTEN/NOTIFY support for real-time
+    event delivery. Messages are ephemeral and not persisted.
+    """
+
+    __slots__ = ("_config", "_listen_connection", "_listen_connection_cm", "_notify_mode", "_runtime")
 
     supports_sync = False
     supports_async = True
@@ -145,8 +170,13 @@ class AsyncpgEventsBackend:
             raise ImproperConfigurationError(msg)
         self._config = config
         self._runtime = config.get_observability_runtime()
+        self._listen_connection: Any | None = None
+        self._listen_connection_cm: Any | None = None
+        self._notify_mode: str | None = None
 
-    async def publish_async(self, channel: str, payload: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
+    async def publish_async(
+        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
+    ) -> str:
         event_id = uuid.uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
         async with self._config.provide_session() as driver:
@@ -155,37 +185,73 @@ class AsyncpgEventsBackend:
         self._runtime.increment_metric("events.publish.native")
         return event_id
 
-    def publish(self, *_: Any, **__: Any) -> str:
-        msg = "publish is not supported for async-only Postgres backend"
+    def publish_sync(self, *_: Any, **__: Any) -> str:
+        msg = "publish_sync is not supported for async-only Postgres backend"
         raise ImproperConfigurationError(msg)
 
     async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
-        connection_cm = self._config.provide_connection()
-        connection = await connection_cm.__aenter__()
-        try:
-            if hasattr(connection, "add_listener") and callable(connection.add_listener):
-                return await self._dequeue_with_listener(connection, channel, poll_interval)
-            if hasattr(connection, "notifies"):
-                return await self._dequeue_with_notifies(connection, channel, poll_interval)
-            msg = "PostgreSQL connection does not support LISTEN/NOTIFY callbacks"
-            raise EventChannelError(msg)
-        finally:
-            with contextlib.suppress(Exception):
-                await connection_cm.__aexit__(None, None, None)
+        connection = await self._ensure_listener(channel)
+        if self._notify_mode == "add_listener":
+            return await self._dequeue_with_listener(connection, channel, poll_interval)
+        if self._notify_mode == "notifies":
+            return await self._dequeue_with_notifies(connection, channel, poll_interval)
+        msg = "PostgreSQL connection does not support LISTEN/NOTIFY callbacks"
+        raise EventChannelError(msg)
 
-    def dequeue(self, *_: Any, **__: Any) -> EventMessage | None:
-        msg = "dequeue is not supported for async-only Postgres backend"
+    def dequeue_sync(self, *_: Any, **__: Any) -> EventMessage | None:
+        msg = "dequeue_sync is not supported for async-only Postgres backend"
         raise ImproperConfigurationError(msg)
 
     async def ack_async(self, _event_id: str) -> None:
-        # Native notifications are fire-and-forget; nothing to acknowledge.
+        """Acknowledge an event. Native notifications are fire-and-forget."""
         self._runtime.increment_metric("events.ack")
 
-    def ack(self, _event_id: str) -> None:
-        msg = "ack is not supported for async-only backend"
+    def ack_sync(self, _event_id: str) -> None:
+        msg = "ack_sync is not supported for async-only backend"
         raise ImproperConfigurationError(msg)
 
+    async def shutdown_async(self) -> None:
+        """Shutdown the listener connection and release resources."""
+        if self._listen_connection_cm is not None:
+            with contextlib.suppress(Exception):
+                await self._listen_connection_cm.__aexit__(None, None, None)
+            self._listen_connection = None
+            self._listen_connection_cm = None
+            self._notify_mode = None
+
+    async def _ensure_listener(self, channel: str) -> Any:
+        """Ensure a dedicated connection is listening and detect notify mode.
+
+        Creates and caches a connection for LISTEN operations. Also detects
+        the appropriate notification mode (add_listener or notifies queue)
+        based on available asyncpg connection capabilities.
+
+        Returns:
+            The cached asyncpg connection.
+
+        Raises:
+            EventChannelError: If the connection lacks LISTEN/NOTIFY support.
+        """
+        if self._listen_connection is None:
+            self._listen_connection_cm = self._config.provide_connection()
+            self._listen_connection = await self._listen_connection_cm.__aenter__()
+            add_listener = getattr(self._listen_connection, "add_listener", None)
+            if add_listener is not None and callable(add_listener):
+                self._notify_mode = "add_listener"
+            elif getattr(self._listen_connection, "notifies", None) is not None:
+                self._notify_mode = "notifies"
+                await self._listen_connection.execute(f"LISTEN {channel}")
+            else:
+                msg = "PostgreSQL connection does not support LISTEN/NOTIFY callbacks"
+                raise EventChannelError(msg)
+        return self._listen_connection
+
     async def _dequeue_with_listener(self, connection: Any, channel: str, poll_interval: float) -> EventMessage | None:
+        """Wait for notification using add_listener callback API.
+
+        This mode uses asyncpg's callback-based listener which automatically
+        manages the LISTEN subscription.
+        """
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
 
@@ -194,34 +260,36 @@ class AsyncpgEventsBackend:
                 return
             loop.call_soon_threadsafe(future.set_result, payload)
 
-        connection.add_listener(channel, _listener)
+        await connection.add_listener(channel, _listener)
         try:
-            try:
-                payload = await asyncio.wait_for(future, timeout=poll_interval)
-            except asyncio.TimeoutError:
-                return None
-            return self._decode_payload(channel, payload)
+            payload = await asyncio.wait_for(future, timeout=poll_interval)
+        except asyncio.TimeoutError:
+            return None
         finally:
             with contextlib.suppress(Exception):
-                connection.remove_listener(channel, _listener)
+                await connection.remove_listener(channel, _listener)
+        return self._decode_payload(channel, payload)
 
     async def _dequeue_with_notifies(self, connection: Any, channel: str, poll_interval: float) -> EventMessage | None:
-        listen_sql = f"LISTEN {channel}"
-        unlisten_sql = f"UNLISTEN {channel}"
-        await connection.execute(listen_sql)
-        try:
-            try:
-                notify = await asyncio.wait_for(connection.notifies.get(), timeout=poll_interval)
-            except asyncio.TimeoutError:
-                return None
-            if getattr(notify, "channel", None) != channel:
-                return None
-            return self._decode_payload(channel, notify.payload)
-        finally:
-            with contextlib.suppress(Exception):
-                await connection.execute(unlisten_sql)
+        """Wait for notification using notifies queue API.
 
-    def _encode_payload(self, event_id: str, payload: dict[str, Any], metadata: dict[str, Any] | None) -> str:
+        The connection is already listening from _ensure_listener.
+        """
+        try:
+            notify = await asyncio.wait_for(connection.notifies.get(), timeout=poll_interval)
+        except asyncio.TimeoutError:
+            return None
+        notify_channel = notify.channel if hasattr(notify, "channel") else None
+        if notify_channel != channel:
+            return None
+        return self._decode_payload(channel, notify.payload)
+
+    def _encode_payload(self, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> str:
+        """Encode event data as JSON for NOTIFY payload.
+
+        Raises:
+            EventChannelError: If encoded payload exceeds PostgreSQL's 8KB limit.
+        """
         envelope = {
             "event_id": event_id,
             "payload": payload,
@@ -234,7 +302,8 @@ class AsyncpgEventsBackend:
             raise EventChannelError(msg)
         return encoded
 
-    def _decode_payload(self, channel: str, payload: str) -> EventMessage:
+    def _decode_payload(self, channel: str, payload: str) -> "EventMessage":
+        """Decode JSON payload from NOTIFY into an EventMessage."""
         data = from_json(payload)
         if not isinstance(data, dict):
             data = {"payload": data}
@@ -259,7 +328,12 @@ class AsyncpgEventsBackend:
         )
 
     @staticmethod
-    def _parse_timestamp(value: Any) -> datetime:
+    def _parse_timestamp(value: Any) -> "datetime":
+        """Parse a timestamp value into a timezone-aware datetime.
+
+        Handles ISO format strings, datetime objects, and falls back to
+        current UTC time for invalid or missing values.
+        """
         if isinstance(value, str):
             with contextlib.suppress(ValueError):
                 parsed = datetime.fromisoformat(value)

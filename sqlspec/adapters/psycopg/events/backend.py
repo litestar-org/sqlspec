@@ -9,6 +9,7 @@ from sqlspec.core import SQL
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import EventMessage
 from sqlspec.extensions.events._queue import QueueEventBackend, TableEventQueue
+from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -19,15 +20,20 @@ if TYPE_CHECKING:
 
 logger = get_logger("events.psycopg")
 
-__all__ = (
-    "PsycopgEventsBackend",
-    "PsycopgHybridEventsBackend",
-    "create_event_backend",
-)
+__all__ = ("PsycopgEventsBackend", "PsycopgHybridEventsBackend", "create_event_backend")
 
 
 class PsycopgEventsBackend:
     """Native LISTEN/NOTIFY backend for psycopg adapters."""
+
+    __slots__ = (
+        "_config",
+        "_listen_connection_async",
+        "_listen_connection_async_cm",
+        "_listen_connection_sync",
+        "_listen_connection_sync_cm",
+        "_runtime",
+    )
 
     supports_sync = True
     supports_async = True
@@ -44,7 +50,9 @@ class PsycopgEventsBackend:
         self._listen_connection_sync: Any | None = None
         self._listen_connection_sync_cm: Any | None = None
 
-    async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    async def publish_async(
+        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
+    ) -> str:
         event_id = uuid.uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
         async with self._config.provide_session() as driver:
@@ -53,7 +61,7 @@ class PsycopgEventsBackend:
         self._runtime.increment_metric("events.publish.native")
         return event_id
 
-    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid.uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
         with self._config.provide_session() as driver:
@@ -63,53 +71,103 @@ class PsycopgEventsBackend:
         return event_id
 
     async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
+        """Dequeue an event from the channel asynchronously.
+
+        Args:
+            channel: Channel name to listen on.
+            poll_interval: Timeout in seconds to wait for a notification.
+
+        Returns:
+            EventMessage if a notification was received, None otherwise.
+        """
         connection = await self._ensure_async_listener(channel)
         async for notify in connection.notifies(timeout=poll_interval, stop_after=1):
-            if getattr(notify, "channel", None) == channel:
+            if notify.channel == channel:
                 return self._decode_payload(channel, notify.payload)
         return None
 
-    def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
+    def dequeue_sync(self, channel: str, poll_interval: float) -> EventMessage | None:
+        """Dequeue an event from the channel synchronously.
+
+        Args:
+            channel: Channel name to listen on.
+            poll_interval: Timeout in seconds to wait for a notification.
+
+        Returns:
+            EventMessage if a notification was received, None otherwise.
+        """
         connection = self._ensure_sync_listener(channel)
         notify_iter = connection.notifies(timeout=poll_interval, stop_after=1)
         with contextlib.suppress(StopIteration):
             notify = next(notify_iter)
-            if getattr(notify, "channel", None) == channel:
+            if notify.channel == channel:
                 return self._decode_payload(channel, notify.payload)
         return None
 
     async def ack_async(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
 
-    def ack(self, _event_id: str) -> None:
+    def ack_sync(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
 
     async def _ensure_async_listener(self, channel: str) -> Any:
+        """Ensure async listener connection is established for the channel.
+
+        Args:
+            channel: Channel name to listen on.
+
+        Returns:
+            The async connection configured for LISTEN/NOTIFY.
+        """
         if self._listen_connection_async is None:
+            validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_async_cm = self._config.provide_connection()
             self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()
             await self._listen_connection_async.set_autocommit(True)
-            await self._listen_connection_async.execute(f"LISTEN {channel}")
+            await self._listen_connection_async.execute(f"LISTEN {validated_channel}")
         return self._listen_connection_async
 
     def _ensure_sync_listener(self, channel: str) -> Any:
+        """Ensure sync listener connection is established for the channel.
+
+        Args:
+            channel: Channel name to listen on.
+
+        Returns:
+            The sync connection configured for LISTEN/NOTIFY.
+        """
         if self._listen_connection_sync is None:
+            validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_sync_cm = self._config.provide_connection()
             self._listen_connection_sync = self._listen_connection_sync_cm.__enter__()
             self._listen_connection_sync.autocommit = True
-            self._listen_connection_sync.execute(f"LISTEN {channel}")
+            self._listen_connection_sync.execute(f"LISTEN {validated_channel}")
         return self._listen_connection_sync
+
+    async def shutdown_async(self) -> None:
+        """Shutdown the async listener and release resources."""
+        if self._listen_connection_async_cm is not None:
+            with contextlib.suppress(Exception):
+                await self._listen_connection_async_cm.__aexit__(None, None, None)
+            self._listen_connection_async = None
+            self._listen_connection_async_cm = None
+
+    def shutdown_sync(self) -> None:
+        """Shutdown the sync listener and release resources."""
+        if self._listen_connection_sync_cm is not None:
+            with contextlib.suppress(Exception):
+                self._listen_connection_sync_cm.__exit__(None, None, None)
+            self._listen_connection_sync = None
+            self._listen_connection_sync_cm = None
 
     @staticmethod
     def _encode_payload(event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> str:
-        return to_json(
-            {
-                "event_id": event_id,
-                "payload": payload,
-                "metadata": metadata,
-                "published_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
+        return to_json({
+            "event_id": event_id,
+            "payload": payload,
+            "metadata": metadata,
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     @staticmethod
     def _decode_payload(channel: str, payload: str) -> EventMessage:
@@ -138,6 +196,11 @@ class PsycopgEventsBackend:
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
+        """Parse a timestamp value into a timezone-aware datetime.
+
+        Handles ISO format strings, datetime objects, and falls back to
+        current UTC time for invalid or missing values.
+        """
         if isinstance(value, datetime):
             return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
         if isinstance(value, str):
@@ -152,11 +215,21 @@ class PsycopgEventsBackend:
 class PsycopgHybridEventsBackend:
     """Durable hybrid backend combining queue storage with LISTEN/NOTIFY wakeups."""
 
+    __slots__ = (
+        "_config",
+        "_listen_connection_async",
+        "_listen_connection_async_cm",
+        "_listen_connection_sync",
+        "_listen_connection_sync_cm",
+        "_queue",
+        "_runtime",
+    )
+
     supports_sync = True
     supports_async = True
     backend_name = "listen_notify_durable"
 
-    def __init__(self, config: "DatabaseConfigProtocol[Any, Any, Any]", queue_backend: QueueEventBackend) -> None:
+    def __init__(self, config: "DatabaseConfigProtocol[Any, Any, Any]", queue_backend: "QueueEventBackend") -> None:
         if "psycopg" not in type(config).__module__:
             msg = "Psycopg hybrid backend requires a Psycopg adapter"
             raise ImproperConfigurationError(msg)
@@ -168,13 +241,15 @@ class PsycopgHybridEventsBackend:
         self._listen_connection_sync: Any | None = None
         self._listen_connection_sync_cm: Any | None = None
 
-    async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    async def publish_async(
+        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
+    ) -> str:
         event_id = uuid.uuid4().hex
         await self._publish_durable_async(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
         return event_id
 
-    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid.uuid4().hex
         self._publish_durable_sync(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
@@ -184,56 +259,120 @@ class PsycopgHybridEventsBackend:
         connection = await self._ensure_async_listener(channel)
         async for _notify in connection.notifies(timeout=poll_interval, stop_after=1):
             break
-        return await self._queue.dequeue_async(channel)
+        return await self._queue.dequeue_async(channel, poll_interval=poll_interval)
 
-    def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
+    def dequeue_sync(self, channel: str, poll_interval: float) -> EventMessage | None:
         connection = self._ensure_sync_listener(channel)
         notify_iter = connection.notifies(timeout=poll_interval, stop_after=1)
         with contextlib.suppress(StopIteration):
             next(notify_iter)
-        return self._queue.dequeue(channel)
+        return self._queue.dequeue_sync(channel, poll_interval=poll_interval)
 
     async def _ensure_async_listener(self, channel: str) -> Any:
+        """Ensure async listener connection is established for the channel.
+
+        Args:
+            channel: Channel name to listen on.
+
+        Returns:
+            The async connection configured for LISTEN/NOTIFY.
+        """
         if self._listen_connection_async is None:
+            validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_async_cm = self._config.provide_connection()
             self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()
             await self._listen_connection_async.set_autocommit(True)
-            await self._listen_connection_async.execute(f"LISTEN {channel}")
+            await self._listen_connection_async.execute(f"LISTEN {validated_channel}")
         return self._listen_connection_async
 
     def _ensure_sync_listener(self, channel: str) -> Any:
+        """Ensure sync listener connection is established for the channel.
+
+        Args:
+            channel: Channel name to listen on.
+
+        Returns:
+            The sync connection configured for LISTEN/NOTIFY.
+        """
         if self._listen_connection_sync is None:
+            validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_sync_cm = self._config.provide_connection()
             self._listen_connection_sync = self._listen_connection_sync_cm.__enter__()
             self._listen_connection_sync.autocommit = True
-            self._listen_connection_sync.execute(f"LISTEN {channel}")
+            self._listen_connection_sync.execute(f"LISTEN {validated_channel}")
         return self._listen_connection_sync
 
     async def ack_async(self, event_id: str) -> None:
+        """Acknowledge an event asynchronously.
+
+        Args:
+            event_id: The event identifier to acknowledge.
+        """
         await self._queue.ack_async(event_id)
         self._runtime.increment_metric("events.ack")
 
-    def ack(self, event_id: str) -> None:
-        self._queue.ack(event_id)
+    def ack_sync(self, event_id: str) -> None:
+        """Acknowledge an event synchronously.
+
+        Args:
+            event_id: The event identifier to acknowledge.
+        """
+        self._queue.ack_sync(event_id)
         self._runtime.increment_metric("events.ack")
+
+    async def shutdown_async(self) -> None:
+        """Shutdown the async listener and release resources."""
+        if self._listen_connection_async_cm is not None:
+            with contextlib.suppress(Exception):
+                await self._listen_connection_async_cm.__aexit__(None, None, None)
+            self._listen_connection_async = None
+            self._listen_connection_async_cm = None
+
+    def shutdown_sync(self) -> None:
+        """Shutdown the sync listener and release resources."""
+        if self._listen_connection_sync_cm is not None:
+            with contextlib.suppress(Exception):
+                self._listen_connection_sync_cm.__exit__(None, None, None)
+            self._listen_connection_sync = None
+            self._listen_connection_sync_cm = None
+
+    def _get_table_queue(self) -> "TableEventQueue":
+        """Get the underlying TableEventQueue from the queue backend.
+
+        Returns:
+            The TableEventQueue instance.
+
+        Raises:
+            EventChannelError: If the queue reference is missing.
+        """
+        queue = self._queue._queue
+        if queue is None:
+            msg = "Hybrid queue backend missing queue reference"
+            raise EventChannelError(msg)
+        return queue
 
     async def _publish_durable_async(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
     ) -> None:
+        """Publish event to durable queue and send NOTIFY asynchronously.
+
+        Args:
+            channel: Channel name to publish to.
+            event_id: Unique event identifier.
+            payload: Event payload data.
+            metadata: Optional event metadata.
+        """
         now = datetime.now(timezone.utc)
-        queue = getattr(self._queue, "_queue", None)
-        if queue is None:
-            msg = "Hybrid queue backend missing queue reference"
-            raise EventChannelError(msg)
+        queue = self._get_table_queue()
         async with self._config.provide_session() as driver:
             await driver.execute(
                 SQL(
-                    queue._upsert_sql,  # type: ignore[attr-defined]
+                    queue._upsert_sql,
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": queue._encode_json(payload),  # type: ignore[attr-defined]
-                        "metadata_json": queue._encode_json(metadata),  # type: ignore[attr-defined]
+                        "payload_json": queue._encode_json(payload),
+                        "metadata_json": queue._encode_json(metadata),
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
@@ -243,26 +382,36 @@ class PsycopgHybridEventsBackend:
                     statement_config=queue.statement_config,
                 )
             )
-            await driver.execute(SQL("SELECT pg_notify(:channel, :payload)", {"channel": channel, "payload": to_json({"event_id": event_id})}))
+            await driver.execute(
+                SQL(
+                    "SELECT pg_notify(:channel, :payload)",
+                    {"channel": channel, "payload": to_json({"event_id": event_id})},
+                )
+            )
             await driver.commit()
 
     def _publish_durable_sync(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
     ) -> None:
+        """Publish event to durable queue and send NOTIFY synchronously.
+
+        Args:
+            channel: Channel name to publish to.
+            event_id: Unique event identifier.
+            payload: Event payload data.
+            metadata: Optional event metadata.
+        """
         now = datetime.now(timezone.utc)
-        queue = getattr(self._queue, "_queue", None)
-        if queue is None:
-            msg = "Hybrid queue backend missing queue reference"
-            raise EventChannelError(msg)
+        queue = self._get_table_queue()
         with self._config.provide_session() as driver:
             driver.execute(
                 SQL(
-                    queue._upsert_sql,  # type: ignore[attr-defined]
+                    queue._upsert_sql,
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": queue._encode_json(payload),  # type: ignore[attr-defined]
-                        "metadata_json": queue._encode_json(metadata),  # type: ignore[attr-defined]
+                        "payload_json": queue._encode_json(payload),
+                        "metadata_json": queue._encode_json(metadata),
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
@@ -272,13 +421,19 @@ class PsycopgHybridEventsBackend:
                     statement_config=queue.statement_config,
                 )
             )
-            driver.execute(SQL("SELECT pg_notify(:channel, :payload)", {"channel": channel, "payload": to_json({"event_id": event_id})}))
+            driver.execute(
+                SQL(
+                    "SELECT pg_notify(:channel, :payload)",
+                    {"channel": channel, "payload": to_json({"event_id": event_id})},
+                )
+            )
             driver.commit()
 
 
 def create_event_backend(
     config: "PsycopgAsyncConfig | PsycopgSyncConfig", backend_name: str, extension_settings: dict[str, Any]
 ) -> PsycopgEventsBackend | PsycopgHybridEventsBackend | None:
+    """Factory used by EventChannel to create the native psycopg backend."""
     if backend_name == "listen_notify":
         try:
             return PsycopgEventsBackend(config)

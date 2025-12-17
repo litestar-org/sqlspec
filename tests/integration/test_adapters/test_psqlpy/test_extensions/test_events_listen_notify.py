@@ -13,10 +13,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 def _dsn(service: "Any") -> str:
-    return (
-        f"postgres://{service.user}:{service.password}"
-        f"@{service.host}:{service.port}/{service.database}"
-    )
+    return f"postgres://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
 
 
 @pytest.mark.asyncio
@@ -53,8 +50,8 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
         assert message.payload["action"] == "native"
     finally:
         backend = getattr(channel, "_backend", None)
-        if backend and hasattr(backend, "shutdown"):
-            await backend.shutdown()
+        if backend and hasattr(backend, "shutdown_async"):
+            await backend.shutdown_async()
         if config.connection_instance:
             await config.close_pool()
 
@@ -100,7 +97,7 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
         assert message.payload["action"] == "hybrid"
     finally:
         backend = getattr(channel, "_backend", None)
-        if backend and hasattr(backend, "shutdown"):
-            await backend.shutdown()
+        if backend and hasattr(backend, "shutdown_async"):
+            await backend.shutdown_async()
         if config.connection_instance:
             await config.close_pool()

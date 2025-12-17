@@ -17,7 +17,7 @@ def test_duckdb_event_channel_queue_fallback(tmp_path) -> None:
     db_path = tmp_path / "duck_events.db"
 
     config = DuckDBConfig(
-        pool_config={"database": str(db_path)},
+        connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -28,10 +28,10 @@ def test_duckdb_event_channel_queue_fallback(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish("notifications", {"action": "duck"})
-    iterator = channel.iter_events("notifications", poll_interval=0.05)
+    event_id = channel.publish_sync("notifications", {"action": "duck"})
+    iterator = channel.iter_events_sync("notifications", poll_interval=0.05)
     message = next(iterator)
-    channel.ack(message.event_id)
+    channel.ack_sync(message.event_id)
 
     with config.provide_session() as driver:
         row = driver.select_one(

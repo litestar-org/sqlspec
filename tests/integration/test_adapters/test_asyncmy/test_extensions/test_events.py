@@ -1,0 +1,136 @@
+"""AsyncMy integration tests for the EventChannel queue backend."""
+
+import pytest
+from pytest_databases.docker.mysql import MySQLService
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncmy import AsyncmyConfig
+from sqlspec.migrations.commands import AsyncMigrationCommands
+
+pytestmark = pytest.mark.xdist_group("mysql")
+
+
+@pytest.mark.mysql
+@pytest.mark.asyncio
+async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService) -> None:
+    """AsyncMy configs publish, consume, and ack events via the queue backend."""
+    config = AsyncmyConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": True,
+        },
+        migration_config={"include_extensions": ["events"]},
+    )
+
+    commands = AsyncMigrationCommands(config)
+    await commands.upgrade()
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+
+    assert channel._backend_name == "queue"
+
+    event_id = await channel.publish_async("notifications", {"action": "mysql"})
+    iterator = channel.iter_events_async("notifications", poll_interval=0.05)
+    message = await iterator.__anext__()
+    await iterator.aclose()
+    await channel.ack_async(message.event_id)
+
+    async with config.provide_session() as driver:
+        row = await driver.select_one(
+            "SELECT status FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
+        )
+
+    assert message.payload["action"] == "mysql"
+    assert row["status"] == "acked"
+
+    await config.close_pool()
+
+
+@pytest.mark.mysql
+@pytest.mark.asyncio
+async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLService) -> None:
+    """AsyncMy queue backend handles multiple messages correctly."""
+    config = AsyncmyConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": True,
+        },
+        migration_config={"include_extensions": ["events"]},
+    )
+
+    commands = AsyncMigrationCommands(config)
+    await commands.upgrade()
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+
+    event_ids = [
+        await channel.publish_async("multi_test", {"index": 0}),
+        await channel.publish_async("multi_test", {"index": 1}),
+        await channel.publish_async("multi_test", {"index": 2}),
+    ]
+
+    received = []
+    iterator = channel.iter_events_async("multi_test", poll_interval=0.05)
+    for _ in range(3):
+        message = await iterator.__anext__()
+        received.append(message)
+        await channel.ack_async(message.event_id)
+    await iterator.aclose()
+
+    received_ids = {m.event_id for m in received}
+    assert received_ids == set(event_ids)
+
+    await config.close_pool()
+
+
+@pytest.mark.mysql
+@pytest.mark.asyncio
+async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService) -> None:
+    """AsyncMy queue backend redelivers nacked messages."""
+    config = AsyncmyConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": True,
+        },
+        migration_config={"include_extensions": ["events"]},
+    )
+
+    commands = AsyncMigrationCommands(config)
+    await commands.upgrade()
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+
+    event_id = await channel.publish_async("nack_test", {"retry": True})
+
+    iterator = channel.iter_events_async("nack_test", poll_interval=0.05)
+    message = await iterator.__anext__()
+    await channel.nack_async(message.event_id)
+    await iterator.aclose()
+
+    async with config.provide_session() as driver:
+        row = await driver.select_one(
+            "SELECT status, attempts FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
+        )
+
+    assert row["status"] == "pending"
+    assert row["attempts"] == 1
+
+    await config.close_pool()

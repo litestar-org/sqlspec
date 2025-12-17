@@ -4,7 +4,6 @@ import asyncio
 import importlib
 import inspect
 import threading
-import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyErro
 from sqlspec.extensions.events._hints import get_runtime_hints
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._queue import QueueEventBackend, TableEventQueue
+from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.portal import get_global_portal
 
@@ -81,18 +81,19 @@ class EventChannel:
     )
 
     def __init__(self, config: "DatabaseConfigProtocol[Any, Any, Any]") -> None:
-        extension_settings = dict(config.extension_config.get("events", {}))
+        extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
         self._adapter_name = self._resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
-        lease_seconds = int(extension_settings.get("lease_seconds", hints.lease_seconds))
-        retention_seconds = int(extension_settings.get("retention_seconds", hints.retention_seconds))
-        self._poll_interval_default = float(extension_settings.get("poll_interval", hints.poll_interval))
+        lease_seconds = int(extension_settings.get("lease_seconds") or hints.lease_seconds)
+        retention_seconds = int(extension_settings.get("retention_seconds") or hints.retention_seconds)
+        self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         if config.is_async:
             extension_settings.setdefault("portal_bridge", True)
+        queue_table: str | None = extension_settings.get("queue_table")
         queue_backend = QueueEventBackend(
             TableEventQueue(
                 config,
-                queue_table=extension_settings.get("queue_table"),
+                queue_table=queue_table,
                 lease_seconds=lease_seconds,
                 retention_seconds=retention_seconds,
                 select_for_update=hints.select_for_update,
@@ -126,6 +127,7 @@ class EventChannel:
     ) -> str:
         """Publish an event using an async driver."""
 
+        channel = self._normalize_channel_name(channel)
         if not self._is_async:
             msg = "publish_async requires an async configuration"
             raise ImproperConfigurationError(msg)
@@ -141,20 +143,21 @@ class EventChannel:
         self._end_event_span(span, result="published")
         return event_id
 
-    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         """Publish an event using a sync driver."""
 
+        channel = self._normalize_channel_name(channel)
         if self._is_async:
             if self._should_bridge_sync_calls():
                 return self._bridge_sync_call(self.publish_async, channel, payload, metadata)
-            msg = "publish requires a sync configuration"
+            msg = "publish_sync requires a sync configuration"
             raise ImproperConfigurationError(msg)
         if not getattr(self._backend, "supports_sync", False):
             msg = "Current events backend does not support sync publishing"
             raise ImproperConfigurationError(msg)
         span = self._start_event_span("publish", channel, mode="sync")
         try:
-            event_id = self._backend.publish(channel, payload, metadata)
+            event_id = self._backend.publish_sync(channel, payload, metadata)
         except Exception as error:
             self._end_event_span(span, error=error)
             raise
@@ -168,6 +171,7 @@ class EventChannel:
     ) -> AsyncIterator[EventMessage]:
         """Yield events as they become available for async adapters."""
 
+        channel = self._normalize_channel_name(channel)
         if not self._is_async:
             msg = "iter_events_async requires an async configuration"
             raise ImproperConfigurationError(msg)
@@ -184,20 +188,20 @@ class EventChannel:
                 raise
             if event is None:
                 self._end_event_span(span, result="empty")
-                await asyncio.sleep(interval)
                 continue
             self._end_event_span(span, result="delivered")
             self._runtime.increment_metric("events.deliver")
             yield event
 
-    def iter_events(self, channel: str, *, poll_interval: float | None = None) -> Iterator[EventMessage]:
+    def iter_events_sync(self, channel: str, *, poll_interval: float | None = None) -> Iterator[EventMessage]:
         """Yield events for sync adapters."""
 
+        channel = self._normalize_channel_name(channel)
         if self._is_async:
             if self._should_bridge_sync_calls():
                 yield from self._iter_events_portal(channel, poll_interval)
                 return
-            msg = "iter_events requires a sync configuration"
+            msg = "iter_events_sync requires a sync configuration"
             raise ImproperConfigurationError(msg)
         if not getattr(self._backend, "supports_sync", False):
             msg = "Current events backend does not support sync consumption"
@@ -206,13 +210,12 @@ class EventChannel:
         while True:
             span = self._start_event_span("dequeue", channel, mode="sync")
             try:
-                event = self._backend.dequeue(channel, interval)
+                event = self._backend.dequeue_sync(channel, interval)
             except Exception as error:
                 self._end_event_span(span, error=error)
                 raise
             if event is None:
                 self._end_event_span(span, result="empty")
-                time.sleep(interval)
                 continue
             self._end_event_span(span, result="delivered")
             self._runtime.increment_metric("events.deliver")
@@ -225,6 +228,7 @@ class EventChannel:
     ) -> SyncEventListener:
         """Start a background thread that invokes handler for each event."""
 
+        channel = self._normalize_channel_name(channel)
         if self._is_async and not self._should_bridge_sync_calls():
             msg = "listen requires a sync configuration"
             raise ImproperConfigurationError(msg)
@@ -267,7 +271,6 @@ class EventChannel:
             while not stop_event.is_set():
                 event = self._dequeue_for_sync(channel, poll_interval)
                 if event is None:
-                    time.sleep(poll_interval)
                     continue
                 message = event
                 try:
@@ -289,6 +292,7 @@ class EventChannel:
     ) -> AsyncEventListener:
         """Start an async task that delivers events to handler."""
 
+        channel = self._normalize_channel_name(channel)
         if not self._is_async:
             msg = "listen_async requires an async configuration"
             raise ImproperConfigurationError(msg)
@@ -333,7 +337,6 @@ class EventChannel:
                     raise
                 if event is None:
                     self._end_event_span(span, result="empty")
-                    await asyncio.sleep(poll_interval)
                     continue
                 self._end_event_span(span, result="delivered")
                 message = event
@@ -367,21 +370,21 @@ class EventChannel:
             raise
         self._end_event_span(span, result="acked")
 
-    def ack(self, event_id: str) -> None:
+    def ack_sync(self, event_id: str) -> None:
         """Acknowledge an event id synchronously."""
 
         if self._is_async:
             if self._should_bridge_sync_calls():
                 self._bridge_sync_call(self.ack_async, event_id)
                 return
-            msg = "ack requires a sync configuration"
+            msg = "ack_sync requires a sync configuration"
             raise ImproperConfigurationError(msg)
         if not getattr(self._backend, "supports_sync", False):
             msg = "Current events backend does not support sync ack"
             raise ImproperConfigurationError(msg)
         span = self._start_event_span("ack", mode="sync")
         try:
-            self._backend.ack(event_id)
+            self._backend.ack_sync(event_id)
         except Exception as error:
             self._end_event_span(span, error=error)
             raise
@@ -440,7 +443,6 @@ class EventChannel:
         while True:
             event = self._bridge_sync_call(self._dequeue_async_with_span, channel, interval)
             if event is None:
-                time.sleep(interval)
                 continue
             self._runtime.increment_metric("events.deliver")
             yield event
@@ -450,7 +452,7 @@ class EventChannel:
         if backend_supports_sync and not self._is_async:
             span = self._start_event_span("dequeue", channel, mode="sync")
             try:
-                event = self._backend.dequeue(channel, poll_interval)
+                event = self._backend.dequeue_sync(channel, poll_interval)
             except Exception as error:
                 self._end_event_span(span, error=error)
                 raise
@@ -466,7 +468,7 @@ class EventChannel:
         if backend_supports_sync and not self._is_async:
             span = self._start_event_span("ack", mode="sync")
             try:
-                self._backend.ack(event_id)
+                self._backend.ack_sync(event_id)
             except Exception as error:
                 self._end_event_span(span, error=error)
                 raise
@@ -505,6 +507,13 @@ class EventChannel:
             msg = "poll_interval must be greater than zero"
             raise ImproperConfigurationError(msg)
         return poll_interval
+
+    @staticmethod
+    def _normalize_channel_name(channel: str) -> str:
+        try:
+            return normalize_event_channel_name(channel)
+        except ValueError as error:
+            raise ImproperConfigurationError(str(error)) from error
 
     def _start_event_span(self, operation: str, channel: "str | None" = None, mode: str = "sync") -> Any:
         span_manager = getattr(self._runtime, "span_manager", None)

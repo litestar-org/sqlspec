@@ -25,22 +25,31 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
+        Uses caching to avoid repeated database queries within the same
+        driver session.
+
         Args:
-            driver: Async database driver instance
+            driver: Async database driver instance.
 
         Returns:
-            PostgreSQL version information or None if detection fails
+            PostgreSQL version information or None if detection fails.
         """
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
+        if was_cached:
+            return cached_version
+
         asyncpg_driver = cast("AsyncpgDriver", driver)
         version_str = await asyncpg_driver.select_value("SELECT version()")
         if not version_str:
             logger.warning("No PostgreSQL version information found")
+            self.cache_version(driver_id, None)
             return None
 
-        # Parse version like "PostgreSQL 15.3 on x86_64-pc-linux-gnu..."
         version_match = POSTGRES_VERSION_PATTERN.search(str(version_str))
         if not version_match:
             logger.warning("Could not parse PostgreSQL version: %s", version_str)
+            self.cache_version(driver_id, None)
             return None
 
         major = int(version_match.group(1))
@@ -49,6 +58,7 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
 
         version_info = VersionInfo(major, minor, patch)
         logger.debug("Detected PostgreSQL version: %s", version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
     async def get_feature_flag(self, driver: AsyncDriverAdapterBase, feature: str) -> bool:

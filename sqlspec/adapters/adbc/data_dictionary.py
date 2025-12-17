@@ -216,14 +216,23 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get database version information based on detected dialect.
 
+        Uses caching to avoid repeated database queries within the same
+        driver session.
+
         Args:
-            driver: ADBC driver instance
+            driver: ADBC driver instance.
 
         Returns:
-            Database version information or None if detection fails
+            Database version information or None if detection fails.
         """
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
+        if was_cached:
+            return cached_version
+
         dialect = self._get_dialect(driver)
         adbc_driver = cast("AdbcDriver", driver)
+        version_info: VersionInfo | None = None
 
         try:
             if dialect == "postgres":
@@ -234,7 +243,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                         major = int(match.group(1))
                         minor = int(match.group(2))
                         patch = int(match.group(3)) if match.group(3) else 0
-                        return VersionInfo(major, minor, patch)
+                        version_info = VersionInfo(major, minor, patch)
 
             elif dialect == "sqlite":
                 version_str = adbc_driver.select_value("SELECT sqlite_version()")
@@ -242,7 +251,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                     match = SQLITE_VERSION_PATTERN.match(str(version_str))
                     if match:
                         major, minor, patch = map(int, match.groups())
-                        return VersionInfo(major, minor, patch)
+                        version_info = VersionInfo(major, minor, patch)
 
             elif dialect == "duckdb":
                 version_str = adbc_driver.select_value("SELECT version()")
@@ -250,7 +259,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                     match = DUCKDB_VERSION_PATTERN.search(str(version_str))
                     if match:
                         major, minor, patch = map(int, match.groups())
-                        return VersionInfo(major, minor, patch)
+                        version_info = VersionInfo(major, minor, patch)
 
             elif dialect == "mysql":
                 version_str = adbc_driver.select_value("SELECT VERSION()")
@@ -258,15 +267,16 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                     match = MYSQL_VERSION_PATTERN.search(str(version_str))
                     if match:
                         major, minor, patch = map(int, match.groups())
-                        return VersionInfo(major, minor, patch)
+                        version_info = VersionInfo(major, minor, patch)
 
             elif dialect == "bigquery":
-                return VersionInfo(1, 0, 0)
+                version_info = VersionInfo(1, 0, 0)
 
         except Exception:
             logger.warning("Failed to get %s version", dialect)
 
-        return None
+        self.cache_version(driver_id, version_info)
+        return version_info
 
     def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
         """Check if database supports a specific feature based on detected dialect.
