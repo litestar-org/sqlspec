@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Psycopg LISTEN/NOTIFY and hybrid event backends."""
 
 import contextlib
@@ -55,7 +56,8 @@ class PsycopgEventsBackend:
     ) -> str:
         event_id = uuid.uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
-        async with self._config.provide_session() as driver:
+        session_cm = self._config.provide_session()
+        async with session_cm as driver:  # type: ignore[union-attr]
             await driver.execute(SQL("SELECT pg_notify(:channel, :payload)", {"channel": channel, "payload": envelope}))
             await driver.commit()
         self._runtime.increment_metric("events.publish.native")
@@ -64,7 +66,8 @@ class PsycopgEventsBackend:
     def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid.uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
-        with self._config.provide_session() as driver:
+        session_cm = self._config.provide_session()
+        with session_cm as driver:  # type: ignore[union-attr]
             driver.execute(SQL("SELECT pg_notify(:channel, :payload)", {"channel": channel, "payload": envelope}))
             driver.commit()
         self._runtime.increment_metric("events.publish.native")
@@ -122,9 +125,10 @@ class PsycopgEventsBackend:
         if self._listen_connection_async is None:
             validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_async_cm = self._config.provide_connection()
-            self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()
-            await self._listen_connection_async.set_autocommit(True)
-            await self._listen_connection_async.execute(f"LISTEN {validated_channel}")
+            self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()  # type: ignore[union-attr]
+            if self._listen_connection_async is not None:
+                await self._listen_connection_async.set_autocommit(True)
+                await self._listen_connection_async.execute(f"LISTEN {validated_channel}")
         return self._listen_connection_async
 
     def _ensure_sync_listener(self, channel: str) -> Any:
@@ -139,9 +143,10 @@ class PsycopgEventsBackend:
         if self._listen_connection_sync is None:
             validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_sync_cm = self._config.provide_connection()
-            self._listen_connection_sync = self._listen_connection_sync_cm.__enter__()
-            self._listen_connection_sync.autocommit = True
-            self._listen_connection_sync.execute(f"LISTEN {validated_channel}")
+            self._listen_connection_sync = self._listen_connection_sync_cm.__enter__()  # type: ignore[union-attr]
+            if self._listen_connection_sync is not None:
+                self._listen_connection_sync.autocommit = True
+                self._listen_connection_sync.execute(f"LISTEN {validated_channel}")
         return self._listen_connection_sync
 
     async def shutdown_async(self) -> None:
@@ -280,9 +285,10 @@ class PsycopgHybridEventsBackend:
         if self._listen_connection_async is None:
             validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_async_cm = self._config.provide_connection()
-            self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()
-            await self._listen_connection_async.set_autocommit(True)
-            await self._listen_connection_async.execute(f"LISTEN {validated_channel}")
+            self._listen_connection_async = await self._listen_connection_async_cm.__aenter__()  # type: ignore[union-attr]
+            if self._listen_connection_async is not None:
+                await self._listen_connection_async.set_autocommit(True)
+                await self._listen_connection_async.execute(f"LISTEN {validated_channel}")
         return self._listen_connection_async
 
     def _ensure_sync_listener(self, channel: str) -> Any:
@@ -297,9 +303,10 @@ class PsycopgHybridEventsBackend:
         if self._listen_connection_sync is None:
             validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_sync_cm = self._config.provide_connection()
-            self._listen_connection_sync = self._listen_connection_sync_cm.__enter__()
-            self._listen_connection_sync.autocommit = True
-            self._listen_connection_sync.execute(f"LISTEN {validated_channel}")
+            self._listen_connection_sync = self._listen_connection_sync_cm.__enter__()  # type: ignore[union-attr]
+            if self._listen_connection_sync is not None:
+                self._listen_connection_sync.autocommit = True
+                self._listen_connection_sync.execute(f"LISTEN {validated_channel}")
         return self._listen_connection_sync
 
     async def ack_async(self, event_id: str) -> None:
@@ -364,7 +371,8 @@ class PsycopgHybridEventsBackend:
         """
         now = datetime.now(timezone.utc)
         queue = self._get_table_queue()
-        async with self._config.provide_session() as driver:
+        session_cm = self._config.provide_session()
+        async with session_cm as driver:  # type: ignore[union-attr]
             await driver.execute(
                 SQL(
                     queue._upsert_sql,
@@ -403,7 +411,8 @@ class PsycopgHybridEventsBackend:
         """
         now = datetime.now(timezone.utc)
         queue = self._get_table_queue()
-        with self._config.provide_session() as driver:
+        session_cm = self._config.provide_session()
+        with session_cm as driver:  # type: ignore[union-attr]
             driver.execute(
                 SQL(
                     queue._upsert_sql,

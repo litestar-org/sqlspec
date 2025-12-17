@@ -165,7 +165,11 @@ class SQLSpec:
         from sqlspec.extensions.events import EventChannel
 
         if isinstance(config, type):
-            config_obj = self._configs.get(config)
+            config_obj: DatabaseConfigProtocol[Any, Any, Any] | None = None
+            for registered_config in self._configs.values():
+                if isinstance(registered_config, config):
+                    config_obj = registered_config
+                    break
             if config_obj is None:
                 msg = f"Configuration {self._get_config_name(config)} is not registered"
                 raise ImproperConfigurationError(msg)

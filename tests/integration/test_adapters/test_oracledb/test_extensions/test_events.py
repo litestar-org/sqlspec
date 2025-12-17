@@ -1,3 +1,4 @@
+# pyright: reportPossiblyUnboundVariable=false, reportAttributeAccessIssue=false
 """OracleDB integration tests for the EventChannel queue backend."""
 
 import asyncio

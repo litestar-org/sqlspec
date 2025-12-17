@@ -31,8 +31,8 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
 
     received: list[Any] = []
 
-    async def _handler(msg):
-        received.append(msg)
+    async def _handler(message: Any) -> None:
+        received.append(message)
 
     try:
         listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
@@ -78,8 +78,8 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
 
     received: list[Any] = []
 
-    async def _handler(msg):
-        received.append(msg)
+    async def _handler(message: Any) -> None:
+        received.append(message)
 
     try:
         listener = channel.listen_async("alerts", _handler, poll_interval=0.2)

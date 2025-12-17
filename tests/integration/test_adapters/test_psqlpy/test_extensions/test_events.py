@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Psqlpy integration tests for the EventChannel queue backend."""
 
 import asyncio

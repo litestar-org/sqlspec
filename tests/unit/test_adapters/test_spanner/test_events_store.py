@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Unit tests for SpannerSyncEventQueueStore."""
 
 from unittest.mock import MagicMock, patch

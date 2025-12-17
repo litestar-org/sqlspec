@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """AioSQLite integration tests for EventChannel with async table queue backend."""
 
 import pytest

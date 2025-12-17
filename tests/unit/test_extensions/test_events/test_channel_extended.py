@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false, reportArgumentType=false
 """Extended unit tests for EventChannel configuration and backend selection."""
 
 import pytest
@@ -232,7 +233,7 @@ def test_event_channel_iter_events_async_on_sync_raises(tmp_path) -> None:
     with pytest.raises(ImproperConfigurationError, match="async configuration"):
         import asyncio
 
-        async def iterate():
+        async def iterate() -> None:
             async for _ in channel.iter_events_async("test"):
                 break
 
@@ -289,20 +290,21 @@ def test_event_channel_listeners_initialized_empty(tmp_path) -> None:
 
 def test_event_channel_resolve_adapter_name_non_sqlspec_module(tmp_path) -> None:
     """_resolve_adapter_name returns None for non-sqlspec configs."""
+    from typing import Any
 
     class CustomConfig:
         is_async = False
-        extension_config = {}
-        driver_features = {}
+        extension_config: dict[str, Any] = {}
+        driver_features: dict[str, Any] = {}
         statement_config = None
 
-        def get_observability_runtime(self):
+        def get_observability_runtime(self) -> Any:
             from sqlspec.observability import NullObservabilityRuntime
 
             return NullObservabilityRuntime()
 
     CustomConfig.__module__ = "myapp.database.config"
-    result = EventChannel._resolve_adapter_name(CustomConfig())
+    result = EventChannel._resolve_adapter_name(CustomConfig())  # type: ignore[arg-type]
 
     assert result is None
 

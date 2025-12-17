@@ -149,7 +149,8 @@ class EventChannel:
         channel = self._normalize_channel_name(channel)
         if self._is_async:
             if self._should_bridge_sync_calls():
-                return self._bridge_sync_call(self.publish_async, channel, payload, metadata)
+                result: str = self._bridge_sync_call(self.publish_async, channel, payload, metadata)
+                return result
             msg = "publish_sync requires a sync configuration"
             raise ImproperConfigurationError(msg)
         if not getattr(self._backend, "supports_sync", False):
@@ -456,11 +457,14 @@ class EventChannel:
             except Exception as error:
                 self._end_event_span(span, error=error)
                 raise
-            result = "empty" if event is None else "delivered"
-            self._end_event_span(span, result=result)
+            span_result = "empty" if event is None else "delivered"
+            self._end_event_span(span, result=span_result)
             return event
         if self._should_bridge_sync_calls():
-            return self._bridge_sync_call(self._dequeue_async_with_span, channel, poll_interval)
+            bridged_result: EventMessage | None = self._bridge_sync_call(
+                self._dequeue_async_with_span, channel, poll_interval
+            )
+            return bridged_result
         return None
 
     def _ack_for_sync(self, event_id: str) -> None:
@@ -489,7 +493,7 @@ class EventChannel:
 
     def _ensure_portal(self) -> Any:
         if self._portal is None:
-            self._portal = get_global_portal()
+            self._portal = get_global_portal()  # type: ignore[assignment]
         return self._portal
 
     @staticmethod

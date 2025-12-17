@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event backend factories."""
 
 import pytest
@@ -53,8 +54,8 @@ def test_asyncpg_factory_passes_extension_settings() -> None:
     backend = create_event_backend(
         config, "listen_notify_durable", {"queue_table": "custom_queue", "lease_seconds": 60}
     )
-
-    queue = backend._queue._queue
+    assert backend is not None
+    queue = backend._queue._queue  # type: ignore[union-attr]
     assert queue._table_name == "custom_queue"
     assert queue._lease_seconds == 60
 
@@ -150,8 +151,8 @@ def test_psqlpy_factory_json_passthrough_not_set_by_default() -> None:
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
     backend = create_event_backend(config, "listen_notify_durable", {})
-
-    queue = backend._queue._queue
+    assert backend is not None
+    queue = backend._queue._queue  # type: ignore[union-attr]
     assert queue._json_passthrough is False
 
 
@@ -163,8 +164,8 @@ def test_psqlpy_factory_json_passthrough_explicit() -> None:
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
     backend = create_event_backend(config, "listen_notify_durable", {"json_passthrough": True})
-
-    queue = backend._queue._queue
+    assert backend is not None
+    queue = backend._queue._queue  # type: ignore[union-attr]
     assert queue._json_passthrough is True
 
 
@@ -203,7 +204,7 @@ def test_oracle_factory_custom_queue_name() -> None:
 
     config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
     backend = create_event_backend(config, "advanced_queue", {"aq_queue": "MY_CUSTOM_QUEUE"})
-
+    assert backend is not None
     assert backend._queue_name == "MY_CUSTOM_QUEUE"
 
 
@@ -411,7 +412,7 @@ def test_asyncpg_hybrid_backend_has_shutdown_async() -> None:
 
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
     backend = create_event_backend(config, "listen_notify_durable", {})
-
+    assert backend is not None
     assert hasattr(backend, "shutdown_async")
     assert callable(backend.shutdown_async)
 
@@ -439,7 +440,7 @@ async def test_asyncpg_hybrid_backend_shutdown_idempotent() -> None:
 
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
     backend = create_event_backend(config, "listen_notify_durable", {})
-
+    assert backend is not None
     await backend.shutdown_async()
     await backend.shutdown_async()
 
@@ -465,7 +466,7 @@ def test_psycopg_hybrid_backend_has_shutdown_async() -> None:
 
     config = PsycopgAsyncConfig(connection_config={"dbname": "test"})
     backend = create_event_backend(config, "listen_notify_durable", {})
-
+    assert backend is not None
     assert hasattr(backend, "shutdown_async")
     assert callable(backend.shutdown_async)
 
@@ -493,7 +494,7 @@ async def test_psycopg_hybrid_backend_shutdown_idempotent() -> None:
 
     config = PsycopgAsyncConfig(connection_config={"dbname": "test"})
     backend = create_event_backend(config, "listen_notify_durable", {})
-
+    assert backend is not None
     await backend.shutdown_async()
     await backend.shutdown_async()
 
@@ -519,7 +520,7 @@ def test_psqlpy_hybrid_backend_has_shutdown_async() -> None:
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
     backend = create_event_backend(config, "listen_notify_durable", {})
-
+    assert backend is not None
     assert hasattr(backend, "shutdown_async")
     assert callable(backend.shutdown_async)
 
@@ -547,7 +548,7 @@ async def test_psqlpy_hybrid_backend_shutdown_idempotent() -> None:
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
     backend = create_event_backend(config, "listen_notify_durable", {})
-
+    assert backend is not None
     await backend.shutdown_async()
     await backend.shutdown_async()
 

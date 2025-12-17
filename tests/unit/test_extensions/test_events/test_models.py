@@ -149,6 +149,7 @@ def test_event_message_different_timestamps() -> None:
     )
 
     assert message.created_at < message.available_at
+    assert message.lease_expires_at is not None
     assert message.available_at < message.lease_expires_at
 
 

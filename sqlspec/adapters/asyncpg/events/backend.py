@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Native and hybrid PostgreSQL backends for EventChannel."""
 
 import asyncio
@@ -68,7 +69,8 @@ class AsyncpgHybridEventsBackend:
         if self._listen_connection is None:
             self._listen_connection_cm = self._config.provide_connection()
             self._listen_connection = await self._listen_connection_cm.__aenter__()
-            await self._listen_connection.execute(f"LISTEN {channel}")
+            if self._listen_connection is not None:
+                await self._listen_connection.execute(f"LISTEN {channel}")
         return self._listen_connection
 
     async def ack_async(self, event_id: str) -> None:
@@ -240,7 +242,8 @@ class AsyncpgEventsBackend:
                 self._notify_mode = "add_listener"
             elif getattr(self._listen_connection, "notifies", None) is not None:
                 self._notify_mode = "notifies"
-                await self._listen_connection.execute(f"LISTEN {channel}")
+                if self._listen_connection is not None:
+                    await self._listen_connection.execute(f"LISTEN {channel}")
             else:
                 msg = "PostgreSQL connection does not support LISTEN/NOTIFY callbacks"
                 raise EventChannelError(msg)

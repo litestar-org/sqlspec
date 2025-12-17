@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Unit tests for TableEventQueue and QueueEventBackend."""
 
 from datetime import datetime, timezone

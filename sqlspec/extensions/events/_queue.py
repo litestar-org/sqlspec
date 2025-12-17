@@ -270,8 +270,9 @@ class TableEventQueue:
 
     async def _fetch_candidate_async(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
-        async with self._config.provide_session() as driver:
-            return await driver.select_one_or_none(
+        session_cm = self._config.provide_session()
+        async with session_cm as driver:  # type: ignore[union-attr]
+            result: dict[str, Any] | None = await driver.select_one_or_none(
                 SQL(
                     self._select_sql,
                     {
@@ -284,11 +285,13 @@ class TableEventQueue:
                     statement_config=self._statement_config,
                 )
             )
+            return result
 
     def _fetch_candidate_sync(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
-        with self._config.provide_session() as driver:
-            return driver.select_one_or_none(
+        session_cm = self._config.provide_session()
+        with session_cm as driver:  # type: ignore[union-attr]
+            result: dict[str, Any] | None = driver.select_one_or_none(
                 SQL(
                     self._select_sql,
                     {
@@ -301,20 +304,23 @@ class TableEventQueue:
                     statement_config=self._statement_config,
                 )
             )
+            return result
 
     async def _execute_async(self, sql: str, parameters: "dict[str, Any]") -> int:
-        async with self._config.provide_session() as driver:
+        session_cm = self._config.provide_session()
+        async with session_cm as driver:  # type: ignore[union-attr]
             result = await driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
             if result.rows_affected:
                 await driver.commit()
-        return result.rows_affected
+            return int(result.rows_affected)
 
     def _execute_sync(self, sql: str, parameters: "dict[str, Any]") -> int:
-        with self._config.provide_session() as driver:
+        session_cm = self._config.provide_session()
+        with session_cm as driver:  # type: ignore[union-attr]
             result = driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
             if result.rows_affected:
                 driver.commit()
-        return result.rows_affected
+            return int(result.rows_affected)
 
     @staticmethod
     def _coerce_datetime(value: Any) -> "datetime":

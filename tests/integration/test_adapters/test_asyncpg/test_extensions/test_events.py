@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """AsyncPG integration tests for the EventChannel native backend."""
 
 import pytest

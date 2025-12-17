@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event queue stores and DDL generation."""
 
 import pytest
@@ -46,7 +47,7 @@ def test_asyncmy_store_schema_qualified_index() -> None:
     )
     store = AsyncmyEventQueueStore(config)
     index_sql = store._build_index_sql()
-
+    assert index_sql is not None
     assert "'myschema'" in index_sql
 
 
@@ -59,7 +60,7 @@ def test_asyncmy_store_unqualified_table_uses_database() -> None:
     config = AsyncmyConfig(connection_config={"host": "localhost", "database": "test"})
     store = AsyncmyEventQueueStore(config)
     index_sql = store._build_index_sql()
-
+    assert index_sql is not None
     assert "DATABASE()" in index_sql
 
 

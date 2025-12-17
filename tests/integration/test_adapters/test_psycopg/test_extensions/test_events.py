@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Psycopg integration tests for the EventChannel queue backend."""
 
 import asyncio

@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false
 """Tests for the EventChannel queue fallback."""
 
 import pytest

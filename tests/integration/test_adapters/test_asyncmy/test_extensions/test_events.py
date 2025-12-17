@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false
 """AsyncMy integration tests for the EventChannel queue backend."""
 
 import pytest

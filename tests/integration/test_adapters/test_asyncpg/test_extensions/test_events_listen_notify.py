@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """PostgreSQL LISTEN/NOTIFY event channel tests for asyncpg adapter."""
 
 import asyncio
@@ -58,8 +59,8 @@ async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -
 
     received: list[Any] = []
 
-    async def _handler(msg: Any) -> None:
-        received.append(msg)
+    async def _handler(message: Any) -> None:
+        received.append(message)
 
     listener = channel.listen_async("notifications", _handler, poll_interval=0.2)
     event_id = await channel.publish_async("notifications", {"action": "async_delivery"})
@@ -105,8 +106,8 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
 
     received: list[Any] = []
 
-    async def _handler(msg: Any) -> None:
-        received.append(msg)
+    async def _handler(message: Any) -> None:
+        received.append(message)
 
     listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
     event_id = await channel.publish_async("alerts", {"action": "hybrid_async"})
@@ -143,8 +144,8 @@ async def test_asyncpg_listen_notify_metadata(postgres_service: "Any") -> None:
 
     received: list[Any] = []
 
-    async def _handler(msg: Any) -> None:
-        received.append(msg)
+    async def _handler(message: Any) -> None:
+        received.append(message)
 
     listener = channel.listen_async("meta_channel", _handler, poll_interval=0.2)
     event_id = await channel.publish_async(

@@ -51,7 +51,8 @@ class OracleAQEventBackend:
     def publish_sync(self, channel: str, payload: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
         event_id = uuid.uuid4().hex
         envelope = self._build_envelope(channel, event_id, payload, metadata)
-        with self._config.provide_session() as driver:
+        session_cm = self._config.provide_session()
+        with session_cm as driver:  # type: ignore[union-attr]
             connection = getattr(driver, "connection", None)
             if connection is None:
                 msg = "Oracle driver does not expose a raw connection"
@@ -67,7 +68,8 @@ class OracleAQEventBackend:
         raise ImproperConfigurationError(msg)
 
     def dequeue_sync(self, channel: str, poll_interval: float) -> EventMessage | None:
-        with self._config.provide_session() as driver:
+        session_cm = self._config.provide_session()
+        with session_cm as driver:  # type: ignore[union-attr]
             connection = getattr(driver, "connection", None)
             if connection is None:
                 msg = "Oracle driver does not expose a raw connection"
@@ -76,10 +78,13 @@ class OracleAQEventBackend:
             options = oracledb.AQDequeueOptions()  # type: ignore[attr-defined]
             options.wait = max(int(self._wait_seconds), 0)
             if self._visibility:
-                options.visibility = getattr(oracledb, self._visibility, None) or oracledb.AQMSG_VISIBLE
+                default_visibility = getattr(oracledb, "AQMSG_VISIBLE", None)
+                options.visibility = getattr(oracledb, self._visibility, None) or default_visibility
             try:
                 message = queue.deqone(options=options)
-            except oracledb.DatabaseError as error:  # pragma: no cover - driver surfaced runtime
+            except Exception as error:  # pragma: no cover - driver surfaced runtime
+                if oracledb is None or not isinstance(error, oracledb.DatabaseError):
+                    raise
                 logger.warning("Oracle AQ dequeue failed: %s", error)
                 driver.rollback()
                 return None
