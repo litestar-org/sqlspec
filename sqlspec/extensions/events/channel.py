@@ -5,9 +5,9 @@ import importlib
 import inspect
 import threading
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._hints import get_runtime_hints
@@ -626,7 +626,7 @@ class EventChannel:
             if backend_shutdown is not None and callable(backend_shutdown):
                 result = backend_shutdown()
                 if result is not None:
-                    await result
+                    await cast("Awaitable[None]", result)
         except Exception as error:
             self._end_event_span(span, error=error)
             raise
