@@ -19,9 +19,9 @@ Database Event Channels
 - Added the first native backend (AsyncPG LISTEN/NOTIFY) enabled via ``driver_features["events_backend"] = "listen_notify"``; the API automatically falls back to the queue backend for other adapters.
 - Introduced experimental Oracle Advanced Queuing support (sync adapters) via ``driver_features["events_backend"] = "advanced_queue"`` with automatic fallback when AQ is unavailable.
 - Documented configuration patterns (queue table naming, lease/retention windows, Oracle ``INMEMORY`` toggle, Postgres native mode) in :doc:`/guides/events/database-event-channels`.
-- Event telemetry now tracks ``events.publish``, ``events.publish.native``, ``events.deliver`` and listener lifecycle, so Prometheus/Otel exporters see event workloads alongside query metrics.
+- Event telemetry now tracks ``events.publish``, ``events.publish.native``, ``events.deliver``, ``events.ack``, ``events.nack``, ``events.shutdown`` and listener lifecycle, so Prometheus/Otel exporters see event workloads alongside query metrics.
 - Added adapter-specific runtime hints (asyncmy, duckdb, bigquery/adbc) plus a ``poll_interval`` extension option so operators can tune leases and cadence per database.
-- Publishing, dequeue, and ack operations now emit ``sqlspec.events.*`` spans whenever ``extension_config["otel"]`` is enabled, giving full trace coverage without extra plumbing.
+- Publishing, dequeue, ack, nack, and shutdown operations now emit ``sqlspec.events.*`` spans whenever ``extension_config["otel"]`` is enabled, giving full trace coverage without extra plumbing.
 - Documented adapter-specific guidance (asyncpg, psycopg, psqlpy, asyncmy, duckdb, oracle) and added a DuckDB integration test to cover the queue fallback path.
 
 v0.33.0 - Configuration Parameter Standardization (BREAKING CHANGE)

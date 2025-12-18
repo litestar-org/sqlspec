@@ -226,12 +226,40 @@ against accidental sync usage.
 `EventChannel` reuses the adapter's observability runtime. Publishing and acking
 increment `events.publish` / `events.ack` counters (native backends emit
 `events.publish.native`), consumers add `events.deliver`, and listener lifecycle
-is tracked via `events.listener.start/stop`. Each publish/dequeue/ack operation
-also opens a span (`sqlspec.events.publish`, `sqlspec.events.dequeue`,
-`sqlspec.events.ack`) so enabling `extension_config["otel"]` automatically
-exports structured traces. The counters and spans flow through
+is tracked via `events.listener.start/stop`. Durable queue backends also record
+`events.nack` when a message is returned to the queue, and `events.shutdown`
+tracks explicit channel shutdown.
+
+Each publish/dequeue/ack/nack/shutdown operation also opens a span
+(`sqlspec.events.publish`, `sqlspec.events.dequeue`, `sqlspec.events.ack`,
+`sqlspec.events.nack`, `sqlspec.events.shutdown`) so enabling
+`extension_config["otel"]` automatically exports structured traces. The counters
+and spans flow through
 `SQLSpec.telemetry_snapshot()` plus the Prometheus helper when
 `extension_config["prometheus"]` is enabled.
+
+## Redelivery (nack) and shutdown
+
+The durable `table_queue` backend supports returning a claimed message to the
+queue for redelivery:
+
+```python
+message = await channel.dequeue_async("notifications", poll_interval=1.0)
+if message is not None:
+    await channel.nack_async(message.event_id)
+```
+
+Native `listen_notify` backends are fire-and-forget and do not support nacking
+because they do not create a durable queue row.
+
+When using native PostgreSQL backends (or hybrid backends that keep a dedicated
+listener connection), call `shutdown_async()` before closing the pool to release
+listener resources cleanly:
+
+```python
+await channel.shutdown_async()
+await config.close_pool()
+```
 
 ## Architecture
 
@@ -311,33 +339,9 @@ config = AdbcConfig(
 )
 ```
 
-## Litestar/ADK integration
+## Litestar integration
 
-- The Litestar and ADK plugins already call `SQLSpec.event_channel()` for you.
-  Enable the extension in your adapter config, then rely on dependency
-  injection to pull channels into handlers:
-
-```python
-from litestar import Litestar, Router
-from sqlspec import SQLSpec
-from sqlspec.adapters.asyncpg import AsyncpgConfig
-from sqlspec.extensions.litestar import SQLSpecPlugin
-
-sql = SQLSpec()
-config = sql.add_config(
-    AsyncpgConfig(
-        connection_config={"dsn": "postgresql://localhost/db"},
-        extension_config={"events": {"queue_table": "app_events"}},
-    )
-)
-
-plugin = SQLSpecPlugin(sql)
-
-async def broadcast_refresh(channel=sql.event_channel(config)) -> None:
-    await channel.publish_async("notifications", {"action": "refresh"})
-
-app = Litestar(route_handlers=[Router(after_request=[broadcast_refresh])], plugins=[plugin])
-```
-
-- Litestar automatically populates `CorrelationContext`, so listener spans and
-  metrics inherit the same correlation IDs as the rest of the request.
+Use `EventChannel` directly, or wire SQLSpec into Litestar's ChannelsPlugin via
+`SQLSpecChannelsBackend` (see the Litestar extension guide). Litestar
+automatically populates `CorrelationContext`, so event spans and metrics inherit
+the same correlation IDs as the rest of the request.
