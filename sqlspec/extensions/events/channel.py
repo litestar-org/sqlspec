@@ -114,7 +114,7 @@ class EventChannel:
         self._config = config
         self._backend_name = backend_label
         self._is_async = bool(config.is_async)
-        self._portal_bridge = bool(extension_settings.get("portal_bridge", False)) and self._is_async
+        self._portal_bridge = bool(extension_settings.get("portal_bridge")) and self._is_async
         self._portal = None
         self._runtime = config.get_observability_runtime()
         self._listeners_async: dict[str, AsyncEventListener] = {}
@@ -626,7 +626,7 @@ class EventChannel:
             if backend_shutdown is not None and callable(backend_shutdown):
                 result = backend_shutdown()
                 if result is not None:
-                    await result  # type: ignore[misc]
+                    await result
         except Exception as error:
             self._end_event_span(span, error=error)
             raise

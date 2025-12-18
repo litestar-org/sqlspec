@@ -1,6 +1,6 @@
 import asyncio
 import tempfile
-from typing import Any
+from typing import Any, cast
 
 import msgspec.json
 import pytest
@@ -14,7 +14,7 @@ from sqlspec.migrations.commands import AsyncMigrationCommands
 
 async def _next_event(subscriber: "Any") -> bytes:
     async for event in subscriber.iter_events():
-        return event
+        return cast("bytes", event)
     msg = "Subscriber stopped without yielding an event"
     raise RuntimeError(msg)
 

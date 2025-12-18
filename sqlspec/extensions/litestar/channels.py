@@ -4,13 +4,16 @@ import asyncio
 import base64
 import hashlib
 import re
-from collections.abc import AsyncGenerator, Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from litestar.channels.backends.base import ChannelsBackend
 
-from sqlspec.extensions.events.channel import EventChannel
 from sqlspec.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Iterable
+
+    from sqlspec.extensions.events.channel import EventChannel
 
 logger = get_logger("extensions.litestar.channels")
 
@@ -42,11 +45,7 @@ class SQLSpecChannelsBackend(ChannelsBackend):
     )
 
     def __init__(
-        self,
-        event_channel: "EventChannel",
-        *,
-        channel_prefix: str = "litestar",
-        poll_interval: float = 0.2,
+        self, event_channel: "EventChannel", *, channel_prefix: str = "litestar", poll_interval: float = 0.2
     ) -> None:
         if not _IDENTIFIER_PATTERN.match(channel_prefix):
             msg = f"channel_prefix must be a valid identifier, got: {channel_prefix!r}"
@@ -57,9 +56,9 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         self._event_channel = event_channel
         self._channel_prefix = channel_prefix
         self._poll_interval = poll_interval
-        self._output_queue: "asyncio.Queue[tuple[str, bytes]] | None" = None
+        self._output_queue: asyncio.Queue[tuple[str, bytes]] | None = None
         self._shutdown = asyncio.Event()
-        self._tasks: dict[str, "asyncio.Task[None]"] = {}
+        self._tasks: dict[str, asyncio.Task[None]] = {}
         self._to_db_channel: dict[str, str] = {}
         self._to_litestar_channel: dict[str, str] = {}
 
@@ -95,7 +94,7 @@ class SQLSpecChannelsBackend(ChannelsBackend):
             self._tasks[channel] = task
 
     async def unsubscribe(self, channels: "Iterable[str]") -> None:
-        cancelled: list["asyncio.Task[None]"] = []
+        cancelled: list[asyncio.Task[None]] = []
         for channel in channels:
             task = self._tasks.pop(channel, None)
             if task is None:
