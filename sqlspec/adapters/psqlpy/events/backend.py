@@ -246,6 +246,10 @@ class PsqlpyHybridEventsBackend:
         await self._queue.ack_async(event_id)
         self._runtime.increment_metric("events.ack")
 
+    async def nack_async(self, event_id: str) -> None:
+        await self._queue.nack_async(event_id)
+        self._runtime.increment_metric("events.nack")
+
     def ack_sync(self, _event_id: str) -> None:
         msg = "ack_sync is not supported for async-only Psqlpy backend"
         raise ImproperConfigurationError(msg)

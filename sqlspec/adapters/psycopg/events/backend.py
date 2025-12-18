@@ -327,6 +327,24 @@ class PsycopgHybridEventsBackend:
         self._queue.ack_sync(event_id)
         self._runtime.increment_metric("events.ack")
 
+    async def nack_async(self, event_id: str) -> None:
+        """Return an event to the durable queue for redelivery asynchronously.
+
+        Args:
+            event_id: The event identifier to return to the queue.
+        """
+        await self._queue.nack_async(event_id)
+        self._runtime.increment_metric("events.nack")
+
+    def nack_sync(self, event_id: str) -> None:
+        """Return an event to the durable queue for redelivery synchronously.
+
+        Args:
+            event_id: The event identifier to return to the queue.
+        """
+        self._queue.nack_sync(event_id)
+        self._runtime.increment_metric("events.nack")
+
     async def shutdown_async(self) -> None:
         """Shutdown the async listener and release resources."""
         if self._listen_connection_async_cm is not None:

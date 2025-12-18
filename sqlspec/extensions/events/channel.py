@@ -250,6 +250,17 @@ class EventChannel:
         thread.start()
         return listener
 
+    def listen_sync(
+        self, channel: str, handler: "SyncEventHandler", *, poll_interval: float | None = None, auto_ack: bool = True
+    ) -> SyncEventListener:
+        """Start a sync listener thread.
+
+        This is an alias of :meth:`listen`, provided for API symmetry with
+        :meth:`listen_async`.
+        """
+
+        return self.listen(channel, handler, poll_interval=poll_interval, auto_ack=auto_ack)
+
     def stop_listener(self, listener_id: str) -> None:
         """Stop a running sync listener."""
 
@@ -258,6 +269,15 @@ class EventChannel:
             return
         listener.stop()
         self._runtime.increment_metric("events.listener.stop")
+
+    def stop_listener_sync(self, listener_id: str) -> None:
+        """Stop a running sync listener.
+
+        This is an alias of :meth:`stop_listener`, provided for API symmetry
+        with :meth:`stop_listener_async`.
+        """
+
+        self.stop_listener(listener_id)
 
     def _run_sync_listener(
         self,
@@ -391,6 +411,51 @@ class EventChannel:
             raise
         self._end_event_span(span, result="acked")
 
+    async def nack_async(self, event_id: str) -> None:
+        """Return an event to the queue for redelivery asynchronously.
+
+        Resets the event status to pending, clearing the lease and allowing
+        it to be picked up by another consumer.
+        """
+        if not self._is_async:
+            msg = "nack_async requires an async configuration"
+            raise ImproperConfigurationError(msg)
+        nack_method = getattr(self._backend, "nack_async", None)
+        if nack_method is None:
+            msg = "Current events backend does not support nack"
+            raise ImproperConfigurationError(msg)
+        span = self._start_event_span("nack", mode="async")
+        try:
+            await nack_method(event_id)
+        except Exception as error:
+            self._end_event_span(span, error=error)
+            raise
+        self._end_event_span(span, result="nacked")
+
+    def nack_sync(self, event_id: str) -> None:
+        """Return an event to the queue for redelivery synchronously.
+
+        Resets the event status to pending, clearing the lease and allowing
+        it to be picked up by another consumer.
+        """
+        if self._is_async:
+            if self._should_bridge_sync_calls():
+                self._bridge_sync_call(self.nack_async, event_id)
+                return
+            msg = "nack_sync requires a sync configuration"
+            raise ImproperConfigurationError(msg)
+        nack_method = getattr(self._backend, "nack_sync", None)
+        if nack_method is None:
+            msg = "Current events backend does not support nack"
+            raise ImproperConfigurationError(msg)
+        span = self._start_event_span("nack", mode="sync")
+        try:
+            nack_method(event_id)
+        except Exception as error:
+            self._end_event_span(span, error=error)
+            raise
+        self._end_event_span(span, result="nacked")
+
     # Loading helpers -----------------------------------------------------------
 
     @staticmethod
@@ -520,23 +585,18 @@ class EventChannel:
             raise ImproperConfigurationError(str(error)) from error
 
     def _start_event_span(self, operation: str, channel: "str | None" = None, mode: str = "sync") -> Any:
-        span_manager = getattr(self._runtime, "span_manager", None)
-        if span_manager is None or not getattr(span_manager, "is_enabled", False):
+        if not getattr(self._runtime.span_manager, "is_enabled", False):
             return None
         attributes: dict[str, Any] = {
             "sqlspec.events.operation": operation,
             "sqlspec.events.backend": self._backend_name,
             "sqlspec.events.mode": mode,
-            "sqlspec.config": type(self._config).__name__,
         }
         if self._adapter_name:
             attributes["sqlspec.events.adapter"] = self._adapter_name
-        bind_key = getattr(self._config, "bind_key", None)
-        if bind_key:
-            attributes["sqlspec.bind_key"] = bind_key
         if channel:
             attributes["sqlspec.events.channel"] = channel
-        return span_manager.start_span(f"sqlspec.events.{operation}", attributes)
+        return self._runtime.start_span(f"sqlspec.events.{operation}", attributes=attributes)
 
     def _end_event_span(self, span: Any, *, error: "Exception | None" = None, result: "str | None" = None) -> None:
         if span is None:
@@ -545,4 +605,55 @@ class EventChannel:
             setter = getattr(span, "set_attribute", None)
             if setter is not None:
                 setter("sqlspec.events.result", result)
-        self._runtime.span_manager.end_span(span, error=error)
+        self._runtime.end_span(span, error=error)
+
+    # Shutdown helpers ------------------------------------------------------------
+
+    async def shutdown_async(self) -> None:
+        """Shutdown the event channel and release backend resources.
+
+        Stops all async listeners and calls the backend's shutdown_async method
+        to release any held connections (e.g., LISTEN/NOTIFY listener connections).
+
+        Must be called before closing the database pool when using native backends.
+        """
+        span = self._start_event_span("shutdown", mode="async")
+        try:
+            for listener_id in list(self._listeners_async):
+                await self.stop_listener_async(listener_id)
+
+            backend_shutdown = getattr(self._backend, "shutdown_async", None)
+            if backend_shutdown is not None and callable(backend_shutdown):
+                result = backend_shutdown()
+                if result is not None:
+                    await result  # type: ignore[misc]
+        except Exception as error:
+            self._end_event_span(span, error=error)
+            raise
+        self._end_event_span(span, result="shutdown")
+        self._runtime.increment_metric("events.shutdown")
+
+    def shutdown_sync(self) -> None:
+        """Shutdown the event channel and release backend resources.
+
+        Stops all sync listeners. For async backends with sync bridging,
+        use shutdown_async instead.
+        """
+        if self._is_async:
+            if self._should_bridge_sync_calls():
+                self._bridge_sync_call(self.shutdown_async)
+                return
+            msg = "shutdown_sync requires a sync configuration"
+            raise ImproperConfigurationError(msg)
+        span = self._start_event_span("shutdown", mode="sync")
+        try:
+            for listener_id in list(self._listeners_sync):
+                self.stop_listener(listener_id)
+            backend_shutdown = getattr(self._backend, "shutdown_sync", None)
+            if backend_shutdown is not None and callable(backend_shutdown):
+                backend_shutdown()
+        except Exception as error:
+            self._end_event_span(span, error=error)
+            raise
+        self._end_event_span(span, result="shutdown")
+        self._runtime.increment_metric("events.shutdown")

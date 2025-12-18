@@ -63,6 +63,7 @@ async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -
         received.append(message)
 
     listener = channel.listen_async("notifications", _handler, poll_interval=0.2)
+    await asyncio.sleep(0.3)  # Allow listener to subscribe before publishing
     event_id = await channel.publish_async("notifications", {"action": "async_delivery"})
 
     for _ in range(200):
@@ -77,6 +78,7 @@ async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -
     assert message.event_id == event_id
     assert message.payload["action"] == "async_delivery"
 
+    await channel.shutdown_async()
     if config.connection_instance:
         await config.close_pool()
 
@@ -110,6 +112,7 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
         received.append(message)
 
     listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
+    await asyncio.sleep(0.3)  # Allow listener to subscribe before publishing
     event_id = await channel.publish_async("alerts", {"action": "hybrid_async"})
 
     for _ in range(200):
@@ -124,6 +127,7 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
     assert message.event_id == event_id
     assert message.payload["action"] == "hybrid_async"
 
+    await channel.shutdown_async()
     if config.connection_instance:
         await config.close_pool()
 
@@ -148,6 +152,7 @@ async def test_asyncpg_listen_notify_metadata(postgres_service: "Any") -> None:
         received.append(message)
 
     listener = channel.listen_async("meta_channel", _handler, poll_interval=0.2)
+    await asyncio.sleep(0.3)  # Allow listener to subscribe before publishing
     event_id = await channel.publish_async(
         "meta_channel", {"action": "with_metadata"}, metadata={"source": "test", "priority": 1}
     )
@@ -166,5 +171,6 @@ async def test_asyncpg_listen_notify_metadata(postgres_service: "Any") -> None:
     assert message.metadata["source"] == "test"
     assert message.metadata["priority"] == 1
 
+    await channel.shutdown_async()
     if config.connection_instance:
         await config.close_pool()

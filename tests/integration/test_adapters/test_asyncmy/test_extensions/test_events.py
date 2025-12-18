@@ -1,6 +1,8 @@
 # pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false
 """AsyncMy integration tests for the EventChannel queue backend."""
 
+from typing import Any
+
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
@@ -13,8 +15,11 @@ pytestmark = pytest.mark.xdist_group("mysql")
 
 @pytest.mark.mysql
 @pytest.mark.asyncio
-async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService) -> None:
+async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService, tmp_path: Any) -> None:
     """AsyncMy configs publish, consume, and ack events via the queue backend."""
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+
     config = AsyncmyConfig(
         connection_config={
             "host": mysql_service.host,
@@ -24,7 +29,8 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService)
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"include_extensions": ["events"]},
+        migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
+        extension_config={"events": {}},
     )
 
     commands = AsyncMigrationCommands(config)
@@ -34,7 +40,7 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService)
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    assert channel._backend_name == "queue"
+    assert channel._backend_name == "table_queue"
 
     event_id = await channel.publish_async("notifications", {"action": "mysql"})
     iterator = channel.iter_events_async("notifications", poll_interval=0.05)
@@ -55,8 +61,11 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService)
 
 @pytest.mark.mysql
 @pytest.mark.asyncio
-async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLService) -> None:
+async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLService, tmp_path: Any) -> None:
     """AsyncMy queue backend handles multiple messages correctly."""
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+
     config = AsyncmyConfig(
         connection_config={
             "host": mysql_service.host,
@@ -66,7 +75,8 @@ async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLServi
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"include_extensions": ["events"]},
+        migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
+        extension_config={"events": {}},
     )
 
     commands = AsyncMigrationCommands(config)
@@ -98,8 +108,11 @@ async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLServi
 
 @pytest.mark.mysql
 @pytest.mark.asyncio
-async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService) -> None:
+async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService, tmp_path: Any) -> None:
     """AsyncMy queue backend redelivers nacked messages."""
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+
     config = AsyncmyConfig(
         connection_config={
             "host": mysql_service.host,
@@ -109,7 +122,8 @@ async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"include_extensions": ["events"]},
+        migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
+        extension_config={"events": {}},
     )
 
     commands = AsyncMigrationCommands(config)

@@ -77,6 +77,10 @@ class AsyncpgHybridEventsBackend:
         await self._queue.ack_async(event_id)
         self._runtime.increment_metric("events.ack")
 
+    async def nack_async(self, event_id: str) -> None:
+        await self._queue.nack_async(event_id)
+        self._runtime.increment_metric("events.nack")
+
     def publish_sync(self, *_: Any, **__: Any) -> str:
         msg = "publish_sync is not supported for async-only Postgres backend"
         raise ImproperConfigurationError(msg)

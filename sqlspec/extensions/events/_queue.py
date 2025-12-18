@@ -54,6 +54,7 @@ class TableEventQueue:
         "_json_passthrough",
         "_lease_seconds",
         "_max_claim_attempts",
+        "_nack_sql",
         "_retention_seconds",
         "_runtime",
         "_select_for_update",
@@ -95,6 +96,7 @@ class TableEventQueue:
         self._select_sql = self._build_select_sql()
         self._claim_sql = self._build_claim_sql()
         self._ack_sql = self._build_ack_sql()
+        self._nack_sql = self._build_nack_sql()
         self._acked_cleanup_sql = self._build_cleanup_sql()
 
     @property
@@ -134,6 +136,9 @@ class TableEventQueue:
 
     def _build_ack_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at WHERE event_id = :event_id"
+
+    def _build_nack_sql(self) -> str:
+        return f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL WHERE event_id = :event_id"
 
     def _build_cleanup_sql(self) -> str:
         return f"DELETE FROM {self._table_name} WHERE status = :acked AND acknowledged_at IS NOT NULL AND acknowledged_at <= :cutoff"
@@ -259,6 +264,26 @@ class TableEventQueue:
         self._execute_sync(self._ack_sql, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
         self._cleanup_sync(now)
         self._runtime.increment_metric("events.ack")
+
+    async def nack_async(self, event_id: str) -> None:
+        """Return an event to the queue for redelivery asynchronously.
+
+        Resets the event status to pending and clears the lease, allowing it
+        to be picked up by another consumer. The attempts counter remains
+        unchanged (was already incremented during claim).
+        """
+        await self._execute_async(self._nack_sql, {"pending": _PENDING_STATUS, "event_id": event_id})
+        self._runtime.increment_metric("events.nack")
+
+    def nack_sync(self, event_id: str) -> None:
+        """Return an event to the queue for redelivery synchronously.
+
+        Resets the event status to pending and clears the lease, allowing it
+        to be picked up by another consumer. The attempts counter remains
+        unchanged (was already incremented during claim).
+        """
+        self._execute_sync(self._nack_sql, {"pending": _PENDING_STATUS, "event_id": event_id})
+        self._runtime.increment_metric("events.nack")
 
     async def _cleanup_async(self, reference: "datetime") -> None:
         cutoff = reference - timedelta(seconds=self._retention_seconds)
@@ -414,6 +439,12 @@ class QueueEventBackend:
 
     def ack_sync(self, event_id: str) -> None:
         self._queue.ack_sync(event_id)
+
+    async def nack_async(self, event_id: str) -> None:
+        await self._queue.nack_async(event_id)
+
+    def nack_sync(self, event_id: str) -> None:
+        self._queue.nack_sync(event_id)
 
     @staticmethod
     def _to_message(event: QueueEvent) -> EventMessage:

@@ -72,6 +72,8 @@ class _OracleEventQueueStoreMixin:
     Slots are defined in the concrete subclasses to allow proper attribute assignment.
     """
 
+    __slots__ = ()
+
     if TYPE_CHECKING:
         _in_memory: bool
         _json_storage: "JSONStorageType | None"
@@ -85,20 +87,21 @@ class _OracleEventQueueStoreMixin:
         """Initialize Oracle-specific settings from extension config.
 
         Must be called from subclass __init__ after super().__init__().
+        Note: Attributes assigned here are defined in subclass __slots__.
         """
         events_config = self._extension_settings
-        self._in_memory = bool(events_config.get("in_memory", False))
-        self._oracle_version_info = None
+        self._in_memory = bool(events_config.get("in_memory", False))  # type: ignore[misc]
+        self._oracle_version_info = None  # type: ignore[misc]
 
         json_storage_override = events_config.get("json_storage")
         if json_storage_override == "json":
-            self._json_storage = JSONStorageType.JSON_NATIVE
+            self._json_storage = JSONStorageType.JSON_NATIVE  # type: ignore[misc]
         elif json_storage_override == "blob_json":
-            self._json_storage = JSONStorageType.BLOB_JSON
+            self._json_storage = JSONStorageType.BLOB_JSON  # type: ignore[misc]
         elif json_storage_override == "blob":
-            self._json_storage = JSONStorageType.BLOB_PLAIN
+            self._json_storage = JSONStorageType.BLOB_PLAIN  # type: ignore[misc]
         else:
-            self._json_storage = None
+            self._json_storage = None  # type: ignore[misc]
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""

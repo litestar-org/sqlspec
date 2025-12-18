@@ -1,4 +1,5 @@
 from sqlspec.extensions.litestar.cli import database_group
+from sqlspec.extensions.litestar.channels import SQLSpecChannelsBackend
 from sqlspec.extensions.litestar.config import LitestarConfig
 from sqlspec.extensions.litestar.plugin import (
     DEFAULT_COMMIT_MODE,
@@ -18,6 +19,7 @@ __all__ = (
     "BaseSQLSpecStore",
     "CommitMode",
     "LitestarConfig",
+    "SQLSpecChannelsBackend",
     "SQLSpecPlugin",
     "database_group",
 )
