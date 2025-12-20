@@ -697,6 +697,8 @@ PROMETHEUS_INSTALLED = dependency_flag("prometheus_client")
 PYARROW_INSTALLED = dependency_flag("pyarrow")
 PYDANTIC_INSTALLED = dependency_flag("pydantic")
 ALLOYDB_CONNECTOR_INSTALLED = dependency_flag("google.cloud.alloydb.connector")
+NANOID_INSTALLED = dependency_flag("fastnanoid")
+UUID_UTILS_INSTALLED = dependency_flag("uuid_utils")
 
 __all__ = (
     "AIOSQL_INSTALLED",
@@ -707,6 +709,7 @@ __all__ = (
     "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
+    "NANOID_INSTALLED",
     "NUMPY_INSTALLED",
     "OBSTORE_INSTALLED",
     "OPENTELEMETRY_INSTALLED",
@@ -719,6 +722,7 @@ __all__ = (
     "PYDANTIC_INSTALLED",
     "UNSET",
     "UNSET_STUB",
+    "UUID_UTILS_INSTALLED",
     "AiosqlAsyncProtocol",
     "AiosqlParamType",
     "AiosqlSQLOperationType",
