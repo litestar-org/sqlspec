@@ -47,7 +47,8 @@ async def test_psqlpy_merge_bulk_10_rows(psqlpy_bulk_session: PsqlpyDriver) -> N
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -84,7 +85,8 @@ async def test_psqlpy_merge_bulk_100_rows(psqlpy_bulk_session: PsqlpyDriver) -> 
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -114,7 +116,8 @@ async def test_psqlpy_merge_bulk_500_rows(psqlpy_bulk_session: PsqlpyDriver) -> 
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -145,7 +148,8 @@ async def test_psqlpy_merge_bulk_1000_rows(psqlpy_bulk_session: PsqlpyDriver) ->
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -172,7 +176,8 @@ async def test_psqlpy_merge_bulk_with_nulls(psqlpy_bulk_session: PsqlpyDriver) -
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -215,7 +220,8 @@ async def test_psqlpy_merge_bulk_update_existing(psqlpy_bulk_session: PsqlpyDriv
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -249,7 +255,8 @@ async def test_psqlpy_merge_bulk_mixed_operations(psqlpy_bulk_session: PsqlpyDri
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")

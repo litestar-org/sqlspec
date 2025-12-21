@@ -48,7 +48,8 @@ async def oracle_vector_session(oracle_async_session: OracleAsyncDriver) -> Asyn
 async def test_oracle_euclidean_distance_execution(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test Oracle VECTOR_DISTANCE euclidean metric execution."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_oracle")
         .order_by("distance")
     )
@@ -67,7 +68,8 @@ async def test_oracle_euclidean_distance_execution(oracle_vector_session: Oracle
 async def test_oracle_euclidean_distance_threshold(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test Oracle euclidean distance with threshold filter."""
     query = (
-        sql.select("content")
+        sql
+        .select("content")
         .from_("vector_docs_oracle")
         .where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
     )
@@ -81,9 +83,8 @@ async def test_oracle_euclidean_distance_threshold(oracle_vector_session: Oracle
 async def test_oracle_cosine_distance_execution(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test Oracle VECTOR_DISTANCE cosine metric execution."""
     query = (
-        sql.select(
-            "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
-        )
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
         .from_("vector_docs_oracle")
         .order_by("distance")
     )
@@ -97,7 +98,8 @@ async def test_oracle_cosine_distance_execution(oracle_vector_session: OracleAsy
 async def test_oracle_inner_product_execution(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test Oracle VECTOR_DISTANCE inner_product (DOT) metric execution."""
     query = (
-        sql.select(
+        sql
+        .select(
             "content",
             sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
         )
@@ -113,7 +115,8 @@ async def test_oracle_inner_product_execution(oracle_vector_session: OracleAsync
 async def test_oracle_euclidean_squared_metric(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test Oracle-specific EUCLIDEAN_SQUARED metric."""
     query = (
-        sql.select(
+        sql
+        .select(
             "content",
             sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean_squared").alias("distance"),
         )
@@ -130,7 +133,8 @@ async def test_oracle_euclidean_squared_metric(oracle_vector_session: OracleAsyn
 async def test_oracle_cosine_similarity_execution(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test Oracle cosine similarity calculation."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs_oracle")
         .order_by(sql.column("score").desc())
     )
@@ -147,7 +151,8 @@ async def test_oracle_cosine_similarity_execution(oracle_vector_session: OracleA
 async def test_oracle_similarity_top_k_results(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test top-K similarity search."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs_oracle")
         .order_by(sql.column("score").desc())
     )
@@ -188,7 +193,8 @@ async def test_oracle_distance_with_null_vectors(oracle_vector_session: OracleAs
     )
 
     query = (
-        sql.select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_oracle")
         .where(sql.column("embedding").is_not_null())
         .order_by("distance")
@@ -203,7 +209,8 @@ async def test_oracle_distance_with_null_vectors(oracle_vector_session: OracleAs
 async def test_oracle_combined_filters_and_distance(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test combining distance threshold with other filters."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_oracle")
         .where((Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0) & (Column("content").in_(["doc1", "doc2"])))
         .order_by("distance")

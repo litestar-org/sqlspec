@@ -48,7 +48,8 @@ def test_example_32(tmp_path: Path) -> None:
 
         # After: Query Builder
         query = (
-            sql.select("users.id", "users.name", "COUNT(orders.id) as order_count")
+            sql
+            .select("users.id", "users.name", "COUNT(orders.id) as order_count")
             .from_("users")
             .left_join("orders", "users.id = orders.user_id")
             .where("users.status = 'active'")

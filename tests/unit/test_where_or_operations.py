@@ -44,7 +44,8 @@ def test_or_where_requires_existing_where() -> None:
 def test_where_or_grouping() -> None:
     """Test where_or method for grouping multiple OR conditions."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("users")
         .where_or(("role", "admin"), ("role", "moderator"), ("permissions", "LIKE", "%admin%"))
     )
@@ -77,7 +78,8 @@ def test_where_or_empty_conditions() -> None:
 def test_mixed_and_or_conditions() -> None:
     """Test mixing AND and OR conditions properly."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("products")
         .where_eq("category", "electronics")  # AND condition
         .where_or(("price", "<", 100), ("on_sale", True))  # OR group
@@ -118,7 +120,8 @@ def test_or_where_with_string_conditions() -> None:
 def test_or_where_with_parameterized_strings() -> None:
     """Test or_where with parameterized string conditions."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("users")
         .where_eq("status", "active")
         .or_where("age > ?", 65)
@@ -140,7 +143,8 @@ def test_or_where_with_parameterized_strings() -> None:
 def test_or_where_helper_methods() -> None:
     """Test all or_where_* helper methods work correctly."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("posts")
         .where_eq("status", "draft")
         .or_where_eq("status", "review")
@@ -186,7 +190,8 @@ def test_or_where_in_with_subquery() -> None:
 def test_complex_nested_or_conditions() -> None:
     """Test complex nested OR conditions with parentheses."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("orders")
         .where_eq("customer_id", 123)
         .where_or(("status", "pending"), ("status", "processing"), ("priority", ">", 5))
@@ -213,7 +218,8 @@ def test_complex_nested_or_conditions() -> None:
 def test_or_where_with_tuples() -> None:
     """Test or_where with tuple conditions."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("products")
         .where("price > 100")
         .or_where(("category", "electronics"))  # 2-tuple equality
@@ -237,7 +243,8 @@ def test_or_where_with_tuples() -> None:
 def test_where_or_with_mixed_condition_types() -> None:
     """Test where_or with mixed condition types."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("users")
         .where_or(
             ("role", "admin"),  # 2-tuple
@@ -266,7 +273,8 @@ def test_where_or_with_mixed_condition_types() -> None:
 def test_or_where_preserves_parameter_naming() -> None:
     """Test that OR conditions preserve descriptive parameter naming."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("events")
         .where_eq("event_type", "click")
         .or_where_eq("event_type", "view")
@@ -290,7 +298,8 @@ def test_or_where_preserves_parameter_naming() -> None:
 def test_or_where_with_update_statements() -> None:
     """Test OR clauses work with UPDATE statements."""
     query = (
-        sql.update("users")
+        sql
+        .update("users")
         .set("last_active", "2023-12-01")
         .where_eq("status", "inactive")
         .or_where_lt("last_login", "2023-01-01")
@@ -314,7 +323,8 @@ def test_or_where_with_update_statements() -> None:
 def test_or_where_with_delete_statements() -> None:
     """Test OR clauses work with DELETE statements."""
     query = (
-        sql.delete()
+        sql
+        .delete()
         .from_("logs")
         .where_lt("created_at", "2023-01-01")
         .or_where_eq("level", "DEBUG")
@@ -339,7 +349,8 @@ def test_or_where_with_delete_statements() -> None:
 def test_chained_or_operations() -> None:
     """Test multiple chained OR operations work correctly."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("products")
         .where_eq("category", "books")
         .or_where_eq("category", "music")
@@ -404,7 +415,8 @@ def test_or_where_complete_method_parity() -> None:
     """Test that all where_* methods have corresponding or_where_* methods."""
     # Test basic OR methods - no complex methods to avoid interference
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("test_table")
         .where_eq("base", "condition")
         .or_where_eq("col1", "value1")
@@ -476,7 +488,8 @@ def test_or_where_subquery_methods() -> None:
     in_subquery = sql.select("user_id").from_("banned_users").where_eq("banned", True)
 
     query = (
-        base_query.or_where_exists(exists_subquery)
+        base_query
+        .or_where_exists(exists_subquery)
         .or_where_not_exists(exists_subquery)
         .or_where_any("user_id", any_subquery)
         .or_where_not_any("user_id", any_subquery)
@@ -503,7 +516,8 @@ def test_or_where_subquery_methods() -> None:
 def test_or_where_aliases_work() -> None:
     """Test that or_where_null and or_where_not_null aliases work correctly."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("products")
         .where_eq("active", True)
         .or_where_null("deleted_at")  # Should be alias for or_where_is_null
@@ -524,7 +538,8 @@ def test_or_where_aliases_work() -> None:
 def test_or_where_ilike_case_insensitive() -> None:
     """Test that or_where_ilike works for case-insensitive pattern matching."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("articles")
         .where_eq("published", True)
         .or_where_ilike("title", "%PYTHON%")  # Should match regardless of case

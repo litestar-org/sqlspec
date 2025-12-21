@@ -128,7 +128,8 @@ def test_to_sql_complex_query_with_subquery() -> None:
 def test_to_sql_join_query() -> None:
     """Test to_sql() with JOIN query."""
     query = (
-        sql.select("p.name", "c.category_name")
+        sql
+        .select("p.name", "c.category_name")
         .from_("products p")
         .join("categories c", "p.category_id = c.id")
         .where("p.price > :min_price")
@@ -275,7 +276,8 @@ def test_to_sql_aggregate_functions() -> None:
 def test_to_sql_window_functions() -> None:
     """Test to_sql() with window functions and parameters."""
     query = (
-        sql.select("name", "ROW_NUMBER() OVER (PARTITION BY category ORDER BY price)")
+        sql
+        .select("name", "ROW_NUMBER() OVER (PARTITION BY category ORDER BY price)")
         .from_("products")
         .where("price > :min")
     )

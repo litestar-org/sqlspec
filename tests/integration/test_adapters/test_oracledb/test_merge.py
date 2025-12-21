@@ -125,7 +125,8 @@ def oracle_merge_sync_session(oracle_23ai_service: OracleService) -> Generator[O
 async def test_oracle_merge_basic_update_existing(oracle_merge_async_session: OracleAsyncDriver) -> None:
     """Test MERGE updates existing row."""
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1, "name": "Updated Product", "price": 24.99}, alias="src")
         .on("t.id = src.id")
@@ -146,7 +147,8 @@ async def test_oracle_merge_basic_update_existing(oracle_merge_async_session: Or
 async def test_oracle_merge_basic_insert_new(oracle_merge_async_session: OracleAsyncDriver) -> None:
     """Test MERGE inserts new row."""
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 2, "name": "New Product", "price": 39.99, "stock": 5}, alias="src")
         .on("t.id = src.id")
@@ -169,7 +171,8 @@ async def test_oracle_merge_basic_insert_new(oracle_merge_async_session: OracleA
 async def test_oracle_merge_update_and_insert(oracle_merge_async_session: OracleAsyncDriver) -> None:
     """Test MERGE handles both update and insert in one operation."""
     merge_query1 = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1, "name": "Updated Existing", "price": 29.99}, alias="src")
         .on("t.id = src.id")
@@ -180,7 +183,8 @@ async def test_oracle_merge_update_and_insert(oracle_merge_async_session: Oracle
     await oracle_merge_async_session.execute(merge_query1)
 
     merge_query2 = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 3, "name": "Brand New", "price": 49.99, "stock": 15}, alias="src")
         .on("t.id = src.id")
@@ -203,7 +207,8 @@ async def test_oracle_merge_update_and_insert(oracle_merge_async_session: Oracle
 async def test_oracle_merge_with_null_values(oracle_merge_async_session: OracleAsyncDriver) -> None:
     """Test MERGE handles NULL values correctly."""
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1, "name": "Updated", "price": 19.99, "stock": None}, alias="src")
         .on("t.id = src.id")
@@ -220,7 +225,8 @@ async def test_oracle_merge_with_null_values(oracle_merge_async_session: OracleA
 async def test_oracle_merge_with_column_expressions(oracle_merge_async_session: OracleAsyncDriver) -> None:
     """Test MERGE with column expressions (not just values)."""
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1, "additional": 5}, alias="src")
         .on("t.id = src.id")
@@ -237,7 +243,8 @@ async def test_oracle_merge_with_column_expressions(oracle_merge_async_session: 
 async def test_oracle_merge_when_matched_with_condition(oracle_merge_async_session: OracleAsyncDriver) -> None:
     """Test MERGE WHEN MATCHED with WHERE condition."""
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1, "new_price": 5.00}, alias="src")
         .on("t.id = src.id")
@@ -264,7 +271,8 @@ async def test_oracle_merge_from_table_source(oracle_merge_async_session: Oracle
     )
 
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging_products", alias="s")
         .on("t.id = s.id")
@@ -294,7 +302,8 @@ async def test_oracle_merge_when_matched_delete(oracle_merge_async_session: Orac
     This test is skipped as sqlglot doesn't support Oracle's UPDATE+DELETE syntax yet.
     """
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1, "discontinued": 1}, alias="src")
         .on("t.id = src.id")
@@ -313,7 +322,8 @@ async def test_oracle_merge_when_matched_delete(oracle_merge_async_session: Orac
 def test_oracle_merge_sync_basic(oracle_merge_sync_session: OracleSyncDriver) -> None:
     """Test MERGE with sync driver."""
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1, "name": "Sync Updated", "price": 15.99}, alias="src")
         .on("t.id = src.id")
@@ -332,7 +342,8 @@ def test_oracle_merge_sync_basic(oracle_merge_sync_session: OracleSyncDriver) ->
 def test_oracle_merge_sync_insert(oracle_merge_sync_session: OracleSyncDriver) -> None:
     """Test MERGE INSERT with sync driver."""
     merge_query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 5, "name": "Sync New", "price": 59.99, "stock": 25}, alias="src")
         .on("t.id = src.id")

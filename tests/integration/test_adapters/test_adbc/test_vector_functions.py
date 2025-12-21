@@ -62,7 +62,8 @@ def adbc_postgres_vector_session(adbc_sync_driver: AdbcDriver) -> Generator[Adbc
 def test_adbc_postgres_euclidean_distance_execution(adbc_postgres_vector_session: AdbcDriver) -> None:
     """Test ADBC PostgreSQL euclidean distance operator execution."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_adbc_pg")
         .order_by("distance")
     )
@@ -83,9 +84,8 @@ def test_adbc_postgres_euclidean_distance_execution(adbc_postgres_vector_session
 def test_adbc_postgres_cosine_distance_execution(adbc_postgres_vector_session: AdbcDriver) -> None:
     """Test ADBC PostgreSQL cosine distance operator execution."""
     query = (
-        sql.select(
-            "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
-        )
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
         .from_("vector_docs_adbc_pg")
         .order_by("distance")
     )
@@ -101,7 +101,8 @@ def test_adbc_postgres_cosine_distance_execution(adbc_postgres_vector_session: A
 def test_adbc_postgres_cosine_similarity_execution(adbc_postgres_vector_session: AdbcDriver) -> None:
     """Test ADBC PostgreSQL cosine similarity calculation."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs_adbc_pg")
         .order_by(sql.column("score").desc())
     )
@@ -162,7 +163,8 @@ def adbc_duckdb_vector_session(adbc_duckdb_driver: AdbcDriver) -> Generator[Adbc
 def test_adbc_duckdb_euclidean_distance_execution(adbc_duckdb_vector_session: AdbcDriver) -> None:
     """Test ADBC DuckDB euclidean distance array function execution."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_adbc_duckdb")
         .order_by("distance")
     )
@@ -182,7 +184,8 @@ def test_adbc_duckdb_euclidean_distance_execution(adbc_duckdb_vector_session: Ad
 def test_adbc_duckdb_euclidean_distance_threshold(adbc_duckdb_vector_session: AdbcDriver) -> None:
     """Test ADBC DuckDB euclidean distance with threshold filter."""
     query = (
-        sql.select("content")
+        sql
+        .select("content")
         .from_("vector_docs_adbc_duckdb")
         .where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
     )
@@ -197,9 +200,8 @@ def test_adbc_duckdb_euclidean_distance_threshold(adbc_duckdb_vector_session: Ad
 def test_adbc_duckdb_cosine_distance_execution(adbc_duckdb_vector_session: AdbcDriver) -> None:
     """Test ADBC DuckDB cosine distance array function execution."""
     query = (
-        sql.select(
-            "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
-        )
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
         .from_("vector_docs_adbc_duckdb")
         .order_by("distance")
     )
@@ -214,7 +216,8 @@ def test_adbc_duckdb_cosine_distance_execution(adbc_duckdb_vector_session: AdbcD
 def test_adbc_duckdb_inner_product_execution(adbc_duckdb_vector_session: AdbcDriver) -> None:
     """Test ADBC DuckDB inner product array function execution."""
     query = (
-        sql.select(
+        sql
+        .select(
             "content",
             sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
         )
@@ -231,7 +234,8 @@ def test_adbc_duckdb_inner_product_execution(adbc_duckdb_vector_session: AdbcDri
 def test_adbc_duckdb_cosine_similarity_execution(adbc_duckdb_vector_session: AdbcDriver) -> None:
     """Test ADBC DuckDB cosine similarity calculation."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs_adbc_duckdb")
         .order_by(sql.column("score").desc())
     )
@@ -249,7 +253,8 @@ def test_adbc_duckdb_cosine_similarity_execution(adbc_duckdb_vector_session: Adb
 def test_adbc_duckdb_similarity_top_k_results(adbc_duckdb_vector_session: AdbcDriver) -> None:
     """Test top-K similarity search with ADBC DuckDB."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs_adbc_duckdb")
         .order_by(sql.column("score").desc())
         .limit(2)
@@ -289,7 +294,8 @@ def test_adbc_duckdb_distance_with_null_vectors(adbc_duckdb_vector_session: Adbc
     )
 
     query = (
-        sql.select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_adbc_duckdb")
         .where(sql.column("embedding").is_not_null())
         .order_by("distance")
@@ -305,7 +311,8 @@ def test_adbc_duckdb_distance_with_null_vectors(adbc_duckdb_vector_session: Adbc
 def test_adbc_duckdb_combined_filters_and_distance(adbc_duckdb_vector_session: AdbcDriver) -> None:
     """Test combining distance threshold with other filters."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_adbc_duckdb")
         .where((Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0) & (Column("content").in_(["doc1", "doc2"])))
         .order_by("distance")

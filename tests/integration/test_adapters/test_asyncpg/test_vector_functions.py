@@ -57,7 +57,8 @@ async def asyncpg_vector_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncGe
 async def test_postgres_euclidean_distance_execution(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test PostgreSQL euclidean distance operator execution."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs")
         .order_by("distance")
     )
@@ -88,9 +89,8 @@ async def test_postgres_euclidean_distance_threshold(asyncpg_vector_session: Asy
 async def test_postgres_cosine_distance_execution(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test PostgreSQL cosine distance operator execution."""
     query = (
-        sql.select(
-            "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
-        )
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
         .from_("vector_docs")
         .order_by("distance")
     )
@@ -104,7 +104,8 @@ async def test_postgres_cosine_distance_execution(asyncpg_vector_session: Asyncp
 async def test_postgres_inner_product_execution(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test PostgreSQL inner product operator execution."""
     query = (
-        sql.select(
+        sql
+        .select(
             "content",
             sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
         )
@@ -120,7 +121,8 @@ async def test_postgres_inner_product_execution(asyncpg_vector_session: AsyncpgD
 async def test_postgres_cosine_similarity_execution(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test PostgreSQL cosine similarity calculation."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs")
         .order_by(sql.column("score").desc())
     )
@@ -137,7 +139,8 @@ async def test_postgres_cosine_similarity_execution(asyncpg_vector_session: Asyn
 async def test_postgres_similarity_top_k_results(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test top-K similarity search."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs")
         .order_by(sql.column("score").desc())
         .limit(2)
@@ -175,7 +178,8 @@ async def test_postgres_distance_with_null_vectors(asyncpg_vector_session: Async
     )
 
     query = (
-        sql.select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs")
         .where(sql.column("embedding").is_not_null())
         .order_by("distance")
@@ -190,7 +194,8 @@ async def test_postgres_distance_with_null_vectors(asyncpg_vector_session: Async
 async def test_postgres_combined_filters_and_distance(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test combining distance threshold with other filters."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs")
         .where((Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0) & (Column("content").in_(["doc1", "doc2"])))
         .order_by("distance")
@@ -242,7 +247,8 @@ async def test_postgres_distance_in_having_clause(asyncpg_vector_session: Asyncp
 async def test_postgres_distance_with_subquery(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test vector distance in subquery."""
     subquery = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs")
         .where(Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0)
     )
@@ -269,7 +275,8 @@ async def test_postgres_similarity_score_range(asyncpg_vector_session: AsyncpgDr
 async def test_postgres_distance_with_cast(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test vector distance with explicit type casting."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).cast("FLOAT").alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).cast("FLOAT").alias("distance"))
         .from_("vector_docs")
         .order_by("distance")
     )

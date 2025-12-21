@@ -47,7 +47,8 @@ async def test_oracle_merge_bulk_10_rows(oracle_bulk_session: OracleAsyncDriver)
     ]
 
     merge_query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -84,7 +85,8 @@ async def test_oracle_merge_bulk_100_rows(oracle_bulk_session: OracleAsyncDriver
     ]
 
     merge_query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -114,7 +116,8 @@ async def test_oracle_merge_bulk_500_rows(oracle_bulk_session: OracleAsyncDriver
     ]
 
     merge_query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -145,7 +148,8 @@ async def test_oracle_merge_bulk_1000_rows(oracle_bulk_session: OracleAsyncDrive
     ]
 
     merge_query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -172,7 +176,8 @@ async def test_oracle_merge_bulk_with_nulls(oracle_bulk_session: OracleAsyncDriv
     ]
 
     merge_query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -215,7 +220,8 @@ async def test_oracle_merge_bulk_update_existing(oracle_bulk_session: OracleAsyn
     ]
 
     merge_query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -249,7 +255,8 @@ async def test_oracle_merge_bulk_mixed_operations(oracle_bulk_session: OracleAsy
     ]
 
     merge_query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -289,7 +296,8 @@ async def test_oracle_merge_bulk_5000_rows(oracle_bulk_session: OracleAsyncDrive
     ]
 
     merge_query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")

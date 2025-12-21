@@ -12,6 +12,7 @@ __all__ = ("SpannerTypeConverter",)
 
 SPANNER_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
 
+
 class SpannerTypeConverter(BaseTypeConverter):
     """Type conversion for Spanner-specific types."""
 

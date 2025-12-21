@@ -70,7 +70,8 @@ def test_where_any_uses_column_name_with_any_suffix() -> None:
 def test_multiple_where_conditions_preserve_column_names() -> None:
     """Test that multiple WHERE conditions preserve individual column names."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("orders")
         .where_eq("status", "pending")
         .where_gt("total", 100.0)
@@ -103,7 +104,8 @@ def test_parameter_collision_handling() -> None:
 def test_table_prefixed_columns_extract_column_name() -> None:
     """Test that table-prefixed columns extract just the column name."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("users u")
         .join("profiles p", "u.id = p.user_id")
         .where_eq("u.email", "test@example.com")
@@ -187,7 +189,8 @@ def test_insert_values_from_dict_preserves_keys() -> None:
 def test_complex_query_preserves_all_column_names() -> None:
     """Test that complex queries preserve column names across all operations."""
     query = (
-        sql.select("u.username", "p.title")
+        sql
+        .select("u.username", "p.title")
         .from_("users u")
         .join("posts p", "u.id = p.author_id")
         .where_eq("u.status", "active")
@@ -230,7 +233,8 @@ def test_subquery_parameters_are_preserved() -> None:
 def test_mixed_parameter_types_preserve_names() -> None:
     """Test that mixed parameter types preserve proper column names."""
     query = (
-        sql.update("user_profiles")
+        sql
+        .update("user_profiles")
         .set({"username": "john_doe", "age": 28, "salary": 75000.50, "is_active": True, "last_seen": None})
         .where_eq("user_id", 12345)
     )
@@ -344,7 +348,8 @@ def test_original_user_example_works_correctly() -> None:
 def test_parameter_naming_with_special_characters_in_values() -> None:
     """Test that parameter naming works with special characters in values."""
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("logs")
         .where_eq("message", "Error: Connection failed!")
         .where_like("details", "%SQL injection attempt: DROP TABLE%")

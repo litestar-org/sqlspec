@@ -53,7 +53,8 @@ def test_psycopg_merge_bulk_10_rows(psycopg_bulk_session: PsycopgSyncDriver) -> 
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -90,7 +91,8 @@ def test_psycopg_merge_bulk_100_rows(psycopg_bulk_session: PsycopgSyncDriver) ->
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -118,7 +120,8 @@ def test_psycopg_merge_bulk_500_rows(psycopg_bulk_session: PsycopgSyncDriver) ->
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -149,7 +152,8 @@ def test_psycopg_merge_bulk_1000_rows(psycopg_bulk_session: PsycopgSyncDriver) -
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -176,7 +180,8 @@ def test_psycopg_merge_bulk_with_nulls(psycopg_bulk_session: PsycopgSyncDriver) 
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -219,7 +224,8 @@ def test_psycopg_merge_bulk_update_existing(psycopg_bulk_session: PsycopgSyncDri
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -253,7 +259,8 @@ def test_psycopg_merge_bulk_mixed_operations(psycopg_bulk_session: PsycopgSyncDr
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")

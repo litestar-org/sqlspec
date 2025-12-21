@@ -83,7 +83,8 @@ def test_to_sql_with_show_parameters_and_dialect_override() -> None:
 def test_build_dialect_override_with_merge() -> None:
     """Test dialect override works with MERGE builder."""
     query = (
-        sql.merge_.into("products", alias="t")
+        sql.merge_
+        .into("products", alias="t")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
@@ -135,7 +136,8 @@ def test_build_multiple_dialect_overrides() -> None:
 def test_to_sql_dialect_override_with_complex_query() -> None:
     """Test dialect override with complex query (JOIN, WHERE, ORDER BY)."""
     query = (
-        sql.select("p.id", "p.name", "c.name AS category_name")
+        sql
+        .select("p.id", "p.name", "c.name AS category_name")
         .from_("products AS p")
         .join("categories AS c", "p.category_id = c.id")
         .where("p.price > :min_price")

@@ -33,8 +33,8 @@ __all__ = (
     "coerce_params_for_spanner",
     "dialect",
     "infer_spanner_param_types",
-    "spanner_to_bytes",
     "spanner_json",
+    "spanner_to_bytes",
     "spanner_to_uuid",
     "uuid_to_spanner",
 )

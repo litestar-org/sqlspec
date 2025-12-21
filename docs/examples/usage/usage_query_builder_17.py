@@ -22,7 +22,8 @@ def test_example_17(tmp_path: Path) -> None:
         # start-example
         # Create table
         query = (
-            sql.create_table("users")
+            sql
+            .create_table("users")
             .if_not_exists()
             .column("id", "INTEGER PRIMARY KEY")
             .column("name", "TEXT NOT NULL")

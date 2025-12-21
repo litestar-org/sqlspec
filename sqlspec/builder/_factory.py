@@ -802,13 +802,15 @@ class SQLFactory:
         Example:
             ```python
             case_expr = (
-                sql.case_.when("x = 1", "one")
+                sql.case_
+                .when("x = 1", "one")
                 .when("x = 2", "two")
                 .else_("other")
                 .end()
             )
             aliased_case = (
-                sql.case_.when("status = 'active'", 1)
+                sql.case_
+                .when("status = 'active'", 1)
                 .else_(0)
                 .as_("is_active")
             )
@@ -896,7 +898,8 @@ class SQLFactory:
         Example:
             ```python
             query = (
-                sql.select("u.name", "arr.value")
+                sql
+                .select("u.name", "arr.value")
                 .from_("users u")
                 .join(sql.lateral_join_("UNNEST(u.tags)").on("true"))
             )
@@ -1085,7 +1088,8 @@ class SQLFactory:
         Example:
             ```python
             query = (
-                sql.select("product", "region", sql.sum("sales"))
+                sql
+                .select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
                 .group_by(sql.rollup("product", "region"))
             )
@@ -1107,7 +1111,8 @@ class SQLFactory:
         Example:
             ```python
             query = (
-                sql.select("product", "region", sql.sum("sales"))
+                sql
+                .select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
                 .group_by(sql.cube("product", "region"))
             )
@@ -1129,7 +1134,8 @@ class SQLFactory:
         Example:
             ```python
             query = (
-                sql.select("product", "region", sql.sum("sales"))
+                sql
+                .select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
                 .group_by(
                     sql.grouping_sets(("product",), ("region",), ())
@@ -1164,7 +1170,8 @@ class SQLFactory:
             ```python
             subquery = sql.select("user_id").from_("active_users")
             query = (
-                sql.select("*")
+                sql
+                .select("*")
                 .from_("users")
                 .where(sql.id.eq(sql.any(subquery)))
             )
@@ -1192,7 +1199,8 @@ class SQLFactory:
             ```python
             subquery = sql.select("user_id").from_("blocked_users")
             query = (
-                sql.select("*")
+                sql
+                .select("*")
                 .from_("users")
                 .where(sql.id.neq(sql.not_any(subquery)))
             )
@@ -1478,7 +1486,8 @@ class SQLFactory:
 
 
             truncate_sql = (
-                sql.truncate_table("my_table")
+                sql
+                .truncate_table("my_table")
                 .cascade()
                 .restart_identity()
                 .build()

@@ -47,7 +47,8 @@ async def test_asyncpg_merge_bulk_10_rows(asyncpg_bulk_session: AsyncpgDriver) -
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -84,7 +85,8 @@ async def test_asyncpg_merge_bulk_100_rows(asyncpg_bulk_session: AsyncpgDriver) 
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -114,7 +116,8 @@ async def test_asyncpg_merge_bulk_500_rows(asyncpg_bulk_session: AsyncpgDriver) 
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -145,7 +148,8 @@ async def test_asyncpg_merge_bulk_1000_rows(asyncpg_bulk_session: AsyncpgDriver)
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -172,7 +176,8 @@ async def test_asyncpg_merge_bulk_with_nulls(asyncpg_bulk_session: AsyncpgDriver
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -215,7 +220,8 @@ async def test_asyncpg_merge_bulk_update_existing(asyncpg_bulk_session: AsyncpgD
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -249,7 +255,8 @@ async def test_asyncpg_merge_bulk_mixed_operations(asyncpg_bulk_session: Asyncpg
     ]
 
     merge_query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")

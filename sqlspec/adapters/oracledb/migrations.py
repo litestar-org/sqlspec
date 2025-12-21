@@ -51,7 +51,8 @@ class OracleMigrationTrackerMixin:
             SQL builder object for Oracle table creation.
         """
         return (
-            sql.create_table(self.version_table)
+            sql
+            .create_table(self.version_table)
             .column("version_num", "VARCHAR2(32)", primary_key=True)
             .column("version_type", "VARCHAR2(16)")
             .column("execution_sequence", "INTEGER")
@@ -73,7 +74,8 @@ class OracleMigrationTrackerMixin:
             SQL builder object for version query.
         """
         return (
-            sql.select('VERSION_NUM AS "version_num"')
+            sql
+            .select('VERSION_NUM AS "version_num"')
             .from_(self.version_table)
             .order_by("EXECUTION_SEQUENCE DESC")
             .limit(1)
@@ -90,7 +92,8 @@ class OracleMigrationTrackerMixin:
             SQL builder object for migrations query.
         """
         return (
-            sql.select(
+            sql
+            .select(
                 'VERSION_NUM AS "version_num"',
                 'VERSION_TYPE AS "version_type"',
                 'EXECUTION_SEQUENCE AS "execution_sequence"',

@@ -50,7 +50,8 @@ def bigquery_vector_session(bigquery_session: BigQueryDriver) -> Generator[BigQu
 def test_bigquery_euclidean_distance_execution(bigquery_vector_session: BigQueryDriver) -> None:
     """Test BigQuery EUCLIDEAN_DISTANCE function execution."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_bigquery")
         .order_by("distance")
     )
@@ -69,7 +70,8 @@ def test_bigquery_euclidean_distance_execution(bigquery_vector_session: BigQuery
 def test_bigquery_euclidean_distance_threshold(bigquery_vector_session: BigQueryDriver) -> None:
     """Test BigQuery euclidean distance with threshold filter."""
     query = (
-        sql.select("content")
+        sql
+        .select("content")
         .from_("vector_docs_bigquery")
         .where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
     )
@@ -83,9 +85,8 @@ def test_bigquery_euclidean_distance_threshold(bigquery_vector_session: BigQuery
 def test_bigquery_cosine_distance_execution(bigquery_vector_session: BigQueryDriver) -> None:
     """Test BigQuery COSINE_DISTANCE function execution."""
     query = (
-        sql.select(
-            "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
-        )
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
         .from_("vector_docs_bigquery")
         .order_by("distance")
     )
@@ -99,7 +100,8 @@ def test_bigquery_cosine_distance_execution(bigquery_vector_session: BigQueryDri
 def test_bigquery_inner_product_execution(bigquery_vector_session: BigQueryDriver) -> None:
     """Test BigQuery DOT_PRODUCT function execution."""
     query = (
-        sql.select(
+        sql
+        .select(
             "content",
             sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
         )
@@ -115,7 +117,8 @@ def test_bigquery_inner_product_execution(bigquery_vector_session: BigQueryDrive
 def test_bigquery_cosine_similarity_execution(bigquery_vector_session: BigQueryDriver) -> None:
     """Test BigQuery cosine similarity calculation."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs_bigquery")
         .order_by(sql.column("score").desc())
     )
@@ -132,7 +135,8 @@ def test_bigquery_cosine_similarity_execution(bigquery_vector_session: BigQueryD
 def test_bigquery_similarity_top_k_results(bigquery_vector_session: BigQueryDriver) -> None:
     """Test top-K similarity search."""
     query = (
-        sql.select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs_bigquery")
         .order_by(sql.column("score").desc())
         .limit(2)
@@ -170,7 +174,8 @@ def test_bigquery_distance_with_null_vectors(bigquery_vector_session: BigQueryDr
     )
 
     query = (
-        sql.select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_bigquery")
         .where(sql.column("embedding").is_not_null())
         .order_by("distance")
@@ -185,7 +190,8 @@ def test_bigquery_distance_with_null_vectors(bigquery_vector_session: BigQueryDr
 def test_bigquery_combined_filters_and_distance(bigquery_vector_session: BigQueryDriver) -> None:
     """Test combining distance threshold with other filters."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs_bigquery")
         .where((Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0) & (Column("content").in_(["doc1", "doc2"])))
         .order_by("distance")

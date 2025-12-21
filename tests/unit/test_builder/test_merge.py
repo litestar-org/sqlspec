@@ -11,7 +11,8 @@ pytestmark = pytest.mark.xdist_group("builder")
 def test_merge_basic_structure() -> None:
     """Test basic MERGE statement structure with all required clauses."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products")
         .using({"id": 1, "name": "Widget", "price": 29.99}, alias="src")
         .on("t.id = src.id")
@@ -95,7 +96,8 @@ def test_merge_on_clause_string() -> None:
 def test_merge_on_clause_complex_condition() -> None:
     """Test MERGE ON clause with complex condition."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("orders", alias="t")
         .using("new_orders", alias="s")
         .on("t.order_id = s.order_id AND t.customer_id = s.customer_id")
@@ -109,7 +111,8 @@ def test_merge_on_clause_complex_condition() -> None:
 def test_merge_when_matched_update_with_dict() -> None:
     """Test WHEN MATCHED THEN UPDATE with dict."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -125,7 +128,8 @@ def test_merge_when_matched_update_with_dict() -> None:
 def test_merge_when_matched_update_with_kwargs() -> None:
     """Test WHEN MATCHED THEN UPDATE with kwargs."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -141,7 +145,8 @@ def test_merge_when_matched_update_with_kwargs() -> None:
 def test_merge_when_matched_update_parameter_values() -> None:
     """Test WHEN MATCHED THEN UPDATE with literal parameter values."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1}, alias="s")
         .on("t.id = s.id")
@@ -159,7 +164,8 @@ def test_merge_when_matched_update_parameter_values() -> None:
 def test_merge_when_matched_update_with_condition() -> None:
     """Test WHEN MATCHED THEN UPDATE with WHERE condition."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -193,7 +199,8 @@ def test_merge_when_matched_delete() -> None:
 def test_merge_when_matched_delete_with_condition() -> None:
     """Test WHEN MATCHED THEN DELETE with WHERE condition."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -216,7 +223,8 @@ def test_merge_when_matched_delete_with_condition() -> None:
 def test_merge_when_matched_update_stores_condition_field() -> None:
     """WHEN MATCHED UPDATE should place predicates in the condition arg."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -235,7 +243,8 @@ def test_merge_when_matched_update_stores_condition_field() -> None:
 def test_merge_when_not_matched_insert_with_mapping() -> None:
     """Test WHEN NOT MATCHED THEN INSERT with dict mapping."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -253,7 +262,8 @@ def test_merge_when_not_matched_insert_with_mapping() -> None:
 def test_merge_when_not_matched_insert_with_kwargs() -> None:
     """Test WHEN NOT MATCHED THEN INSERT with kwargs."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -268,7 +278,8 @@ def test_merge_when_not_matched_insert_with_kwargs() -> None:
 def test_merge_when_not_matched_insert_with_columns_values() -> None:
     """Test WHEN NOT MATCHED THEN INSERT with explicit columns and values."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -283,7 +294,8 @@ def test_merge_when_not_matched_insert_with_columns_values() -> None:
 def test_merge_when_not_matched_insert_from_source_columns() -> None:
     """Test WHEN NOT MATCHED INSERT infers values from source table when only columns provided."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -309,7 +321,8 @@ def test_merge_when_not_matched_insert_mismatched_columns_error() -> None:
 def test_merge_when_not_matched_by_source_update() -> None:
     """Test WHEN NOT MATCHED BY SOURCE THEN UPDATE clause."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -325,7 +338,8 @@ def test_merge_when_not_matched_by_source_update() -> None:
 def test_merge_when_not_matched_by_source_delete() -> None:
     """Test WHEN NOT MATCHED BY SOURCE THEN DELETE clause."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -340,7 +354,8 @@ def test_merge_when_not_matched_by_source_delete() -> None:
 def test_merge_multiple_when_clauses() -> None:
     """Test MERGE with multiple WHEN clauses."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -356,7 +371,8 @@ def test_merge_multiple_when_clauses() -> None:
 def test_merge_complex_scenario() -> None:
     """Test complex MERGE scenario with all clause types."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("inventory", alias="inv")
         .using({"product_id": 100, "quantity": 50, "location": "Warehouse A"}, alias="src")
         .on("inv.product_id = src.product_id AND inv.location = src.location")
@@ -378,7 +394,8 @@ def test_merge_complex_scenario() -> None:
 def test_merge_with_constructor_table() -> None:
     """Test MERGE with table specified in constructor."""
     query = (
-        sql.merge("products")
+        sql
+        .merge("products")
         .using("staging", alias="s")
         .on("products.id = s.id")
         .when_matched_then_update(name="s.name")
@@ -392,7 +409,8 @@ def test_merge_with_constructor_table() -> None:
 def test_merge_parameter_naming_uniqueness() -> None:
     """Test that parameters are named uniquely when columns collide."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using({"id": 1, "name": "First"}, alias="s")
         .on("t.id = s.id")
@@ -408,7 +426,8 @@ def test_merge_parameter_naming_uniqueness() -> None:
 def test_merge_null_value_handling() -> None:
     """Test MERGE with NULL values in parameters."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("users", alias="t")
         .using({"id": 1, "email": None, "status": "active"}, alias="s")
         .on("t.id = s.id")
@@ -423,7 +442,8 @@ def test_merge_null_value_handling() -> None:
 def test_merge_column_reference_detection() -> None:
     """Test that column references are not parameterized."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
@@ -440,7 +460,8 @@ def test_merge_subquery_as_source() -> None:
     """Test MERGE with subquery as source."""
     subquery = sql.select("id", "name", "price").from_("staging").where("active = :active", active=True)
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using(subquery, alias="s")
         .on("t.id = s.id")
@@ -456,7 +477,8 @@ def test_merge_subquery_as_source() -> None:
 def test_merge_builds_valid_statement() -> None:
     """Test that MERGE builder returns a valid Statement object."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("test_table")
         .using({"id": 1}, alias="s")
         .on("test_table.id = s.id")
@@ -479,7 +501,8 @@ def test_merge_using_list_of_dicts() -> None:
         {"id": 3, "name": "Widget C", "price": 39.99},
     ]
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
@@ -499,7 +522,8 @@ def test_merge_using_list_of_dicts_postgres_dialect() -> None:
     """Test MERGE with list of dicts generates jsonb_to_recordset for PostgreSQL."""
     data = [{"id": 1, "name": "Widget A"}, {"id": 2, "name": "Widget B"}]
     query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
@@ -516,7 +540,8 @@ def test_merge_using_single_dict_postgres_dialect() -> None:
     """Test MERGE with single dict generates jsonb_to_recordset for PostgreSQL."""
     data = {"id": 1, "name": "Widget A"}
     query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
@@ -540,7 +565,8 @@ def test_merge_mysql_dialect_raises_error() -> None:
     from sqlspec.exceptions import DialectNotSupportedError
 
     query = (
-        sql.merge(dialect="mysql")
+        sql
+        .merge(dialect="mysql")
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
@@ -556,7 +582,8 @@ def test_merge_sqlite_dialect_raises_error() -> None:
     from sqlspec.exceptions import DialectNotSupportedError
 
     query = (
-        sql.merge(dialect="sqlite")
+        sql
+        .merge(dialect="sqlite")
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
@@ -572,7 +599,8 @@ def test_merge_duckdb_dialect_raises_error() -> None:
     from sqlspec.exceptions import DialectNotSupportedError
 
     query = (
-        sql.merge(dialect="duckdb")
+        sql
+        .merge(dialect="duckdb")
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
@@ -606,7 +634,8 @@ def test_merge_sqlite_error_suggests_alternative() -> None:
 def test_merge_postgres_dialect_allowed() -> None:
     """Test MERGE with PostgreSQL dialect is allowed."""
     query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
@@ -620,7 +649,8 @@ def test_merge_postgres_dialect_allowed() -> None:
 def test_merge_oracle_dialect_allowed() -> None:
     """Test MERGE with Oracle dialect is allowed."""
     query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
@@ -634,7 +664,8 @@ def test_merge_oracle_dialect_allowed() -> None:
 def test_merge_no_dialect_allowed() -> None:
     """Test MERGE with no dialect specified is allowed."""
     query = (
-        sql.merge()
+        sql
+        .merge()
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
@@ -650,7 +681,8 @@ def test_merge_property_shorthand() -> None:
     from sqlspec.builder._merge import Merge
 
     query = (
-        sql.merge_.into("products", alias="t")
+        sql.merge_
+        .into("products", alias="t")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")

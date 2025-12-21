@@ -275,4 +275,4 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return LISTEN/NOTIFY defaults for Psqlpy adapters."""
 
-        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True, json_passthrough=True)
+        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)

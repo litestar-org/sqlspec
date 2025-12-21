@@ -119,7 +119,7 @@ def spanner_json(value: Any) -> Any:
     """
     if isinstance(value, JsonObject):
         return value
-    return JsonObject(value)
+    return JsonObject(value)  # type: ignore[no-untyped-call]
 
 
 def coerce_params_for_spanner(

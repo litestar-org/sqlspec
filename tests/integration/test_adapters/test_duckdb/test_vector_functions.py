@@ -55,7 +55,8 @@ def duckdb_vector_session(duckdb_basic_session: DuckDBDriver) -> Generator[DuckD
 def test_duckdb_euclidean_distance_execution(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB euclidean distance using array functions."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs")
         .order_by("distance")
     )
@@ -84,7 +85,8 @@ def test_duckdb_euclidean_distance_threshold(duckdb_vector_session: DuckDBDriver
 def test_duckdb_cosine_distance_execution(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB cosine distance using array functions."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
         .from_("vector_docs")
         .order_by("distance")
     )
@@ -98,7 +100,8 @@ def test_duckdb_cosine_distance_execution(duckdb_vector_session: DuckDBDriver) -
 def test_duckdb_inner_product_execution(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB inner product using negative dot product."""
     query = (
-        sql.select(
+        sql
+        .select(
             "content", Column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance")
         )
         .from_("vector_docs")
@@ -113,7 +116,8 @@ def test_duckdb_inner_product_execution(duckdb_vector_session: DuckDBDriver) -> 
 def test_duckdb_cosine_similarity_execution(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB cosine similarity calculation."""
     query = (
-        sql.select("content", Column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", Column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs")
         .order_by(Column("score").desc())
     )
@@ -130,7 +134,8 @@ def test_duckdb_cosine_similarity_execution(duckdb_vector_session: DuckDBDriver)
 def test_duckdb_similarity_top_k_results(duckdb_vector_session: DuckDBDriver) -> None:
     """Test top-K similarity search with DuckDB."""
     query = (
-        sql.select("content", Column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+        sql
+        .select("content", Column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
         .from_("vector_docs")
         .order_by(Column("score").desc())
         .limit(2)
@@ -168,7 +173,8 @@ def test_duckdb_distance_with_null_vectors(duckdb_vector_session: DuckDBDriver) 
     )
 
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs")
         .where(Column("embedding").is_not_null())
         .order_by("distance")
@@ -183,7 +189,8 @@ def test_duckdb_distance_with_null_vectors(duckdb_vector_session: DuckDBDriver) 
 def test_duckdb_combined_filters_and_distance(duckdb_vector_session: DuckDBDriver) -> None:
     """Test combining distance threshold with other filters in DuckDB."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs")
         .where((Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0) & (Column("content").in_(["doc1", "doc2"])))
         .order_by("distance")
@@ -216,7 +223,8 @@ def test_duckdb_distance_zero_vector(duckdb_vector_session: DuckDBDriver) -> Non
     )
 
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.0, 0.0, 0.0]).alias("distance"))
+        sql
+        .select("content", Column("embedding").vector_distance([0.0, 0.0, 0.0]).alias("distance"))
         .from_("vector_docs")
         .order_by("distance")
     )
@@ -249,7 +257,8 @@ def test_duckdb_large_vectors(duckdb_vector_session: DuckDBDriver) -> None:
         )
 
         query = (
-            sql.select("content", Column("embedding").vector_distance([0.1] * 10).alias("distance"))
+            sql
+            .select("content", Column("embedding").vector_distance([0.1] * 10).alias("distance"))
             .from_("large_vectors")
             .order_by("distance")
         )

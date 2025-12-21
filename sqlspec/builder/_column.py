@@ -299,7 +299,8 @@ class Column:
         Examples:
             Basic distance query with threshold:
                 >>> query = (
-                ...     sql.select("*")
+                ...     sql
+                ...     .select("*")
                 ...     .from_("docs")
                 ...     .where(
                 ...         Column("embedding").vector_distance(
@@ -311,7 +312,8 @@ class Column:
 
             Distance in SELECT clause with alias:
                 >>> query = (
-                ...     sql.select(
+                ...     sql
+                ...     .select(
                 ...         "id",
                 ...         Column("embedding")
                 ...         .vector_distance([0.1, 0.2])
@@ -323,7 +325,8 @@ class Column:
 
             Compare two vector columns:
                 >>> query = (
-                ...     sql.select("*")
+                ...     sql
+                ...     .select("*")
                 ...     .from_("pairs")
                 ...     .where(
                 ...         Column("vec1").vector_distance(
@@ -355,7 +358,8 @@ class Column:
         Examples:
             Find most similar documents:
                 >>> query = (
-                ...     sql.select(
+                ...     sql
+                ...     .select(
                 ...         "id",
                 ...         Column("embedding")
                 ...         .cosine_similarity([0.1, 0.2])

@@ -31,7 +31,8 @@ def test_example_22(tmp_path: Path) -> None:
         cte = sql.select("user_id", "COUNT(*) as order_count").from_("orders").group_by("user_id")
 
         query = (
-            sql.select("users.name", "user_orders.order_count")
+            sql
+            .select("users.name", "user_orders.order_count")
             .with_("user_orders", cte)
             .from_("users")
             .join("user_orders", "users.id = user_orders.user_id")

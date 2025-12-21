@@ -1050,9 +1050,13 @@ class CommonDriverAttributesMixin:
             }:
                 sorted_items = sorted(
                     parameters.items(),
-                    key=lambda item: int(item[0])
-                    if item[0].isdigit()
-                    else (int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")),
+                    key=lambda item: (
+                        int(item[0])
+                        if item[0].isdigit()
+                        else (
+                            int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")
+                        )
+                    ),
                 )
                 return [self._apply_coercion(value, statement_config) for _, value in sorted_items]
 
