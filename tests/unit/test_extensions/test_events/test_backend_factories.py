@@ -139,11 +139,11 @@ def test_psqlpy_factory_hybrid_backend() -> None:
     assert backend.backend_name == "listen_notify_durable"
 
 
-def test_psqlpy_factory_json_passthrough_not_set_by_default() -> None:
-    """Psqlpy hybrid backend does not enable json_passthrough by default.
+def test_psqlpy_factory_json_passthrough_enabled_by_default() -> None:
+    """Psqlpy hybrid backend enables json_passthrough by default.
 
-    This ensures consistency with other PostgreSQL adapters (asyncpg, psycopg)
-    which also don't enable json_passthrough by default.
+    Psqlpy's native bindings expect Python dicts for JSONB columns,
+    so json_passthrough must be enabled to avoid serializing to strings.
     """
     pytest.importorskip("psqlpy")
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
@@ -153,7 +153,7 @@ def test_psqlpy_factory_json_passthrough_not_set_by_default() -> None:
     backend = create_event_backend(config, "listen_notify_durable", {})
     assert backend is not None
     queue = backend._queue._queue  # type: ignore[union-attr]
-    assert queue._json_passthrough is False
+    assert queue._json_passthrough is True
 
 
 def test_psqlpy_factory_json_passthrough_explicit() -> None:
