@@ -1,16 +1,10 @@
 """DuckDB integration tests for EventChannel queue fallback."""
 
-from typing import TYPE_CHECKING, cast
-
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
-
-if TYPE_CHECKING:
-    from sqlspec.extensions.events import SyncEventChannel
-
 
 @pytest.mark.integration
 @pytest.mark.duckdb
@@ -31,7 +25,7 @@ def test_duckdb_event_channel_queue_fallback(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("SyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     event_id = channel.publish("notifications", {"action": "duck"})
     iterator = channel.iter_events("notifications", poll_interval=0.05)

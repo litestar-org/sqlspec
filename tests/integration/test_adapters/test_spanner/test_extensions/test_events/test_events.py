@@ -1,15 +1,10 @@
 """Integration tests for Spanner EventChannel queue backend."""
 
-from typing import TYPE_CHECKING, cast
-
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.spanner.events import SpannerSyncEventQueueStore
-
-if TYPE_CHECKING:
-    from sqlspec.extensions.events import SyncEventChannel
 
 pytestmark = [pytest.mark.spanner, pytest.mark.integration]
 
@@ -20,7 +15,7 @@ def test_spanner_event_channel_queue_fallback(
     """Queue-backed events work on Spanner via the table queue backend."""
     spec = SQLSpec()
     spec.add_config(spanner_events_config)
-    channel = cast("SyncEventChannel", spec.event_channel(spanner_events_config))
+    channel = spec.event_channel(spanner_events_config)
 
     event_id = channel.publish("notifications", {"action": "spanner_event"})
 
@@ -88,7 +83,7 @@ def test_spanner_event_metadata_roundtrip(
     """Events with metadata are correctly stored and retrieved."""
     spec = SQLSpec()
     spec.add_config(spanner_events_config)
-    channel = cast("SyncEventChannel", spec.event_channel(spanner_events_config))
+    channel = spec.event_channel(spanner_events_config)
 
     metadata = {"source": "test", "priority": 1}
     event_id = channel.publish("metadata_test", {"data": "value"}, metadata=metadata)

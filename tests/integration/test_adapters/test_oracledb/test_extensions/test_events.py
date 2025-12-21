@@ -4,7 +4,7 @@
 import asyncio
 import os
 from textwrap import dedent
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -14,8 +14,6 @@ from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
@@ -108,7 +106,7 @@ def test_oracle_sync_event_channel_queue_fallback(tmp_path: "Path") -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("SyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     event_id = channel.publish("notifications", {"action": "oracle"})
     iterator = channel.iter_events("notifications", poll_interval=0.5)
@@ -148,7 +146,7 @@ async def test_oracle_async_event_channel_queue_fallback(tmp_path: "Path") -> No
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     event_id = await channel.publish("notifications", {"action": "oracle_async"})
     iterator = channel.iter_events("notifications", poll_interval=0.5)

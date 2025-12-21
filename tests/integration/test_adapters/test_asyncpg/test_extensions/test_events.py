@@ -1,14 +1,11 @@
 # pyright: reportPrivateUsage=false
 """AsyncPG integration tests for the EventChannel native backend."""
 
-from typing import cast
-
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
-from sqlspec.extensions.events import AsyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -30,7 +27,7 @@ async def test_asyncpg_native_event_channel(postgres_service: PostgresService) -
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast(AsyncEventChannel, spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     assert channel._backend_name == "listen_notify"
 

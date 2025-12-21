@@ -2,16 +2,13 @@
 """PostgreSQL LISTEN/NOTIFY event channel tests for psqlpy adapter."""
 
 import asyncio
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.psqlpy import PsqlpyConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
-
-if TYPE_CHECKING:
-    from sqlspec.extensions.events import AsyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -31,7 +28,7 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     received: list[Any] = []
 
@@ -78,7 +75,7 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     received: list[Any] = []
 

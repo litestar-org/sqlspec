@@ -2,16 +2,13 @@
 """PostgreSQL LISTEN/NOTIFY event channel tests for asyncpg adapter."""
 
 import asyncio
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
-
-if TYPE_CHECKING:
-    from sqlspec.extensions.events import AsyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -32,7 +29,7 @@ async def test_asyncpg_listen_notify_publish_and_ack(postgres_service: "Any") ->
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     assert channel._backend_name == "listen_notify"
 
@@ -58,7 +55,7 @@ async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     received: list[Any] = []
 
@@ -105,7 +102,7 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     assert channel._backend_name == "listen_notify_durable"
 
@@ -147,7 +144,7 @@ async def test_asyncpg_listen_notify_metadata(postgres_service: "Any") -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     received: list[Any] = []
 

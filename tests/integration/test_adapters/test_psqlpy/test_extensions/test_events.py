@@ -2,7 +2,6 @@
 """Psqlpy integration tests for the EventChannel queue backend."""
 
 import asyncio
-from typing import TYPE_CHECKING, cast
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -10,9 +9,6 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec import SQLSpec
 from sqlspec.adapters.psqlpy import PsqlpyConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
-
-if TYPE_CHECKING:
-    from sqlspec.extensions.events import AsyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -40,7 +36,7 @@ async def test_psqlpy_event_channel_queue_fallback(tmp_path, postgres_service: P
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     event_id = await channel.publish("notifications", {"action": "psqlpy"})
     iterator = channel.iter_events("notifications", poll_interval=0.1)

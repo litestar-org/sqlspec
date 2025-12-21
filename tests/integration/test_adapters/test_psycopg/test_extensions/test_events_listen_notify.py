@@ -3,16 +3,13 @@
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
-
-if TYPE_CHECKING:
-    from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -31,7 +28,7 @@ def test_psycopg_sync_listen_notify(postgres_service: "Any") -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("SyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
     backend = channel._backend
     assert "_ensure_sync_listener" in dir(backend)
 
@@ -62,7 +59,7 @@ async def test_psycopg_async_listen_notify(postgres_service: "Any") -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     received: list[Any] = []
 
@@ -101,7 +98,7 @@ def test_psycopg_sync_hybrid_listen_notify_durable(postgres_service: "Any", tmp_
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("SyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     received: list[Any] = []
     listener = channel.listen("alerts", lambda message: received.append(message), poll_interval=0.2)
@@ -137,7 +134,7 @@ async def test_psycopg_async_hybrid_listen_notify_durable(postgres_service: "Any
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     received: list[Any] = []
 

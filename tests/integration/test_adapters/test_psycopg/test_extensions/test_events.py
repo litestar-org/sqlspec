@@ -2,7 +2,6 @@
 """Psycopg integration tests for the EventChannel queue backend."""
 
 import asyncio
-from typing import TYPE_CHECKING, cast
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -10,9 +9,6 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec import SQLSpec
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
-
-if TYPE_CHECKING:
-    from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -38,7 +34,7 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("SyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     event_id = channel.publish("notifications", {"action": "queue"})
     iterator = channel.iter_events("notifications", poll_interval=0.1)
@@ -74,7 +70,7 @@ async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_ser
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = cast("AsyncEventChannel", spec.event_channel(config))
+    channel = spec.event_channel(config)
 
     event_id = await channel.publish("notifications", {"action": "async_queue"})
     iterator = channel.iter_events("notifications", poll_interval=0.1)
