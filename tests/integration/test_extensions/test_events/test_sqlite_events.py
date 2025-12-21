@@ -7,6 +7,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 
+
 @pytest.mark.integration
 @pytest.mark.sqlite
 def test_sqlite_event_channel_publish_and_consume(tmp_path) -> None:

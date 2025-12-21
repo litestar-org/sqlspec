@@ -6,6 +6,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 
+
 @pytest.mark.integration
 @pytest.mark.duckdb
 def test_duckdb_event_channel_queue_fallback(tmp_path) -> None:

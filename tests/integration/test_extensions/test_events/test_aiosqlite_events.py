@@ -7,6 +7,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_publish(tmp_path) -> None:
