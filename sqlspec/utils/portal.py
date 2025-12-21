@@ -5,6 +5,7 @@ from sync frameworks like Flask. Based on the portal pattern from Advanced Alche
 """
 
 import asyncio
+import atexit
 import functools
 import os
 import queue
@@ -257,12 +258,13 @@ class PortalManager(metaclass=SingletonMeta):
         self._portal: Portal | None = None
         self._lock = threading.Lock()
         self._pid: int | None = None
+        self._atexit_registered: bool = False
 
     def get_or_create_portal(self) -> Portal:
         """Get or create the global portal instance.
 
         Lazily creates and starts the portal provider on first access.
-        Thread-safe via locking.
+        Thread-safe via locking. Registers an atexit handler for cleanup.
 
         Returns:
             Global portal instance.
@@ -278,9 +280,30 @@ class PortalManager(metaclass=SingletonMeta):
                     self._provider.start()
                     self._portal = Portal(self._provider)
                     self._pid = current_pid
+                    self._register_atexit()
                     logger.debug("Global portal provider created and started")
 
         return cast("Portal", self._portal)
+
+    def _register_atexit(self) -> None:
+        """Register atexit handler for graceful shutdown.
+
+        Only registers once per process to avoid duplicate cleanup.
+        """
+        if not self._atexit_registered:
+            atexit.register(self._atexit_cleanup)
+            self._atexit_registered = True
+            logger.debug("Portal atexit handler registered")
+
+    def _atexit_cleanup(self) -> None:
+        """Cleanup handler called at interpreter shutdown.
+
+        Gracefully stops the portal provider to ensure pending
+        async operations complete before the process exits.
+        """
+        if self._provider is not None and self._provider.is_running:
+            logger.debug("Portal atexit cleanup: stopping provider")
+            self.stop()
 
     @property
     def is_running(self) -> bool:

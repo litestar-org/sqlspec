@@ -342,3 +342,42 @@ def test_portal_thread_safety() -> None:
     assert all(p is portals[0] for p in portals)
 
     manager.stop()
+
+
+def test_portal_manager_atexit_registration() -> None:
+    """PortalManager registers atexit handler on portal creation."""
+    manager = PortalManager()
+
+    assert not manager._atexit_registered
+
+    manager.get_or_create_portal()
+
+    assert manager._atexit_registered
+    assert manager.is_running
+
+    manager.stop()
+
+
+def test_portal_manager_atexit_cleanup() -> None:
+    """PortalManager._atexit_cleanup stops running provider."""
+    manager = PortalManager()
+    manager.get_or_create_portal()
+
+    assert manager.is_running
+
+    manager._atexit_cleanup()
+
+    assert not manager.is_running
+
+
+def test_portal_manager_atexit_cleanup_noop_when_stopped() -> None:
+    """PortalManager._atexit_cleanup is no-op when already stopped."""
+    manager = PortalManager()
+    manager.get_or_create_portal()
+    manager.stop()
+
+    assert not manager.is_running
+
+    manager._atexit_cleanup()
+
+    assert not manager.is_running
