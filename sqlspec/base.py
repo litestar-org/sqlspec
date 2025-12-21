@@ -159,8 +159,25 @@ class SQLSpec:
         """
         return self._configs
 
+    @overload
+    def event_channel(self, config: "type[SyncConfigT]") -> "SyncEventChannel": ...
+
+    @overload
+    def event_channel(self, config: "type[AsyncConfigT]") -> "AsyncEventChannel": ...
+
+    @overload
     def event_channel(
-        self, config: "type[SyncConfigT | AsyncConfigT] | SyncConfigT | AsyncConfigT"
+        self, config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]"
+    ) -> "SyncEventChannel": ...
+
+    @overload
+    def event_channel(
+        self, config: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]"
+    ) -> "AsyncEventChannel": ...
+
+    def event_channel(
+        self,
+        config: "type[SyncConfigT | AsyncConfigT] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
     ) -> "SyncEventChannel | AsyncEventChannel":
         """Create an event channel for the provided configuration.
 

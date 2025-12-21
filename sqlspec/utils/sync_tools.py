@@ -161,7 +161,8 @@ def await_(
             from sqlspec.utils.portal import get_global_portal
 
             portal = get_global_portal()
-            return portal.call(async_function, *args, **kwargs)
+            typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
+            return portal.call(typed_partial)
         else:
             if loop.is_running():
                 try:
@@ -180,7 +181,8 @@ def await_(
             from sqlspec.utils.portal import get_global_portal
 
             portal = get_global_portal()
-            return portal.call(async_function, *args, **kwargs)
+            typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
+            return portal.call(typed_partial)
 
     return wrapper
 

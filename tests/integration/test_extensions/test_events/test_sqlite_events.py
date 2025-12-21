@@ -1,11 +1,16 @@
 # pyright: reportArgumentType=false
 """SQLite integration tests for EventChannel with table queue backend."""
 
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
+
+if TYPE_CHECKING:
+    from sqlspec.extensions.events import SyncEventChannel
 
 
 @pytest.mark.integration
@@ -26,7 +31,7 @@ def test_sqlite_event_channel_publish_and_consume(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     event_id = channel.publish("notifications", {"action": "test"})
     iterator = channel.iter_events("notifications", poll_interval=0.01)
@@ -55,7 +60,7 @@ def test_sqlite_event_channel_ack_updates_status(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     event_id = channel.publish("alerts", {"level": "info"})
     iterator = channel.iter_events("alerts", poll_interval=0.01)
@@ -89,7 +94,7 @@ def test_sqlite_event_channel_custom_table_name(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     event_id = channel.publish("events", {"custom": True})
 
@@ -117,7 +122,7 @@ def test_sqlite_event_channel_multiple_channels(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     id_alerts = channel.publish("alerts", {"type": "alert"})
     channel.publish("notifications", {"type": "notification"})
@@ -148,7 +153,7 @@ def test_sqlite_event_channel_metadata_preserved(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     event_id = channel.publish("events", {"action": "create"}, metadata={"user_id": "user_123", "source": "api"})
 
@@ -179,7 +184,7 @@ def test_sqlite_event_channel_attempts_tracked(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     event_id = channel.publish("events", {"action": "test"})
 
@@ -212,7 +217,7 @@ def test_sqlite_event_channel_telemetry(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     channel.publish("events", {"action": "telemetry_test"})
     iterator = channel.iter_events("events", poll_interval=0.01)

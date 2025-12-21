@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false, reportArgumentType=false
 """AsyncMy integration tests for the EventChannel queue backend."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pytest_databases.docker.mysql import MySQLService
@@ -9,6 +9,9 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncmy import AsyncmyConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
+
+if TYPE_CHECKING:
+    from sqlspec.extensions.events import AsyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
@@ -38,7 +41,7 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService,
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     assert channel._backend_name == "table_queue"
 
@@ -84,7 +87,7 @@ async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLServi
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_ids = [
         await channel.publish("multi_test", {"index": 0}),
@@ -131,7 +134,7 @@ async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_id = await channel.publish("nack_test", {"retry": True})
 

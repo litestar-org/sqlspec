@@ -1,11 +1,16 @@
 # pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 """AioSQLite integration tests for EventChannel with async table queue backend."""
 
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
+
+if TYPE_CHECKING:
+    from sqlspec.extensions.events import AsyncEventChannel
 
 
 @pytest.mark.integration
@@ -26,7 +31,7 @@ async def test_aiosqlite_event_channel_publish(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_id = await channel.publish("notifications", {"action": "async_test"})
 
@@ -59,7 +64,7 @@ async def test_aiosqlite_event_channel_consume(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_id = await channel.publish("events", {"data": "async_value"})
 
@@ -91,7 +96,7 @@ async def test_aiosqlite_event_channel_ack(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_id = await channel.publish("alerts", {"priority": "high"})
 
@@ -129,7 +134,7 @@ async def test_aiosqlite_event_channel_metadata(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_id = await channel.publish(
         "events", {"action": "async_meta"}, metadata={"request_id": "req_abc", "timestamp": "2024-01-15T10:00:00Z"}
@@ -164,7 +169,7 @@ async def test_aiosqlite_event_channel_telemetry(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     await channel.publish("events", {"track": "async"})
     generator = channel.iter_events("events", poll_interval=0.01)
@@ -199,7 +204,7 @@ async def test_aiosqlite_event_channel_custom_table_name(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_id = await channel.publish("events", {"custom": True})
 
@@ -231,7 +236,7 @@ async def test_aiosqlite_event_channel_multiple_channels(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     id_alerts = await channel.publish("alerts", {"type": "alert"})
     await channel.publish("notifications", {"type": "notification"})
@@ -265,7 +270,7 @@ async def test_aiosqlite_event_channel_attempts_tracked(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_id = await channel.publish("events", {"action": "test"})
 

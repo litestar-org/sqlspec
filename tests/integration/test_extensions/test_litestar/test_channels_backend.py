@@ -7,7 +7,7 @@ import pytest
 from litestar.channels.plugin import ChannelsPlugin
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.extensions.events.channel import EventChannel
+from sqlspec.extensions.events import AsyncEventChannel
 from sqlspec.extensions.litestar.channels import SQLSpecChannelsBackend
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
@@ -34,7 +34,7 @@ async def test_litestar_channels_backend_database_roundtrip(tmp_path: "Any") -> 
         commands = AsyncMigrationCommands(config)
         await commands.upgrade("head")
 
-        backend = SQLSpecChannelsBackend(EventChannel(config), channel_prefix="litestar", poll_interval=0.05)
+        backend = SQLSpecChannelsBackend(AsyncEventChannel(config), channel_prefix="litestar", poll_interval=0.05)
         plugin = ChannelsPlugin(backend=backend, channels=["notifications"])
 
         async with plugin:

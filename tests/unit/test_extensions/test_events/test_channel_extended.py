@@ -2,13 +2,16 @@
 """Extended unit tests for EventChannel configuration and backend selection."""
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
+
+if TYPE_CHECKING:
+    from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 
 
 def _run_async(coro: "Any") -> "Any":
@@ -91,7 +94,7 @@ def test_sync_event_channel_rejects_async_config(tmp_path) -> None:
     config = AiosqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
 
     with pytest.raises(ImproperConfigurationError, match="sync configuration"):
-        SyncEventChannel(config)
+        SyncEventChannel(cast("SyncDatabaseConfig[Any, Any, Any]", config))
 
 
 def test_async_event_channel_rejects_sync_config(tmp_path) -> None:
@@ -99,7 +102,7 @@ def test_async_event_channel_rejects_sync_config(tmp_path) -> None:
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
 
     with pytest.raises(ImproperConfigurationError, match="async configuration"):
-        AsyncEventChannel(config)
+        AsyncEventChannel(cast("AsyncDatabaseConfig[Any, Any, Any]", config))
 
 
 def test_event_channel_normalize_channel_name_valid(tmp_path) -> None:

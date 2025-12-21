@@ -1,6 +1,8 @@
 # pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false, reportArgumentType=false
 """Tests for the EventChannel queue fallback."""
 
+from typing import cast
+
 import pytest
 
 from sqlspec import SQLSpec
@@ -53,7 +55,7 @@ def test_event_channel_publish_and_ack_sync(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     event_id = channel.publish("notifications", {"action": "refresh"})
     iterator = channel.iter_events("notifications", poll_interval=0.01)
@@ -92,7 +94,7 @@ async def test_event_channel_async_iteration(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
     event_id = await channel.publish("notifications", {"action": "async"})
 
@@ -132,7 +134,7 @@ def test_event_channel_backend_fallback(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("SyncEventChannel", spec.event_channel(config))
 
     event_id = channel.publish("notifications", {"payload": "fallback"})
     iterator = channel.iter_events("notifications", poll_interval=0.01)
@@ -151,7 +153,7 @@ def test_event_channel_backend_fallback(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_event_channel_portal_bridge_sync_api(tmp_path) -> None:
-    """Sync APIs can bridge to async adapters via the portal toggle."""
+    """Async adapters publish and consume events via the event_channel helper."""
 
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
@@ -167,15 +169,16 @@ async def test_event_channel_portal_bridge_sync_api(tmp_path) -> None:
 
     spec = SQLSpec()
     spec.add_config(config)
-    channel = spec.event_channel(config)
+    channel = cast("AsyncEventChannel", spec.event_channel(config))
 
-    event_id = channel.publish("notifications", {"action": "portal"})
+    event_id = await channel.publish("notifications", {"action": "portal"})
 
     iterator = channel.iter_events("notifications", poll_interval=0.01)
-    message = next(iterator)
+    message = await iterator.__anext__()
+    await iterator.aclose()
 
     assert message.event_id == event_id
-    channel.ack(message.event_id)
+    await channel.ack(message.event_id)
 
     async with config.provide_session() as driver:
         row = await driver.select_one(
