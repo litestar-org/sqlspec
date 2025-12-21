@@ -381,3 +381,19 @@ def test_portal_manager_atexit_cleanup_noop_when_stopped() -> None:
     manager._atexit_cleanup()  # pyright: ignore[reportPrivateUsage]
 
     assert not manager.is_running
+
+
+def test_portal_call_timeout() -> None:
+    """PortalProvider.call raises error on timeout."""
+
+    async def slow_function() -> int:
+        await asyncio.sleep(10)
+        return 42
+
+    provider = PortalProvider()
+    provider.start()
+
+    with pytest.raises(ImproperConfigurationError, match="timed out after"):
+        provider.call(slow_function, timeout=0.1)
+
+    provider.stop()
