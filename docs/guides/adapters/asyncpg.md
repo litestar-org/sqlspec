@@ -248,8 +248,11 @@ For comprehensive examples and migration guides, see:
 - Publishing uses `connection.notify()` under the hood; consumers rely on
   `connection.add_listener()` with dedicated connections so the shared pool
   stays available for transactional work.
+- For durability and retries, set `driver_features["events_backend"] =
+  "listen_notify_durable"` and include the `events` extension migrations.
 - Force the durable queue fallback (for deterministic testing or multi-tenant
-  workloads) by overriding `driver_features["events_backend"] = "table_queue"`.
+  workloads) by overriding `driver_features["events_backend"] = "table_queue"`
+  and including the `events` migrations.
 
 ## Common Issues
 

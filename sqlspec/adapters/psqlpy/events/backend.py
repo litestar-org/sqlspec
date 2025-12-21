@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.core import SQL
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import EventMessage
-from sqlspec.extensions.events._queue import QueueEventBackend, TableEventQueue
+from sqlspec.extensions.events._queue import QueueEventBackend, build_queue_backend
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -319,16 +319,7 @@ def create_event_backend(
         except ImproperConfigurationError:
             return None
     if backend_name == "listen_notify_durable":
-        queue = TableEventQueue(
-            config,
-            queue_table=extension_settings.get("queue_table"),
-            lease_seconds=extension_settings.get("lease_seconds"),
-            retention_seconds=extension_settings.get("retention_seconds"),
-            select_for_update=extension_settings.get("select_for_update"),
-            skip_locked=extension_settings.get("skip_locked"),
-            json_passthrough=extension_settings.get("json_passthrough"),
-        )
-        queue_backend = QueueEventBackend(queue)
+        queue_backend = build_queue_backend(config, extension_settings, adapter_name="psqlpy")
         try:
             return PsqlpyHybridEventsBackend(config, queue_backend)
         except ImproperConfigurationError:

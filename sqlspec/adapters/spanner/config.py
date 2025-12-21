@@ -12,6 +12,7 @@ from sqlspec.adapters.spanner._types import SpannerConnection
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver, spanner_statement_config
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -264,3 +265,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             "SpannerSyncDriver": SpannerSyncDriver,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return queue defaults for Spanner JSON handling."""
+
+        return EventRuntimeHints(json_passthrough=True)

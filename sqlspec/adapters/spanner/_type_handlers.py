@@ -12,7 +12,9 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from google.cloud.spanner_v1 import param_types
+from google.cloud.spanner_v1 import JsonObject, param_types
+
+from sqlspec.utils.type_converters import should_json_encode_sequence
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -21,6 +23,7 @@ __all__ = (
     "bytes_to_spanner",
     "coerce_params_for_spanner",
     "infer_spanner_param_types",
+    "spanner_json",
     "spanner_to_bytes",
     "spanner_to_uuid",
     "uuid_to_spanner",
@@ -105,6 +108,20 @@ def spanner_to_uuid(value: "bytes | None") -> "UUID | bytes | None":
         return value
 
 
+def spanner_json(value: Any) -> Any:
+    """Wrap JSON values for Spanner JSON parameters.
+
+    Args:
+        value: JSON-compatible value (dict, list, tuple, or scalar).
+
+    Returns:
+        JsonObject wrapper when available, otherwise the original value.
+    """
+    if isinstance(value, JsonObject):
+        return value
+    return JsonObject(value)
+
+
 def coerce_params_for_spanner(
     params: "dict[str, Any] | None", json_serializer: "Callable[[Any], str] | None" = None
 ) -> "dict[str, Any] | None":
@@ -114,11 +131,12 @@ def coerce_params_for_spanner(
     - UUID -> base64-encoded bytes (via uuid_to_spanner + bytes_to_spanner)
     - bytes -> base64-encoded bytes (required by Spanner Python client)
     - datetime timezone awareness
-    - dict -> JSON string
+    - dict -> JsonObject (if available) for JSON columns
+    - nested sequences -> JsonObject (if available) for JSON arrays
 
     Args:
         params: Parameter dictionary or None.
-        json_serializer: Optional JSON serializer for dict values.
+        json_serializer: Optional JSON serializer (unused for JSON dicts).
 
     Returns:
         Coerced parameter dictionary or None.
@@ -134,8 +152,15 @@ def coerce_params_for_spanner(
             coerced[key] = bytes_to_spanner(value)
         elif isinstance(value, datetime) and value.tzinfo is None:
             coerced[key] = value.replace(tzinfo=timezone.utc)
-        elif isinstance(value, dict) and json_serializer is not None:
-            coerced[key] = json_serializer(value)
+        elif isinstance(value, JsonObject):
+            coerced[key] = value
+        elif isinstance(value, dict):
+            coerced[key] = spanner_json(value)
+        elif isinstance(value, (list, tuple)):
+            if should_json_encode_sequence(value):
+                coerced[key] = spanner_json(list(value))
+            else:
+                coerced[key] = list(value) if isinstance(value, tuple) else value
         else:
             coerced[key] = value
     return coerced
@@ -169,12 +194,16 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
             types[key] = param_types.TIMESTAMP
         elif isinstance(value, date):
             types[key] = param_types.DATE
-        elif isinstance(value, dict) and hasattr(param_types, "JSON"):
+        elif hasattr(param_types, "JSON") and isinstance(value, (dict, JsonObject)):
             types[key] = param_types.JSON
-        elif isinstance(value, list):
-            if not value:
+        elif isinstance(value, (list, tuple)):
+            if should_json_encode_sequence(value) and hasattr(param_types, "JSON"):
+                types[key] = param_types.JSON
                 continue
-            first = value[0]
+            sequence = list(value)
+            if not sequence:
+                continue
+            first = sequence[0]
             if isinstance(first, int):
                 types[key] = param_types.Array(param_types.INT64)  # type: ignore[no-untyped-call]
             elif isinstance(first, str):

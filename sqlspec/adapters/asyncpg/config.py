@@ -21,6 +21,7 @@ from sqlspec.adapters.asyncpg.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
@@ -490,3 +491,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             "AsyncpgPreparedStatement": AsyncpgPreparedStatement,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for PostgreSQL queue fallback."""
+
+        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)

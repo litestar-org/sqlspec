@@ -21,6 +21,7 @@ from sqlspec.adapters.psycopg.driver import (
     psycopg_statement_config,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import to_json
@@ -299,6 +300,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         })
         return namespace
 
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for PostgreSQL queue fallback."""
+
+        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
 
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
@@ -495,3 +501,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "PsycopgPoolParams": PsycopgPoolParams,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for PostgreSQL queue fallback."""
+
+        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)

@@ -6,10 +6,11 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import EventChannelError
+from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._store import normalize_queue_table_name
 from sqlspec.utils.logging import get_logger
@@ -20,7 +21,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("events.queue")
 
-__all__ = ("QueueEvent", "QueueEventBackend", "TableEventQueue")
+__all__ = ("QueueEvent", "QueueEventBackend", "TableEventQueue", "build_queue_backend")
+
+_ADAPTER_MODULE_PARTS = 3
 
 _PENDING_STATUS = "pending"
 _LEASED_STATUS = "leased"
@@ -335,17 +338,20 @@ class TableEventQueue:
         session_cm = self._config.provide_session()
         async with session_cm as driver:  # type: ignore[union-attr]
             result = await driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
-            if result.rows_affected:
-                await driver.commit()
-            return int(result.rows_affected)
+            await driver.commit()
+            rows_affected = result.rows_affected
+            return int(rows_affected) if rows_affected is not None else 0
 
     def _execute_sync(self, sql: str, parameters: "dict[str, Any]") -> int:
-        session_cm = self._config.provide_session()
+        session_factory = getattr(self._config, "provide_write_session", None)
+        use_write_session = session_factory is not None
+        session_cm = self._config.provide_session() if session_factory is None else cast("Any", session_factory)()
         with session_cm as driver:  # type: ignore[union-attr]
             result = driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
-            if result.rows_affected:
+            if not use_write_session:
                 driver.commit()
-            return int(result.rows_affected)
+            rows_affected = result.rows_affected
+            return int(rows_affected) if rows_affected is not None else 0
 
     @staticmethod
     def _coerce_datetime(value: Any) -> "datetime":
@@ -402,6 +408,56 @@ class TableEventQueue:
         if self._json_passthrough:
             return value
         return to_json(value)
+
+
+def build_queue_backend(
+    config: "DatabaseConfigProtocol[Any, Any, Any]",
+    extension_settings: "dict[str, Any] | None" = None,
+    *,
+    adapter_name: "str | None" = None,
+    hints: "EventRuntimeHints | None" = None,
+) -> "QueueEventBackend":
+    """Build a QueueEventBackend using adapter hints and extension overrides."""
+
+    settings = dict(extension_settings or {})
+    resolved_adapter = adapter_name or _resolve_adapter_name(config)
+    runtime_hints = hints or get_runtime_hints(resolved_adapter, config)
+    queue = TableEventQueue(
+        config,
+        queue_table=settings.get("queue_table"),
+        lease_seconds=_resolve_int_setting(settings, "lease_seconds", runtime_hints.lease_seconds),
+        retention_seconds=_resolve_int_setting(settings, "retention_seconds", runtime_hints.retention_seconds),
+        select_for_update=_resolve_bool_setting(settings, "select_for_update", runtime_hints.select_for_update),
+        skip_locked=_resolve_bool_setting(settings, "skip_locked", runtime_hints.skip_locked),
+        json_passthrough=_resolve_bool_setting(settings, "json_passthrough", runtime_hints.json_passthrough),
+    )
+    return QueueEventBackend(queue)
+
+
+def _resolve_adapter_name(config: "DatabaseConfigProtocol[Any, Any, Any]") -> "str | None":
+    module_name = type(config).__module__
+    parts = module_name.split(".")
+    if len(parts) >= _ADAPTER_MODULE_PARTS and parts[0] == "sqlspec" and parts[1] == "adapters":
+        return parts[2]
+    return None
+
+
+def _resolve_bool_setting(settings: "dict[str, Any]", key: str, default: bool) -> bool:
+    if key not in settings:
+        return bool(default)
+    value = settings.get(key)
+    if value is None:
+        return bool(default)
+    return bool(value)
+
+
+def _resolve_int_setting(settings: "dict[str, Any]", key: str, default: int) -> int:
+    if key not in settings:
+        return int(default)
+    value = settings.get(key)
+    if value is None:
+        return int(default)
+    return int(value)
 
 
 class QueueEventBackend:

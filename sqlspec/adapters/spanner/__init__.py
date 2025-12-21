@@ -7,6 +7,7 @@ from sqlspec.adapters.spanner._type_handlers import (
     bytes_to_spanner,
     coerce_params_for_spanner,
     infer_spanner_param_types,
+    spanner_json,
     spanner_to_bytes,
     spanner_to_uuid,
     uuid_to_spanner,
@@ -33,6 +34,7 @@ __all__ = (
     "dialect",
     "infer_spanner_param_types",
     "spanner_to_bytes",
+    "spanner_json",
     "spanner_to_uuid",
     "uuid_to_spanner",
 )

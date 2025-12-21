@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._hints import get_runtime_hints
 from sqlspec.extensions.events._models import EventMessage
-from sqlspec.extensions.events._queue import QueueEventBackend, TableEventQueue
+from sqlspec.extensions.events._queue import build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.portal import get_global_portal
@@ -84,23 +84,10 @@ class EventChannel:
         extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
         self._adapter_name = self._resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
-        lease_seconds = int(extension_settings.get("lease_seconds") or hints.lease_seconds)
-        retention_seconds = int(extension_settings.get("retention_seconds") or hints.retention_seconds)
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         if config.is_async:
             extension_settings.setdefault("portal_bridge", True)
-        queue_table: str | None = extension_settings.get("queue_table")
-        queue_backend = QueueEventBackend(
-            TableEventQueue(
-                config,
-                queue_table=queue_table,
-                lease_seconds=lease_seconds,
-                retention_seconds=retention_seconds,
-                select_for_update=hints.select_for_update,
-                skip_locked=hints.skip_locked,
-                json_passthrough=hints.json_passthrough,
-            )
-        )
+        queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
         backend_name = config.driver_features.get("events_backend") or "table_queue"
         native_backend = self._load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:

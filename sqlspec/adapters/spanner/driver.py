@@ -26,7 +26,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -339,7 +339,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
 
 def _build_spanner_profile() -> DriverParameterProfile:
-    type_coercions: dict[type, Any] = {dict: to_json}
     return DriverParameterProfile(
         name="Spanner",
         default_style=ParameterStyle.NAMED_AT,
@@ -353,7 +352,7 @@ def _build_spanner_profile() -> DriverParameterProfile:
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=True,
-        custom_type_coercions=type_coercions,
+        custom_type_coercions=None,
         extras={},
     )
 

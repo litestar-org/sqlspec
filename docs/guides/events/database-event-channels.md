@@ -213,7 +213,7 @@ against accidental sync usage.
 
 | Adapter | Backend | Default poll interval | Lease window | Locking hints |
 | --- | --- | --- | --- | --- |
-| AsyncPG / Psycopg / Psqlpy | Native LISTEN/NOTIFY | `N/A` (native notifications) | `N/A` | Dedicated listener connections reuse the driver's native APIs. |
+| AsyncPG / Psycopg / Psqlpy | `listen_notify` (default), `listen_notify_durable` | `0.5s` (queue-backed paths only) | `30s` (queue-backed paths only) | Queue backends add `FOR UPDATE SKIP LOCKED`; native backends use dedicated listener connections. |
 | Oracle | `advanced_queue` (sync adapters) | `aq_wait_seconds` (default `5s`) | `N/A` – AQ removes messages when dequeued | Exposes AQ dequeue options via `extension_config`. |
 | Asyncmy (MySQL) | Queue fallback | `0.25s` | `5s` | Adds `FOR UPDATE SKIP LOCKED` to reduce contention. |
 | DuckDB | Queue fallback | `0.15s` | `15s` | Favor short leases/poll windows so embedded engines do not spin. |
@@ -295,6 +295,10 @@ config = AsyncpgConfig(
 )
 ```
 
+Queue-backed backends (`listen_notify_durable`, `table_queue`) require the
+events extension migrations. Ensure `migration_config["include_extensions"]`
+contains `"events"` before publishing or consuming.
+
 ### Event Queue Stores
 
 Stores generate adapter-specific DDL for the queue table. Each adapter has
@@ -310,8 +314,8 @@ Example store implementations:
 | Adapter | Payload Type | Timestamp Type | Special Handling |
 | --- | --- | --- | --- |
 | AsyncPG / Psycopg / Psqlpy | JSONB | TIMESTAMPTZ | Standard PostgreSQL |
-| Oracle | CLOB | TIMESTAMP | PL/SQL exception blocks for idempotent DDL |
-| MySQL / Asyncmy | JSON | DATETIME(6) | FOR UPDATE SKIP LOCKED |
+| Oracle | JSON or BLOB | TIMESTAMP | PL/SQL exception blocks, auto-detected JSON storage |
+| MySQL / Asyncmy | JSON | DATETIME(6) | Conditional index creation via procedural SQL |
 | DuckDB | JSON | TIMESTAMP | Short poll intervals |
 | BigQuery | JSON | TIMESTAMP | CLUSTER BY for partitioning |
 | Spanner | JSON | TIMESTAMP | Separate DDL execution (no IF NOT EXISTS) |

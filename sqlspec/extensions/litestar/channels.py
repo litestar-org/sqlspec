@@ -33,17 +33,6 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         to deterministic database channel identifiers via hashing.
     """
 
-    __slots__ = (
-        "_channel_prefix",
-        "_event_channel",
-        "_output_queue",
-        "_poll_interval",
-        "_shutdown",
-        "_tasks",
-        "_to_db_channel",
-        "_to_litestar_channel",
-    )
-
     def __init__(
         self, event_channel: "EventChannel", *, channel_prefix: str = "litestar", poll_interval: float = 0.2
     ) -> None:

@@ -1,11 +1,24 @@
 # pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false, reportArgumentType=false
 """Extended unit tests for EventChannel configuration and backend selection."""
 
+import asyncio
+from typing import Any
+
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventChannel
+
+
+def _run_async(coro: "Any") -> "Any":
+    """Run a coroutine in a dedicated event loop."""
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def test_event_channel_adapter_name_resolution(tmp_path) -> None:
@@ -165,9 +178,7 @@ def test_event_channel_publish_async_on_sync_raises(tmp_path) -> None:
     channel = EventChannel(config)
 
     with pytest.raises(ImproperConfigurationError, match="async configuration"):
-        import asyncio
-
-        asyncio.get_event_loop().run_until_complete(channel.publish_async("test", {"action": "test"}))
+        _run_async(channel.publish_async("test", {"action": "test"}))
 
 
 def test_event_channel_publish_sync_on_async_without_bridge_raises(tmp_path) -> None:
@@ -231,13 +242,12 @@ def test_event_channel_iter_events_async_on_sync_raises(tmp_path) -> None:
     channel = EventChannel(config)
 
     with pytest.raises(ImproperConfigurationError, match="async configuration"):
-        import asyncio
 
         async def iterate() -> None:
             async for _ in channel.iter_events_async("test"):
                 break
 
-        asyncio.get_event_loop().run_until_complete(iterate())
+        _run_async(iterate())
 
 
 def test_event_channel_listen_async_on_sync_raises(tmp_path) -> None:
@@ -258,9 +268,7 @@ def test_event_channel_ack_async_on_sync_raises(tmp_path) -> None:
     channel = EventChannel(config)
 
     with pytest.raises(ImproperConfigurationError, match="async configuration"):
-        import asyncio
-
-        asyncio.get_event_loop().run_until_complete(channel.ack_async("test-event-id"))
+        _run_async(channel.ack_async("test-event-id"))
 
 
 def test_event_channel_backend_supports_sync(tmp_path) -> None:
