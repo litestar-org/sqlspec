@@ -348,11 +348,11 @@ def test_portal_manager_atexit_registration() -> None:
     """PortalManager registers atexit handler on portal creation."""
     manager = PortalManager()
 
-    assert not manager._atexit_registered
+    assert not manager._atexit_registered  # pyright: ignore[reportPrivateUsage]
 
     manager.get_or_create_portal()
 
-    assert manager._atexit_registered
+    assert manager._atexit_registered  # pyright: ignore[reportPrivateUsage]
     assert manager.is_running
 
     manager.stop()
@@ -365,7 +365,7 @@ def test_portal_manager_atexit_cleanup() -> None:
 
     assert manager.is_running
 
-    manager._atexit_cleanup()
+    manager._atexit_cleanup()  # pyright: ignore[reportPrivateUsage]
 
     assert not manager.is_running
 
@@ -378,6 +378,6 @@ def test_portal_manager_atexit_cleanup_noop_when_stopped() -> None:
 
     assert not manager.is_running
 
-    manager._atexit_cleanup()
+    manager._atexit_cleanup()  # pyright: ignore[reportPrivateUsage]
 
     assert not manager.is_running
