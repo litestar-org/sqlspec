@@ -108,10 +108,10 @@ def test_oracle_sync_event_channel_queue_fallback(tmp_path: "Path") -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish_sync("notifications", {"action": "oracle"})
-    iterator = channel.iter_events_sync("notifications", poll_interval=0.5)
+    event_id = channel.publish("notifications", {"action": "oracle"})
+    iterator = channel.iter_events("notifications", poll_interval=0.5)
     message = next(iterator)
-    channel.ack_sync(message.event_id)
+    channel.ack(message.event_id)
 
     with config.provide_session() as driver:
         row = driver.select_one(
@@ -148,13 +148,13 @@ async def test_oracle_async_event_channel_queue_fallback(tmp_path: "Path") -> No
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = await channel.publish_async("notifications", {"action": "oracle_async"})
-    iterator = channel.iter_events_async("notifications", poll_interval=0.5)
+    event_id = await channel.publish("notifications", {"action": "oracle_async"})
+    iterator = channel.iter_events("notifications", poll_interval=0.5)
     try:
         message = await asyncio.wait_for(iterator.__anext__(), timeout=10)
     finally:
         await iterator.aclose()
-    await channel.ack_async(message.event_id)
+    await channel.ack(message.event_id)
 
     async with config.provide_session() as driver:
         row = await driver.select_one(

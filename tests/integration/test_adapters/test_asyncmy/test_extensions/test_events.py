@@ -1,4 +1,4 @@
-# pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false
+# pyright: reportPrivateUsage=false, reportAttributeAccessIssue=false, reportArgumentType=false
 """AsyncMy integration tests for the EventChannel queue backend."""
 
 from typing import Any
@@ -42,11 +42,11 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService,
 
     assert channel._backend_name == "table_queue"
 
-    event_id = await channel.publish_async("notifications", {"action": "mysql"})
-    iterator = channel.iter_events_async("notifications", poll_interval=0.05)
+    event_id = await channel.publish("notifications", {"action": "mysql"})
+    iterator = channel.iter_events("notifications", poll_interval=0.05)
     message = await iterator.__anext__()
     await iterator.aclose()
-    await channel.ack_async(message.event_id)
+    await channel.ack(message.event_id)
 
     async with config.provide_session() as driver:
         row = await driver.select_one(
@@ -87,17 +87,17 @@ async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLServi
     channel = spec.event_channel(config)
 
     event_ids = [
-        await channel.publish_async("multi_test", {"index": 0}),
-        await channel.publish_async("multi_test", {"index": 1}),
-        await channel.publish_async("multi_test", {"index": 2}),
+        await channel.publish("multi_test", {"index": 0}),
+        await channel.publish("multi_test", {"index": 1}),
+        await channel.publish("multi_test", {"index": 2}),
     ]
 
     received = []
-    iterator = channel.iter_events_async("multi_test", poll_interval=0.05)
+    iterator = channel.iter_events("multi_test", poll_interval=0.05)
     for _ in range(3):
         message = await iterator.__anext__()
         received.append(message)
-        await channel.ack_async(message.event_id)
+        await channel.ack(message.event_id)
     await iterator.aclose()
 
     received_ids = {m.event_id for m in received}
@@ -133,11 +133,11 @@ async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = await channel.publish_async("nack_test", {"retry": True})
+    event_id = await channel.publish("nack_test", {"retry": True})
 
-    iterator = channel.iter_events_async("nack_test", poll_interval=0.05)
+    iterator = channel.iter_events("nack_test", poll_interval=0.05)
     message = await iterator.__anext__()
-    await channel.nack_async(message.event_id)
+    await channel.nack(message.event_id)
     await iterator.aclose()
 
     async with config.provide_session() as driver:

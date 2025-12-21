@@ -13,7 +13,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterable
 
-    from sqlspec.extensions.events.channel import EventChannel
+    from sqlspec.extensions.events.channel import AsyncEventChannel
 
 logger = get_logger("extensions.litestar.channels")
 
@@ -34,7 +34,7 @@ class SQLSpecChannelsBackend(ChannelsBackend):
     """
 
     def __init__(
-        self, event_channel: "EventChannel", *, channel_prefix: str = "litestar", poll_interval: float = 0.2
+        self, event_channel: "AsyncEventChannel", *, channel_prefix: str = "litestar", poll_interval: float = 0.2
     ) -> None:
         if not _IDENTIFIER_PATTERN.match(channel_prefix):
             msg = f"channel_prefix must be a valid identifier, got: {channel_prefix!r}"
@@ -66,13 +66,13 @@ class SQLSpecChannelsBackend(ChannelsBackend):
             await asyncio.gather(*tasks, return_exceptions=True)
         self._to_db_channel.clear()
         self._to_litestar_channel.clear()
-        await self._event_channel.shutdown_async()
+        await self._event_channel.shutdown()
 
     async def publish(self, data: bytes, channels: "Iterable[str]") -> None:
         payload = {"data_b64": base64.b64encode(data).decode("ascii")}
         for channel in channels:
             db_channel = self._db_channel_name(channel)
-            await self._event_channel.publish_async(db_channel, payload)
+            await self._event_channel.publish(db_channel, payload)
 
     async def subscribe(self, channels: "Iterable[str]") -> None:
         for channel in channels:
@@ -135,18 +135,18 @@ class SQLSpecChannelsBackend(ChannelsBackend):
 
     async def _stream_channel(self, channel: str, db_channel: str) -> None:
         try:
-            async for message in self._event_channel.iter_events_async(db_channel, poll_interval=self._poll_interval):
+            async for message in self._event_channel.iter_events(db_channel, poll_interval=self._poll_interval):
                 if self._shutdown.is_set():
                     return
                 payload = message.payload
                 decoded = self._decode_payload(payload)
                 if decoded is None:
                     logger.warning("litestar channel %s dropped malformed payload: %r", channel, payload)
-                    await self._event_channel.ack_async(message.event_id)
+                    await self._event_channel.ack(message.event_id)
                     continue
                 assert self._output_queue is not None
                 await self._output_queue.put((channel, decoded))
-                await self._event_channel.ack_async(message.event_id)
+                await self._event_channel.ack(message.event_id)
         except asyncio.CancelledError:
             raise
         except Exception as error:  # pragma: no cover - defensive

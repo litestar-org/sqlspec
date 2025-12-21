@@ -1,9 +1,9 @@
 # Database Event Channels
 
-SQLSpec now ships a portable event channel API that wraps native LISTEN/NOTIFY
+SQLSpec ships a portable event channel API that wraps native LISTEN/NOTIFY
 (or tapers down to a durable queue table when a driver lacks native support).
 This guide documents the queue-backed fallback delivered in
-`sqlspec.extensions.events.EventChannel`, the native PostgreSQL backend, and how to enable
+`sqlspec.extensions.events`, the native PostgreSQL backend, and how to enable
 each option across adapters.
 
 ## Quick start
@@ -51,14 +51,14 @@ config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"})
 spec.add_config(config)
 channel = spec.event_channel(config)
 
-event_id = await channel.publish_async("notifications", {"type": "native"})
-async for message in channel.iter_events_async("notifications"):
+event_id = await channel.publish("notifications", {"type": "native"})
+async for message in channel.iter_events("notifications"):
     assert message.event_id == event_id
     break
 ```
 
 Native events are fire-and-forget: there is no durable queue row, so
-`ack_async()` becomes a no-op used solely for API parity. If you need durable
+`ack()` becomes a no-op used solely for API parity. If you need durable
 storage (e.g., for retries or multi-consumer fan-out) keep the queue backend
 enabled as described below.
 
@@ -117,14 +117,26 @@ When `in_memory=True` and the adapter dialect is Oracle, the migration adds the
 `INMEMORY PRIORITY HIGH` clause so queue rows live in the column store. Other
 adapters ignore this flag.
 
+## Sync vs Async Channels
+
+SQLSpec provides separate channel classes for sync and async configurations:
+
+- **`SyncEventChannel`** - For sync database configs (SqliteConfig, DuckdbConfig, PsycopgSyncConfig, etc.)
+- **`AsyncEventChannel`** - For async database configs (AsyncpgConfig, AiosqliteConfig, PsycopgAsyncConfig, etc.)
+
+The `SQLSpec.event_channel()` factory method automatically returns the correct type
+based on your configuration's `is_async` attribute.
+
 ## Publishing events
 
-Both sync and async adapters share the same API surface. Call the method that
-matches your driver type:
+Both sync and async channels share the same API surface with clean method names:
 
 ```python
+# Sync channel (SqliteConfig, DuckdbConfig, PsycopgSyncConfig, etc.)
 channel.publish("notifications", {"type": "user_update", "user_id": 42})
-await channel.publish_async("notifications", {"type": "refresh", "user_id": 42})
+
+# Async channel (AsyncpgConfig, AiosqliteConfig, PsycopgAsyncConfig, etc.)
+await channel.publish("notifications", {"type": "refresh", "user_id": 42})
 ```
 
 Payloads must be JSON-serialisable. Optional metadata maps can be stored via the
@@ -145,7 +157,7 @@ async def handle(message: EventMessage) -> None:
     # do work, then ack when auto_ack=False
     print(message.channel, message.payload)
 
-listener = channel.listen_async(
+listener = channel.listen(
     "notifications",
     handle,
     poll_interval=0.5,
@@ -153,15 +165,15 @@ listener = channel.listen_async(
 )
 
 # later
-await channel.stop_listener_async(listener.id)
+await channel.stop_listener(listener.id)
 ```
 
 For manual iteration instead of background tasks:
 
 ```python
-async for message in channel.iter_events_async("notifications", poll_interval=1):
+async for message in channel.iter_events("notifications", poll_interval=1):
     await process(message)
-    await channel.ack_async(message.event_id)
+    await channel.ack(message.event_id)
 ```
 
 ### Sync listeners
@@ -183,16 +195,6 @@ channel.stop_listener(listener.id)
 
 Manual iteration is also available via `channel.iter_events(...)` which yields
 `EventMessage` objects until you break the loop.
-
-#### Using sync APIs with async adapters
-
-When you call `SQLSpec.event_channel()` with an async adapter (AsyncPG,
-AioSQLite, etc.) the extension automatically enables a *portal bridge* so the
-sync APIs (`publish`, `iter_events`, `listen`, `ack`) remain usable. Under the
-hood SQLSpec runs the async backend inside a background event loop via
-`sqlspec.utils.portal`. Disable this by setting
-`extension_config["events"]["portal_bridge"] = False` if you prefer to guard
-against accidental sync usage.
 
 ## Configuration reference
 
@@ -244,21 +246,32 @@ The durable `table_queue` backend supports returning a claimed message to the
 queue for redelivery:
 
 ```python
-message = await channel.dequeue_async("notifications", poll_interval=1.0)
-if message is not None:
-    await channel.nack_async(message.event_id)
+# Async channel
+async for message in channel.iter_events("notifications", poll_interval=1.0):
+    await channel.nack(message.event_id)
+    break
+
+# Sync channel
+for message in channel.iter_events("notifications", poll_interval=1.0):
+    channel.nack(message.event_id)
+    break
 ```
 
 Native `listen_notify` backends are fire-and-forget and do not support nacking
 because they do not create a durable queue row.
 
 When using native PostgreSQL backends (or hybrid backends that keep a dedicated
-listener connection), call `shutdown_async()` before closing the pool to release
+listener connection), call `shutdown()` before closing the pool to release
 listener resources cleanly:
 
 ```python
-await channel.shutdown_async()
+# Async channel
+await channel.shutdown()
 await config.close_pool()
+
+# Sync channel
+channel.shutdown()
+config.close_pool()
 ```
 
 ## Architecture

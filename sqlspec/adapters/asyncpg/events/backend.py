@@ -3,7 +3,6 @@
 
 import asyncio
 import contextlib
-import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +12,7 @@ from sqlspec.extensions.events import EventMessage
 from sqlspec.extensions.events._queue import QueueEventBackend, TableEventQueue, build_queue_backend
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
@@ -46,7 +46,7 @@ class AsyncpgHybridEventsBackend:
     async def publish_async(
         self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
     ) -> str:
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         await self._publish_durable(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
         return event_id
@@ -183,7 +183,7 @@ class AsyncpgEventsBackend:
     async def publish_async(
         self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
     ) -> str:
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
         async with self._config.provide_session() as driver:
             await driver.execute(SQL("SELECT pg_notify($1, $2)", channel, envelope))
@@ -314,7 +314,7 @@ class AsyncpgEventsBackend:
         data = from_json(payload)
         if not isinstance(data, dict):
             data = {"payload": data}
-        event_id = data.get("event_id", uuid.uuid4().hex)
+        event_id = data.get("event_id", uuid4().hex)
         payload_obj = data.get("payload")
         if not isinstance(payload_obj, dict):
             payload_obj = {"value": payload_obj}

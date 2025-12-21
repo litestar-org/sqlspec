@@ -1,10 +1,9 @@
-"""Unified event channel API with queue fallback."""
+"""Event channel API with separate sync and async implementations."""
 
 import asyncio
 import importlib
 import inspect
 import threading
-import uuid
 from collections.abc import AsyncIterator, Awaitable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -15,15 +14,16 @@ from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._queue import build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.portal import get_global_portal
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
     from sqlspec.extensions.events.protocols import AsyncEventHandler, SyncEventHandler
+    from sqlspec.observability import ObservabilityRuntime
 
 logger = get_logger("events.channel")
 
-__all__ = ("AsyncEventListener", "EventChannel", "EventMessage", "SyncEventListener")
+__all__ = ("AsyncEventChannel", "AsyncEventListener", "EventMessage", "SyncEventChannel", "SyncEventListener")
 
 _ADAPTER_MODULE_PARTS = 3
 
@@ -40,7 +40,6 @@ class AsyncEventListener:
 
     async def stop(self) -> None:
         """Signal the listener to stop and await task completion."""
-
         self.stop_event.set()
         if not self.task.done():
             await self.task
@@ -58,40 +57,137 @@ class SyncEventListener:
 
     def stop(self) -> None:
         """Signal the listener to stop and join the thread."""
-
         self.stop_event.set()
         self.thread.join()
 
 
-class EventChannel:
-    """High-level event API that works across sync and async adapters."""
+def _resolve_adapter_name(config: Any) -> "str | None":
+    """Resolve adapter name from config module path."""
+    module_name = type(config).__module__
+    parts = module_name.split(".")
+    if len(parts) >= _ADAPTER_MODULE_PARTS and parts[0] == "sqlspec" and parts[1] == "adapters":
+        return parts[2]
+    return None
+
+
+def _normalize_channel_name(channel: str) -> str:
+    """Normalize and validate channel name."""
+    try:
+        return normalize_event_channel_name(channel)
+    except ValueError as error:
+        raise ImproperConfigurationError(str(error)) from error
+
+
+def _resolve_poll_interval(poll_interval: "float | None", default: float) -> float:
+    """Resolve poll interval with validation."""
+    if poll_interval is None:
+        return default
+    if poll_interval <= 0:
+        msg = "poll_interval must be greater than zero"
+        raise ImproperConfigurationError(msg)
+    return poll_interval
+
+
+def _load_native_backend(config: Any, backend_name: str | None, extension_settings: "dict[str, Any]") -> Any | None:
+    """Load adapter-specific native backend if available."""
+    if backend_name in {None, "table_queue"}:
+        return None
+    module_name = type(config).__module__
+    parts = module_name.split(".")
+    if len(parts) < _ADAPTER_MODULE_PARTS or parts[0] != "sqlspec" or parts[1] != "adapters":
+        return None
+    adapter_name = parts[2]
+    backend_module_name = f"sqlspec.adapters.{adapter_name}.events.backend"
+    try:
+        backend_module = importlib.import_module(backend_module_name)
+    except ModuleNotFoundError:
+        logger.debug("Adapter %s has no events backend module", adapter_name)
+        return None
+    except ImportError as error:
+        logger.warning("Failed to import %s: %s", backend_module_name, error)
+        return None
+
+    factory = getattr(backend_module, "create_event_backend", None)
+    if factory is None:
+        logger.debug("Adapter %s missing create_event_backend()", adapter_name)
+        return None
+    try:
+        backend = factory(config, backend_name, extension_settings)
+    except MissingDependencyError as error:
+        logger.warning("Events backend %s missing dependency: %s", backend_name, error)
+        return None
+    except ImproperConfigurationError as error:
+        logger.warning("Events backend %s rejected configuration: %s", backend_name, error)
+        return None
+    return backend
+
+
+def _start_event_span(
+    runtime: "ObservabilityRuntime",
+    operation: str,
+    backend_name: str,
+    adapter_name: "str | None",
+    channel: "str | None" = None,
+    mode: str = "sync",
+) -> Any:
+    """Start an observability span for event operations."""
+    if not getattr(runtime.span_manager, "is_enabled", False):
+        return None
+    attributes: dict[str, Any] = {
+        "sqlspec.events.operation": operation,
+        "sqlspec.events.backend": backend_name,
+        "sqlspec.events.mode": mode,
+    }
+    if adapter_name:
+        attributes["sqlspec.events.adapter"] = adapter_name
+    if channel:
+        attributes["sqlspec.events.channel"] = channel
+    return runtime.start_span(f"sqlspec.events.{operation}", attributes=attributes)
+
+
+def _end_event_span(
+    runtime: "ObservabilityRuntime", span: Any, *, error: "Exception | None" = None, result: "str | None" = None
+) -> None:
+    """End an observability span."""
+    if span is None:
+        return
+    if result is not None:
+        setter = getattr(span, "set_attribute", None)
+        if setter is not None:
+            setter("sqlspec.events.result", result)
+    runtime.end_span(span, error=error)
+
+
+class SyncEventChannel:
+    """Event channel for synchronous database configurations.
+
+    Provides publish/subscribe functionality using sync database drivers.
+    Use with sync configs like SqliteConfig, DuckdbConfig, PsycopgSyncConfig.
+    """
 
     __slots__ = (
         "_adapter_name",
         "_backend",
         "_backend_name",
         "_config",
-        "_is_async",
-        "_listeners_async",
-        "_listeners_sync",
+        "_listeners",
         "_poll_interval_default",
-        "_portal",
-        "_portal_bridge",
         "_runtime",
     )
 
-    def __init__(self, config: "DatabaseConfigProtocol[Any, Any, Any]") -> None:
+    def __init__(self, config: "SyncDatabaseConfig[Any, Any, Any]") -> None:
+        if config.is_async:
+            msg = "SyncEventChannel requires a sync configuration"
+            raise ImproperConfigurationError(msg)
         extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
-        self._adapter_name = self._resolve_adapter_name(config)
+        self._adapter_name = _resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
-        if config.is_async:
-            extension_settings.setdefault("portal_bridge", True)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
         backend_name = config.driver_features.get("events_backend") or "table_queue"
-        native_backend = self._load_native_backend(config, backend_name, extension_settings)
+        native_backend = _load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:
-            if backend_name not in (None, "table_queue"):
+            if backend_name not in {None, "table_queue"}:
                 logger.warning("Events backend %s unavailable; defaulting to table_queue", backend_name)
             self._backend = queue_backend
             backend_label = "table_queue"
@@ -100,173 +196,157 @@ class EventChannel:
             backend_label = getattr(native_backend, "backend_name", backend_name or "table_queue")
         self._config = config
         self._backend_name = backend_label
-        self._is_async = bool(config.is_async)
-        self._portal_bridge = bool(extension_settings.get("portal_bridge")) and self._is_async
-        self._portal = None
         self._runtime = config.get_observability_runtime()
-        self._listeners_async: dict[str, AsyncEventListener] = {}
-        self._listeners_sync: dict[str, SyncEventListener] = {}
+        self._listeners: dict[str, SyncEventListener] = {}
 
-    # Publishing -----------------------------------------------------------------
+    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        """Publish an event to a channel.
 
-    async def publish_async(
-        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
-    ) -> str:
-        """Publish an event using an async driver."""
+        Args:
+            channel: Target channel name.
+            payload: Event payload (must be JSON-serializable).
+            metadata: Optional metadata dict.
 
-        channel = self._normalize_channel_name(channel)
-        if not self._is_async:
-            msg = "publish_async requires an async configuration"
-            raise ImproperConfigurationError(msg)
-        if not getattr(self._backend, "supports_async", False):
-            msg = "Current events backend does not support async publishing"
-            raise ImproperConfigurationError(msg)
-        span = self._start_event_span("publish", channel, mode="async")
-        try:
-            event_id = await self._backend.publish_async(channel, payload, metadata)
-        except Exception as error:
-            self._end_event_span(span, error=error)
-            raise
-        self._end_event_span(span, result="published")
-        return event_id
-
-    def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
-        """Publish an event using a sync driver."""
-
-        channel = self._normalize_channel_name(channel)
-        if self._is_async:
-            if self._should_bridge_sync_calls():
-                result: str = self._bridge_sync_call(self.publish_async, channel, payload, metadata)
-                return result
-            msg = "publish_sync requires a sync configuration"
-            raise ImproperConfigurationError(msg)
+        Returns:
+            The event ID.
+        """
+        channel = _normalize_channel_name(channel)
         if not getattr(self._backend, "supports_sync", False):
             msg = "Current events backend does not support sync publishing"
             raise ImproperConfigurationError(msg)
-        span = self._start_event_span("publish", channel, mode="sync")
+        span = _start_event_span(self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="sync")
         try:
             event_id = self._backend.publish_sync(channel, payload, metadata)
         except Exception as error:
-            self._end_event_span(span, error=error)
+            _end_event_span(self._runtime, span, error=error)
             raise
-        self._end_event_span(span, result="published")
+        _end_event_span(self._runtime, span, result="published")
         return event_id
 
-    # Iteration -------------------------------------------------------------------
+    def iter_events(self, channel: str, *, poll_interval: float | None = None) -> Iterator[EventMessage]:
+        """Yield events as they become available.
 
-    async def iter_events_async(
-        self, channel: str, *, poll_interval: float | None = None
-    ) -> AsyncIterator[EventMessage]:
-        """Yield events as they become available for async adapters."""
+        Args:
+            channel: Channel to consume from.
+            poll_interval: Override default poll interval.
 
-        channel = self._normalize_channel_name(channel)
-        if not self._is_async:
-            msg = "iter_events_async requires an async configuration"
-            raise ImproperConfigurationError(msg)
-        if not getattr(self._backend, "supports_async", False):
-            msg = "Current events backend does not support async consumption"
-            raise ImproperConfigurationError(msg)
-        interval = self._resolve_poll_interval(poll_interval)
-        while True:
-            span = self._start_event_span("dequeue", channel, mode="async")
-            try:
-                event = await self._backend.dequeue_async(channel, interval)
-            except Exception as error:
-                self._end_event_span(span, error=error)
-                raise
-            if event is None:
-                self._end_event_span(span, result="empty")
-                continue
-            self._end_event_span(span, result="delivered")
-            self._runtime.increment_metric("events.deliver")
-            yield event
-
-    def iter_events_sync(self, channel: str, *, poll_interval: float | None = None) -> Iterator[EventMessage]:
-        """Yield events for sync adapters."""
-
-        channel = self._normalize_channel_name(channel)
-        if self._is_async:
-            if self._should_bridge_sync_calls():
-                yield from self._iter_events_portal(channel, poll_interval)
-                return
-            msg = "iter_events_sync requires a sync configuration"
-            raise ImproperConfigurationError(msg)
+        Yields:
+            EventMessage objects.
+        """
+        channel = _normalize_channel_name(channel)
         if not getattr(self._backend, "supports_sync", False):
             msg = "Current events backend does not support sync consumption"
             raise ImproperConfigurationError(msg)
-        interval = self._resolve_poll_interval(poll_interval)
+        interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
         while True:
-            span = self._start_event_span("dequeue", channel, mode="sync")
+            span = _start_event_span(
+                self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="sync"
+            )
             try:
                 event = self._backend.dequeue_sync(channel, interval)
             except Exception as error:
-                self._end_event_span(span, error=error)
+                _end_event_span(self._runtime, span, error=error)
                 raise
             if event is None:
-                self._end_event_span(span, result="empty")
+                _end_event_span(self._runtime, span, result="empty")
                 continue
-            self._end_event_span(span, result="delivered")
+            _end_event_span(self._runtime, span, result="delivered")
             self._runtime.increment_metric("events.deliver")
             yield event
-
-    # Listening -------------------------------------------------------------------
 
     def listen(
         self, channel: str, handler: "SyncEventHandler", *, poll_interval: float | None = None, auto_ack: bool = True
     ) -> SyncEventListener:
-        """Start a background thread that invokes handler for each event."""
+        """Start a background thread that invokes handler for each event.
 
-        channel = self._normalize_channel_name(channel)
-        if self._is_async and not self._should_bridge_sync_calls():
-            msg = "listen requires a sync configuration"
-            raise ImproperConfigurationError(msg)
-        if not getattr(self._backend, "supports_sync", False) and not self._should_bridge_sync_calls():
+        Args:
+            channel: Channel to listen on.
+            handler: Callback function for each event.
+            poll_interval: Override default poll interval.
+            auto_ack: Automatically acknowledge events after handler completes.
+
+        Returns:
+            SyncEventListener that can be used to stop the listener.
+        """
+        channel = _normalize_channel_name(channel)
+        if not getattr(self._backend, "supports_sync", False):
             msg = "Current events backend does not support sync listeners"
             raise ImproperConfigurationError(msg)
-        interval = self._resolve_poll_interval(poll_interval)
-        listener_id = uuid.uuid4().hex
+        interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
+        listener_id = uuid4().hex
         stop_event = threading.Event()
         thread = threading.Thread(
-            target=self._run_sync_listener,
-            args=(listener_id, channel, handler, stop_event, interval, auto_ack),
-            daemon=True,
+            target=self._run_listener, args=(listener_id, channel, handler, stop_event, interval, auto_ack), daemon=True
         )
         listener = SyncEventListener(listener_id, channel, thread, stop_event, interval)
-        self._listeners_sync[listener_id] = listener
+        self._listeners[listener_id] = listener
         self._runtime.increment_metric("events.listener.start")
         thread.start()
         return listener
 
-    def listen_sync(
-        self, channel: str, handler: "SyncEventHandler", *, poll_interval: float | None = None, auto_ack: bool = True
-    ) -> SyncEventListener:
-        """Start a sync listener thread.
-
-        This is an alias of :meth:`listen`, provided for API symmetry with
-        :meth:`listen_async`.
-        """
-
-        return self.listen(channel, handler, poll_interval=poll_interval, auto_ack=auto_ack)
-
     def stop_listener(self, listener_id: str) -> None:
-        """Stop a running sync listener."""
+        """Stop a running listener.
 
-        listener = self._listeners_sync.pop(listener_id, None)
+        Args:
+            listener_id: ID of the listener to stop.
+        """
+        listener = self._listeners.pop(listener_id, None)
         if listener is None:
             return
         listener.stop()
         self._runtime.increment_metric("events.listener.stop")
 
-    def stop_listener_sync(self, listener_id: str) -> None:
-        """Stop a running sync listener.
+    def ack(self, event_id: str) -> None:
+        """Acknowledge an event.
 
-        This is an alias of :meth:`stop_listener`, provided for API symmetry
-        with :meth:`stop_listener_async`.
+        Args:
+            event_id: ID of the event to acknowledge.
         """
+        if not getattr(self._backend, "supports_sync", False):
+            msg = "Current events backend does not support sync ack"
+            raise ImproperConfigurationError(msg)
+        span = _start_event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="sync")
+        try:
+            self._backend.ack_sync(event_id)
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="acked")
 
-        self.stop_listener(listener_id)
+    def nack(self, event_id: str) -> None:
+        """Return an event to the queue for redelivery.
 
-    def _run_sync_listener(
+        Args:
+            event_id: ID of the event to return.
+        """
+        nack_method = getattr(self._backend, "nack_sync", None)
+        if nack_method is None:
+            msg = "Current events backend does not support nack"
+            raise ImproperConfigurationError(msg)
+        span = _start_event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="sync")
+        try:
+            nack_method(event_id)
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="nacked")
+
+    def shutdown(self) -> None:
+        """Shutdown the event channel and release backend resources."""
+        span = _start_event_span(self._runtime, "shutdown", self._backend_name, self._adapter_name, mode="sync")
+        try:
+            for listener_id in list(self._listeners):
+                self.stop_listener(listener_id)
+            backend_shutdown = getattr(self._backend, "shutdown_sync", None)
+            if backend_shutdown is not None and callable(backend_shutdown):
+                backend_shutdown()
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="shutdown")
+        self._runtime.increment_metric("events.shutdown")
+
+    def _run_listener(
         self,
         listener_id: str,
         channel: str,
@@ -275,22 +355,130 @@ class EventChannel:
         poll_interval: float,
         auto_ack: bool,
     ) -> None:
+        """Internal listener loop."""
         try:
             while not stop_event.is_set():
-                event = self._dequeue_for_sync(channel, poll_interval)
-                if event is None:
-                    continue
-                message = event
+                span = _start_event_span(
+                    self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="sync"
+                )
                 try:
-                    handler(message)
+                    event = self._backend.dequeue_sync(channel, poll_interval)
+                except Exception as error:
+                    _end_event_span(self._runtime, span, error=error)
+                    raise
+                if event is None:
+                    _end_event_span(self._runtime, span, result="empty")
+                    continue
+                _end_event_span(self._runtime, span, result="delivered")
+                try:
+                    handler(event)
                     if auto_ack:
-                        self._ack_for_sync(message.event_id)
+                        self._backend.ack_sync(event.event_id)
                 except Exception as error:  # pragma: no cover - logging path
                     logger.warning("sync listener %s handler error: %s", listener_id, error)
         finally:
-            self._listeners_sync.pop(listener_id, None)
+            self._listeners.pop(listener_id, None)
 
-    def listen_async(
+
+class AsyncEventChannel:
+    """Event channel for asynchronous database configurations.
+
+    Provides publish/subscribe functionality using async database drivers.
+    Use with async configs like AsyncpgConfig, AiosqliteConfig, PsycopgAsyncConfig.
+    """
+
+    __slots__ = (
+        "_adapter_name",
+        "_backend",
+        "_backend_name",
+        "_config",
+        "_listeners",
+        "_poll_interval_default",
+        "_runtime",
+    )
+
+    def __init__(self, config: "AsyncDatabaseConfig[Any, Any, Any]") -> None:
+        if not config.is_async:
+            msg = "AsyncEventChannel requires an async configuration"
+            raise ImproperConfigurationError(msg)
+        extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
+        self._adapter_name = _resolve_adapter_name(config)
+        hints = get_runtime_hints(self._adapter_name, config)
+        self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
+        queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
+        backend_name = config.driver_features.get("events_backend") or "table_queue"
+        native_backend = _load_native_backend(config, backend_name, extension_settings)
+        if native_backend is None:
+            if backend_name not in {None, "table_queue"}:
+                logger.warning("Events backend %s unavailable; defaulting to table_queue", backend_name)
+            self._backend = queue_backend
+            backend_label = "table_queue"
+        else:
+            self._backend = native_backend
+            backend_label = getattr(native_backend, "backend_name", backend_name or "table_queue")
+        self._config = config
+        self._backend_name = backend_label
+        self._runtime = config.get_observability_runtime()
+        self._listeners: dict[str, AsyncEventListener] = {}
+
+    async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        """Publish an event to a channel.
+
+        Args:
+            channel: Target channel name.
+            payload: Event payload (must be JSON-serializable).
+            metadata: Optional metadata dict.
+
+        Returns:
+            The event ID.
+        """
+        channel = _normalize_channel_name(channel)
+        if not getattr(self._backend, "supports_async", False):
+            msg = "Current events backend does not support async publishing"
+            raise ImproperConfigurationError(msg)
+        span = _start_event_span(
+            self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="async"
+        )
+        try:
+            event_id = await self._backend.publish_async(channel, payload, metadata)
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="published")
+        return event_id
+
+    async def iter_events(self, channel: str, *, poll_interval: float | None = None) -> AsyncIterator[EventMessage]:
+        """Yield events as they become available.
+
+        Args:
+            channel: Channel to consume from.
+            poll_interval: Override default poll interval.
+
+        Yields:
+            EventMessage objects.
+        """
+        channel = _normalize_channel_name(channel)
+        if not getattr(self._backend, "supports_async", False):
+            msg = "Current events backend does not support async consumption"
+            raise ImproperConfigurationError(msg)
+        interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
+        while True:
+            span = _start_event_span(
+                self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="async"
+            )
+            try:
+                event = await self._backend.dequeue_async(channel, interval)
+            except Exception as error:
+                _end_event_span(self._runtime, span, error=error)
+                raise
+            if event is None:
+                _end_event_span(self._runtime, span, result="empty")
+                continue
+            _end_event_span(self._runtime, span, result="delivered")
+            self._runtime.increment_metric("events.deliver")
+            yield event
+
+    def listen(
         self,
         channel: str,
         handler: "AsyncEventHandler | SyncEventHandler",
@@ -298,35 +486,96 @@ class EventChannel:
         poll_interval: float | None = None,
         auto_ack: bool = True,
     ) -> AsyncEventListener:
-        """Start an async task that delivers events to handler."""
+        """Start an async task that delivers events to handler.
 
-        channel = self._normalize_channel_name(channel)
-        if not self._is_async:
-            msg = "listen_async requires an async configuration"
-            raise ImproperConfigurationError(msg)
+        Args:
+            channel: Channel to listen on.
+            handler: Callback function for each event (sync or async).
+            poll_interval: Override default poll interval.
+            auto_ack: Automatically acknowledge events after handler completes.
+
+        Returns:
+            AsyncEventListener that can be used to stop the listener.
+        """
+        channel = _normalize_channel_name(channel)
         if not getattr(self._backend, "supports_async", False):
             msg = "Current events backend does not support async listeners"
             raise ImproperConfigurationError(msg)
         loop = asyncio.get_running_loop()
         stop_event = asyncio.Event()
-        interval = self._resolve_poll_interval(poll_interval)
-        listener_id = uuid.uuid4().hex
-        task = loop.create_task(self._run_async_listener(listener_id, channel, handler, stop_event, interval, auto_ack))
+        interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
+        listener_id = uuid4().hex
+        task = loop.create_task(self._run_listener(listener_id, channel, handler, stop_event, interval, auto_ack))
         listener = AsyncEventListener(listener_id, channel, task, stop_event, interval)
-        self._listeners_async[listener_id] = listener
+        self._listeners[listener_id] = listener
         self._runtime.increment_metric("events.listener.start")
         return listener
 
-    async def stop_listener_async(self, listener_id: str) -> None:
-        """Stop a running async listener."""
+    async def stop_listener(self, listener_id: str) -> None:
+        """Stop a running listener.
 
-        listener = self._listeners_async.pop(listener_id, None)
+        Args:
+            listener_id: ID of the listener to stop.
+        """
+        listener = self._listeners.pop(listener_id, None)
         if listener is None:
             return
         await listener.stop()
         self._runtime.increment_metric("events.listener.stop")
 
-    async def _run_async_listener(
+    async def ack(self, event_id: str) -> None:
+        """Acknowledge an event.
+
+        Args:
+            event_id: ID of the event to acknowledge.
+        """
+        if not getattr(self._backend, "supports_async", False):
+            msg = "Current events backend does not support async ack"
+            raise ImproperConfigurationError(msg)
+        span = _start_event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="async")
+        try:
+            await self._backend.ack_async(event_id)
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="acked")
+
+    async def nack(self, event_id: str) -> None:
+        """Return an event to the queue for redelivery.
+
+        Args:
+            event_id: ID of the event to return.
+        """
+        nack_method = getattr(self._backend, "nack_async", None)
+        if nack_method is None:
+            msg = "Current events backend does not support nack"
+            raise ImproperConfigurationError(msg)
+        span = _start_event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="async")
+        try:
+            await nack_method(event_id)
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="nacked")
+
+    async def shutdown(self) -> None:
+        """Shutdown the event channel and release backend resources."""
+        span = _start_event_span(self._runtime, "shutdown", self._backend_name, self._adapter_name, mode="async")
+        try:
+            for listener_id in list(self._listeners):
+                await self.stop_listener(listener_id)
+            backend_shutdown = getattr(self._backend, "shutdown_async", None)
+            if backend_shutdown is not None and callable(backend_shutdown):
+                result = backend_shutdown()
+                if result is not None:
+                    await cast("Awaitable[None]", result)
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="shutdown")
+        self._runtime.increment_metric("events.shutdown")
+
+    async def _run_listener(
         self,
         listener_id: str,
         channel: str,
@@ -335,312 +584,28 @@ class EventChannel:
         poll_interval: float,
         auto_ack: bool,
     ) -> None:
+        """Internal listener loop."""
         try:
             while not stop_event.is_set():
-                span = self._start_event_span("dequeue", channel, mode="async")
+                span = _start_event_span(
+                    self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="async"
+                )
                 try:
                     event = await self._backend.dequeue_async(channel, poll_interval)
                 except Exception as error:
-                    self._end_event_span(span, error=error)
+                    _end_event_span(self._runtime, span, error=error)
                     raise
                 if event is None:
-                    self._end_event_span(span, result="empty")
+                    _end_event_span(self._runtime, span, result="empty")
                     continue
-                self._end_event_span(span, result="delivered")
-                message = event
+                _end_event_span(self._runtime, span, result="delivered")
                 try:
-                    result = handler(message)
+                    result = handler(event)
                     if inspect.isawaitable(result):
                         await result
                     if auto_ack:
-                        await self._backend.ack_async(message.event_id)
+                        await self._backend.ack_async(event.event_id)
                 except Exception as error:  # pragma: no cover - logging path
                     logger.warning("async listener %s handler error: %s", listener_id, error)
         finally:
-            self._listeners_async.pop(listener_id, None)
-
-    # Ack helpers -----------------------------------------------------------------
-
-    async def ack_async(self, event_id: str) -> None:
-        """Acknowledge an event id asynchronously."""
-
-        if not self._is_async:
-            msg = "ack_async requires an async configuration"
-            raise ImproperConfigurationError(msg)
-        if not getattr(self._backend, "supports_async", False):
-            msg = "Current events backend does not support async ack"
-            raise ImproperConfigurationError(msg)
-        span = self._start_event_span("ack", mode="async")
-        try:
-            await self._backend.ack_async(event_id)
-        except Exception as error:
-            self._end_event_span(span, error=error)
-            raise
-        self._end_event_span(span, result="acked")
-
-    def ack_sync(self, event_id: str) -> None:
-        """Acknowledge an event id synchronously."""
-
-        if self._is_async:
-            if self._should_bridge_sync_calls():
-                self._bridge_sync_call(self.ack_async, event_id)
-                return
-            msg = "ack_sync requires a sync configuration"
-            raise ImproperConfigurationError(msg)
-        if not getattr(self._backend, "supports_sync", False):
-            msg = "Current events backend does not support sync ack"
-            raise ImproperConfigurationError(msg)
-        span = self._start_event_span("ack", mode="sync")
-        try:
-            self._backend.ack_sync(event_id)
-        except Exception as error:
-            self._end_event_span(span, error=error)
-            raise
-        self._end_event_span(span, result="acked")
-
-    async def nack_async(self, event_id: str) -> None:
-        """Return an event to the queue for redelivery asynchronously.
-
-        Resets the event status to pending, clearing the lease and allowing
-        it to be picked up by another consumer.
-        """
-        if not self._is_async:
-            msg = "nack_async requires an async configuration"
-            raise ImproperConfigurationError(msg)
-        nack_method = getattr(self._backend, "nack_async", None)
-        if nack_method is None:
-            msg = "Current events backend does not support nack"
-            raise ImproperConfigurationError(msg)
-        span = self._start_event_span("nack", mode="async")
-        try:
-            await nack_method(event_id)
-        except Exception as error:
-            self._end_event_span(span, error=error)
-            raise
-        self._end_event_span(span, result="nacked")
-
-    def nack_sync(self, event_id: str) -> None:
-        """Return an event to the queue for redelivery synchronously.
-
-        Resets the event status to pending, clearing the lease and allowing
-        it to be picked up by another consumer.
-        """
-        if self._is_async:
-            if self._should_bridge_sync_calls():
-                self._bridge_sync_call(self.nack_async, event_id)
-                return
-            msg = "nack_sync requires a sync configuration"
-            raise ImproperConfigurationError(msg)
-        nack_method = getattr(self._backend, "nack_sync", None)
-        if nack_method is None:
-            msg = "Current events backend does not support nack"
-            raise ImproperConfigurationError(msg)
-        span = self._start_event_span("nack", mode="sync")
-        try:
-            nack_method(event_id)
-        except Exception as error:
-            self._end_event_span(span, error=error)
-            raise
-        self._end_event_span(span, result="nacked")
-
-    # Loading helpers -----------------------------------------------------------
-
-    @staticmethod
-    def _load_native_backend(
-        config: "DatabaseConfigProtocol[Any, Any, Any]", backend_name: str | None, extension_settings: dict[str, Any]
-    ) -> Any | None:
-        if backend_name in (None, "table_queue"):
-            return None
-        module_name = type(config).__module__
-        parts = module_name.split(".")
-        if len(parts) < _ADAPTER_MODULE_PARTS or parts[0] != "sqlspec" or parts[1] != "adapters":
-            return None
-        adapter_name = parts[2]
-        backend_module_name = f"sqlspec.adapters.{adapter_name}.events.backend"
-        try:
-            backend_module = importlib.import_module(backend_module_name)
-        except ModuleNotFoundError:
-            logger.debug("Adapter %s has no events backend module", adapter_name)
-            return None
-        except ImportError as error:
-            logger.warning("Failed to import %s: %s", backend_module_name, error)
-            return None
-
-        factory = getattr(backend_module, "create_event_backend", None)
-        if factory is None:
-            logger.debug("Adapter %s missing create_event_backend()", adapter_name)
-            return None
-        try:
-            backend = factory(config, backend_name, extension_settings)
-        except MissingDependencyError as error:
-            logger.warning("Events backend %s missing dependency: %s", backend_name, error)
-            return None
-        except ImproperConfigurationError as error:
-            logger.warning("Events backend %s rejected configuration: %s", backend_name, error)
-            return None
-        return backend
-
-    async def _dequeue_async_with_span(self, channel: str, poll_interval: float) -> "EventMessage | None":
-        span = self._start_event_span("dequeue", channel, mode="async")
-        try:
-            event = await self._backend.dequeue_async(channel, poll_interval)
-        except Exception as error:
-            self._end_event_span(span, error=error)
-            raise
-        result = "empty" if event is None else "delivered"
-        self._end_event_span(span, result=result)
-        return event
-
-    def _iter_events_portal(self, channel: str, poll_interval: float | None) -> Iterator[EventMessage]:
-        interval = self._resolve_poll_interval(poll_interval)
-        while True:
-            event = self._bridge_sync_call(self._dequeue_async_with_span, channel, interval)
-            if event is None:
-                continue
-            self._runtime.increment_metric("events.deliver")
-            yield event
-
-    def _dequeue_for_sync(self, channel: str, poll_interval: float) -> "EventMessage | None":
-        backend_supports_sync = getattr(self._backend, "supports_sync", False)
-        if backend_supports_sync and not self._is_async:
-            span = self._start_event_span("dequeue", channel, mode="sync")
-            try:
-                event = self._backend.dequeue_sync(channel, poll_interval)
-            except Exception as error:
-                self._end_event_span(span, error=error)
-                raise
-            span_result = "empty" if event is None else "delivered"
-            self._end_event_span(span, result=span_result)
-            return event
-        if self._should_bridge_sync_calls():
-            bridged_result: EventMessage | None = self._bridge_sync_call(
-                self._dequeue_async_with_span, channel, poll_interval
-            )
-            return bridged_result
-        return None
-
-    def _ack_for_sync(self, event_id: str) -> None:
-        backend_supports_sync = getattr(self._backend, "supports_sync", False)
-        if backend_supports_sync and not self._is_async:
-            span = self._start_event_span("ack", mode="sync")
-            try:
-                self._backend.ack_sync(event_id)
-            except Exception as error:
-                self._end_event_span(span, error=error)
-                raise
-            self._end_event_span(span, result="acked")
-            return
-        if self._should_bridge_sync_calls():
-            self._bridge_sync_call(self.ack_async, event_id)
-            return
-        msg = "Current events backend does not support sync ack"
-        raise ImproperConfigurationError(msg)
-
-    def _should_bridge_sync_calls(self) -> bool:
-        return self._portal_bridge and getattr(self._backend, "supports_async", False)
-
-    def _bridge_sync_call(self, func: Any, *args: Any, **kwargs: Any) -> Any:
-        portal = self._ensure_portal()
-        return portal.call(func, *args, **kwargs)
-
-    def _ensure_portal(self) -> Any:
-        if self._portal is None:
-            self._portal = get_global_portal()  # type: ignore[assignment]
-        return self._portal
-
-    @staticmethod
-    def _resolve_adapter_name(config: "DatabaseConfigProtocol[Any, Any, Any]") -> "str | None":
-        module_name = type(config).__module__
-        parts = module_name.split(".")
-        if len(parts) >= _ADAPTER_MODULE_PARTS and parts[0] == "sqlspec" and parts[1] == "adapters":
-            return parts[2]
-        return None
-
-    def _resolve_poll_interval(self, poll_interval: "float | None") -> float:
-        if poll_interval is None:
-            return self._poll_interval_default
-        if poll_interval <= 0:
-            msg = "poll_interval must be greater than zero"
-            raise ImproperConfigurationError(msg)
-        return poll_interval
-
-    @staticmethod
-    def _normalize_channel_name(channel: str) -> str:
-        try:
-            return normalize_event_channel_name(channel)
-        except ValueError as error:
-            raise ImproperConfigurationError(str(error)) from error
-
-    def _start_event_span(self, operation: str, channel: "str | None" = None, mode: str = "sync") -> Any:
-        if not getattr(self._runtime.span_manager, "is_enabled", False):
-            return None
-        attributes: dict[str, Any] = {
-            "sqlspec.events.operation": operation,
-            "sqlspec.events.backend": self._backend_name,
-            "sqlspec.events.mode": mode,
-        }
-        if self._adapter_name:
-            attributes["sqlspec.events.adapter"] = self._adapter_name
-        if channel:
-            attributes["sqlspec.events.channel"] = channel
-        return self._runtime.start_span(f"sqlspec.events.{operation}", attributes=attributes)
-
-    def _end_event_span(self, span: Any, *, error: "Exception | None" = None, result: "str | None" = None) -> None:
-        if span is None:
-            return
-        if result is not None:
-            setter = getattr(span, "set_attribute", None)
-            if setter is not None:
-                setter("sqlspec.events.result", result)
-        self._runtime.end_span(span, error=error)
-
-    # Shutdown helpers ------------------------------------------------------------
-
-    async def shutdown_async(self) -> None:
-        """Shutdown the event channel and release backend resources.
-
-        Stops all async listeners and calls the backend's shutdown_async method
-        to release any held connections (e.g., LISTEN/NOTIFY listener connections).
-
-        Must be called before closing the database pool when using native backends.
-        """
-        span = self._start_event_span("shutdown", mode="async")
-        try:
-            for listener_id in list(self._listeners_async):
-                await self.stop_listener_async(listener_id)
-
-            backend_shutdown = getattr(self._backend, "shutdown_async", None)
-            if backend_shutdown is not None and callable(backend_shutdown):
-                result = backend_shutdown()
-                if result is not None:
-                    await cast("Awaitable[None]", result)
-        except Exception as error:
-            self._end_event_span(span, error=error)
-            raise
-        self._end_event_span(span, result="shutdown")
-        self._runtime.increment_metric("events.shutdown")
-
-    def shutdown_sync(self) -> None:
-        """Shutdown the event channel and release backend resources.
-
-        Stops all sync listeners. For async backends with sync bridging,
-        use shutdown_async instead.
-        """
-        if self._is_async:
-            if self._should_bridge_sync_calls():
-                self._bridge_sync_call(self.shutdown_async)
-                return
-            msg = "shutdown_sync requires a sync configuration"
-            raise ImproperConfigurationError(msg)
-        span = self._start_event_span("shutdown", mode="sync")
-        try:
-            for listener_id in list(self._listeners_sync):
-                self.stop_listener(listener_id)
-            backend_shutdown = getattr(self._backend, "shutdown_sync", None)
-            if backend_shutdown is not None and callable(backend_shutdown):
-                backend_shutdown()
-        except Exception as error:
-            self._end_event_span(span, error=error)
-            raise
-        self._end_event_span(span, result="shutdown")
-        self._runtime.increment_metric("events.shutdown")
+            self._listeners.pop(listener_id, None)

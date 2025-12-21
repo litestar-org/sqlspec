@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -15,6 +14,7 @@ from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._store import normalize_queue_table_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -155,7 +155,7 @@ class TableEventQueue:
     ) -> str:
         """Insert a new event row asynchronously and return its identifier."""
 
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         now = self._utcnow()
         await self._execute_async(
             self._upsert_sql,
@@ -177,7 +177,7 @@ class TableEventQueue:
     def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         """Insert a new event row using synchronous drivers."""
 
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         now = self._utcnow()
         self._execute_sync(
             self._upsert_sql,

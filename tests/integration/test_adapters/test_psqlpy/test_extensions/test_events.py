@@ -1,4 +1,4 @@
-# pyright: reportAttributeAccessIssue=false
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 """Psqlpy integration tests for the EventChannel queue backend."""
 
 import asyncio
@@ -38,13 +38,13 @@ async def test_psqlpy_event_channel_queue_fallback(tmp_path, postgres_service: P
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = await channel.publish_async("notifications", {"action": "psqlpy"})
-    iterator = channel.iter_events_async("notifications", poll_interval=0.1)
+    event_id = await channel.publish("notifications", {"action": "psqlpy"})
+    iterator = channel.iter_events("notifications", poll_interval=0.1)
     try:
         message = await asyncio.wait_for(iterator.__anext__(), timeout=5)
     finally:
         await iterator.aclose()
-    await channel.ack_async(message.event_id)
+    await channel.ack(message.event_id)
 
     async with config.provide_session() as driver:
         row = await driver.select_one(

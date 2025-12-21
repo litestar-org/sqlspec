@@ -1,13 +1,13 @@
 """Oracle Advanced Queuing backend for EventChannel."""
 
 import contextlib
-import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -49,7 +49,7 @@ class OracleAQEventBackend:
         self._wait_seconds: int = int(settings.get("aq_wait_seconds", 5))
 
     def publish_sync(self, channel: str, payload: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         envelope = self._build_envelope(channel, event_id, payload, metadata)
         session_cm = self._config.provide_session()
         with session_cm as driver:  # type: ignore[union-attr]
@@ -97,7 +97,7 @@ class OracleAQEventBackend:
             payload = {"payload": payload}
         payload_channel = payload.get("channel")
         message_channel = payload_channel if isinstance(payload_channel, str) else channel
-        event_id = payload.get("event_id", uuid.uuid4().hex)
+        event_id = payload.get("event_id", uuid4().hex)
         body = payload.get("payload")
         if not isinstance(body, dict):
             body = {"value": body}

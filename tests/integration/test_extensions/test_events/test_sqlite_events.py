@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """SQLite integration tests for EventChannel with table queue backend."""
 
 import pytest
@@ -27,8 +28,8 @@ def test_sqlite_event_channel_publish_and_consume(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish_sync("notifications", {"action": "test"})
-    iterator = channel.iter_events_sync("notifications", poll_interval=0.01)
+    event_id = channel.publish("notifications", {"action": "test"})
+    iterator = channel.iter_events("notifications", poll_interval=0.01)
     message = next(iterator)
 
     assert message.event_id == event_id
@@ -56,10 +57,10 @@ def test_sqlite_event_channel_ack_updates_status(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish_sync("alerts", {"level": "info"})
-    iterator = channel.iter_events_sync("alerts", poll_interval=0.01)
+    event_id = channel.publish("alerts", {"level": "info"})
+    iterator = channel.iter_events("alerts", poll_interval=0.01)
     message = next(iterator)
-    channel.ack_sync(message.event_id)
+    channel.ack(message.event_id)
 
     with config.provide_session() as driver:
         row = driver.select_one(
@@ -90,7 +91,7 @@ def test_sqlite_event_channel_custom_table_name(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish_sync("events", {"custom": True})
+    event_id = channel.publish("events", {"custom": True})
 
     with config.provide_session() as driver:
         row = driver.select_one("SELECT event_id FROM app_events WHERE event_id = :event_id", {"event_id": event_id})
@@ -118,10 +119,10 @@ def test_sqlite_event_channel_multiple_channels(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    id_alerts = channel.publish_sync("alerts", {"type": "alert"})
-    channel.publish_sync("notifications", {"type": "notification"})
+    id_alerts = channel.publish("alerts", {"type": "alert"})
+    channel.publish("notifications", {"type": "notification"})
 
-    alerts_iter = channel.iter_events_sync("alerts", poll_interval=0.01)
+    alerts_iter = channel.iter_events("alerts", poll_interval=0.01)
     alert_msg = next(alerts_iter)
 
     assert alert_msg.event_id == id_alerts
@@ -149,9 +150,9 @@ def test_sqlite_event_channel_metadata_preserved(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish_sync("events", {"action": "create"}, metadata={"user_id": "user_123", "source": "api"})
+    event_id = channel.publish("events", {"action": "create"}, metadata={"user_id": "user_123", "source": "api"})
 
-    iterator = channel.iter_events_sync("events", poll_interval=0.01)
+    iterator = channel.iter_events("events", poll_interval=0.01)
     message = next(iterator)
 
     assert message.event_id == event_id
@@ -180,9 +181,9 @@ def test_sqlite_event_channel_attempts_tracked(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish_sync("events", {"action": "test"})
+    event_id = channel.publish("events", {"action": "test"})
 
-    iterator = channel.iter_events_sync("events", poll_interval=0.01)
+    iterator = channel.iter_events("events", poll_interval=0.01)
     next(iterator)
 
     with config.provide_session() as driver:
@@ -213,10 +214,10 @@ def test_sqlite_event_channel_telemetry(tmp_path) -> None:
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    channel.publish_sync("events", {"action": "telemetry_test"})
-    iterator = channel.iter_events_sync("events", poll_interval=0.01)
+    channel.publish("events", {"action": "telemetry_test"})
+    iterator = channel.iter_events("events", poll_interval=0.01)
     message = next(iterator)
-    channel.ack_sync(message.event_id)
+    channel.ack(message.event_id)
 
     snapshot = spec.telemetry_snapshot()
 

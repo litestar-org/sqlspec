@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """PostgreSQL LISTEN/NOTIFY event channel tests for psqlpy adapter."""
 
 import asyncio
@@ -35,14 +36,14 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
         received.append(message)
 
     try:
-        listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
+        listener = channel.listen("alerts", _handler, poll_interval=0.2)
         await asyncio.sleep(0.1)
-        event_id = await channel.publish_async("alerts", {"action": "native"})
+        event_id = await channel.publish("alerts", {"action": "native"})
         for _ in range(200):
             if received:
                 break
             await asyncio.sleep(0.05)
-        await channel.stop_listener_async(listener.id)
+        await channel.stop_listener(listener.id)
 
         assert received, "listener did not receive message"
         message = received[0]
@@ -50,8 +51,8 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
         assert message.payload["action"] == "native"
     finally:
         backend = getattr(channel, "_backend", None)
-        if backend and hasattr(backend, "shutdown_async"):
-            await backend.shutdown_async()
+        if backend and hasattr(backend, "shutdown"):
+            await backend.shutdown()
         if config.connection_instance:
             await config.close_pool()
 
@@ -82,14 +83,14 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
         received.append(message)
 
     try:
-        listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
+        listener = channel.listen("alerts", _handler, poll_interval=0.2)
         await asyncio.sleep(0.1)
-        event_id = await channel.publish_async("alerts", {"action": "hybrid"})
+        event_id = await channel.publish("alerts", {"action": "hybrid"})
         for _ in range(200):
             if received:
                 break
             await asyncio.sleep(0.05)
-        await channel.stop_listener_async(listener.id)
+        await channel.stop_listener(listener.id)
 
         assert received, "listener did not receive message"
         message = received[0]
@@ -97,7 +98,7 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
         assert message.payload["action"] == "hybrid"
     finally:
         backend = getattr(channel, "_backend", None)
-        if backend and hasattr(backend, "shutdown_async"):
-            await backend.shutdown_async()
+        if backend and hasattr(backend, "shutdown"):
+            await backend.shutdown()
         if config.connection_instance:
             await config.close_pool()

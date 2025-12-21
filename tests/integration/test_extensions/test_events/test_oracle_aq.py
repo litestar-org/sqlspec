@@ -7,7 +7,7 @@ from pytest_databases.docker.oracle import OracleService
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.oracledb import OracleSyncConfig
-from sqlspec.extensions.events import EventChannel
+from sqlspec.extensions.events import SyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
@@ -100,13 +100,13 @@ def test_oracle_aq_publish_receive(oracle_aq_config: OracleSyncConfig) -> None:
     spec.add_config(oracle_aq_config)
     channel = spec.event_channel(oracle_aq_config)
 
-    assert isinstance(channel, EventChannel)
+    assert isinstance(channel, SyncEventChannel)
 
-    event_id = channel.publish_sync("alerts", {"action": "refresh"})
-    iterator = channel.iter_events_sync("alerts", poll_interval=1.0)
+    event_id = channel.publish("alerts", {"action": "refresh"})
+    iterator = channel.iter_events("alerts", poll_interval=1.0)
     message = next(iterator)
 
     assert message.event_id == event_id
     assert message.payload["action"] == "refresh"
 
-    channel.ack_sync(message.event_id)
+    channel.ack(message.event_id)

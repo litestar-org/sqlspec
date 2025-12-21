@@ -1,4 +1,4 @@
-# pyright: reportAttributeAccessIssue=false
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 """Psycopg integration tests for the EventChannel queue backend."""
 
 import asyncio
@@ -36,10 +36,10 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish_sync("notifications", {"action": "queue"})
-    iterator = channel.iter_events_sync("notifications", poll_interval=0.1)
+    event_id = channel.publish("notifications", {"action": "queue"})
+    iterator = channel.iter_events("notifications", poll_interval=0.1)
     message = next(iterator)
-    channel.ack_sync(message.event_id)
+    channel.ack(message.event_id)
 
     with config.provide_session() as driver:
         row = driver.select_one(
@@ -55,7 +55,7 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
 @pytest.mark.postgres
 @pytest.mark.asyncio
 async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_service: PostgresService) -> None:
-    """Psycopg async configs bridge through the queue backend."""
+    """Psycopg async configs use the queue backend."""
 
     migrations_dir = tmp_path / "psycopg_async_events"
     migrations_dir.mkdir()
@@ -72,13 +72,13 @@ async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_ser
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = await channel.publish_async("notifications", {"action": "async_queue"})
-    iterator = channel.iter_events_async("notifications", poll_interval=0.1)
+    event_id = await channel.publish("notifications", {"action": "async_queue"})
+    iterator = channel.iter_events("notifications", poll_interval=0.1)
     try:
         message = await asyncio.wait_for(iterator.__anext__(), timeout=5)
     finally:
         await iterator.aclose()
-    await channel.ack_async(message.event_id)
+    await channel.ack(message.event_id)
 
     async with config.provide_session() as driver:
         row = await driver.select_one(

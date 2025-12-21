@@ -17,11 +17,11 @@ def test_spanner_event_channel_queue_fallback(
     spec.add_config(spanner_events_config)
     channel = spec.event_channel(spanner_events_config)
 
-    event_id = channel.publish_sync("notifications", {"action": "spanner_event"})
+    event_id = channel.publish("notifications", {"action": "spanner_event"})
 
-    iterator = channel.iter_events_sync("notifications", poll_interval=0.05)
+    iterator = channel.iter_events("notifications", poll_interval=0.05)
     message = next(iterator)
-    channel.ack_sync(message.event_id)
+    channel.ack(message.event_id)
 
     with spanner_events_config.provide_session() as driver:
         row = driver.select_one(
@@ -86,11 +86,11 @@ def test_spanner_event_metadata_roundtrip(
     channel = spec.event_channel(spanner_events_config)
 
     metadata = {"source": "test", "priority": 1}
-    event_id = channel.publish_sync("metadata_test", {"data": "value"}, metadata=metadata)
+    event_id = channel.publish("metadata_test", {"data": "value"}, metadata=metadata)
 
-    iterator = channel.iter_events_sync("metadata_test", poll_interval=0.05)
+    iterator = channel.iter_events("metadata_test", poll_interval=0.05)
     message = next(iterator)
-    channel.ack_sync(message.event_id)
+    channel.ack(message.event_id)
 
     assert message.event_id == event_id
     assert message.metadata == metadata

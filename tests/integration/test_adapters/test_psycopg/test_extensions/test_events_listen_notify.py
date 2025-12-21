@@ -34,7 +34,7 @@ def test_psycopg_sync_listen_notify(postgres_service: "Any") -> None:
 
     received: list[Any] = []
     listener = channel.listen("alerts", lambda message: received.append(message), poll_interval=0.2)
-    event_id = channel.publish_sync("alerts", {"action": "ping"})
+    event_id = channel.publish("alerts", {"action": "ping"})
     for _ in range(200):
         if received:
             break
@@ -66,13 +66,13 @@ async def test_psycopg_async_listen_notify(postgres_service: "Any") -> None:
     async def _handler(message: Any) -> None:
         received.append(message)
 
-    listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
-    event_id = await channel.publish_async("alerts", {"action": "async"})
+    listener = channel.listen("alerts", _handler, poll_interval=0.2)
+    event_id = await channel.publish("alerts", {"action": "async"})
     for _ in range(200):
         if received:
             break
         await asyncio.sleep(0.05)
-    await channel.stop_listener_async(listener.id)
+    await channel.stop_listener(listener.id)
 
     assert received, "listener did not receive message"
     message = received[0]
@@ -102,7 +102,7 @@ def test_psycopg_sync_hybrid_listen_notify_durable(postgres_service: "Any", tmp_
 
     received: list[Any] = []
     listener = channel.listen("alerts", lambda message: received.append(message), poll_interval=0.2)
-    event_id = channel.publish_sync("alerts", {"action": "hybrid"})
+    event_id = channel.publish("alerts", {"action": "hybrid"})
     for _ in range(200):
         if received:
             break
@@ -141,13 +141,13 @@ async def test_psycopg_async_hybrid_listen_notify_durable(postgres_service: "Any
     async def _handler(message: Any) -> None:
         received.append(message)
 
-    listener = channel.listen_async("alerts", _handler, poll_interval=0.2)
-    event_id = await channel.publish_async("alerts", {"action": "hybrid-async"})
+    listener = channel.listen("alerts", _handler, poll_interval=0.2)
+    event_id = await channel.publish("alerts", {"action": "hybrid-async"})
     for _ in range(200):
         if received:
             break
         await asyncio.sleep(0.05)
-    await channel.stop_listener_async(listener.id)
+    await channel.stop_listener(listener.id)
 
     assert received, "listener did not receive message"
     message = received[0]

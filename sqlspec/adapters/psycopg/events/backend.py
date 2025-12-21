@@ -2,7 +2,6 @@
 """Psycopg LISTEN/NOTIFY and hybrid event backends."""
 
 import contextlib
-import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +12,7 @@ from sqlspec.extensions.events._queue import QueueEventBackend, TableEventQueue,
 from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
@@ -54,7 +54,7 @@ class PsycopgEventsBackend:
     async def publish_async(
         self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
     ) -> str:
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
         session_cm = self._config.provide_session()
         async with session_cm as driver:  # type: ignore[union-attr]
@@ -64,7 +64,7 @@ class PsycopgEventsBackend:
         return event_id
 
     def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         envelope = self._encode_payload(event_id, payload, metadata)
         session_cm = self._config.provide_session()
         with session_cm as driver:  # type: ignore[union-attr]
@@ -179,7 +179,7 @@ class PsycopgEventsBackend:
         data = from_json(payload)
         if not isinstance(data, dict):
             data = {"payload": data}
-        event_id = data.get("event_id", uuid.uuid4().hex)
+        event_id = data.get("event_id", uuid4().hex)
         payload_obj = data.get("payload")
         if not isinstance(payload_obj, dict):
             payload_obj = {"value": payload_obj}
@@ -249,13 +249,13 @@ class PsycopgHybridEventsBackend:
     async def publish_async(
         self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
     ) -> str:
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         await self._publish_durable_async(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
         return event_id
 
     def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
-        event_id = uuid.uuid4().hex
+        event_id = uuid4().hex
         self._publish_durable_sync(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
         return event_id

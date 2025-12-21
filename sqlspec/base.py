@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlspec.core import SQL
-    from sqlspec.extensions.events import EventChannel
+    from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
     from sqlspec.typing import PoolT
 
 
@@ -159,10 +159,20 @@ class SQLSpec:
         """
         return self._configs
 
-    def event_channel(self, config: "type[SyncConfigT | AsyncConfigT] | SyncConfigT | AsyncConfigT") -> "EventChannel":
-        """Create an EventChannel for the provided configuration."""
+    def event_channel(
+        self, config: "type[SyncConfigT | AsyncConfigT] | SyncConfigT | AsyncConfigT"
+    ) -> "SyncEventChannel | AsyncEventChannel":
+        """Create an event channel for the provided configuration.
 
-        from sqlspec.extensions.events import EventChannel
+        Returns SyncEventChannel for sync configs, AsyncEventChannel for async configs.
+
+        Args:
+            config: A registered database configuration instance or type.
+
+        Returns:
+            The appropriate event channel type for the configuration.
+        """
+        from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 
         if isinstance(config, type):
             config_obj: DatabaseConfigProtocol[Any, Any, Any] | None = None
@@ -173,8 +183,12 @@ class SQLSpec:
             if config_obj is None:
                 msg = f"Configuration {self._get_config_name(config)} is not registered"
                 raise ImproperConfigurationError(msg)
-            return EventChannel(config_obj)
-        return EventChannel(config)
+            if config_obj.is_async:
+                return AsyncEventChannel(config_obj)  # type: ignore[arg-type]
+            return SyncEventChannel(config_obj)  # type: ignore[arg-type]
+        if config.is_async:
+            return AsyncEventChannel(config)  # type: ignore[arg-type]
+        return SyncEventChannel(config)  # type: ignore[arg-type]
 
     def telemetry_snapshot(self) -> "dict[str, Any]":
         """Return aggregated diagnostics across all registered configurations."""
