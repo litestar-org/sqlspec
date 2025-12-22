@@ -36,19 +36,19 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = channel.publish("notifications", {"action": "queue"})
-    iterator = channel.iter_events("notifications", poll_interval=0.1)
-    message = next(iterator)
-    channel.ack(message.event_id)
+    try:
+        event_id = channel.publish("notifications", {"action": "queue"})
+        iterator = channel.iter_events("notifications", poll_interval=0.1)
+        message = next(iterator)
+        channel.ack(message.event_id)
 
-    with config.provide_session() as driver:
-        row = driver.select_one(
-            "SELECT status FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
-        )
+        with config.provide_session() as driver:
+            row = driver.select_one(
+                "SELECT status FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
+            )
 
-    assert row["status"] == "acked"
-
-    if config.connection_instance:
+        assert row["status"] == "acked"
+    finally:
         config.close_pool()
 
 
@@ -72,20 +72,20 @@ async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_ser
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    event_id = await channel.publish("notifications", {"action": "async_queue"})
-    iterator = channel.iter_events("notifications", poll_interval=0.1)
     try:
-        message = await asyncio.wait_for(iterator.__anext__(), timeout=5)
+        event_id = await channel.publish("notifications", {"action": "async_queue"})
+        iterator = channel.iter_events("notifications", poll_interval=0.1)
+        try:
+            message = await asyncio.wait_for(iterator.__anext__(), timeout=5)
+        finally:
+            await iterator.aclose()
+        await channel.ack(message.event_id)
+
+        async with config.provide_session() as driver:
+            row = await driver.select_one(
+                "SELECT status FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
+            )
+
+        assert row["status"] == "acked"
     finally:
-        await iterator.aclose()
-    await channel.ack(message.event_id)
-
-    async with config.provide_session() as driver:
-        row = await driver.select_one(
-            "SELECT status FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
-        )
-
-    assert row["status"] == "acked"
-
-    if config.connection_instance:
         await config.close_pool()
