@@ -865,17 +865,27 @@ The events extension provides database-agnostic pub/sub via two layers:
 **Backends** handle communication (LISTEN/NOTIFY, Oracle AQ, table polling):
 
 ```python
-# Backend selection via driver_features
-class AdapterDriverFeatures(TypedDict):
-    enable_events: NotRequired[bool]
-    events_backend: NotRequired[Literal["listen_notify", "listen_notify_durable", "table_queue", "advanced_queue"]]
-
-# Auto-detection in config __init__
-if "enable_events" not in driver_features:
-    driver_features["enable_events"] = extension_config.get("events") is not None
-if "events_backend" not in driver_features:
-    driver_features["events_backend"] = "listen_notify"  # or adapter-specific default
+# Backend selection via extension_config (NOT driver_features)
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://..."},
+    extension_config={
+        "events": {
+            "backend": "listen_notify_durable",  # Backend selection here
+            "queue_table": "event_queue_custom",
+            "lease_seconds": 60,
+        }
+    }
+)
 ```
+
+Available backends:
+- `listen_notify`: Real-time PostgreSQL LISTEN/NOTIFY (ephemeral, no migrations)
+- `table_queue`: Durable table-backed queue with retries (all adapters)
+- `listen_notify_durable`: Hybrid combining both (PostgreSQL only)
+- `advanced_queue`: Oracle Advanced Queueing
+
+PostgreSQL adapters (asyncpg, psycopg, psqlpy) default to `listen_notify`.
+All other adapters default to `table_queue`.
 
 **Stores** generate adapter-specific DDL for the queue table:
 
@@ -916,9 +926,47 @@ def create_event_backend(
 
 - Backends implement `publish_async`, `dequeue_async`, `ack_async` (and sync variants)
 - Stores inherit from `BaseEventQueueStore` and override `_column_types()`
-- Use `driver_features` for backend selection, `extension_config["events"]` for settings
+- Use `extension_config["events"]["backend"]` for backend selection, other keys for settings
 - Always support `table_queue` fallback for databases without native pub/sub
 - Separate DDL execution for databases without transactional DDL (Spanner, BigQuery)
+
+**Auto-migration inclusion:**
+
+Extensions with migration support are automatically included in
+`migration_config["include_extensions"]` based on their settings:
+
+- **litestar**: Only when ``session_table`` is set (``True`` or custom name)
+- **adk**: When any adk settings are present
+- **events**: When any events settings are present
+
+Use `exclude_extensions` to opt out:
+
+```python
+# Auto-includes events migrations when extension_config["events"] is set
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://..."},
+    extension_config={"events": {"backend": "table_queue"}},
+)
+
+# Litestar with session storage - auto-includes migrations
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://..."},
+    extension_config={"litestar": {"session_table": True}},  # or "my_sessions"
+)
+
+# Litestar for DI only - no migrations needed
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://..."},
+    extension_config={"litestar": {"session_key": "db"}},  # No session_table = no migrations
+)
+
+# Exclude events migrations when using ephemeral backend
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://..."},
+    migration_config={"exclude_extensions": ["events"]},  # Skip queue table migration
+    extension_config={"events": {"backend": "listen_notify"}},
+)
+```
 
 **Reference implementation:** `sqlspec/extensions/events/`, `sqlspec/adapters/*/events/`
 

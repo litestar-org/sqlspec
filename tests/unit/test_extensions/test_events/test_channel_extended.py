@@ -62,7 +62,7 @@ def test_event_channel_backend_fallback_warning(tmp_path) -> None:
     """EventChannel falls back to table_queue for unavailable backends."""
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "test.db")},
-        driver_features={"events_backend": "nonexistent_backend"},
+        extension_config={"events": {"backend": "nonexistent_backend"}},
     )
     channel = SyncEventChannel(config)
 

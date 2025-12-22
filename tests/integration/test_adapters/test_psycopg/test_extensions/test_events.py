@@ -27,7 +27,7 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
     config = PsycopgSyncConfig(
         connection_config={"conninfo": _build_conninfo(postgres_service)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
-        driver_features={"events_backend": "table_queue", "enable_events": True},
+        extension_config={"events": {"backend": "table_queue"}},
     )
 
     commands = SyncMigrationCommands(config)
@@ -67,7 +67,7 @@ async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_ser
     config = PsycopgAsyncConfig(
         connection_config={"conninfo": _build_conninfo(postgres_service)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
-        driver_features={"events_backend": "table_queue", "enable_events": True},
+        extension_config={"events": {"backend": "table_queue"}},
     )
 
     commands = AsyncMigrationCommands(config)

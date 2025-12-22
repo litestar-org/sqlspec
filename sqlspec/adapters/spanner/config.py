@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from google.cloud.spanner_v1 import Client
 from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
@@ -66,8 +66,6 @@ class SpannerDriverFeatures(TypedDict):
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     session_labels: "NotRequired[dict[str, str]]"
-    enable_events: "NotRequired[bool]"
-    events_backend: "NotRequired[Literal['table_queue']]"
 
 
 class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSessionPool", SpannerSyncDriver]):
@@ -109,11 +107,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         features.setdefault("enable_uuid_conversion", True)
         features.setdefault("json_serializer", to_json)
         features.setdefault("json_deserializer", from_json)
-        events_configured = extension_config is not None and "events" in extension_config
-        if "enable_events" not in features:
-            features["enable_events"] = events_configured
-        if "events_backend" not in features:
-            features["events_backend"] = "table_queue"
 
         base_statement_config = statement_config or spanner_statement_config
 

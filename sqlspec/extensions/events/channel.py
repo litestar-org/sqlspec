@@ -88,6 +88,23 @@ def _resolve_poll_interval(poll_interval: "float | None", default: float) -> flo
     return poll_interval
 
 
+_POSTGRES_ADAPTERS = frozenset({"asyncpg", "psycopg", "psqlpy"})
+
+
+def _get_default_backend(adapter_name: "str | None") -> str:
+    """Return the default events backend for an adapter.
+
+    Args:
+        adapter_name: Name of the database adapter.
+
+    Returns:
+        Default backend name ('listen_notify' for PostgreSQL, 'table_queue' otherwise).
+    """
+    if adapter_name in _POSTGRES_ADAPTERS:
+        return "listen_notify"
+    return "table_queue"
+
+
 def _load_native_backend(config: Any, backend_name: str | None, extension_settings: "dict[str, Any]") -> Any | None:
     """Load adapter-specific native backend if available."""
     if backend_name in {None, "table_queue"}:
@@ -184,7 +201,7 @@ class SyncEventChannel:
         hints = get_runtime_hints(self._adapter_name, config)
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
-        backend_name = config.driver_features.get("events_backend") or "table_queue"
+        backend_name = extension_settings.get("backend") or _get_default_backend(self._adapter_name)
         native_backend = _load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
@@ -406,7 +423,7 @@ class AsyncEventChannel:
         hints = get_runtime_hints(self._adapter_name, config)
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
-        backend_name = config.driver_features.get("events_backend") or "table_queue"
+        backend_name = extension_settings.get("backend") or _get_default_backend(self._adapter_name)
         native_backend = _load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:

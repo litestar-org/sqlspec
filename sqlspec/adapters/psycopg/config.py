@@ -2,7 +2,7 @@
 
 import contextlib
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -94,8 +94,6 @@ class PsycopgDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
-    enable_events: NotRequired[bool]
-    events_backend: NotRequired[Literal["listen_notify", "table_queue", "listen_notify_durable"]]
 
 
 __all__ = (
@@ -154,10 +152,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
         processed_driver_features.setdefault("json_serializer", serializer)
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
-
-        # Auto-detect events support based on extension_config
-        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_driver_features.setdefault("events_backend", "listen_notify")
 
         super().__init__(
             connection_config=processed_connection_config,
@@ -351,10 +345,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
         processed_driver_features.setdefault("json_serializer", serializer)
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
-
-        # Auto-detect events support based on extension_config
-        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_driver_features.setdefault("events_backend", "listen_notify")
 
         super().__init__(
             connection_config=processed_connection_config,

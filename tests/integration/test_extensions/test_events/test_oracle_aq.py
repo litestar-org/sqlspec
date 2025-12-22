@@ -24,8 +24,7 @@ def oracle_aq_config(oracle_23ai_service: OracleService) -> Generator[OracleSync
             "user": oracle_23ai_service.user,
             "password": oracle_23ai_service.password,
         },
-        driver_features={"events_backend": "advanced_queue", "enable_events": True},
-        extension_config={"events": {}},
+        extension_config={"events": {"backend": "advanced_queue"}},
     )
 
     queue_table = "SQLSPEC_EVENTS_QUEUE_TABLE"

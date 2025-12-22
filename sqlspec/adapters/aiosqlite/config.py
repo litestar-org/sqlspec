@@ -1,7 +1,7 @@
 """Aiosqlite database configuration."""
 
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -82,8 +82,6 @@ class AiosqliteDriverFeatures(TypedDict):
     enable_custom_adapters: NotRequired[bool]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
-    enable_events: NotRequired[bool]
-    events_backend: NotRequired[Literal["table_queue"]]
 
 
 class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnectionPool, AiosqliteDriver]):
@@ -144,10 +142,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         processed_driver_features.setdefault("enable_custom_adapters", True)
         json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
         json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
-
-        # Auto-detect events support based on extension_config
-        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_driver_features.setdefault("events_backend", "table_queue")
 
         base_statement_config = statement_config or aiosqlite_statement_config
         if json_serializer is not None:

@@ -22,8 +22,7 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
     """Native LISTEN/NOTIFY path delivers payloads."""
 
     config = PsqlpyConfig(
-        connection_config={"dsn": _dsn(postgres_service)},
-        driver_features={"events_backend": "listen_notify", "enable_events": True},
+        connection_config={"dsn": _dsn(postgres_service)}, extension_config={"events": {"backend": "listen_notify"}}
     )
 
     spec = SQLSpec()
@@ -67,8 +66,7 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
     config = PsqlpyConfig(
         connection_config={"dsn": _dsn(postgres_service)},
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        driver_features={"events_backend": "listen_notify_durable", "enable_events": True},
-        extension_config={"events": {}},
+        extension_config={"events": {"backend": "listen_notify_durable"}},
     )
 
     await AsyncMigrationCommands(config).upgrade()

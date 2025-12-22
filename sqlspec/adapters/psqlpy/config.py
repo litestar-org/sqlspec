@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
@@ -102,8 +102,6 @@ class PsqlpyDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
-    enable_events: NotRequired[bool]
-    events_backend: NotRequired[Literal["listen_notify", "table_queue", "listen_notify_durable"]]
 
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
@@ -155,10 +153,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         serializer_callable = to_json if serializer is None else cast("Callable[[Any], str]", serializer)
         processed_driver_features.setdefault("json_serializer", serializer_callable)
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
-
-        # Auto-detect events support based on extension_config
-        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_driver_features.setdefault("events_backend", "listen_notify")
 
         super().__init__(
             connection_config=processed_connection_config,

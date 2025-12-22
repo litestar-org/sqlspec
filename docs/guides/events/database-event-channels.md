@@ -15,10 +15,7 @@ from sqlspec.adapters.sqlite import SqliteConfig
 spec = SQLSpec()
 config = SqliteConfig(
     connection_config={"database": ":memory:"},
-    migration_config={
-        "script_location": "migrations",
-        "include_extensions": ["events"],
-    },
+    migration_config={"script_location": "migrations"},
     extension_config={
         "events": {
             "queue_table": "app_events",
@@ -26,6 +23,7 @@ config = SqliteConfig(
     },
 )
 spec.add_config(config)
+# Events migrations are auto-included when extension_config["events"] is present
 
 channel = spec.event_channel(config)
 channel.publish("notifications", {"type": "cache_invalidate", "key": "user:1"})
@@ -38,7 +36,7 @@ for message in channel.iter_events("notifications"):
 ## PostgreSQL native notifications
 
 All async PostgreSQL adapters (AsyncPG, Psycopg async, and Psqlpy) support
-native `LISTEN/NOTIFY` via `events_backend="listen_notify"`. When enabled,
+native `LISTEN/NOTIFY` via `extension_config["events"]["backend"] = "listen_notify"`. When enabled,
 events flow directly through PostgreSQL's notification system with no
 migrations required.
 
@@ -65,7 +63,7 @@ enabled as described below.
 
 ## Oracle Advanced Queuing (sync adapters)
 
-Set ``config.driver_features["events_backend"] = "advanced_queue"`` to opt into native AQ.
+Set ``extension_config["events"]["backend"] = "advanced_queue"`` to opt into native AQ.
 When enabled, ``EventChannel`` publishes JSON payloads via ``connection.queue`` and
 skips the durable table migrations. The backend currently targets synchronous drivers
 (async configs fall back to the queue extension automatically).
@@ -81,20 +79,21 @@ and transparently falls back to the table-backed queue backend.
 
 ## Enabling the events extension
 
-1. **Include the extension migrations**
+1. **Extension migrations are auto-included**
+
+   When `extension_config["events"]` is present, SQLSpec automatically
+   includes the events extension in `migration_config["include_extensions"]`.
+   Running `sqlspec upgrade` (or `config.migrate_up()`) applies
+   `ext_events_0001`, which creates the queue table and composite index.
+
+   To skip the migrations (e.g., for ephemeral `listen_notify` backend):
 
    ```python
    migration_config={
        "script_location": "migrations",
-       "include_extensions": ["events"],
+       "exclude_extensions": ["events"],  # Skip queue table migration
    }
    ```
-
-   When `extension_config["events"]` is present SQLSpec automatically
-   appends `"events"` to `include_extensions`, but setting it explicitly makes
-   the intent clear and mirrors other extension guides. Running
-   `sqlspec upgrade` (or `config.migrate_up()`) applies
-   `ext_events_0001`, which creates the queue table and composite index.
 
 2. **Provide extension settings (optional)**
 
@@ -200,14 +199,18 @@ Manual iteration is also available via `channel.iter_events(...)` which yields
 
 | Option             | Default                 | Description |
 | ------------------ | ----------------------- | ----------- |
+| `backend`          | adapter-specific        | Backend implementation: `listen_notify`, `table_queue`, `listen_notify_durable`, or `advanced_queue`. |
 | `queue_table`      | `sqlspec_event_queue`   | Table name used by migrations and runtime. |
 | `lease_seconds`    | `30`                    | How long a consumer owns a message before it can be retried. |
 | `retention_seconds`| `86400`                 | How long acknowledged rows remain before automatic cleanup. |
 | `poll_interval`    | adapter-specific        | Default sleep window between dequeue attempts; see table below. |
 | `in_memory`        | `False`                 | Oracle-only flag that adds `INMEMORY PRIORITY HIGH` to the queue table. |
-| `aq_queue`         | `SQLSPEC_EVENTS_QUEUE`  | Native AQ queue name when `events_backend="advanced_queue"`. |
+| `aq_queue`         | `SQLSPEC_EVENTS_QUEUE`  | Native AQ queue name when `backend="advanced_queue"`. |
 | `aq_wait_seconds`  | `5`                     | Wait timeout (seconds) for AQ dequeue operations. |
 | `aq_visibility`    | *unset*                 | Optional visibility constant (e.g., `AQMSG_VISIBLE`). |
+
+To skip migrations for ephemeral backends (e.g., `listen_notify`), use
+`migration_config={"exclude_extensions": ["events"]}`.
 
 ### Adapter defaults
 
@@ -290,7 +293,7 @@ three backend types:
 | `advanced_queue` | Oracle Advanced Queuing | Enterprise Oracle deployments |
 | `table_queue` | Polling-based queue table | Universal fallback for any database |
 
-Configure the backend via `driver_features["events_backend"]`:
+Configure the backend via `extension_config["events"]["backend"]`:
 
 ```python
 from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -298,19 +301,20 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 # Native LISTEN/NOTIFY (default for PostgreSQL adapters)
 config = AsyncpgConfig(
     connection_config={"dsn": "postgresql://localhost/db"},
-    driver_features={"events_backend": "listen_notify"},
+    extension_config={"events": {"backend": "listen_notify"}},
 )
 
 # Hybrid: durable queue with NOTIFY wakeups
 config = AsyncpgConfig(
     connection_config={"dsn": "postgresql://localhost/db"},
-    driver_features={"events_backend": "listen_notify_durable"},
+    extension_config={"events": {"backend": "listen_notify_durable"}},
 )
 ```
 
 Queue-backed backends (`listen_notify_durable`, `table_queue`) require the
-events extension migrations. Ensure `migration_config["include_extensions"]`
-contains `"events"` before publishing or consuming.
+events extension migrations. When `extension_config["events"]` is present,
+SQLSpec auto-includes the migrations. For ephemeral `listen_notify` only,
+use `migration_config={"exclude_extensions": ["events"]}`.
 
 ### Event Queue Stores
 

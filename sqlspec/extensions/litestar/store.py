@@ -76,12 +76,19 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
 
         Returns:
             Table name for the session store.
+
+        Notes:
+            Accepts ``session_table: True`` for default name or a string for custom name.
         """
+        default_name = "litestar_session"
         if hasattr(self._config, "extension_config"):
             extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
             litestar_config: dict[str, Any] = extension_config.get("litestar", {})
-            return str(litestar_config.get("session_table", "litestar_session"))
-        return "litestar_session"
+            session_table = litestar_config.get("session_table", default_name)
+            if session_table is True:
+                return default_name
+            return str(session_table)
+        return default_name
 
     @property
     def config(self) -> ConfigT:
