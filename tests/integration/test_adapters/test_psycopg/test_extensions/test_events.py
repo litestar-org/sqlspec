@@ -39,7 +39,10 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
     try:
         event_id = channel.publish("notifications", {"action": "queue"})
         iterator = channel.iter_events("notifications", poll_interval=0.1)
-        message = next(iterator)
+        try:
+            message = next(iterator)
+        finally:
+            iterator.close()
         channel.ack(message.event_id)
 
         with config.provide_session() as driver:
