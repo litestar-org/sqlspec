@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -159,8 +159,6 @@ class DuckDBDriverFeatures(TypedDict):
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
     extension_flags: NotRequired[dict[str, Any]]
-    enable_events: NotRequired[bool]
-    events_backend: NotRequired[Literal["table_queue"]]
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
@@ -260,10 +258,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         )
         processed_features.setdefault("enable_uuid_conversion", True)
         serializer = processed_features.setdefault("json_serializer", to_json)
-
-        # Auto-detect events support based on extension_config
-        processed_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_features.setdefault("events_backend", "table_queue")
 
         if extension_flags:
             existing_flags = cast("dict[str, Any]", processed_features.get("extension_flags", {}))

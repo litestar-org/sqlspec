@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 import asyncmy
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
@@ -90,8 +90,6 @@ class AsyncmyDriverFeatures(TypedDict):
 
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
-    enable_events: NotRequired[bool]
-    events_backend: NotRequired[Literal["table_queue"]]
 
 
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):  # pyright: ignore
@@ -143,10 +141,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = processed_driver_features.setdefault("json_serializer", to_json)
         deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
-
-        # Auto-detect events support based on extension_config
-        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_driver_features.setdefault("events_backend", "table_queue")
 
         base_statement_config = statement_config or build_asyncmy_statement_config(
             json_serializer=serializer, json_deserializer=deserializer

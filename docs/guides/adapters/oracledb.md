@@ -902,9 +902,9 @@ For comprehensive examples and migration guides, see:
 
 ## Event Channels
 
-- Set `driver_features["events_backend"] = "advanced_queue"` to enable native
+- Set `extension_config={"events": {"backend": "advanced_queue"}}` to enable native
   Advanced Queuing support. Event publishing uses `connection.queue()` and
-  inherits the AQ options surfaced via `extension_config["events"]`
+  inherits the AQ options from `extension_config["events"]`
   (`aq_queue`, `aq_wait_seconds`, `aq_visibility`).
 - AQ requires DBA-provisioned queues plus enqueue/dequeue privileges. When the
   driver detects missing privileges it logs a warning and falls back to the

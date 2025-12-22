@@ -254,16 +254,15 @@ For comprehensive examples and migration guides, see:
 
 ## Event Channels
 
-- Psqlpy enables native LISTEN/NOTIFY by default
-  (`driver_features["events_backend"] = "listen_notify"`). Call
-  `spec.event_channel(config)` to publish or consume without migrations.
+- Psqlpy defaults to native LISTEN/NOTIFY support (`backend="listen_notify"`).
+  Call `spec.event_channel(config)` to obtain a channel—no migrations required.
 - Native listeners use the `Listener` API and a dedicated connection so the
   shared pool remains available for normal queries.
-- For durability and retries, set `driver_features["events_backend"] =
-  "listen_notify_durable"` and include the `events` extension migrations.
-- The queue-only fallback remains available by setting
-  `driver_features["events_backend"] = "table_queue"` alongside the
-  `events` migrations.
+- For durability and retries, set `extension_config={"events": {"backend": "listen_notify_durable"}}`
+  and include the `events` extension migrations.
+- Force the durable queue fallback (for deterministic testing or multi-tenant
+  workloads) by setting `extension_config={"events": {"backend": "table_queue"}}`
+  and including the `events` migrations.
 
 ## Best Practices
 

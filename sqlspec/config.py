@@ -113,7 +113,23 @@ class MigrationConfig(TypedDict):
     """Enforce strict migration ordering. When enabled, prevents out-of-order migrations from being applied. Defaults to False."""
 
     include_extensions: NotRequired["list[str]"]
-    """List of extension names whose migrations should be included. Extension migrations maintain separate versioning and are prefixed with 'ext_{name}_'."""
+    """List of extension names whose migrations should be included. Extension migrations maintain separate versioning and are prefixed with 'ext_{name}_'.
+
+    Note: Extensions with migration support (litestar, adk, events) are auto-included when
+    their settings are present in ``extension_config``. Use ``exclude_extensions`` to opt out.
+    """
+
+    exclude_extensions: NotRequired["list[str]"]
+    """List of extension names to exclude from automatic migration inclusion.
+
+    When an extension is configured in ``extension_config``, its migrations are automatically
+    included. Use this to prevent that for specific extensions:
+
+    Example:
+        migration_config={
+            "exclude_extensions": ["events"]  # Use ephemeral listen_notify, skip queue table
+        }
+    """
 
     transactional: NotRequired[bool]
     """Wrap migrations in transactions when supported. When enabled (default for adapters that support it), each migration runs in a transaction that is committed on success or rolled back on failure. This prevents partial migrations from leaving the database in an inconsistent state. Requires adapter support for transactional DDL. Defaults to True for PostgreSQL, SQLite, and DuckDB; False for MySQL, Oracle, and BigQuery. Individual migrations can override this with a '-- transactional: false' comment."""
@@ -173,6 +189,17 @@ class LitestarConfig(TypedDict):
     """Configuration options for Litestar SQLSpec plugin.
 
     All fields are optional with sensible defaults.
+    """
+
+    session_table: NotRequired["bool | str"]
+    """Enable session table for server-side session storage.
+
+    - ``True``: Use default table name ('litestar_session')
+    - ``"custom_name"``: Use custom table name
+
+    When set, litestar extension migrations are auto-included to create the session table.
+    If you're only using litestar for DI/connection management (not session storage),
+    leave this unset to skip the migrations.
     """
 
     connection_key: NotRequired[str]
@@ -429,7 +456,19 @@ class ADKConfig(TypedDict):
 
 
 class EventsConfig(TypedDict):
-    """Configuration options for the events extension queue fallback."""
+    """Configuration options for the events extension.
+
+    Use in ``extension_config["events"]``.
+    """
+
+    backend: NotRequired[Literal["listen_notify", "table_queue", "listen_notify_durable", "advanced_queue"]]
+    """Backend implementation. PostgreSQL adapters default to 'listen_notify', others to 'table_queue'.
+
+    - listen_notify: Real-time PostgreSQL LISTEN/NOTIFY (ephemeral)
+    - table_queue: Durable table-backed queue with retries (all adapters)
+    - listen_notify_durable: Hybrid combining both (PostgreSQL only)
+    - advanced_queue: Oracle Advanced Queueing
+    """
 
     queue_table: NotRequired[str]
     """Name of the fallback queue table. Defaults to 'sqlspec_event_queue'."""
@@ -438,10 +477,26 @@ class EventsConfig(TypedDict):
     """Lease duration for claimed events before they can be retried. Defaults to 30 seconds."""
 
     retention_seconds: NotRequired[int]
-    """Retention window for acknowledged events before cleanup. Defaults to 86400 seconds (24 hours)."""
+    """Retention window for acknowledged events before cleanup. Defaults to 86400 (24 hours)."""
+
+    poll_interval: NotRequired[float]
+    """Default poll interval in seconds for event consumers. Defaults to 1.0."""
+
+    select_for_update: NotRequired[bool]
+    """Use SELECT FOR UPDATE locking when claiming events. Defaults to False."""
+
+    skip_locked: NotRequired[bool]
+    """Use SKIP LOCKED for non-blocking event claims. Defaults to False."""
+
+    json_passthrough: NotRequired[bool]
+    """Skip JSON encoding/decoding for payloads. Defaults to False."""
 
     in_memory: NotRequired[bool]
-    """Enable Oracle INMEMORY clause for the queue table. Ignored by other adapters. Defaults to False."""
+    """Enable Oracle INMEMORY clause for the queue table. Ignored by other adapters. Defaults to False.
+
+    Note: To skip events migrations (e.g., when using ephemeral 'listen_notify' backend),
+    use ``migration_config={"exclude_extensions": ["events"]}``.
+    """
 
 
 class OpenTelemetryConfig(TypedDict):
@@ -577,13 +632,45 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self._storage_capabilities = None
 
     def _ensure_extension_migrations(self) -> None:
-        """Auto-include extension migrations when extension_config requests them."""
+        """Auto-include extension migrations when extension_config has them configured.
 
+        Extensions with migration support are automatically included in
+        ``migration_config["include_extensions"]`` based on their settings:
+
+        - **litestar**: Only when ``session_table`` is set (for session storage)
+        - **adk**: When any adk settings are present
+        - **events**: When any events settings are present
+
+        Use ``exclude_extensions`` to opt out of auto-inclusion.
+        """
         extension_settings = cast("dict[str, Any]", self.extension_config)
-        events_settings = extension_settings.get("events")
-        if events_settings is None:
-            return
         migration_config = cast("dict[str, Any]", self.migration_config)
+
+        exclude_extensions = migration_config.get("exclude_extensions", [])
+        if isinstance(exclude_extensions, tuple):
+            exclude_extensions = list(exclude_extensions)
+
+        extensions_to_add: list[str] = []
+
+        litestar_settings = extension_settings.get("litestar")
+        if (
+            litestar_settings is not None
+            and "session_table" in litestar_settings
+            and "litestar" not in exclude_extensions
+        ):
+            extensions_to_add.append("litestar")
+
+        adk_settings = extension_settings.get("adk")
+        if adk_settings is not None and "adk" not in exclude_extensions:
+            extensions_to_add.append("adk")
+
+        events_settings = extension_settings.get("events")
+        if events_settings is not None and "events" not in exclude_extensions:
+            extensions_to_add.append("events")
+
+        if not extensions_to_add:
+            return
+
         include_extensions = migration_config.get("include_extensions")
         if include_extensions is None:
             include_list: list[str] = []
@@ -593,8 +680,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             migration_config["include_extensions"] = include_list
         else:
             include_list = cast("list[str]", include_extensions)
-        if "events" not in include_list:
-            include_list.append("events")
+
+        for ext in extensions_to_add:
+            if ext not in include_list:
+                include_list.append(ext)
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return default event runtime hints for this configuration."""
@@ -992,7 +1081,6 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self.driver_features.setdefault("events_backend", "table_queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1138,7 +1226,6 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
-        self.driver_features.setdefault("events_backend", "table_queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1287,7 +1374,6 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self.driver_features.setdefault("events_backend", "table_queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1465,7 +1551,6 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self.driver_features.setdefault("events_backend", "table_queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 

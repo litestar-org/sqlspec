@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -141,8 +141,6 @@ class AdbcDriverFeatures(TypedDict):
     enable_cast_detection: NotRequired[bool]
     strict_type_coercion: NotRequired[bool]
     arrow_extension_types: NotRequired[bool]
-    enable_events: NotRequired[bool]
-    events_backend: NotRequired[Literal["table_queue"]]
 
 
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
@@ -204,10 +202,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         processed_driver_features.setdefault("enable_cast_detection", True)
         processed_driver_features.setdefault("strict_type_coercion", False)
         processed_driver_features.setdefault("arrow_extension_types", True)
-
-        # Auto-detect events support based on extension_config
-        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_driver_features.setdefault("events_backend", "table_queue")
 
         if json_serializer is not None:
             statement_config = _apply_json_serializer_to_statement_config(statement_config, json_serializer)

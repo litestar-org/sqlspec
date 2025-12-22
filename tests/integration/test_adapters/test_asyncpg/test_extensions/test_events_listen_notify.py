@@ -23,8 +23,7 @@ async def test_asyncpg_listen_notify_publish_and_ack(postgres_service: "Any") ->
     """AsyncPG adapter publishes and acknowledges LISTEN/NOTIFY events."""
 
     config = AsyncpgConfig(
-        connection_config={"dsn": _dsn(postgres_service)},
-        driver_features={"events_backend": "listen_notify", "enable_events": True},
+        connection_config={"dsn": _dsn(postgres_service)}, extension_config={"events": {"backend": "listen_notify"}}
     )
 
     spec = SQLSpec()
@@ -49,8 +48,7 @@ async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -
     """AsyncPG adapter delivers NOTIFY payloads via EventChannel listener."""
 
     config = AsyncpgConfig(
-        connection_config={"dsn": _dsn(postgres_service)},
-        driver_features={"events_backend": "listen_notify", "enable_events": True},
+        connection_config={"dsn": _dsn(postgres_service)}, extension_config={"events": {"backend": "listen_notify"}}
     )
 
     spec = SQLSpec()
@@ -94,8 +92,7 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
     config = AsyncpgConfig(
         connection_config={"dsn": _dsn(postgres_service)},
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        driver_features={"events_backend": "listen_notify_durable", "enable_events": True},
-        extension_config={"events": {}},
+        extension_config={"events": {"backend": "listen_notify_durable"}},
     )
 
     await AsyncMigrationCommands(config).upgrade()
@@ -138,8 +135,7 @@ async def test_asyncpg_listen_notify_metadata(postgres_service: "Any") -> None:
     """AsyncPG adapter preserves metadata in LISTEN/NOTIFY events."""
 
     config = AsyncpgConfig(
-        connection_config={"dsn": _dsn(postgres_service)},
-        driver_features={"events_backend": "listen_notify", "enable_events": True},
+        connection_config={"dsn": _dsn(postgres_service)}, extension_config={"events": {"backend": "listen_notify"}}
     )
 
     spec = SQLSpec()

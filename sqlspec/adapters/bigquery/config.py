@@ -1,7 +1,7 @@
 """BigQuery database configuration."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
@@ -99,8 +99,6 @@ class BigQueryDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[Any], None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
-    enable_events: NotRequired[bool]
-    events_backend: NotRequired[Literal["table_queue"]]
 
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
@@ -154,10 +152,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         user_connection_hook = processed_driver_features.pop("on_connection_create", None)
         processed_driver_features.setdefault("enable_uuid_conversion", True)
         serializer = processed_driver_features.setdefault("json_serializer", to_json)
-
-        # Auto-detect events support based on extension_config
-        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
-        processed_driver_features.setdefault("events_backend", "table_queue")
 
         self._connection_instance: BigQueryConnection | None = processed_driver_features.get("connection_instance")
 

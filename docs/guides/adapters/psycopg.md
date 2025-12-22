@@ -133,16 +133,15 @@ For comprehensive examples and migration guides, see:
 
 ## Event Channels
 
-- Psycopg enables native LISTEN/NOTIFY support by default
-  (`driver_features["events_backend"] = "listen_notify"`). Call
-  `spec.event_channel(config)` to publish or consume without migrations.
-- Listeners run on dedicated connections so the pool remains available for
-  transactional work.
-- For durability and retries, set `driver_features["events_backend"] =
-  "listen_notify_durable"` and include the `events` extension migrations.
-- The queue-only fallback remains available by setting
-  `driver_features["events_backend"] = "table_queue"` alongside the
-  `events` migrations.
+- Psycopg defaults to native LISTEN/NOTIFY support (`backend="listen_notify"`).
+  Call `spec.event_channel(config)` to obtain a channel—no migrations required.
+- Publishing uses `connection.notify()` under the hood; consumers rely on
+  dedicated connections so the shared pool stays available for transactional work.
+- For durability and retries, set `extension_config={"events": {"backend": "listen_notify_durable"}}`
+  and include the `events` extension migrations.
+- Force the durable queue fallback (for deterministic testing or multi-tenant
+  workloads) by setting `extension_config={"events": {"backend": "table_queue"}}`
+  and including the `events` migrations.
 
 ## Common Issues
 
