@@ -22,6 +22,7 @@ from sqlspec.core import (
     reset_cache_stats,
     update_cache_config,
 )
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
 from sqlspec.typing import ConnectionT
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlspec.core import SQL
+    from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
     from sqlspec.typing import PoolT
 
 
@@ -156,6 +158,54 @@ class SQLSpec:
             Dictionary mapping config instance IDs to config instances.
         """
         return self._configs
+
+    @overload
+    def event_channel(self, config: "type[SyncConfigT]") -> "SyncEventChannel": ...
+
+    @overload
+    def event_channel(self, config: "type[AsyncConfigT]") -> "AsyncEventChannel": ...
+
+    @overload
+    def event_channel(
+        self, config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]"
+    ) -> "SyncEventChannel": ...
+
+    @overload
+    def event_channel(
+        self, config: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]"
+    ) -> "AsyncEventChannel": ...
+
+    def event_channel(
+        self,
+        config: "type[SyncConfigT | AsyncConfigT] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
+    ) -> "SyncEventChannel | AsyncEventChannel":
+        """Create an event channel for the provided configuration.
+
+        Returns SyncEventChannel for sync configs, AsyncEventChannel for async configs.
+
+        Args:
+            config: A registered database configuration instance or type.
+
+        Returns:
+            The appropriate event channel type for the configuration.
+        """
+        from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
+
+        if isinstance(config, type):
+            config_obj: DatabaseConfigProtocol[Any, Any, Any] | None = None
+            for registered_config in self._configs.values():
+                if isinstance(registered_config, config):
+                    config_obj = registered_config
+                    break
+            if config_obj is None:
+                msg = f"Configuration {self._get_config_name(config)} is not registered"
+                raise ImproperConfigurationError(msg)
+            if config_obj.is_async:
+                return AsyncEventChannel(config_obj)  # type: ignore[arg-type]
+            return SyncEventChannel(config_obj)  # type: ignore[arg-type]
+        if config.is_async:
+            return AsyncEventChannel(config)  # type: ignore[arg-type]
+        return SyncEventChannel(config)  # type: ignore[arg-type]
 
     def telemetry_snapshot(self) -> "dict[str, Any]":
         """Return aggregated diagnostics across all registered configurations."""

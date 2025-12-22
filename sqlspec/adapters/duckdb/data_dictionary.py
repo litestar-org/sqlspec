@@ -25,26 +25,36 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
     def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get DuckDB database version information.
 
+        Uses caching to avoid repeated database queries within the same
+        driver session.
+
         Args:
-            driver: DuckDB driver instance
+            driver: DuckDB driver instance.
 
         Returns:
-            DuckDB version information or None if detection fails
+            DuckDB version information or None if detection fails.
         """
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
+        if was_cached:
+            return cached_version
+
         version_str = cast("DuckDBDriver", driver).select_value("SELECT version()")
         if not version_str:
             logger.warning("No DuckDB version information found")
+            self.cache_version(driver_id, None)
             return None
 
-        # Parse version like "v0.9.2" or "0.9.2"
         version_match = DUCKDB_VERSION_PATTERN.search(str(version_str))
         if not version_match:
             logger.warning("Could not parse DuckDB version: %s", version_str)
+            self.cache_version(driver_id, None)
             return None
 
         major, minor, patch = map(int, version_match.groups())
         version_info = VersionInfo(major, minor, patch)
         logger.debug("Detected DuckDB version: %s", version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
     def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:

@@ -93,7 +93,8 @@ def test_case_when_uses_descriptive_names() -> None:
 def test_complex_query_preserves_column_names() -> None:
     """Test that complex queries with multiple operations preserve column names."""
     query = (
-        sql.select("u.name", "p.title")
+        sql
+        .select("u.name", "p.title")
         .from_("users u")
         .join("posts p", "u.id = p.user_id")
         .where_eq("u.status", "active")
@@ -163,7 +164,8 @@ def test_table_prefixed_columns_extract_column_name() -> None:
 def test_mixed_parameter_types_preserve_names() -> None:
     """Test that mixed parameter types (strings, numbers, booleans) preserve proper names."""
     query = (
-        sql.update("accounts")
+        sql
+        .update("accounts")
         .set({"username": "john_doe", "balance": 1500.75, "is_active": True, "last_login": None})
         .where_eq("account_id", 12345)
     )

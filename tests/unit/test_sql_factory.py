@@ -305,7 +305,8 @@ def test_insert_method() -> None:
 def test_insert_values_with_kwargs() -> None:
     """Test Insert.values() method with keyword arguments."""
     query = (
-        sql.insert("team_member")
+        sql
+        .insert("team_member")
         .values(team_id=1, user_id=2, role="admin", joined_at=sql.raw("NOW()"))
         .returning("id", "team_id", "user_id", "role", "is_owner", "joined_at")
     )
@@ -1001,7 +1002,8 @@ def test_mixed_sql_objects_and_regular_parameters() -> None:
     raw_expr = sql.raw("UPPER(name)")
 
     query = (
-        sql.select("id", raw_expr)
+        sql
+        .select("id", raw_expr)
         .from_("users")
         .where_eq("status", "active")
         .where(sql.raw("created_at > :min_date", min_date="2023-01-01"))
@@ -1143,7 +1145,8 @@ def test_on_conflict_do_nothing_basic() -> None:
 def test_on_conflict_do_nothing_multiple_columns() -> None:
     """Test ON CONFLICT DO NOTHING with multiple conflict columns."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .columns("email", "username", "name")
         .values("john@test.com", "john", "John")
         .on_conflict("email", "username")
@@ -1192,7 +1195,8 @@ def test_on_conflict_do_update_basic() -> None:
 def test_on_conflict_do_update_multiple_values() -> None:
     """Test ON CONFLICT DO UPDATE with multiple update values."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .columns("id", "name", "email")
         .values(1, "John", "john@test.com")
         .on_conflict("id")
@@ -1213,7 +1217,8 @@ def test_on_conflict_do_update_multiple_values() -> None:
 def test_on_conflict_do_update_with_sql_raw() -> None:
     """Test ON CONFLICT DO UPDATE with sql.raw expressions."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .columns("id", "name")
         .values(1, "John")
         .on_conflict("id")
@@ -1233,7 +1238,8 @@ def test_on_conflict_do_update_with_sql_raw() -> None:
 def test_on_conflict_do_update_with_sql_raw_parameters() -> None:
     """Test ON CONFLICT DO UPDATE with sql.raw that has parameters."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .columns("id", "name")
         .values(1, "John")
         .on_conflict("id")
@@ -1267,7 +1273,8 @@ def test_on_conflict_convenience_method() -> None:
 def test_legacy_on_duplicate_key_update_method() -> None:
     """Test that the legacy on_duplicate_key_update method generates MySQL syntax."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .columns("id", "name")
         .values(1, "John")
         .on_duplicate_key_update(name="Updated", updated_at=sql.raw("NOW()"))
@@ -1316,7 +1323,8 @@ def test_on_conflict_with_multiple_rows() -> None:
 def test_on_conflict_chaining_with_returning() -> None:
     """Test ON CONFLICT chaining with RETURNING clause."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .columns("id", "name")
         .values(1, "John")
         .on_conflict("id")
@@ -1373,7 +1381,8 @@ def test_on_conflict_type_safety() -> None:
 def test_merge_when_matched_then_update_with_kwargs() -> None:
     """Test MERGE when_matched_then_update with kwargs support."""
     query = (
-        sql.merge("users")
+        sql
+        .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
         .when_matched_then_update(name="Updated John", email="updated@test.com")
@@ -1391,7 +1400,8 @@ def test_merge_when_matched_then_update_with_kwargs() -> None:
 def test_merge_when_matched_then_update_mixed_dict_kwargs() -> None:
     """Test MERGE when_matched_then_update with mixed dict and kwargs."""
     query = (
-        sql.merge("users")
+        sql
+        .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
         .when_matched_then_update({"name": "Dict Name"}, email="Kwargs Email", status="active")
@@ -1411,7 +1421,8 @@ def test_merge_when_matched_then_update_mixed_dict_kwargs() -> None:
 def test_merge_when_matched_then_update_with_sql_raw() -> None:
     """Test MERGE when_matched_then_update with sql.raw expressions."""
     query = (
-        sql.merge("users")
+        sql
+        .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
         .when_matched_then_update(
@@ -1435,7 +1446,8 @@ def test_merge_when_matched_then_update_with_sql_raw() -> None:
 def test_merge_when_not_matched_by_source_then_update_with_kwargs() -> None:
     """Test MERGE when_not_matched_by_source_then_update with kwargs support."""
     query = (
-        sql.merge("users")
+        sql
+        .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
         .when_not_matched_by_source_then_update(status="inactive", last_seen=sql.raw("NOW()"))
@@ -1452,7 +1464,8 @@ def test_merge_when_not_matched_by_source_then_update_with_kwargs() -> None:
 def test_merge_when_not_matched_by_source_then_update_mixed() -> None:
     """Test MERGE when_not_matched_by_source_then_update with mixed dict and kwargs."""
     query = (
-        sql.merge("users")
+        sql
+        .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
         .when_not_matched_by_source_then_update(
@@ -1484,7 +1497,8 @@ def test_merge_empty_update_values_error() -> None:
 def test_merge_backward_compatibility() -> None:
     """Test that MERGE methods maintain backward compatibility with dict-only usage."""
     query = (
-        sql.merge("users")
+        sql
+        .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
         .when_matched_then_update({"name": "Updated", "email": "updated@test.com"})
@@ -1503,7 +1517,8 @@ def test_merge_backward_compatibility() -> None:
 def test_merge_complete_example() -> None:
     """Test MERGE example with all features."""
     query = (
-        sql.merge("users")
+        sql
+        .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
         .when_matched_then_update(name="new_users.name", email="new_users.email", updated_at=sql.raw("NOW()"))
@@ -1755,7 +1770,8 @@ def test_for_update_with_sql_factory() -> None:
 def test_for_update_chaining_with_where() -> None:
     """Test for_update chaining with other operations."""
     query = (
-        sql.select("id", "status", dialect="postgres")
+        sql
+        .select("id", "status", dialect="postgres")
         .from_("job")
         .where_eq("user_id", 123)
         .for_update(skip_locked=True)
@@ -1779,7 +1795,8 @@ def test_for_share_with_sql_factory() -> None:
 def test_for_update_of_with_parameters() -> None:
     """Test FOR UPDATE OF with parameter binding."""
     query = (
-        sql.select("j.id", "u.name", dialect="postgres")
+        sql
+        .select("j.id", "u.name", dialect="postgres")
         .from_("job j")
         .join("users u ON j.user_id = u.id")
         .where_eq("j.status", "pending")

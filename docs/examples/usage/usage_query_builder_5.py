@@ -33,7 +33,8 @@ def test_example_5(tmp_path: Path) -> None:
 
         # LEFT JOIN
         query = (
-            sql.select("u.id", "u.name", "COUNT(o.id) as order_count")
+            sql
+            .select("u.id", "u.name", "COUNT(o.id) as order_count")
             .from_("users u")
             .left_join("orders o", "u.id = o.user_id")
             .group_by("u.id", "u.name")
@@ -42,7 +43,8 @@ def test_example_5(tmp_path: Path) -> None:
 
         # Multiple JOINs
         query = (
-            sql.select("u.name", "o.id", "p.name as product")
+            sql
+            .select("u.name", "o.id", "p.name as product")
             .from_("users u")
             .join("orders o", "u.id = o.user_id")
             .join("order_items oi", "o.id = oi.order_id")

@@ -2,7 +2,7 @@
 
 import contextlib
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 import oracledb
 from typing_extensions import NotRequired
@@ -103,11 +103,22 @@ class OracleDriverFeatures(TypedDict):
         Applies only to RAW(16) columns; other RAW sizes remain unchanged.
         Uses Python's stdlib uuid module (no external dependencies).
         Defaults to True for improved type safety and storage efficiency.
+    enable_events: Enable database event channel support.
+        Defaults to True when extension_config["events"] is configured.
+        Provides pub/sub capabilities via Oracle Advanced Queuing or table-backed fallback.
+        Requires extension_config["events"] for migration setup when using table_queue backend.
+    events_backend: Event channel backend selection.
+        Options: "advanced_queue", "table_queue"
+        - "advanced_queue": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
+        - "table_queue": Durable table-backed queue with retries and exactly-once delivery
+        Defaults to "table_queue" (works on all Oracle editions without special privileges).
     """
 
     enable_numpy_vectors: NotRequired[bool]
     enable_lowercase_column_names: NotRequired[bool]
     enable_uuid_binary: NotRequired[bool]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["advanced_queue", "table_queue"]]
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
@@ -159,6 +170,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
         processed_driver_features.setdefault("enable_lowercase_column_names", True)
         processed_driver_features.setdefault("enable_uuid_binary", True)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         super().__init__(
             connection_config=processed_connection_config,
@@ -338,6 +353,10 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
         processed_driver_features.setdefault("enable_lowercase_column_names", True)
         processed_driver_features.setdefault("enable_uuid_binary", True)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         super().__init__(
             connection_config=processed_connection_config,

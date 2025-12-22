@@ -27,6 +27,15 @@ This guide covers `asyncmy`.
 -   **`PyMySQL.err.OperationalError: (1366, ...)`**: Incorrect string value for a column. This is often due to character set issues. Ensure your connection and tables are using `utf8mb4`.
 -   **Authentication Errors:** MySQL 8.0 and later use a different default authentication plugin (`caching_sha2_password`). If you have trouble connecting, you may need to configure the user account to use the older `mysql_native_password` plugin, though this is less secure.
 
+## Event Channels
+
+- Asyncmy uses the queue-backed event channel with MySQL-specific hints:
+  `poll_interval` defaults to `0.25s`, leases default to `5s`, and the dequeuer
+  issues `SELECT ... FOR UPDATE SKIP LOCKED` to avoid duplicate deliveries.
+- Include the `events` extension migrations and call
+  `spec.event_channel(config)` to publish/consume events. Override
+  `extension_config["events"]` when you need different lease/poll windows.
+
 ## Query Stack Support
 
 The MySQL wire protocol doesn't offer a pipeline/batch mode like Oracle or PostgreSQL, so `StatementStack` executions use the base sequential implementation:

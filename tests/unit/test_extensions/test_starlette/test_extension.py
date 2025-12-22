@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("starlette")
 
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -57,9 +58,9 @@ def test_get_session_works_in_route() -> None:
 
     plugin_ref: SQLSpecPlugin | None = None
 
-    async def test_route(request):  # type: ignore[no-untyped-def]
+    async def test_route(request: Request) -> JSONResponse:  # type: ignore[no-untyped-def]
         assert plugin_ref is not None
-        db = plugin_ref.get_session(request)
+        db = plugin_ref.get_session(request)  # pyright: ignore
         result = await db.execute("SELECT 1 as value")
         return JSONResponse({"value": result.scalar()})
 

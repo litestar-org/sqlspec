@@ -51,6 +51,7 @@ Optimization guides for SQLSpec:
 Cloud platform integrations:
 
 - [**Google Connectors**](cloud/google-connectors.md) - Using Cloud SQL connectors with BigQuery and Spanner
+- [**Database Event Channels**](events/database-event-channels.md) - Queue fallback, migrations, and handler patterns
 
 ## Migrations
 

@@ -61,7 +61,8 @@ def test_upsert_postgres_builder_chain() -> None:
     assert isinstance(builder, Merge)
 
     query = (
-        builder.using([{"id": 1, "name": "Product 1"}], alias="src")
+        builder
+        .using([{"id": 1, "name": "Product 1"}], alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
         .when_not_matched_then_insert(id="src.id", name="src.name")

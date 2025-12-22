@@ -47,7 +47,8 @@ def test_example_7(tmp_path: Path) -> None:
 
         # Multiple aggregations
         query = (
-            sql.select(sql.column("created_at").as_("date"), "COUNT(*) as orders", "SUM(total) as revenue")
+            sql
+            .select(sql.column("created_at").as_("date"), "COUNT(*) as orders", "SUM(total) as revenue")
             .from_("orders")
             .group_by("date")
         )

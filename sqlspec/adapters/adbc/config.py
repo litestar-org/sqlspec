@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -11,6 +11,7 @@ from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHa
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_string
@@ -126,12 +127,22 @@ class AdbcDriverFeatures(TypedDict):
             When True, preserves Arrow extension type metadata when reading data.
             When False, falls back to storage types.
             Default: True
+        enable_events: Enable database event channel support.
+            Defaults to True when extension_config["events"] is configured.
+            Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
+            Requires extension_config["events"] for migration setup.
+        events_backend: Event channel backend selection.
+            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+            ADBC does not have native pub/sub, so table_queue is the only backend.
+            Defaults to "table_queue".
     """
 
     json_serializer: "NotRequired[Callable[[Any], str]]"
     enable_cast_detection: NotRequired[bool]
     strict_type_coercion: NotRequired[bool]
     arrow_extension_types: NotRequired[bool]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["table_queue"]]
 
 
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
@@ -193,6 +204,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         processed_driver_features.setdefault("enable_cast_detection", True)
         processed_driver_features.setdefault("strict_type_coercion", False)
         processed_driver_features.setdefault("arrow_extension_types", True)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         if json_serializer is not None:
             statement_config = _apply_json_serializer_to_statement_config(statement_config, json_serializer)
@@ -403,6 +418,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             "AdbcExceptionHandler": AdbcExceptionHandler,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults suitable for ADBC warehouses."""
+
+        return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
 
 
 def _apply_json_serializer_to_statement_config(

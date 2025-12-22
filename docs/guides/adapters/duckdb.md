@@ -289,6 +289,12 @@ ds.write_dataset(
 )
 ```
 
+## Event Channels
+
+- DuckDB adapters rely on the queue-backed event channel. Include the `events` extension migrations and instantiate `EventChannel` via `spec.event_channel(config)`.
+- The default poll interval is `0.15s` with `15s` leases—tuned to avoid busy looping inside the embedded engine. Override `extension_config["events"]["poll_interval"]` or `lease_seconds` when your workloads need different pacing.
+
+
 ## Common Issues
 
 - **`duckdb.IOException`**: Usually occurs when there are issues reading a file (e.g., a Parquet or CSV file). Check file paths and permissions.

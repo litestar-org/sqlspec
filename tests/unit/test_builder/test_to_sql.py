@@ -66,7 +66,8 @@ def test_to_sql_multiple_parameters() -> None:
 def test_to_sql_merge_builder() -> None:
     """Test to_sql() works with MERGE builder."""
     query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 1, "name": "Product 1"}, alias="src")
         .on("t.id = src.id")

@@ -5,6 +5,7 @@ from sync frameworks like Flask. Based on the portal pattern from Advanced Alche
 """
 
 import asyncio
+import atexit
 import functools
 import os
 import queue
@@ -112,6 +113,8 @@ class PortalProvider:
         """Stop the background thread and event loop.
 
         Gracefully shuts down the event loop and waits for thread to finish.
+        Only closes the loop after the thread has terminated to avoid
+        undefined behavior from closing a running loop.
         """
         if self._loop is None or self._loop_thread is None:
             logger.debug("Portal provider not running")
@@ -121,9 +124,10 @@ class PortalProvider:
         self._loop_thread.join(timeout=5)
 
         if self._loop_thread.is_alive():
-            logger.warning("Portal thread did not stop within 5 seconds")
+            logger.warning("Portal thread did not stop within 5 seconds, skipping loop.close()")
+        else:
+            self._loop.close()
 
-        self._loop.close()
         self._loop = None
         self._loop_thread = None
         self._ready_event.clear()
@@ -145,22 +149,25 @@ class PortalProvider:
         result: _R = await func(*args, **kwargs)
         return result
 
-    def call(self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, **kwargs: Any) -> _R:
+    def call(
+        self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, timeout: float = 300.0, **kwargs: Any
+    ) -> _R:
         """Call an async function from synchronous context.
 
         Executes the async function in the background event loop and blocks
-        until the result is available.
+        until the result is available or timeout is reached.
 
         Args:
             func: The async function to call.
             *args: Positional arguments to the function.
+            timeout: Maximum seconds to wait for result (default 300).
             **kwargs: Keyword arguments to the function.
 
         Returns:
             Result of the async function.
 
         Raises:
-            ImproperConfigurationError: If portal provider not started.
+            ImproperConfigurationError: If portal provider not started or timeout reached.
 
         """
         if self._loop is None or not self.is_running:
@@ -173,7 +180,11 @@ class PortalProvider:
 
         self._loop.call_soon_threadsafe(self._process_request)
 
-        result, exception = local_result_queue.get()
+        try:
+            result, exception = local_result_queue.get(timeout=timeout)
+        except queue.Empty:
+            msg = f"Portal call timed out after {timeout} seconds"
+            raise ImproperConfigurationError(msg) from None
 
         if exception:
             raise exception
@@ -222,19 +233,22 @@ class Portal:
         """
         self._provider = provider
 
-    def call(self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, **kwargs: Any) -> _R:
+    def call(
+        self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, timeout: float = 300.0, **kwargs: Any
+    ) -> _R:
         """Call an async function using the portal provider.
 
         Args:
             func: The async function to call.
             *args: Positional arguments to the function.
+            timeout: Maximum seconds to wait for result (default 300).
             **kwargs: Keyword arguments to the function.
 
         Returns:
             Result of the async function.
 
         """
-        return self._provider.call(func, *args, **kwargs)
+        return self._provider.call(func, *args, timeout=timeout, **kwargs)
 
 
 class PortalManager(metaclass=SingletonMeta):
@@ -257,12 +271,13 @@ class PortalManager(metaclass=SingletonMeta):
         self._portal: Portal | None = None
         self._lock = threading.Lock()
         self._pid: int | None = None
+        self._atexit_registered: bool = False
 
     def get_or_create_portal(self) -> Portal:
         """Get or create the global portal instance.
 
         Lazily creates and starts the portal provider on first access.
-        Thread-safe via locking.
+        Thread-safe via locking. Registers an atexit handler for cleanup.
 
         Returns:
             Global portal instance.
@@ -278,9 +293,30 @@ class PortalManager(metaclass=SingletonMeta):
                     self._provider.start()
                     self._portal = Portal(self._provider)
                     self._pid = current_pid
+                    self._register_atexit()
                     logger.debug("Global portal provider created and started")
 
         return cast("Portal", self._portal)
+
+    def _register_atexit(self) -> None:
+        """Register atexit handler for graceful shutdown.
+
+        Only registers once per process to avoid duplicate cleanup.
+        """
+        if not self._atexit_registered:
+            atexit.register(self._atexit_cleanup)
+            self._atexit_registered = True
+            logger.debug("Portal atexit handler registered")
+
+    def _atexit_cleanup(self) -> None:
+        """Cleanup handler called at interpreter shutdown.
+
+        Gracefully stops the portal provider to ensure pending
+        async operations complete before the process exits.
+        """
+        if self._provider is not None and self._provider.is_running:
+            logger.debug("Portal atexit cleanup: stopping provider")
+            self.stop()
 
     @property
     def is_running(self) -> bool:

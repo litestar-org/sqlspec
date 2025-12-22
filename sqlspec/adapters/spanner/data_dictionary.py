@@ -15,6 +15,18 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
     """Fetch table, column, and index metadata from Spanner."""
 
     def get_version(self, driver: "SyncDriverAdapterBase") -> "VersionInfo | None":
+        """Get Spanner version information.
+
+        Spanner is a fully managed cloud service that doesn't expose
+        traditional version information. Feature availability is determined
+        by the service itself, not version numbers.
+
+        Args:
+            driver: Spanner driver instance
+
+        Returns:
+            None - Spanner doesn't provide version information.
+        """
         _ = driver
         return None
 

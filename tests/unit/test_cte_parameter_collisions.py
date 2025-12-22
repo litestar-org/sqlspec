@@ -51,7 +51,8 @@ def test_cte_parameter_uniqueness_with_same_column_names() -> None:
     cte3 = sql.select("id", "name").from_("categories").where_eq("name", "Electronics")
 
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .with_cte("active_users", cte1)
         .with_cte("popular_products", cte2)
         .with_cte("main_category", cte3)
@@ -100,7 +101,8 @@ def test_nested_cte_parameter_handling() -> None:
     inner_cte = sql.select("user_id").from_("sessions").where_between("created_at", "2023-01-01", "2023-12-31")
 
     outer_cte = (
-        sql.select("user_id", "COUNT(*) as visit_count")
+        sql
+        .select("user_id", "COUNT(*) as visit_count")
         .from_("visits")
         .where_in("user_id", inner_cte)
         .where_gt("duration", 300)
@@ -127,7 +129,8 @@ def test_cte_with_multiple_where_conditions() -> None:
     """Test CTE parameter collision with multiple WHERE conditions."""
     # Create CTEs with multiple conditions on same column names
     cte1 = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("orders")
         .where_eq("status", "pending")
         .where_gt("amount", 100)
@@ -135,7 +138,8 @@ def test_cte_with_multiple_where_conditions() -> None:
     )
 
     cte2 = (
-        sql.select("*")
+        sql
+        .select("*")
         .from_("invoices")
         .where_eq("status", "paid")
         .where_lt("amount", 50)
@@ -166,7 +170,8 @@ def test_cte_parameter_collision_with_main_query_params() -> None:
     cte = sql.select("id").from_("products").where_eq("category", "electronics")
 
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .with_cte("electronics", cte)
         .from_("orders")
         .where_eq("category", "books")  # Same parameter name as CTE
@@ -209,7 +214,8 @@ def test_multiple_cte_levels_parameter_isolation() -> None:
 
     # Level 2 CTE that references Level 1
     level2 = (
-        sql.select("user_id", "COUNT(*) as login_count")
+        sql
+        .select("user_id", "COUNT(*) as login_count")
         .from_("daily_stats")
         .where_in("user_id", level1)
         .where_eq("type", "summary")
@@ -217,7 +223,8 @@ def test_multiple_cte_levels_parameter_isolation() -> None:
 
     # Main query
     query = (
-        sql.select("*")
+        sql
+        .select("*")
         .with_cte("login_events", level1)
         .with_cte("login_summary", level2)
         .from_("reports")

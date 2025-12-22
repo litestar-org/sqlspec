@@ -680,7 +680,8 @@ async def test_for_update_skip_locked(postgres_service: PostgresService) -> None
 
                     result = await asyncio.wait_for(
                         session1.select_one_or_none(
-                            sql.select("*")
+                            sql
+                            .select("*")
                             .from_("test_lock_table")
                             .where_eq("name", "nonexistent")
                             .for_update(skip_locked=True)
@@ -706,7 +707,8 @@ async def test_for_update_skip_locked(postgres_service: PostgresService) -> None
                     try:
                         await asyncio.wait_for(
                             session2.select_one(
-                                sql.select("*")
+                                sql
+                                .select("*")
                                 .from_("test_lock_table")
                                 .where_eq("name", "lock_test")
                                 .for_update(nowait=True)
@@ -804,7 +806,8 @@ async def test_for_update_of_tables(asyncpg_session: AsyncpgDriver) -> None:
 
         # Test FOR UPDATE OF specific table in join
         result = await asyncpg_session.select_one(
-            sql.select("t.id", "t.name", "u.name")
+            sql
+            .select("t.id", "t.name", "u.name")
             .from_("test_table t")
             .join("test_users u", "t.id = u.id")
             .where_eq("t.name", "join_test")

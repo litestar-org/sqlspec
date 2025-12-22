@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
@@ -16,6 +16,7 @@ from sqlspec.adapters.psqlpy.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import StatementConfig
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import to_json
@@ -86,11 +87,23 @@ class PsqlpyDriverFeatures(TypedDict):
         Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
     json_serializer: Custom JSON serializer applied to the statement configuration.
     json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
+    enable_events: Enable database event channel support.
+        Defaults to True when extension_config["events"] is configured.
+        Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
+        Requires extension_config["events"] for migration setup when using table_queue backend.
+    events_backend: Event channel backend selection.
+        Options: "listen_notify", "table_queue", "listen_notify_durable"
+        - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time) - coming soon
+        - "table_queue": Durable table-backed queue with retries and exactly-once delivery (current default)
+        - "listen_notify_durable": Hybrid - real-time + durable (available when native support lands)
+        Defaults to "table_queue" until native LISTEN/NOTIFY support is implemented.
     """
 
     enable_pgvector: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["listen_notify", "table_queue", "listen_notify_durable"]]
 
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
@@ -142,6 +155,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         serializer_callable = to_json if serializer is None else cast("Callable[[Any], str]", serializer)
         processed_driver_features.setdefault("json_serializer", serializer_callable)
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "listen_notify")
 
         super().__init__(
             connection_config=processed_connection_config,
@@ -254,3 +271,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             "PsqlpyPoolParams": PsqlpyPoolParams,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return LISTEN/NOTIFY defaults for Psqlpy adapters."""
+
+        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True, json_passthrough=True)

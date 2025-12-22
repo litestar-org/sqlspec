@@ -26,7 +26,8 @@ def test_example_10(tmp_path: Path) -> None:
         # start-example
         # Multiple value sets
         query = (
-            sql.insert("users")
+            sql
+            .insert("users")
             .columns("name", "email")
             .values("Alice", "alice@example.com")
             .values("Bob", "bob@example.com")

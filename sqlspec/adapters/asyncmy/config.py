@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 import asyncmy
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
@@ -18,6 +18,7 @@ from sqlspec.adapters.asyncmy.driver import (
     build_asyncmy_statement_config,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -77,10 +78,20 @@ class AsyncmyDriverFeatures(TypedDict):
     json_deserializer: Custom JSON deserializer function.
         Defaults to sqlspec.utils.serializers.from_json.
         Use for performance (orjson) or custom decoding.
+    enable_events: Enable database event channel support.
+        Defaults to True when extension_config["events"] is configured.
+        Provides pub/sub capabilities via table-backed queue (MySQL/MariaDB have no native pub/sub).
+        Requires extension_config["events"] for migration setup.
+    events_backend: Event channel backend selection.
+        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+        MySQL/MariaDB do not have native pub/sub, so table_queue is the only backend.
+        Defaults to "table_queue".
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["table_queue"]]
 
 
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):  # pyright: ignore
@@ -132,6 +143,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = processed_driver_features.setdefault("json_serializer", to_json)
         deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         base_statement_config = statement_config or build_asyncmy_statement_config(
             json_serializer=serializer, json_deserializer=deserializer
@@ -246,3 +261,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             "AsyncmyPoolParams": AsyncmyPoolParams,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return queue polling defaults for Asyncmy adapters."""
+
+        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)

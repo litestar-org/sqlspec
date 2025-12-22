@@ -2,7 +2,7 @@
 
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -48,11 +48,21 @@ class SqliteDriverFeatures(TypedDict):
         Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
         Defaults to sqlspec.utils.serializers.from_json.
+    enable_events: Enable database event channel support.
+        Defaults to True when extension_config["events"] is configured.
+        Provides pub/sub capabilities via table-backed queue (SQLite has no native pub/sub).
+        Requires extension_config["events"] for migration setup.
+    events_backend: Event channel backend selection.
+        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+        SQLite does not have native pub/sub, so table_queue is the only backend.
+        Defaults to "table_queue".
     """
 
     enable_custom_adapters: NotRequired[bool]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["table_queue"]]
 
 
 __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
@@ -113,6 +123,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         processed_driver_features.setdefault("enable_custom_adapters", True)
         json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
         json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         base_statement_config = statement_config or sqlite_statement_config
         if json_serializer is not None:

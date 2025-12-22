@@ -252,6 +252,19 @@ For comprehensive examples and migration guides, see:
 - [MERGE Statement Builder Guide](/guides/builder/merge.md)
 - [Unified Upsert API Guide](/guides/upsert.md)
 
+## Event Channels
+
+- Psqlpy enables native LISTEN/NOTIFY by default
+  (`driver_features["events_backend"] = "listen_notify"`). Call
+  `spec.event_channel(config)` to publish or consume without migrations.
+- Native listeners use the `Listener` API and a dedicated connection so the
+  shared pool remains available for normal queries.
+- For durability and retries, set `driver_features["events_backend"] =
+  "listen_notify_durable"` and include the `events` extension migrations.
+- The queue-only fallback remains available by setting
+  `driver_features["events_backend"] = "table_queue"` alongside the
+  `events` migrations.
+
 ## Best Practices
 
 -   **Rust-Based:** `psqlpy` is a modern, Rust-based driver for PostgreSQL, which can offer significant performance advantages.

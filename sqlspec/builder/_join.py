@@ -218,7 +218,8 @@ class JoinClauseMixin:
         Example:
             ```python
             query = (
-                sql.select("u.name", "arr.value")
+                sql
+                .select("u.name", "arr.value")
                 .from_("users u")
                 .lateral_join("UNNEST(u.tags)", alias="arr")
             )
@@ -272,7 +273,8 @@ class JoinBuilder:
 
         # Or with query builder
         query = (
-            sql.select("users.name", "posts.title")
+            sql
+            .select("users.name", "posts.title")
             .from_("users")
             .join(
                 sql.left_join_("posts").on(

@@ -58,7 +58,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             SQL builder object for table creation.
         """
         return (
-            sql.create_table(self.version_table)
+            sql
+            .create_table(self.version_table)
             .if_not_exists()
             .column("version_num", "VARCHAR(32)", primary_key=True)
             .column("version_type", "VARCHAR(16)")
@@ -125,7 +126,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             SQL builder object for insert.
         """
         return (
-            sql.insert(self.version_table)
+            sql
+            .insert(self.version_table)
             .columns(
                 "version_num",
                 "version_type",
@@ -165,7 +167,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             SQL builder object for update.
         """
         return (
-            sql.update(self.version_table)
+            sql
+            .update(self.version_table)
             .set("version_num", new_version)
             .set("version_type", new_version_type)
             .where(sql.version_num == old_version)

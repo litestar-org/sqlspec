@@ -39,68 +39,235 @@ uv run pre-commit run --all-files  # Pre-commit hooks
 
 ### Development Infrastructure
 
-```bash
-make infra-up                   # Start all dev databases (Docker)
-make infra-down                 # Stop databases
-make infra-postgres             # Start only PostgreSQL
-make infra-oracle               # Start only Oracle
-make infra-mysql                # Start only MySQL
-```
-
-### Documentation
-
-```bash
-make docs                       # Build Sphinx documentation
-```
+- **Start development databases**: `make infra-up` or `./tools/local-infra.sh up`
+- **Stop development databases**: `make infra-down` or `./tools/local-infra.sh down`
+- **Start specific database**: `make infra-postgres`, `make infra-oracle`, or `make infra-mysql`
 
 ## High-Level Architecture
 
+SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between Python and SQL. It is NOT an ORM but rather a flexible connectivity layer that provides consistent interfaces across multiple database systems.
+
 ### Core Components
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| SQLSpec Base | `sqlspec/base.py` | Registry, config management, session context managers |
-| Adapters | `sqlspec/adapters/` | Database-specific implementations (asyncpg, psycopg, duckdb, etc.) |
-| Driver System | `sqlspec/driver/` | Base classes for sync/async drivers with transaction support |
-| Core Processing | `sqlspec/core/` | Statement parsing, parameter conversion, result handling, caching |
-| SQL Builder | `sqlspec/builder/` | Fluent API for programmatic query construction |
-| Storage | `sqlspec/storage/` | Data import/export with fsspec and obstore backends |
-| Extensions | `sqlspec/extensions/` | Framework integrations (Litestar, Starlette, FastAPI, Flask) |
-| Migrations | `sqlspec/migrations/` | Database migration tools and CLI |
+1. **SQLSpec Base (`sqlspec/base.py`)**: The main registry and configuration manager. Handles database configuration registration, connection pooling lifecycle, and provides context managers for sessions.
 
-### Adapters Structure
+2. **Adapters (`sqlspec/adapters/`)**: Database-specific implementations. Each adapter consists of:
+   - `config.py`: Configuration classes specific to the database
+   - `driver.py`: Driver implementation (sync/async) that executes queries
+   - `_types.py`: Type definitions specific to the adapter or other uncompilable mypyc objects
+   - Supported adapters: `adbc`, `aiosqlite`, `asyncmy`, `asyncpg`, `bigquery`, `duckdb`, `oracledb`, `psqlpy`, `psycopg`, `sqlite`
 
-Each adapter in `sqlspec/adapters/` follows this structure:
+3. **Driver System (`sqlspec/driver/`)**: Base classes and mixins for all database drivers:
+   - `_async.py`: Async driver base class with transaction support
+   - `_sync.py`: Sync driver base class with transaction support
+   - `_common.py`: Shared functionality and result handling
+   - `mixins/`: Additional capabilities like result processing and SQL translation
 
-- `config.py` - Configuration classes with pool settings
-- `driver.py` - Query execution implementation (sync/async)
-- `_types.py` - Adapter-specific type definitions
-- Optional: `_*_handlers.py` - Type handlers for optional features (numpy, pgvector)
+4. **Core Query Processing (`sqlspec/core/`)**:
+   - `statement.py`: SQL statement wrapper with metadata
+   - `parameters.py`: Parameter style conversion (e.g., `?` to `$1` for Postgres)
+   - `result.py`: Result set handling with type mapping support
+   - `cache.py`: Statement caching for performance
+   - `compiler.py`: SQL compilation and validation using sqlglot
 
-Supported adapters: adbc, aiosqlite, asyncmy, asyncpg, bigquery, duckdb, oracledb, psqlpy, psycopg, spanner, sqlite
+5. **SQL Builder (`sqlspec/builder/`)**: Experimental fluent API for building SQL queries programmatically. Uses method chaining and mixins for different SQL operations (SELECT, INSERT, UPDATE, DELETE, etc.).
+
+6. **SQL Factory (`sqlspec/_sql.py`)**: SQL Factory that combines raw SQL parsing with the SQL builder components.
+
+7. **Storage (`sqlspec/storage/`)**: Unified interface for data import/export operations with backends for fsspec and obstore.
+
+8. **Extensions (`sqlspec/extensions/`)**: Framework integrations:
+   - `litestar/`: Litestar web framework integration with dependency injection
+   - `aiosql/`: Integration with aiosql for SQL file loading
+
+9. **Loader (`sqlspec/loader.py`)**: SQL file loading system that parses `.sql` files and creates callable query objects with type hints.
+
+10. **Database Migrations (`sqlspec/migrations/`)**: A set of tools and CLI commands to enable database migrations generations.  Offers SQL and Python templates and up/down methods to apply.  It also uses the builder API to create a version tracking table to track applied revisions in the database.
 
 ### Key Design Patterns
 
-- **Protocol-Based Design**: All protocols in `sqlspec/protocols.py`, type guards in `sqlspec/utils/type_guards.py`
-- **Configuration-Driver Separation**: Config holds connection details, Driver executes queries
-- **Context Manager Pattern**: All sessions use context managers for resource cleanup
-- **Parameter Style Abstraction**: Automatic conversion between ?, :name, $1, %s styles
+- **Protocol-Based Design**: Uses Python protocols (`sqlspec/protocols.py`) for runtime type checking instead of inheritance
+    - ALL protocols in `sqlspec.protocols.py`
+    - ALL type guards in `sqlspec.utils.type_guards.py`
+- **Configuration-Driver Separation**: Each adapter has a config class (connection details) and driver class (execution logic)
+- **Context Manager Pattern**: All database sessions use context managers for proper resource cleanup
+- **Parameter Style Abstraction**: Automatically converts between different parameter styles (?, :name, $1, %s)
+- **Type Safety**: Supports mapping results to Pydantic, msgspec, attrs, and other typed models
+- **Single-Pass Processing**: Parse once → transform once → validate once - SQL object is single source of truth
+- **Abstract Methods with Concrete Implementations**: Protocol defines abstract methods, base classes provide concrete sync/async implementations
+
+### Query Stack Implementation Guidelines
+
+- **Builder Discipline**
+    - `StatementStack` and `StackOperation` are immutable (`__slots__`, tuple storage). Every push helper returns a new stack; never mutate `_operations` in place.
+    - Validate inputs at push time (non-empty SQL, execute_many payloads, reject nested stacks) so drivers can assume well-formed operations.
+- **Adapter Responsibilities**
+    - Add a single capability gate per adapter (e.g., Oracle pipeline version check, `psycopg.capabilities.has_pipeline()`), return `super().execute_stack()` immediately when unsupported.
+    - Preserve `StackResult.result` by building SQL/Arrow results via `create_sql_result()` / `create_arrow_result()` instead of copying row data.
+    - Honor manual toggles via `driver_features={"stack_native_disabled": True}` and document the behavior in the adapter guide.
+- **Telemetry + Tracing**
+    - Always wrap adapter overrides with `StackExecutionObserver(self, stack, continue_on_error, native_pipeline=bool)`.
+    - Do **not** emit duplicate metrics; the observer already increments `stack.execute.*`, logs `stack.execute.start/complete/failed`, and publishes the `sqlspec.stack.execute` span.
+- **Error Handling**
+    - Wrap driver exceptions in `StackExecutionError` with `operation_index`, summarized SQL (`describe_stack_statement()`), adapter name, and execution mode.
+    - Continue-on-error stacks append `StackResult.from_error()` and keep executing. Fail-fast stacks roll back (if they started the transaction) before re-raising the wrapped error.
+- **Testing Expectations**
+    - Add integration tests under `tests/integration/test_adapters/<adapter>/test_driver.py::test_*statement_stack*` that cover native path, sequential fallback, and continue-on-error.
+    - Guard base behavior (empty stacks, large stacks, transaction boundaries) via `tests/integration/test_stack_edge_cases.py`.
+
+### Driver Parameter Profile Registry
+
+- All adapter parameter defaults live in `DriverParameterProfile` entries inside `sqlspec/core/parameters.py`.
+- Use lowercase adapter keys (e.g., `"asyncpg"`, `"duckdb"`) and populate every required field: default style, supported styles, execution style, native list expansion flags, JSON strategy, and optional extras.
+- JSON behaviour is controlled through `json_serializer_strategy`:
+    - `"helper"`: call `ParameterStyleConfig.with_json_serializers()` (dict/list/tuple auto-encode)
+    - `"driver"`: defer to driver codecs while surfacing serializer references for later registration
+    - `"none"`: skip JSON helpers entirely (reserve for adapters that must not touch JSON)
+- Extras should encapsulate adapter-specific tweaks (e.g., `type_coercion_overrides`, `json_tuple_strategy`). Document new extras inline and keep them immutable.
+- Always build `StatementConfig` via `build_statement_config_from_profile()` and pass adapter-specific overrides through the helper instead of instantiating configs manually in drivers.
+- When introducing a new adapter, add its profile, update relevant guides, and extend unit coverage so each JSON strategy path is exercised.
+- Record the canonical adapter key, JSON strategy, and extras in the corresponding adapter guide so contributors can verify behaviour without reading the registry source.
+
+### Protocol Abstract Methods Pattern
+
+When adding methods that need to support both sync and async configurations, use this pattern:
+
+**Step 1: Define abstract method in protocol**
+
+```python
+from abc import abstractmethod
+from typing import Awaitable
+
+class DatabaseConfigProtocol(Protocol):
+    is_async: ClassVar[bool]  # Set by base classes
+
+    @abstractmethod
+    def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> "Awaitable[None] | None":
+        """Apply database migrations up to specified revision.
+
+        Args:
+            revision: Target revision or "head" for latest.
+            allow_missing: Allow out-of-order migrations.
+            auto_sync: Auto-reconcile renamed migrations.
+            dry_run: Show what would be done without applying.
+        """
+        raise NotImplementedError
+```
+
+**Step 2: Implement in sync base class (no async/await)**
+
+```python
+class NoPoolSyncConfig(DatabaseConfigProtocol):
+    is_async: ClassVar[bool] = False
+
+    def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = self._ensure_migration_commands()
+        commands.upgrade(revision, allow_missing, auto_sync, dry_run)
+```
+
+**Step 3: Implement in async base class (with async/await)**
+
+```python
+class NoPoolAsyncConfig(DatabaseConfigProtocol):
+    is_async: ClassVar[bool] = True
+
+    async def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        await commands.upgrade(revision, allow_missing, auto_sync, dry_run)
+```
+
+**Key principles:**
+
+- Protocol defines the interface with union return type (`Awaitable[T] | T`)
+- Sync base classes implement without `async def` or `await`
+- Async base classes implement with `async def` and `await`
+- Each base class has concrete implementation - no need for child classes to override
+- Use `cast()` to narrow types when delegating to command objects
+- All 4 base classes (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig) implement the same way
+
+**Benefits:**
+
+- Single source of truth (protocol) for API contract
+- Each base class provides complete implementation
+- Child adapter classes (AsyncpgConfig, SqliteConfig, etc.) inherit working methods automatically
+- Type checkers understand sync vs async based on `is_async` class variable
+- No code duplication across adapters
+
+**When to use:**
+
+- Adding convenience methods that delegate to external command objects
+- Methods that need identical behavior across all adapters
+- Operations that differ only in sync vs async execution
+- Any protocol method where behavior is determined by sync/async mode
+
+**Anti-patterns to avoid:**
+
+- Don't use runtime `if self.is_async:` checks in a single implementation
+- Don't make protocol methods concrete (always use `@abstractmethod`)
+- Don't duplicate logic across the 4 base classes
+- Don't forget to update all 4 base classes when adding new methods
 
 ### Database Connection Flow
 
 ```python
-# 1. Create SQLSpec manager
-manager = SQLSpec()
+import tempfile
 
-# 2. Create and register configuration (returns same instance)
-config = manager.add_config(AsyncpgConfig(connection_config={"dsn": "postgresql://..."}))
+def test_starlette_autocommit_mode() -> None:
+    """Test autocommit mode automatically commits on success."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(
+            pool_config={"database": tmp.name},
+            extension_config={"starlette": {"commit_mode": "autocommit"}}
+        )
+        sql.add_config(config)
+        db_ext = SQLSpecPlugin(sql, app)
 
-# 3. Get session via context manager (using config instance)
-async with manager.provide_session(config) as session:
-    result = await session.execute("SELECT * FROM users")
+        # Test logic here - each test gets isolated database
 ```
 
-## Code Quality Standards (MANDATORY)
+**Why this works**:
+
+- Each test creates a unique temporary file
+- No database state shared between tests
+- Tests can run in parallel safely with `pytest -n 2 --dist=loadgroup`
+- Files automatically deleted on test completion
+
+**When to use**:
+
+- Framework extension tests (Starlette, FastAPI, Flask, etc.)
+- Any test using connection pooling with SQLite
+- Integration tests that run in parallel
+
+**Alternatives NOT recommended**:
+
+- `CREATE TABLE IF NOT EXISTS` - Masks test isolation issues
+- Disabling pooling - Tests don't reflect production configuration
+- Running tests serially - Slows down CI significantly
+
+### CLI Config Loader Isolation Pattern
+
+- When exercising CLI migration commands, generate a unique module namespace for each test (for example `cli_test_config_<uuid>`).
+- Place temporary config modules inside `tmp_path` and register them via `sys.modules` within the test, then delete them during teardown to prevent bleed-through.
+- Always patch `Path.cwd()` or provide explicit path arguments so helper functions resolve the test-local module rather than cached global fixtures.
+- Add regression tests ensuring the helper cleaning logic runs even if CLI commands raise exceptions to avoid polluting later suites.
+
+### Performance Optimizations
+
+- **Mypyc Compilation**: Core modules can be compiled with mypyc for performance
+- **Statement Caching**: Parsed SQL statements are cached to avoid re-parsing
+- **Connection Pooling**: Built-in support for connection pooling in async drivers
+- **Arrow Integration**: Direct export to Arrow format for efficient data handling
+
+## **MANDATORY** Code Quality Standards (TOP PRIORITY)
 
 ### Type Annotations
 
@@ -154,6 +321,7 @@ For detailed implementation patterns, consult these guides:
 | Parameter Profiles | `docs/guides/adapters/parameter-profile-registry.md` |
 | Adapter Guides | `docs/guides/adapters/{adapter}.md` |
 | Framework Extensions | `docs/guides/extensions/{framework}.md` |
+| Database Events | `docs/guides/events/database-event-channels.md` |
 | Quick Reference | `docs/guides/quick-reference/quick-reference.md` |
 | Code Standards | `docs/guides/development/code-standards.md` |
 | Implementation Patterns | `docs/guides/development/implementation-patterns.md` |
@@ -689,6 +857,70 @@ if async_configs:
 - Use `cast()` in async contexts for type safety with migration commands
 
 **Reference implementation:** `sqlspec/cli.py` (lines 218-255, 311-724)
+
+### Events Extension Pattern
+
+The events extension provides database-agnostic pub/sub via two layers:
+
+**Backends** handle communication (LISTEN/NOTIFY, Oracle AQ, table polling):
+
+```python
+# Backend selection via driver_features
+class AdapterDriverFeatures(TypedDict):
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["listen_notify", "listen_notify_durable", "table_queue", "advanced_queue"]]
+
+# Auto-detection in config __init__
+if "enable_events" not in driver_features:
+    driver_features["enable_events"] = extension_config.get("events") is not None
+if "events_backend" not in driver_features:
+    driver_features["events_backend"] = "listen_notify"  # or adapter-specific default
+```
+
+**Stores** generate adapter-specific DDL for the queue table:
+
+```python
+# In sqlspec/adapters/{adapter}/events/store.py
+class AdapterEventQueueStore(BaseEventQueueStore[AdapterConfig]):
+    __slots__ = ()
+
+    def _column_types(self) -> tuple[str, str, str]:
+        # Return (payload_type, metadata_type, timestamp_type)
+        return "JSONB", "JSONB", "TIMESTAMPTZ"  # PostgreSQL
+
+    def _build_create_table_sql(self) -> str:
+        # Override for database-specific DDL syntax
+        return super()._build_create_table_sql()
+
+    def _wrap_create_statement(self, statement: str, object_type: str) -> str:
+        # Wrap with IF NOT EXISTS, PL/SQL blocks, etc.
+        return statement.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+```
+
+**Backend factory pattern** for native backends:
+
+```python
+# In sqlspec/adapters/{adapter}/events/backend.py
+def create_event_backend(
+    config: "AdapterConfig", backend_name: str, extension_settings: dict[str, Any]
+) -> AdapterEventsBackend | None:
+    if backend_name == "listen_notify":
+        return AdapterEventsBackend(config)
+    if backend_name == "listen_notify_durable":
+        queue = TableEventQueue(config, **extension_settings)
+        return AdapterHybridEventsBackend(config, QueueEventBackend(queue))
+    return None  # Falls back to table_queue
+```
+
+**Key principles:**
+
+- Backends implement `publish_async`, `dequeue_async`, `ack_async` (and sync variants)
+- Stores inherit from `BaseEventQueueStore` and override `_column_types()`
+- Use `driver_features` for backend selection, `extension_config["events"]` for settings
+- Always support `table_queue` fallback for databases without native pub/sub
+- Separate DDL execution for databases without transactional DDL (Spanner, BigQuery)
+
+**Reference implementation:** `sqlspec/extensions/events/`, `sqlspec/adapters/*/events/`
 
 ## Collaboration Guidelines
 

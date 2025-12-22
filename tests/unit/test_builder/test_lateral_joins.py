@@ -119,7 +119,8 @@ def test_join_builder_cross_lateral() -> None:
 def test_multiple_lateral_joins() -> None:
     """Test multiple LATERAL joins in sequence."""
     query = (
-        sql.select("u.name", "tags.tag", "stats.value")
+        sql
+        .select("u.name", "tags.tag", "stats.value")
         .from_("users u")
         .lateral_join("UNNEST(u.tags)", alias="tags")
         .left_lateral_join("generate_series(1, u.count)", alias="stats")

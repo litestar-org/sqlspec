@@ -53,7 +53,8 @@ def test_upsert_preserves_table_name() -> None:
     assert isinstance(builder, Merge)
 
     query = (
-        builder.using({"id": 1, "name": "Test"}, alias="src")
+        builder
+        .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
         .when_not_matched_then_insert(id="src.id", name="src.name")
@@ -81,7 +82,8 @@ def test_upsert_merge_supports_all_when_clauses() -> None:
     assert isinstance(builder, Merge)
 
     query = (
-        builder.using({"id": 1, "name": "Test"}, alias="src")
+        builder
+        .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
         .when_not_matched_then_insert(id="src.id", name="src.name")
@@ -141,7 +143,8 @@ def test_upsert_with_complex_table_name() -> None:
     assert isinstance(builder, Merge)
 
     query = (
-        builder.using({"id": 1, "name": "Test"}, alias="src")
+        builder
+        .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
         .when_not_matched_then_insert(id="src.id", name="src.name")
@@ -183,7 +186,8 @@ def test_upsert_with_quoted_table_name() -> None:
     assert isinstance(builder, Merge)
 
     query = (
-        builder.using({"id": 1, "name": "Test"}, alias="src")
+        builder
+        .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
         .when_not_matched_then_insert(id="src.id", name="src.name")

@@ -44,7 +44,8 @@ def test_merge_property_supports_full_chain() -> None:
     """Test sql.merge_ property supports full method chain."""
     factory = sql.__class__(dialect="postgres")
     query = (
-        factory.merge_.into("products", alias="t")
+        factory.merge_
+        .into("products", alias="t")
         .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
@@ -64,14 +65,16 @@ def test_merge_property_multiple_accesses_independent() -> None:
     assert builder1 is not builder2
 
     query1 = (
-        builder1.using({"id": 1}, alias="src")
+        builder1
+        .using({"id": 1}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
         .when_not_matched_then_insert(id="src.id")
     )
 
     query2 = (
-        builder2.using({"id": 2}, alias="src")
+        builder2
+        .using({"id": 2}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(price="src.price")
         .when_not_matched_then_insert(id="src.id")
@@ -90,7 +93,8 @@ def test_merge_property_backward_compatible() -> None:
     assert isinstance(builder, Merge)
 
     query = (
-        builder.into("products", alias="t")
+        builder
+        .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
@@ -107,7 +111,8 @@ def test_merge_property_with_bulk_data() -> None:
     bulk_data = [{"id": i, "name": f"Product {i}"} for i in range(10)]
 
     query = (
-        factory.merge_.into("products", alias="t")
+        factory.merge_
+        .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
@@ -122,7 +127,8 @@ def test_merge_property_with_all_when_clauses() -> None:
     """Test sql.merge_ property supports all WHEN clause types."""
     factory = sql.__class__(dialect="postgres")
     query = (
-        factory.merge_.into("products", alias="t")
+        factory.merge_
+        .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")
@@ -162,7 +168,8 @@ def test_merge_property_to_sql_works() -> None:
     """Test sql.merge_ property result works with to_sql()."""
     factory = sql.__class__(dialect="postgres")
     query = (
-        factory.merge_.into("products", alias="t")
+        factory.merge_
+        .into("products", alias="t")
         .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name")

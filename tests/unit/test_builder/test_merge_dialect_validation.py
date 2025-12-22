@@ -49,7 +49,8 @@ def test_merge_sqlite_error_suggests_on_conflict() -> None:
 def test_merge_postgres_passes_validation() -> None:
     """Test MERGE with PostgreSQL dialect passes validation."""
     query = (
-        sql.merge(dialect="postgres")
+        sql
+        .merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
@@ -64,7 +65,8 @@ def test_merge_postgres_passes_validation() -> None:
 def test_merge_oracle_passes_validation() -> None:
     """Test MERGE with Oracle dialect passes validation."""
     query = (
-        sql.merge(dialect="oracle")
+        sql
+        .merge(dialect="oracle")
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
@@ -79,7 +81,8 @@ def test_merge_oracle_passes_validation() -> None:
 def test_merge_bigquery_passes_validation() -> None:
     """Test MERGE with BigQuery dialect passes validation."""
     query = (
-        sql.merge(dialect="bigquery")
+        sql
+        .merge(dialect="bigquery")
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
@@ -94,7 +97,8 @@ def test_merge_bigquery_passes_validation() -> None:
 def test_merge_tsql_passes_validation() -> None:
     """Test MERGE with T-SQL/SQL Server dialect passes validation."""
     query = (
-        sql.merge(dialect="tsql")
+        sql
+        .merge(dialect="tsql")
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
@@ -109,7 +113,8 @@ def test_merge_tsql_passes_validation() -> None:
 def test_merge_teradata_passes_validation() -> None:
     """Test MERGE with Teradata dialect passes validation."""
     query = (
-        sql.merge(dialect="teradata")
+        sql
+        .merge(dialect="teradata")
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
@@ -150,7 +155,8 @@ def test_merge_validation_happens_at_build_time() -> None:
 def test_merge_unsupported_dialect_with_full_query() -> None:
     """Test MERGE raises error even with complete query for unsupported dialect."""
     query = (
-        sql.merge(dialect="sqlite")
+        sql
+        .merge(dialect="sqlite")
         .into("products", alias="t")
         .using({"id": 1, "name": "Product 1"}, alias="src")
         .on("t.id = src.id")
@@ -175,7 +181,8 @@ def test_merge_validation_with_bulk_data() -> None:
     bulk_data = [{"id": i, "name": f"Product {i}"} for i in range(10)]
 
     query = (
-        sql.merge(dialect="mysql")
+        sql
+        .merge(dialect="mysql")
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
@@ -193,7 +200,8 @@ def test_merge_supported_dialects_complete_chain() -> None:
 
     for dialect in supported_dialects:
         query = (
-            sql.merge(dialect=dialect)
+            sql
+            .merge(dialect=dialect)
             .into("products", alias="t")
             .using({"id": 1, "name": "Test"}, alias="src")
             .on("t.id = src.id")

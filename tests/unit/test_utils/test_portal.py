@@ -342,3 +342,58 @@ def test_portal_thread_safety() -> None:
     assert all(p is portals[0] for p in portals)
 
     manager.stop()
+
+
+def test_portal_manager_atexit_registration() -> None:
+    """PortalManager registers atexit handler on portal creation."""
+    manager = PortalManager()
+
+    assert not manager._atexit_registered  # pyright: ignore[reportPrivateUsage]
+
+    manager.get_or_create_portal()
+
+    assert manager._atexit_registered  # pyright: ignore[reportPrivateUsage]
+    assert manager.is_running
+
+    manager.stop()
+
+
+def test_portal_manager_atexit_cleanup() -> None:
+    """PortalManager._atexit_cleanup stops running provider."""
+    manager = PortalManager()
+    manager.get_or_create_portal()
+
+    assert manager.is_running
+
+    manager._atexit_cleanup()  # pyright: ignore[reportPrivateUsage]
+
+    assert not manager.is_running
+
+
+def test_portal_manager_atexit_cleanup_noop_when_stopped() -> None:
+    """PortalManager._atexit_cleanup is no-op when already stopped."""
+    manager = PortalManager()
+    manager.get_or_create_portal()
+    manager.stop()
+
+    assert not manager.is_running
+
+    manager._atexit_cleanup()  # pyright: ignore[reportPrivateUsage]
+
+    assert not manager.is_running
+
+
+def test_portal_call_timeout() -> None:
+    """PortalProvider.call raises error on timeout."""
+
+    async def slow_function() -> int:
+        await asyncio.sleep(10)
+        return 42
+
+    provider = PortalProvider()
+    provider.start()
+
+    with pytest.raises(ImproperConfigurationError, match="timed out after"):
+        provider.call(slow_function, timeout=0.1)
+
+    provider.stop()

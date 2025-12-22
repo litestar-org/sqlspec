@@ -150,6 +150,39 @@ app = Litestar(
 
 Every adapter exposes a store class (e.g., `AsyncpgStore`, `AiosqliteStore`, `DuckdbStore`) in its `litestar` submodule. Each subclass inherits `BaseSQLSpecStore`, enforces consistent schema DDL, and provides utilities such as `delete_expired()`. Run `delete_expired()` periodically or use `litestar sessions delete-expired` from the CLI.
 
+## Channels Backend (Database Broker)
+
+Litestar ships with a Channels plugin for broadcasting event streams to subscribers (for example WebSocket clients). SQLSpec can act as a Channels backend by reusing the `events` extension (table queue or native backends where available).
+
+```python
+from litestar import Litestar
+from litestar.channels.plugin import ChannelsPlugin
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.extensions.events import EventChannel
+from sqlspec.extensions.litestar import SQLSpecChannelsBackend, SQLSpecPlugin
+
+sqlspec = SQLSpec()
+config = sqlspec.add_config(
+    AiosqliteConfig(
+        connection_config={"database": "app.db"},
+        migration_config={"script_location": "migrations", "include_extensions": ["events"]},
+        extension_config={"events": {}},
+    )
+)
+
+channels_backend = SQLSpecChannelsBackend(EventChannel(config), channel_prefix="litestar")
+channels_plugin = ChannelsPlugin(backend=channels_backend, channels=["notifications"])
+
+app = Litestar(plugins=[SQLSpecPlugin(sqlspec), channels_plugin])
+```
+
+Notes:
+
+- Run migrations with `include_extensions=["events"]` so the queue table exists.
+- Litestar channels may use arbitrary names; the backend maps them to database-safe event channel identifiers deterministically.
+
 ## CLI Integration
 
 The `SQLSpecPlugin` automatically registers the `db` command group with the Litestar CLI. No additional configuration is required.

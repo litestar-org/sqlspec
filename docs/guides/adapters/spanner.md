@@ -8,26 +8,26 @@ This guide provides specific instructions for the `spanner` adapter.
 
 ## Key Information
 
--   **Driver:** `google-cloud-spanner`
--   **Parameter Style:** `named` with `@` prefix (e.g., `@name`)
--   **Dialect:** `spanner` (custom dialect extending BigQuery)
--   **Transactional DDL:** Not supported (DDL uses separate admin operations)
+- **Driver:** `google-cloud-spanner`
+- **Parameter Style:** `named` with `@` prefix (e.g., `@name`)
+- **Dialect:** `spanner` (custom dialect extending BigQuery)
+- **Transactional DDL:** Not supported (DDL uses separate admin operations)
 
 ## Parameter Profile
 
--   **Registry Key:** `"spanner"`
--   **JSON Strategy:** `helper`
--   **Default Style:** `NAMED_AT` (parameters prefixed with `@`)
+- **Registry Key:** `"spanner"`
+- **JSON Strategy:** `helper`
+- **Default Style:** `NAMED_AT` (parameters prefixed with `@`)
 
 ## Features
 
--   **Full ACID Transactions:** Spanner provides global transactions with strong consistency
--   **Interleaved Tables:** Physical co-location of parent-child rows for performance
--   **Row-Level TTL:** Automatic row expiration via TTL policies
--   **Session Pooling:** Built-in session pool management
--   **UUID Handling:** Automatic UUID-to-bytes conversion
--   **BYTES Handling:** Automatic base64 encoding/decoding for BYTES columns
--   **JSON Support:** Native JSON type handling
+- **Full ACID Transactions:** Spanner provides global transactions with strong consistency
+- **Interleaved Tables:** Physical co-location of parent-child rows for performance
+- **Row-Level TTL:** Automatic row expiration via TTL policies
+- **Session Pooling:** Built-in session pool management
+- **UUID Handling:** Automatic UUID-to-bytes conversion
+- **BYTES Handling:** Automatic base64 encoding/decoding for BYTES columns
+- **JSON Support:** Native JSON type handling
 
 ## Configuration
 
@@ -124,8 +124,30 @@ with config.provide_session() as session:
 ```
 
 The encoding/decoding is transparent - you work with Python bytes directly. The adapter uses:
+
 - `bytes_to_spanner()` - Base64-encode bytes for storage
 - `spanner_to_bytes()` - Base64-decode bytes from storage
+
+### JSON Handling
+
+Spanner JSON parameters should use Python structures instead of pre-serialized strings. SQLSpec wraps JSON
+values with the Spanner client `JsonObject` when available.
+
+- Dicts are treated as JSON objects.
+- Nested sequences (lists/tuples containing dicts or nested lists) are treated as JSON arrays.
+- Flat sequences of scalars are preserved as ARRAY parameters.
+
+If you need a JSON array of scalars or a scalar JSON value, wrap it explicitly:
+
+```python
+from sqlspec.adapters.spanner import spanner_json
+
+payload = spanner_json([1, 2, 3])
+session.execute(
+    "INSERT INTO events (payload_json) VALUES (@payload)",
+    {"payload": payload},
+)
+```
 
 ### UUID Handling
 
@@ -210,6 +232,7 @@ CREATE TABLE orders (
 ```
 
 Interleaved tables provide:
+
 - Automatic co-location of related data
 - Efficient joins between parent and child tables
 - Cascading deletes for data integrity
@@ -317,17 +340,17 @@ events = store.list_events(session.id)
 
 ## Common Issues
 
--   **DDL Operations:** DDL statements (CREATE TABLE, ALTER TABLE, etc.) cannot be executed through the driver's `execute()` method. Use `database.update_ddl()` for DDL operations.
+- **DDL Operations:** DDL statements (CREATE TABLE, ALTER TABLE, etc.) cannot be executed through the driver's `execute()` method. Use `database.update_ddl()` for DDL operations.
 
--   **Mutation Limit:** Spanner has a 20,000 mutation limit per transaction. For bulk inserts, batch operations into multiple transactions.
+- **Mutation Limit:** Spanner has a 20,000 mutation limit per transaction. For bulk inserts, batch operations into multiple transactions.
 
--   **Read-Only Snapshots:** The default session context uses read-only snapshots. For write operations, use `database.run_in_transaction()` or configure a transaction context.
+- **Read-Only Snapshots:** The default session context uses read-only snapshots. For write operations, use `database.run_in_transaction()` or configure a transaction context.
 
--   **Emulator Limitations:** The Spanner emulator doesn't support all features (e.g., some complex queries, backups). Test critical functionality against a real Spanner instance.
+- **Emulator Limitations:** The Spanner emulator doesn't support all features (e.g., some complex queries, backups). Test critical functionality against a real Spanner instance.
 
--   **`google.api_core.exceptions.AlreadyExists`:** Resource already exists. Check if the table or index already exists before creating.
+- **`google.api_core.exceptions.AlreadyExists`:** Resource already exists. Check if the table or index already exists before creating.
 
--   **`google.api_core.exceptions.NotFound`:** Resource not found. Verify the instance, database, and table names are correct.
+- **`google.api_core.exceptions.NotFound`:** Resource not found. Verify the instance, database, and table names are correct.
 
 ## Best Practices
 

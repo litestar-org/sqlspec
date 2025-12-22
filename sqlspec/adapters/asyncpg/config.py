@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from asyncpg import Connection, Record
 from asyncpg import create_pool as asyncpg_create_pool
@@ -21,6 +21,7 @@ from sqlspec.adapters.asyncpg.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
@@ -117,6 +118,17 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_ip_type: IP address type for connection.
         Options: "PUBLIC", "PRIVATE", "PSC"
         Defaults to "PRIVATE".
+    enable_events: Enable database event channel support.
+        Defaults to True when extension_config["events"] is configured.
+        Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
+        Requires extension_config["events"] for migration setup when using table_queue backend.
+    events_backend: Event channel backend selection.
+        Options: "listen_notify", "table_queue", "listen_notify_durable"
+        - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time)
+        - "table_queue": Durable table-backed queue with retries and exactly-once delivery
+        - "listen_notify_durable": Hybrid - combines real-time LISTEN/NOTIFY with table durability (recommended for production)
+        Defaults to "listen_notify" for backward compatibility.
+        Note: "listen_notify_durable" provides best of both worlds - <100ms latency with full durability.
     """
 
     json_serializer: NotRequired[Callable[[Any], str]]
@@ -131,6 +143,8 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_instance_uri: NotRequired[str]
     alloydb_enable_iam_auth: NotRequired[bool]
     alloydb_ip_type: NotRequired[str]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["listen_notify", "table_queue", "listen_notify_durable"]]
 
 
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
@@ -182,6 +196,10 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         features_dict.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
         features_dict.setdefault("enable_cloud_sql", False)
         features_dict.setdefault("enable_alloydb", False)
+
+        # Auto-detect events support based on extension_config
+        features_dict.setdefault("enable_events", "events" in (extension_config or {}))
+        features_dict.setdefault("events_backend", "listen_notify")
 
         base_statement_config = statement_config or build_asyncpg_statement_config(
             json_serializer=serializer, json_deserializer=deserializer
@@ -473,3 +491,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             "AsyncpgPreparedStatement": AsyncpgPreparedStatement,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for PostgreSQL queue fallback."""
+
+        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)

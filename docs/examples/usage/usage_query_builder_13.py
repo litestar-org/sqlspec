@@ -30,7 +30,8 @@ def test_example_13(tmp_path: Path) -> None:
         from sqlglot import exp
 
         query = (
-            sql.update("users")
+            sql
+            .update("users")
             .set("name", "New Name")
             .set("email", "newemail@example.com")
             .set("updated_at", exp.CurrentTimestamp())

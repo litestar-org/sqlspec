@@ -190,7 +190,8 @@ def test_on_conflict_do_update_basic() -> None:
 def test_on_conflict_multiple_columns() -> None:
     """Test ON CONFLICT with multiple columns."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .values(email="john@test.com", username="john", name="John")
         .on_conflict("email", "username")
         .do_nothing()
@@ -216,7 +217,8 @@ def test_on_conflict_no_columns() -> None:
 def test_on_conflict_do_update_with_sql_raw() -> None:
     """Test ON CONFLICT DO UPDATE with sql.raw expressions."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .values(id=1, name="John")
         .on_conflict("id")
         .do_update(updated_at=sql.raw("NOW()"), name="Updated")
@@ -241,7 +243,8 @@ def test_on_conflict_convenience_method() -> None:
 def test_legacy_on_duplicate_key_update() -> None:
     """Test legacy on_duplicate_key_update method."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .values(id=1, name="John")
         .on_duplicate_key_update(name="Updated", updated_at=sql.raw("NOW()"))
     )
@@ -254,7 +257,8 @@ def test_legacy_on_duplicate_key_update() -> None:
 def test_on_conflict_chaining() -> None:
     """Test ON CONFLICT method chaining."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .values(id=1, name="John")
         .on_conflict("id")
         .do_update(name="Updated")
@@ -292,7 +296,8 @@ def test_on_conflict_empty_do_update() -> None:
 def test_on_conflict_parameter_merging() -> None:
     """Test that ON CONFLICT properly merges parameters from SQL objects."""
     query = (
-        sql.insert("users")
+        sql
+        .insert("users")
         .values(id=1, name="John")
         .on_conflict("id")
         .do_update(name=sql.raw("COALESCE(:new_name, name)", new_name="Updated"), updated_at=sql.raw("NOW()"))

@@ -49,10 +49,12 @@ Driver APIs
 .. currentmodule:: sqlspec.driver._async
 
 .. automethod:: AsyncDriverAdapterBase.execute_stack
+   :noindex:
 
 .. currentmodule:: sqlspec.driver._sync
 
 .. automethod:: SyncDriverAdapterBase.execute_stack
+   :noindex:
 
 Exceptions
 ==========

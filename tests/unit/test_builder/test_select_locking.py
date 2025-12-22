@@ -32,7 +32,8 @@ def test_for_update_nowait() -> None:
 def test_for_update_of_single_table() -> None:
     """Test FOR UPDATE OF specific table."""
     query = (
-        sql.select("j.id", "u.name", dialect="postgres")
+        sql
+        .select("j.id", "u.name", dialect="postgres")
         .from_("job j")
         .join("users u ON j.user_id = u.id")
         .for_update(of="j")
@@ -44,7 +45,8 @@ def test_for_update_of_single_table() -> None:
 def test_for_update_of_multiple_tables() -> None:
     """Test FOR UPDATE OF multiple tables."""
     query = (
-        sql.select("j.id", "u.name", "c.title", dialect="postgres")
+        sql
+        .select("j.id", "u.name", "c.title", dialect="postgres")
         .from_("job j")
         .join("users u ON j.user_id = u.id")
         .join("companies c ON u.company_id = c.id")
@@ -96,7 +98,8 @@ def test_for_share_nowait() -> None:
 def test_for_share_of_table() -> None:
     """Test FOR SHARE OF specific table."""
     query = (
-        sql.select("j.id", "u.name", dialect="postgres")
+        sql
+        .select("j.id", "u.name", dialect="postgres")
         .from_("job j")
         .join("users u ON j.user_id = u.id")
         .for_share(of="j")
@@ -155,7 +158,8 @@ def test_for_no_key_update_error_non_select() -> None:
 def test_chaining_with_other_clauses() -> None:
     """Test FOR UPDATE chained with other SQL clauses."""
     query = (
-        sql.select("id", "name", "status", dialect="postgres")
+        sql
+        .select("id", "name", "status", dialect="postgres")
         .from_("job")
         .where("status = 'pending'")
         .order_by("priority DESC")
@@ -215,7 +219,8 @@ def test_mysql_dialect_basic() -> None:
 def test_complex_join_with_for_update_of() -> None:
     """Test FOR UPDATE OF with complex joins."""
     query = (
-        sql.select("j.id", "j.status", "u.name", "c.title", dialect="postgres")
+        sql
+        .select("j.id", "j.status", "u.name", "c.title", dialect="postgres")
         .from_("job j")
         .join("users u ON j.user_id = u.id")
         .join("companies c ON u.company_id = c.id")
