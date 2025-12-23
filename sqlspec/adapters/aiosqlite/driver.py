@@ -390,6 +390,14 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             await cursor.execute(statement)
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        Returns:
+            True if connection is in an active transaction.
+        """
+        return bool(self.connection.in_transaction)
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.

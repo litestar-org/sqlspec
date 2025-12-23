@@ -10,7 +10,7 @@ from typing_extensions import Self
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
-from sqlspec.utils.type_guards import has_expression_and_sql, has_query_builder_parameters
+from sqlspec.utils.type_guards import has_attr, has_expression_and_sql, has_parameter_builder, is_dict
 
 __all__ = (
     "DeleteFromClauseMixin",
@@ -151,8 +151,8 @@ class InsertValuesMixin:
         builder = cast("SQLBuilderProtocol", self)
 
         positional_values = list(values)
-        if len(positional_values) == SINGLE_VALUE_COUNT and hasattr(positional_values[0], "items") and not kwargs:
-            kwargs = cast("dict[str, Any]", positional_values[0])
+        if len(positional_values) == SINGLE_VALUE_COUNT and is_dict(positional_values[0]) and not kwargs:
+            kwargs = positional_values[0]
             positional_values = []
 
         if kwargs and positional_values:
@@ -293,14 +293,14 @@ class UpdateSetClauseMixin:
     def _process_update_value(self, val: Any, col: Any) -> exp.Expression:
         if isinstance(val, exp.Expression):
             return val
-        if has_query_builder_parameters(val):
+        if has_parameter_builder(val):
             subquery = val.build()
-            sql_text = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+            sql_text = subquery.sql if has_attr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
             value_expr = exp.paren(exp.maybe_parse(sql_text, dialect=getattr(self, "dialect", None)))
             for p_name, p_value in getattr(val, "parameters", {}).items():
                 self.add_parameter(p_value, name=p_name)
             return value_expr
-        if hasattr(val, "expression") and hasattr(val, "sql"):
+        if has_expression_and_sql(val):
             return extract_sql_object_expression(val, builder=self)
         builder = cast("SQLBuilderProtocol", self)
         column_name = col if isinstance(col, str) else str(col)
@@ -358,7 +358,7 @@ class UpdateFromClauseMixin:
         table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = exp.to_table(table, alias=alias)
-        elif has_query_builder_parameters(table):
+        elif has_parameter_builder(table):
             subquery_params = getattr(table, "_parameters", None)
             if isinstance(subquery_params, dict):
                 builder_with_params = cast("SQLBuilderProtocol", self)

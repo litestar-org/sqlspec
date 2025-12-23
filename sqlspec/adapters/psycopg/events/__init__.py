@@ -1,16 +1,20 @@
 """Events helpers for the psycopg adapter."""
 
 from sqlspec.adapters.psycopg.events.backend import (
-    PsycopgEventsBackend,
-    PsycopgHybridEventsBackend,
+    PsycopgAsyncEventsBackend,
+    PsycopgAsyncHybridEventsBackend,
+    PsycopgSyncEventsBackend,
+    PsycopgSyncHybridEventsBackend,
     create_event_backend,
 )
 from sqlspec.adapters.psycopg.events.store import PsycopgAsyncEventQueueStore, PsycopgSyncEventQueueStore
 
 __all__ = (
     "PsycopgAsyncEventQueueStore",
-    "PsycopgEventsBackend",
-    "PsycopgHybridEventsBackend",
+    "PsycopgAsyncEventsBackend",
+    "PsycopgAsyncHybridEventsBackend",
     "PsycopgSyncEventQueueStore",
+    "PsycopgSyncEventsBackend",
+    "PsycopgSyncHybridEventsBackend",
     "create_event_backend",
 )

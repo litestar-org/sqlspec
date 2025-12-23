@@ -7,16 +7,35 @@ import abc
 import inspect
 import sys
 import types
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
+from sqlspec.utils.type_guards import has_attr
 
 __all__ = ("BaseMigrationLoader", "MigrationLoadError", "PythonFileLoader", "SQLFileLoader", "get_migration_loader")
 
 PROJECT_ROOT_MARKERS: Final[list[str]] = ["pyproject.toml", ".git", "setup.cfg", "setup.py"]
+
+
+def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., Any] | None":
+    """Get a callable attribute from a module if it exists.
+
+    Args:
+        module: The module to check.
+        name: The attribute name to look for.
+
+    Returns:
+        The callable if it exists and is callable, None otherwise.
+    """
+    if not has_attr(module, name):
+        return None
+    attr = getattr(module, name)
+    if callable(attr):
+        return cast("Callable[..., Any]", attr)
+    return None
 
 
 class MigrationLoadError(Exception):
@@ -216,24 +235,14 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            upgrade_func = None
-            func_name = None
+            upgrade_func = _get_callable_attr(module, "up")
+            if upgrade_func is None:
+                upgrade_func = _get_callable_attr(module, "migrate_up")
 
-            if hasattr(module, "up") and callable(module.up):
-                upgrade_func = module.up
-                func_name = "up"
-            elif hasattr(module, "migrate_up") and callable(module.migrate_up):
-                upgrade_func = module.migrate_up
-                func_name = "migrate_up"
-            else:
+            if upgrade_func is None:
                 msg = f"No upgrade function found in {path}. Expected 'up()' or 'migrate_up()'"
                 raise MigrationLoadError(msg)
 
-            if not callable(upgrade_func):
-                msg = f"'{func_name}' is not callable in {path}"
-                raise MigrationLoadError(msg)
-
-            # Check if function accepts context parameter
             sig = inspect.signature(upgrade_func)
             accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
 
@@ -258,19 +267,13 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            downgrade_func = None
+            downgrade_func = _get_callable_attr(module, "down")
+            if downgrade_func is None:
+                downgrade_func = _get_callable_attr(module, "migrate_down")
 
-            if hasattr(module, "down") and callable(module.down):
-                downgrade_func = module.down
-            elif hasattr(module, "migrate_down") and callable(module.migrate_down):
-                downgrade_func = module.migrate_down
-            else:
+            if downgrade_func is None:
                 return []
 
-            if not callable(downgrade_func):
-                return []
-
-            # Check if function accepts context parameter
             sig = inspect.signature(downgrade_func)
             accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
 
@@ -295,21 +298,12 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            upgrade_func = None
-            func_name = None
+            upgrade_func = _get_callable_attr(module, "up")
+            if upgrade_func is None:
+                upgrade_func = _get_callable_attr(module, "migrate_up")
 
-            if hasattr(module, "up") and callable(module.up):
-                upgrade_func = module.up
-                func_name = "up"
-            elif hasattr(module, "migrate_up") and callable(module.migrate_up):
-                upgrade_func = module.migrate_up
-                func_name = "migrate_up"
-            else:
+            if upgrade_func is None:
                 msg = f"Migration {path} missing required upgrade function. Expected 'up()' or 'migrate_up()'"
-                raise MigrationLoadError(msg)
-
-            if not callable(upgrade_func):
-                msg = f"Migration {path} '{func_name}' is not callable"
                 raise MigrationLoadError(msg)
 
     def _find_project_root(self, start_path: Path) -> Path:

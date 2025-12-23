@@ -16,48 +16,107 @@ if TYPE_CHECKING:
     from sqlglot import exp
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.core import StatementConfig
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
-    "BytesConvertibleProtocol",
+    "ConnectionStateProtocol",
+    "CursorMetadataProtocol",
     "DictProtocol",
-    "ExpressionWithAliasProtocol",
-    "FilterAppenderProtocol",
-    "FilterParameterProtocol",
+    "HasExpressionAndParametersProtocol",
+    "HasExpressionAndSQLProtocol",
     "HasExpressionProtocol",
-    "HasExpressionsProtocol",
-    "HasLimitProtocol",
-    "HasOffsetProtocol",
-    "HasOrderByProtocol",
+    "HasMigrationConfigProtocol",
     "HasParameterBuilderProtocol",
     "HasSQLGlotExpressionProtocol",
     "HasSQLMethodProtocol",
+    "HasStatementConfigFactoryProtocol",
+    "HasStatementConfigProtocol",
     "HasToStatementProtocol",
     "HasWhereProtocol",
-    "IndexableRow",
     "IterableParameters",
+    "MigrationModuleProtocol",
+    "NotificationProtocol",
     "ObjectStoreItemProtocol",
     "ObjectStoreProtocol",
-    "ParameterValueProtocol",
+    "PipelineCapableProtocol",
+    "QueryResultProtocol",
+    "ReadableProtocol",
     "SQLBuilderProtocol",
     "SelectBuilderProtocol",
     "StackResultProtocol",
+    "SupportsArrayProtocol",
     "SupportsArrowResults",
+    "ToSchemaProtocol",
     "WithMethodProtocol",
 )
 
 
 @runtime_checkable
-class IndexableRow(Protocol):
-    """Protocol for row types that support index access."""
+class ReadableProtocol(Protocol):
+    """Protocol for objects that have a read method (e.g., LOBs)."""
 
-    def __getitem__(self, index: int) -> Any:
-        """Get item by index."""
+    def read(self) -> "bytes | str":
+        """Read content from the object."""
         ...
+
+
+@runtime_checkable
+class SupportsArrayProtocol(Protocol):
+    """Protocol for NumPy-like arrays."""
+
+    dtype: Any
+    shape: tuple[int, ...]
+    __array__: Any
 
     def __len__(self) -> int:
-        """Get length of the row."""
+        """Return the length of the array."""
         ...
+
+
+@runtime_checkable
+class CursorMetadataProtocol(Protocol):
+    """Protocol for cursor metadata access."""
+
+    @property
+    def description(self) -> "Sequence[Any] | None": ...
+
+
+@runtime_checkable
+class NotificationProtocol(Protocol):
+    """Protocol for database event notifications."""
+
+    channel: str
+    payload: str
+
+
+@runtime_checkable
+class QueryResultProtocol(Protocol):
+    """Protocol for query execution results."""
+
+    tag: "str | None"
+    status: "str | None"
+
+
+@runtime_checkable
+class HasStatementConfigProtocol(Protocol):
+    """Protocol for objects holding statement configuration."""
+
+    statement_config: "StatementConfig"
+
+
+@runtime_checkable
+class PipelineCapableProtocol(Protocol):
+    """Protocol for connections supporting pipeline execution."""
+
+    def run_pipeline(self, pipeline: Any, *, continue_on_error: bool = False) -> Any: ...
+
+
+@runtime_checkable
+class ConnectionStateProtocol(Protocol):
+    """Protocol for checking connection state."""
+
+    def is_in_transaction(self) -> bool: ...
 
 
 @runtime_checkable
@@ -92,40 +151,6 @@ class HasWhereProtocol(Protocol):
 
 
 @runtime_checkable
-class HasLimitProtocol(Protocol):
-    """Protocol for SQL expressions that support LIMIT clauses."""
-
-    def limit(self, *args: Any, **kwargs: Any) -> Any:
-        """Add LIMIT clause to expression."""
-        ...
-
-
-@runtime_checkable
-class HasOffsetProtocol(Protocol):
-    """Protocol for SQL expressions that support OFFSET clauses."""
-
-    def offset(self, *args: Any, **kwargs: Any) -> Any:
-        """Add OFFSET clause to expression."""
-        ...
-
-
-@runtime_checkable
-class HasOrderByProtocol(Protocol):
-    """Protocol for SQL expressions that support ORDER BY clauses."""
-
-    def order_by(self, *args: Any, **kwargs: Any) -> Any:
-        """Add ORDER BY clause to expression."""
-        ...
-
-
-@runtime_checkable
-class HasExpressionsProtocol(Protocol):
-    """Protocol for SQL expressions that have an expressions attribute."""
-
-    expressions: Any
-
-
-@runtime_checkable
 class HasSQLMethodProtocol(Protocol):
     """Protocol for objects that have a sql() method for rendering SQL."""
 
@@ -135,54 +160,10 @@ class HasSQLMethodProtocol(Protocol):
 
 
 @runtime_checkable
-class FilterParameterProtocol(Protocol):
-    """Protocol for filter objects that can extract parameters."""
-
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
-        """Extract parameters from the filter."""
-        ...
-
-
-@runtime_checkable
-class FilterAppenderProtocol(Protocol):
-    """Protocol for filter objects that can append to SQL statements."""
-
-    def append_to_statement(self, sql: Any) -> Any:
-        """Append this filter to a SQL statement."""
-        ...
-
-
-@runtime_checkable
-class ParameterValueProtocol(Protocol):
-    """Protocol for parameter objects with value and type_hint attributes."""
-
-    value: Any
-    type_hint: str
-
-
-@runtime_checkable
 class DictProtocol(Protocol):
     """Protocol for objects with a __dict__ attribute."""
 
     __dict__: dict[str, Any]
-
-
-@runtime_checkable
-class BytesConvertibleProtocol(Protocol):
-    """Protocol for objects that can be converted to bytes."""
-
-    def __bytes__(self) -> bytes:
-        """Convert object to bytes."""
-        ...
-
-
-@runtime_checkable
-class ExpressionWithAliasProtocol(Protocol):
-    """Protocol for SQL expressions that support aliasing with as_() method."""
-
-    def as_(self, alias: str, **kwargs: Any) -> "exp.Alias":
-        """Create an aliased expression."""
-        ...
 
 
 @runtime_checkable
@@ -410,7 +391,12 @@ class HasSQLGlotExpressionProtocol(Protocol):
 
 @runtime_checkable
 class HasParameterBuilderProtocol(Protocol):
-    """Protocol for objects that can add parameters."""
+    """Protocol for objects that can add parameters and build queries."""
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Return the current parameters dictionary."""
+        ...
 
     def add_parameter(self, value: Any, name: "str | None" = None) -> tuple[Any, str]:
         """Add a parameter to the builder."""
@@ -422,6 +408,10 @@ class HasParameterBuilderProtocol(Protocol):
 
     def set_expression(self, expression: "exp.Expression") -> None:
         """Replace the underlying SQLGlot expression."""
+        ...
+
+    def build(self, dialect: Any = None) -> Any:
+        """Build the SQL query and return a SafeQuery-like object."""
         ...
 
 
@@ -590,3 +580,64 @@ class StackResultProtocol(Protocol):
     def is_arrow_result(self) -> bool: ...
 
     def get_result(self) -> Any: ...
+
+
+@runtime_checkable
+class ToSchemaProtocol(Protocol):
+    """Protocol for objects that can convert results to schema models."""
+
+    def to_schema(self, schema_type: Any, rows: Any, **kwargs: Any) -> Any:
+        """Convert rows to schema model instances."""
+        ...
+
+
+@runtime_checkable
+class HasExpressionAndSQLProtocol(Protocol):
+    """Protocol for objects with both expression and sql attributes (like SQL class)."""
+
+    expression: Any
+    sql: str
+
+
+@runtime_checkable
+class HasExpressionAndParametersProtocol(Protocol):
+    """Protocol for objects with both expression and parameters attributes."""
+
+    expression: Any
+    parameters: Any
+
+
+@runtime_checkable
+class HasStatementConfigFactoryProtocol(Protocol):
+    """Protocol for objects that can create a StatementConfig.
+
+    Used for config objects that have a factory method to create statement configs.
+    """
+
+    def _create_statement_config(self) -> "StatementConfig":
+        """Create a new StatementConfig instance."""
+        ...
+
+
+@runtime_checkable
+class HasMigrationConfigProtocol(Protocol):
+    """Protocol for database configurations that support migrations.
+
+    Used to check if a config object has migration_config attribute.
+    """
+
+    migration_config: "Mapping[str, Any] | None"
+
+
+@runtime_checkable
+class MigrationModuleProtocol(Protocol):
+    """Protocol for Python migration modules.
+
+    Migration modules must have at least an 'up' or 'migrate_up' function.
+    Optionally they may have 'down' or 'migrate_down' for downgrades.
+    """
+
+    up: "Callable[..., str | list[str]] | None"
+    migrate_up: "Callable[..., str | list[str]] | None"
+    down: "Callable[..., str | list[str]] | None"
+    migrate_down: "Callable[..., str | list[str]] | None"

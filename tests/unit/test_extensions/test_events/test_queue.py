@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.extensions.events._queue import QueueEvent, QueueEventBackend, TableEventQueue
+from sqlspec.extensions.events._payload import parse_event_timestamp
+from sqlspec.extensions.events._queue import QueueEvent, SyncQueueEventBackend, TableEventQueue, _to_message
 
 
 def test_table_event_queue_default_table_name(tmp_path) -> None:
@@ -261,58 +262,58 @@ def test_table_event_queue_hydrate_event_non_dict_payload(tmp_path) -> None:
     assert event.metadata == {"value": 42}
 
 
-def test_table_event_queue_coerce_datetime_from_string() -> None:
+def test_parse_event_timestamp_from_string() -> None:
     """ISO format strings are parsed to datetime."""
-    result = TableEventQueue._coerce_datetime("2024-01-15T10:30:00Z")
+    result = parse_event_timestamp("2024-01-15T10:30:00Z")
     assert isinstance(result, datetime)
     assert result.tzinfo is not None
 
 
-def test_table_event_queue_coerce_datetime_naive_string() -> None:
+def test_parse_event_timestamp_naive_string() -> None:
     """Naive datetime strings get UTC timezone added."""
-    result = TableEventQueue._coerce_datetime("2024-01-15T10:30:00")
+    result = parse_event_timestamp("2024-01-15T10:30:00")
     assert result.tzinfo == timezone.utc
 
 
-def test_table_event_queue_coerce_datetime_from_datetime() -> None:
+def test_parse_event_timestamp_from_datetime() -> None:
     """Datetime objects are passed through."""
     now = datetime.now(timezone.utc)
-    result = TableEventQueue._coerce_datetime(now)
+    result = parse_event_timestamp(now)
     assert result is now
 
 
-def test_table_event_queue_coerce_datetime_naive_datetime() -> None:
+def test_parse_event_timestamp_naive_datetime() -> None:
     """Naive datetime objects get UTC timezone added."""
     naive = datetime(2024, 1, 15, 10, 30, 0)
-    result = TableEventQueue._coerce_datetime(naive)
+    result = parse_event_timestamp(naive)
     assert result.tzinfo == timezone.utc
 
 
-def test_table_event_queue_coerce_datetime_invalid() -> None:
+def test_parse_event_timestamp_invalid() -> None:
     """Invalid values return current UTC time."""
-    result = TableEventQueue._coerce_datetime("not a date")
+    result = parse_event_timestamp("not a date")
     assert isinstance(result, datetime)
     assert result.tzinfo is not None
 
 
-def test_table_event_queue_coerce_datetime_none() -> None:
+def test_parse_event_timestamp_none() -> None:
     """None values return current UTC time."""
-    result = TableEventQueue._coerce_datetime(None)
+    result = parse_event_timestamp(None)
     assert isinstance(result, datetime)
 
 
-def test_queue_event_backend_backend_name() -> None:
-    """QueueEventBackend has correct backend_name."""
-    assert QueueEventBackend.backend_name == "table_queue"
+def test_sync_queue_event_backend_backend_name() -> None:
+    """SyncQueueEventBackend has correct backend_name."""
+    assert SyncQueueEventBackend.backend_name == "table_queue"
 
 
-def test_queue_event_backend_supports_sync_and_async() -> None:
-    """QueueEventBackend supports both sync and async operations."""
-    assert QueueEventBackend.supports_sync is True
-    assert QueueEventBackend.supports_async is True
+def test_sync_queue_event_backend_supports_sync() -> None:
+    """SyncQueueEventBackend supports sync operations only."""
+    assert SyncQueueEventBackend.supports_sync is True
+    assert SyncQueueEventBackend.supports_async is False
 
 
-def test_queue_event_backend_to_message_conversion() -> None:
+def test_to_message_conversion() -> None:
     """_to_message converts QueueEvent to EventMessage."""
     now = datetime.now(timezone.utc)
     queue_event = QueueEvent(
@@ -325,7 +326,7 @@ def test_queue_event_backend_to_message_conversion() -> None:
         lease_expires_at=now,
         created_at=now,
     )
-    message = QueueEventBackend._to_message(queue_event)
+    message = _to_message(queue_event)
     assert message.event_id == "msg123"
     assert message.channel == "alerts"
     assert message.payload == {"level": "warning"}

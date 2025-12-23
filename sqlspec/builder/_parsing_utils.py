@@ -46,7 +46,7 @@ def _merge_sql_parameters(sql_obj: Any, builder: Any) -> None:
         sql_obj: SQL object with parameters attribute
         builder: Builder instance with add_parameter method
     """
-    if not (builder and has_expression_and_parameters(sql_obj) and hasattr(builder, "add_parameter")):
+    if not (builder and has_expression_and_parameters(sql_obj) and has_parameter_builder(builder)):
         return
 
     for param_name, param_value in sql_obj.parameters.items():
@@ -84,12 +84,13 @@ def parse_column_expression(column_input: str | exp.Expression | Any, builder: A
             return cast("exp.Expression", column_input.expression)
 
         _merge_sql_parameters(column_input, builder)
-        return exp.maybe_parse(column_input.sql) or exp.column(str(column_input.sql))
+        sql_str = column_input.sql
+        return exp.maybe_parse(sql_str) or exp.column(sql_str)
 
-    if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expression):
-        return column_input._expression
+    if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expression):  # pyright: ignore[reportPrivateUsage]
+        return column_input._expression  # pyright: ignore[reportPrivateUsage]
 
-    return exp.maybe_parse(column_input) or exp.column(str(column_input))
+    return exp.maybe_parse(column_input) or exp.column(str(column_input))  # pyright: ignore[reportArgumentType]
 
 
 def parse_table_expression(table_input: str, explicit_alias: str | None = None) -> exp.Expression:
@@ -167,7 +168,7 @@ def parse_condition_expression(
             return exp.Is(this=column_expr, expression=exp.null())
         if builder and has_parameter_builder(builder):
             column_name = extract_column_name(column)
-            param_name = builder.generate_unique_parameter_name(column_name)
+            param_name = builder.generate_unique_parameter_name(column_name)  # pyright: ignore[reportAttributeAccessIssue]
             _, param_name = builder.add_parameter(value, name=param_name)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
         if isinstance(value, str):

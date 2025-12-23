@@ -161,12 +161,12 @@ def test_event_channel_backend_supports_sync(tmp_path) -> None:
     assert getattr(channel._backend, "supports_sync", False) is True
 
 
-def test_event_channel_backend_supports_async(tmp_path) -> None:
-    """Table queue backend supports async operations."""
+def test_sync_event_channel_backend_no_async(tmp_path) -> None:
+    """Sync channel uses sync backend which does not support async."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     channel = SyncEventChannel(config)
 
-    assert getattr(channel._backend, "supports_async", False) is True
+    assert getattr(channel._backend, "supports_async", False) is False
 
 
 def test_event_channel_listeners_initialized_empty(tmp_path) -> None:

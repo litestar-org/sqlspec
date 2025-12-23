@@ -18,7 +18,12 @@ from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-    from sqlspec.extensions.events.protocols import AsyncEventHandler, SyncEventHandler
+    from sqlspec.extensions.events.protocols import (
+        AsyncEventBackendProtocol,
+        AsyncEventHandler,
+        SyncEventBackendProtocol,
+        SyncEventHandler,
+    )
     from sqlspec.observability import ObservabilityRuntime
 
 logger = get_logger("events.channel")
@@ -192,6 +197,8 @@ class SyncEventChannel:
         "_runtime",
     )
 
+    _backend: "SyncEventBackendProtocol"
+
     def __init__(self, config: "SyncDatabaseConfig[Any, Any, Any]") -> None:
         if config.is_async:
             msg = "SyncEventChannel requires a sync configuration"
@@ -206,10 +213,10 @@ class SyncEventChannel:
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
                 logger.warning("Events backend %s unavailable; defaulting to table_queue", backend_name)
-            self._backend = queue_backend
+            self._backend = cast("SyncEventBackendProtocol", queue_backend)
             backend_label = "table_queue"
         else:
-            self._backend = native_backend
+            self._backend = cast("SyncEventBackendProtocol", native_backend)
             backend_label = getattr(native_backend, "backend_name", backend_name or "table_queue")
         self._config = config
         self._backend_name = backend_label
@@ -233,7 +240,7 @@ class SyncEventChannel:
             raise ImproperConfigurationError(msg)
         span = _start_event_span(self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="sync")
         try:
-            event_id = self._backend.publish_sync(channel, payload, metadata)
+            event_id = self._backend.publish(channel, payload, metadata)
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
@@ -260,7 +267,7 @@ class SyncEventChannel:
                 self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="sync"
             )
             try:
-                event = self._backend.dequeue_sync(channel, interval)
+                event = self._backend.dequeue(channel, interval)
             except Exception as error:
                 _end_event_span(self._runtime, span, error=error)
                 raise
@@ -324,7 +331,7 @@ class SyncEventChannel:
             raise ImproperConfigurationError(msg)
         span = _start_event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="sync")
         try:
-            self._backend.ack_sync(event_id)
+            self._backend.ack(event_id)
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
@@ -336,7 +343,7 @@ class SyncEventChannel:
         Args:
             event_id: ID of the event to return.
         """
-        nack_method = getattr(self._backend, "nack_sync", None)
+        nack_method = getattr(self._backend, "nack", None)
         if nack_method is None:
             msg = "Current events backend does not support nack"
             raise ImproperConfigurationError(msg)
@@ -354,7 +361,7 @@ class SyncEventChannel:
         try:
             for listener_id in list(self._listeners):
                 self.stop_listener(listener_id)
-            backend_shutdown = getattr(self._backend, "shutdown_sync", None)
+            backend_shutdown = getattr(self._backend, "shutdown", None)
             if backend_shutdown is not None and callable(backend_shutdown):
                 backend_shutdown()
         except Exception as error:
@@ -379,7 +386,7 @@ class SyncEventChannel:
                     self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="sync"
                 )
                 try:
-                    event = self._backend.dequeue_sync(channel, poll_interval)
+                    event = self._backend.dequeue(channel, poll_interval)
                 except Exception as error:
                     _end_event_span(self._runtime, span, error=error)
                     raise
@@ -390,7 +397,7 @@ class SyncEventChannel:
                 try:
                     handler(event)
                     if auto_ack:
-                        self._backend.ack_sync(event.event_id)
+                        self._backend.ack(event.event_id)
                 except Exception as error:  # pragma: no cover - logging path
                     logger.warning("sync listener %s handler error: %s", listener_id, error)
         finally:
@@ -414,6 +421,8 @@ class AsyncEventChannel:
         "_runtime",
     )
 
+    _backend: "AsyncEventBackendProtocol"
+
     def __init__(self, config: "AsyncDatabaseConfig[Any, Any, Any]") -> None:
         if not config.is_async:
             msg = "AsyncEventChannel requires an async configuration"
@@ -428,10 +437,10 @@ class AsyncEventChannel:
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
                 logger.warning("Events backend %s unavailable; defaulting to table_queue", backend_name)
-            self._backend = queue_backend
+            self._backend = cast("AsyncEventBackendProtocol", queue_backend)
             backend_label = "table_queue"
         else:
-            self._backend = native_backend
+            self._backend = cast("AsyncEventBackendProtocol", native_backend)
             backend_label = getattr(native_backend, "backend_name", backend_name or "table_queue")
         self._config = config
         self._backend_name = backend_label
@@ -457,7 +466,7 @@ class AsyncEventChannel:
             self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="async"
         )
         try:
-            event_id = await self._backend.publish_async(channel, payload, metadata)
+            event_id = await self._backend.publish(channel, payload, metadata)
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
@@ -484,7 +493,7 @@ class AsyncEventChannel:
                 self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="async"
             )
             try:
-                event = await self._backend.dequeue_async(channel, interval)
+                event = await self._backend.dequeue(channel, interval)
             except Exception as error:
                 _end_event_span(self._runtime, span, error=error)
                 raise
@@ -551,7 +560,7 @@ class AsyncEventChannel:
             raise ImproperConfigurationError(msg)
         span = _start_event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="async")
         try:
-            await self._backend.ack_async(event_id)
+            await self._backend.ack(event_id)
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
@@ -563,7 +572,7 @@ class AsyncEventChannel:
         Args:
             event_id: ID of the event to return.
         """
-        nack_method = getattr(self._backend, "nack_async", None)
+        nack_method = getattr(self._backend, "nack", None)
         if nack_method is None:
             msg = "Current events backend does not support nack"
             raise ImproperConfigurationError(msg)
@@ -581,7 +590,7 @@ class AsyncEventChannel:
         try:
             for listener_id in list(self._listeners):
                 await self.stop_listener(listener_id)
-            backend_shutdown = getattr(self._backend, "shutdown_async", None)
+            backend_shutdown = getattr(self._backend, "shutdown", None)
             if backend_shutdown is not None and callable(backend_shutdown):
                 result = backend_shutdown()
                 if result is not None:
@@ -608,7 +617,7 @@ class AsyncEventChannel:
                     self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="async"
                 )
                 try:
-                    event = await self._backend.dequeue_async(channel, poll_interval)
+                    event = await self._backend.dequeue(channel, poll_interval)
                 except Exception as error:
                     _end_event_span(self._runtime, span, error=error)
                     raise
@@ -621,7 +630,7 @@ class AsyncEventChannel:
                     if inspect.isawaitable(result):
                         await result
                     if auto_ack:
-                        await self._backend.ack_async(event.event_id)
+                        await self._backend.ack(event.event_id)
                 except Exception as error:  # pragma: no cover - logging path
                     logger.warning("async listener %s handler error: %s", listener_id, error)
         finally:

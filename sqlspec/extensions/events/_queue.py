@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
@@ -11,6 +10,7 @@ from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints
 from sqlspec.extensions.events._models import EventMessage
+from sqlspec.extensions.events._payload import parse_event_timestamp
 from sqlspec.extensions.events._store import normalize_queue_table_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("events.queue")
 
-__all__ = ("QueueEvent", "QueueEventBackend", "TableEventQueue", "build_queue_backend")
+__all__ = ("AsyncQueueEventBackend", "QueueEvent", "SyncQueueEventBackend", "TableEventQueue", "build_queue_backend")
 
 _ADAPTER_MODULE_PARTS = 3
 
@@ -354,21 +354,7 @@ class TableEventQueue:
             return int(rows_affected) if rows_affected is not None else 0
 
     @staticmethod
-    def _coerce_datetime(value: Any) -> "datetime":
-        if isinstance(value, datetime):
-            if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
-            return value
-        if isinstance(value, str):
-            with suppress(ValueError):
-                parsed = datetime.fromisoformat(value)
-                if parsed.tzinfo is None:
-                    return parsed.replace(tzinfo=timezone.utc)
-                return parsed
-        return TableEventQueue._utcnow()
-
-    @classmethod
-    def _hydrate_event(cls, row: "dict[str, Any]", lease_expires_at: "datetime | None") -> QueueEvent:
+    def _hydrate_event(row: "dict[str, Any]", lease_expires_at: "datetime | None") -> QueueEvent:
         payload_raw = row.get("payload_json")
         metadata_raw = row.get("metadata_json")
         if isinstance(payload_raw, dict):
@@ -387,10 +373,10 @@ class TableEventQueue:
         metadata_value = (
             metadata_obj if isinstance(metadata_obj, dict) or metadata_obj is None else {"value": metadata_obj}
         )
-        available_at = cls._coerce_datetime(row.get("available_at"))
-        created_at = cls._coerce_datetime(row.get("created_at"))
+        available_at = parse_event_timestamp(row.get("available_at"))
+        created_at = parse_event_timestamp(row.get("created_at"))
         lease_value = lease_expires_at or row.get("lease_expires_at")
-        lease_at = cls._coerce_datetime(lease_value) if lease_value is not None else None
+        lease_at = parse_event_timestamp(lease_value) if lease_value is not None else None
         return QueueEvent(
             event_id=row["event_id"],
             channel=row["channel"],
@@ -416,7 +402,7 @@ def build_queue_backend(
     *,
     adapter_name: "str | None" = None,
     hints: "EventRuntimeHints | None" = None,
-) -> "QueueEventBackend":
+) -> "SyncQueueEventBackend | AsyncQueueEventBackend":
     """Build a QueueEventBackend using adapter hints and extension overrides."""
 
     settings = dict(extension_settings or {})
@@ -431,7 +417,9 @@ def build_queue_backend(
         skip_locked=_resolve_bool_setting(settings, "skip_locked", runtime_hints.skip_locked),
         json_passthrough=_resolve_bool_setting(settings, "json_passthrough", runtime_hints.json_passthrough),
     )
-    return QueueEventBackend(queue)
+    if config.is_async:
+        return AsyncQueueEventBackend(queue)
+    return SyncQueueEventBackend(queue)
 
 
 def _resolve_adapter_name(config: "DatabaseConfigProtocol[Any, Any, Any]") -> "str | None":
@@ -460,57 +448,80 @@ def _resolve_int_setting(settings: "dict[str, Any]", key: str, default: int) -> 
     return int(value)
 
 
-class QueueEventBackend:
-    """Adapter-facing wrapper that exposes TableEventQueue via EventMessage objects."""
+class SyncQueueEventBackend:
+    """Sync backend wrapper that exposes TableEventQueue via EventMessage objects."""
+
+    __slots__ = ("_queue",)
 
     supports_sync = True
+    supports_async = False
+    backend_name = "table_queue"
+
+    def __init__(self, table_queue: TableEventQueue) -> None:
+        self._queue = table_queue
+
+    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        return self._queue.publish_sync(channel, payload, metadata)
+
+    def dequeue(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
+        event = self._queue.dequeue_sync(channel, poll_interval=poll_interval)
+        if event is None:
+            return None
+        return _to_message(event)
+
+    def ack(self, event_id: str) -> None:
+        self._queue.ack_sync(event_id)
+
+    def nack(self, event_id: str) -> None:
+        self._queue.nack_sync(event_id)
+
+    def shutdown(self) -> None:
+        """Shutdown the backend (no-op for table queue)."""
+
+
+class AsyncQueueEventBackend:
+    """Async backend wrapper that exposes TableEventQueue via EventMessage objects."""
+
+    __slots__ = ("_queue",)
+
+    supports_sync = False
     supports_async = True
     backend_name = "table_queue"
 
     def __init__(self, table_queue: TableEventQueue) -> None:
         self._queue = table_queue
 
-    async def publish_async(
-        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
-    ) -> str:
+    async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         return await self._queue.publish_async(channel, payload, metadata)
 
-    def publish_sync(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
-        return self._queue.publish_sync(channel, payload, metadata)
-
-    async def dequeue_async(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
+    async def dequeue(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
         event = await self._queue.dequeue_async(channel, poll_interval=poll_interval)
         if event is None:
             return None
-        return self._to_message(event)
+        return _to_message(event)
 
-    def dequeue_sync(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
-        event = self._queue.dequeue_sync(channel, poll_interval=poll_interval)
-        if event is None:
-            return None
-        return self._to_message(event)
-
-    async def ack_async(self, event_id: str) -> None:
+    async def ack(self, event_id: str) -> None:
         await self._queue.ack_async(event_id)
 
-    def ack_sync(self, event_id: str) -> None:
-        self._queue.ack_sync(event_id)
-
-    async def nack_async(self, event_id: str) -> None:
+    async def nack(self, event_id: str) -> None:
         await self._queue.nack_async(event_id)
 
-    def nack_sync(self, event_id: str) -> None:
-        self._queue.nack_sync(event_id)
+    async def shutdown(self) -> None:
+        """Shutdown the backend (no-op for table queue)."""
 
-    @staticmethod
-    def _to_message(event: QueueEvent) -> EventMessage:
-        return EventMessage(
-            event_id=event.event_id,
-            channel=event.channel,
-            payload=event.payload,
-            metadata=event.metadata,
-            attempts=event.attempts,
-            available_at=event.available_at,
-            lease_expires_at=event.lease_expires_at,
-            created_at=event.created_at,
-        )
+
+def _to_message(event: QueueEvent) -> EventMessage:
+    """Convert QueueEvent to EventMessage."""
+    return EventMessage(
+        event_id=event.event_id,
+        channel=event.channel,
+        payload=event.payload,
+        metadata=event.metadata,
+        attempts=event.attempts,
+        available_at=event.available_at,
+        lease_expires_at=event.lease_expires_at,
+        created_at=event.created_at,
+    )
+
+
+QueueEventBackend = SyncQueueEventBackend | AsyncQueueEventBackend

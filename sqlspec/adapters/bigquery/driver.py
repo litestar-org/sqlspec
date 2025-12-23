@@ -806,6 +806,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = cursor.job.num_dml_affected_rows or 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        BigQuery does not support transactions.
+
+        Returns:
+            False - BigQuery has no transaction support.
+        """
+        return False
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.

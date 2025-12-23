@@ -240,6 +240,18 @@ class SQLResult(StatementResult):
         """
         return self._operation_type
 
+    def _get_rows(self) -> "list[dict[str, Any]]":
+        """Get validated row data as list of dicts.
+
+        Returns:
+            List of row dictionaries, empty list if no data.
+        """
+        if self.data is None:
+            return []
+        if not isinstance(self.data, list):
+            return []
+        return self.data
+
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get metadata value by key.
 
@@ -313,7 +325,7 @@ class SQLResult(StatementResult):
                     "total_rows_affected": self.get_total_rows_affected(),
                 }
             ]
-        data = cast("list[dict[str, Any]]", self.data or [])
+        data = self._get_rows()
         if schema_type:
             return cast("list[SchemaT]", to_schema(data, schema_type=schema_type))
         return data
@@ -377,9 +389,10 @@ class SQLResult(StatementResult):
         Returns:
             First row (optionally transformed to schema_type) or None if no data.
         """
-        if not self.data:
+        rows = self._get_rows()
+        if not rows:
             return None
-        row = cast("dict[str, Any]", self.data[0])
+        row = rows[0]
         if schema_type:
             return to_schema(row, schema_type=schema_type)
         return row
@@ -449,10 +462,11 @@ class SQLResult(StatementResult):
         Returns:
             The row at the specified index
         """
-        if self.data is None:
+        rows = self._get_rows()
+        if not rows:
             msg = "No data available"
             raise IndexError(msg)
-        return cast("dict[str, Any]", self.data[index])
+        return rows[index]
 
     def __iter__(self) -> "Iterator[dict[str, Any]]":
         """Iterate over the rows in the result.
@@ -460,7 +474,7 @@ class SQLResult(StatementResult):
         Returns:
             Iterator that yields each row as a dictionary
         """
-        return iter(self.data or [])
+        return iter(self._get_rows())
 
     @overload
     def all(self, *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
@@ -478,7 +492,7 @@ class SQLResult(StatementResult):
         Returns:
             List of all rows (optionally transformed to schema_type)
         """
-        data = cast("list[dict[str, Any]]", self.data or [])
+        data = self._get_rows()
         if schema_type:
             return cast("list[SchemaT]", to_schema(data, schema_type=schema_type))
         return data
@@ -502,11 +516,12 @@ class SQLResult(StatementResult):
         Raises:
             ValueError: If no results or more than one result
         """
-        if not self.data:
+        rows = self._get_rows()
+        if not rows:
             msg = "No result found, exactly one row expected"
             raise ValueError(msg)
 
-        data_len = len(self.data)
+        data_len = len(rows)
         if data_len == 0:
             msg = "No result found, exactly one row expected"
             raise ValueError(msg)
@@ -514,7 +529,7 @@ class SQLResult(StatementResult):
             msg = f"Multiple results found ({data_len}), exactly one row expected"
             raise ValueError(msg)
 
-        row = cast("dict[str, Any]", self.data[0])
+        row = rows[0]
         if schema_type:
             return to_schema(row, schema_type=schema_type)
         return row
@@ -538,17 +553,18 @@ class SQLResult(StatementResult):
         Raises:
             ValueError: If more than one result
         """
-        if not self.data:
+        rows = self._get_rows()
+        if not rows:
             return None
 
-        data_len = len(self.data)
+        data_len = len(rows)
         if data_len == 0:
             return None
         if data_len > 1:
             msg = f"Multiple results found ({data_len}), at most one row expected"
             raise ValueError(msg)
 
-        row = cast("dict[str, Any]", self.data[0])
+        row = rows[0]
         if schema_type:
             return to_schema(row, schema_type=schema_type)
         return row
@@ -758,12 +774,10 @@ class ArrowResult(StatementResult):
 
         Raises:
             ValueError: If no Arrow table is available.
+            TypeError: If data is not an Arrow Table.
         """
-        if self.data is None:
-            msg = "No Arrow table available"
-            raise ValueError(msg)
-
-        return cast("list[str]", self.data.column_names)
+        table = self.get_data()
+        return list(table.column_names)
 
     @property
     def num_rows(self) -> int:
@@ -774,12 +788,10 @@ class ArrowResult(StatementResult):
 
         Raises:
             ValueError: If no Arrow table is available.
+            TypeError: If data is not an Arrow Table.
         """
-        if self.data is None:
-            msg = "No Arrow table available"
-            raise ValueError(msg)
-
-        return cast("int", self.data.num_rows)
+        table = self.get_data()
+        return table.num_rows
 
     @property
     def num_columns(self) -> int:
@@ -790,12 +802,10 @@ class ArrowResult(StatementResult):
 
         Raises:
             ValueError: If no Arrow table is available.
+            TypeError: If data is not an Arrow Table.
         """
-        if self.data is None:
-            msg = "No Arrow table available"
-            raise ValueError(msg)
-
-        return cast("int", self.data.num_columns)
+        table = self.get_data()
+        return table.num_columns
 
     def to_pandas(self) -> "PandasDataFrame":
         """Convert Arrow data to pandas DataFrame.
@@ -861,6 +871,7 @@ class ArrowResult(StatementResult):
 
         Raises:
             ValueError: If no Arrow table is available.
+            TypeError: If data is not an Arrow Table.
 
         Examples:
             >>> result = session.select_to_arrow(
@@ -870,11 +881,9 @@ class ArrowResult(StatementResult):
             >>> print(rows[0])
             {'id': 1, 'name': 'Alice'}
         """
-        if self.data is None:
-            msg = "No Arrow table available"
-            raise ValueError(msg)
-
-        return cast("list[dict[str, Any]]", self.data.to_pylist())
+        table = self.get_data()
+        result: list[dict[str, Any]] = table.to_pylist()
+        return result
 
     def write_to_storage_sync(
         self,
@@ -914,17 +923,15 @@ class ArrowResult(StatementResult):
 
         Raises:
             ValueError: If no Arrow table is available.
+            TypeError: If data is not an Arrow Table.
 
         Examples:
             >>> result = session.select_to_arrow("SELECT * FROM users")
             >>> print(len(result))
             100
         """
-        if self.data is None:
-            msg = "No Arrow table available"
-            raise ValueError(msg)
-
-        return cast("int", self.data.num_rows)
+        table = self.get_data()
+        return table.num_rows
 
     def __iter__(self) -> "Iterator[dict[str, Any]]":
         """Iterate over rows as dictionaries.

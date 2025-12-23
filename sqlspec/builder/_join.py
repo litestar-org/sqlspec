@@ -12,7 +12,12 @@ from typing_extensions import Self
 
 from sqlspec.builder._parsing_utils import parse_table_expression
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import has_query_builder_parameters
+from sqlspec.utils.type_guards import (
+    has_attr,
+    has_expression_and_parameters,
+    has_expression_and_sql,
+    has_parameter_builder,
+)
 
 if TYPE_CHECKING:
     from sqlspec.core import SQL
@@ -22,16 +27,15 @@ __all__ = ("JoinBuilder", "JoinClauseMixin")
 
 
 def _handle_sql_object_condition(on: Any, builder: "SQLBuilderProtocol") -> exp.Expression:
-    if hasattr(on, "expression") and on.expression is not None:
-        if hasattr(on, "parameters"):
-            for param_name, param_value in on.parameters.items():
-                builder.add_parameter(param_value, name=param_name)
-        return cast("exp.Expression", on.expression)
-    if hasattr(on, "parameters"):
+    if has_expression_and_parameters(on) and on.expression is not None:
         for param_name, param_value in on.parameters.items():
             builder.add_parameter(param_value, name=param_name)
-    parsed_expr = exp.maybe_parse(on.sql, dialect=builder.dialect)
-    return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))
+        return cast("exp.Expression", on.expression)
+    if has_expression_and_parameters(on):
+        for param_name, param_value in on.parameters.items():
+            builder.add_parameter(param_value, name=param_name)
+    parsed_expr = exp.maybe_parse(on.sql, dialect=builder.dialect)  # pyright: ignore[reportAttributeAccessIssue]
+    return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def _parse_join_condition(
@@ -41,7 +45,7 @@ def _parse_join_condition(
         return None
     if isinstance(on, str):
         return exp.condition(on)
-    if hasattr(on, "expression") and hasattr(on, "sql"):
+    if has_expression_and_sql(on):
         return _handle_sql_object_condition(on, builder)
     if isinstance(on, exp.Expression):
         return on
@@ -55,13 +59,13 @@ def _handle_query_builder_table(table: Any, alias: str | None, builder: "SQLBuil
     if isinstance(table_parameters, dict):
         parameters = table_parameters
 
-    if hasattr(table, "_build_final_expression") and callable(table._build_final_expression):
+    if has_attr(table, "_build_final_expression") and callable(table._build_final_expression):
         subquery_expression = cast("exp.Expression", table._build_final_expression(copy=True))
     else:
         subquery_result = table.build()
-        sql_text = subquery_result.sql if hasattr(subquery_result, "sql") else str(subquery_result)
+        sql_text = subquery_result.sql if has_attr(subquery_result, "sql") else str(subquery_result)
         subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
-        if parameters is None and hasattr(subquery_result, "parameters"):
+        if parameters is None and has_attr(subquery_result, "parameters"):
             result_parameters = subquery_result.parameters
             if isinstance(result_parameters, dict):
                 parameters = result_parameters
@@ -79,7 +83,7 @@ def _parse_join_table(
 ) -> exp.Expression:
     if isinstance(table, str):
         return parse_table_expression(table, alias)
-    if has_query_builder_parameters(table):
+    if has_parameter_builder(table):
         return _handle_query_builder_table(table, alias, builder)
     if isinstance(table, exp.Expression):
         return table

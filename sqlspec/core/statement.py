@@ -193,11 +193,11 @@ class SQL:
         """
         return get_default_config()
 
-    def _normalize_dialect(self, dialect: "DialectType | None") -> "str | None":
+    def _normalize_dialect(self, dialect: "DialectType") -> "str | None":
         """Convert dialect to string representation.
 
         Args:
-            dialect: Dialect type or string
+            dialect: Dialect type, string, or None
 
         Returns:
             String representation of the dialect or None
@@ -252,36 +252,31 @@ class SQL:
         if "is_script" in kwargs:
             self._is_script = bool(kwargs.pop("is_script"))
 
-        filters: list[StatementFilter] = []
-        actual_params: list[Any] = []
-        for p in parameters:
-            if is_statement_filter(p):
-                filters.append(p)
-            else:
-                actual_params.append(p)
-
-        self._filters.extend(filters)
-
-        if actual_params:
-            param_count = len(actual_params)
-            if param_count == 1:
-                param = actual_params[0]
-                if isinstance(param, dict):
-                    self._named_parameters.update(param)
-                elif isinstance(param, (list, tuple)):
-                    if self._is_many:
-                        self._positional_parameters = list(param)
-                    else:
-                        # For drivers with native list expansion support, each item in the tuple/list
-                        # should be treated as a separate parameter (but preserve inner lists/arrays)
-                        # This allows passing arrays/lists as single JSONB parameters
-                        self._positional_parameters.extend(param)
-                else:
-                    self._positional_parameters.append(param)
-            else:
-                self._positional_parameters.extend(actual_params)
-
+        self._filters.extend(self._extract_filters(parameters))
+        self._normalize_parameters(parameters)
         self._named_parameters.update(kwargs)
+
+    def _extract_filters(self, parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
+        return [p for p in parameters if is_statement_filter(p)]
+
+    def _normalize_parameters(self, parameters: "tuple[Any, ...]") -> None:
+        actual_params = [p for p in parameters if not is_statement_filter(p)]
+        if not actual_params:
+            return
+
+        if len(actual_params) == 1:
+            param = actual_params[0]
+            if isinstance(param, dict):
+                self._named_parameters.update(param)
+            elif isinstance(param, (list, tuple)):
+                if self._is_many:
+                    self._positional_parameters = list(param)
+                else:
+                    self._positional_parameters.extend(param)
+            else:
+                self._positional_parameters.append(param)
+        else:
+            self._positional_parameters.extend(actual_params)
 
     @property
     def sql(self) -> str:

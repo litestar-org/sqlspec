@@ -13,7 +13,11 @@ from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psqlpy.events.backend import PsqlpyEventsBackend, PsqlpyHybridEventsBackend
 from sqlspec.adapters.psqlpy.events.backend import create_event_backend as psqlpy_factory
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
-from sqlspec.adapters.psycopg.events.backend import PsycopgEventsBackend, PsycopgHybridEventsBackend
+from sqlspec.adapters.psycopg.events.backend import (
+    PsycopgAsyncEventsBackend,
+    PsycopgAsyncHybridEventsBackend,
+    PsycopgSyncEventsBackend,
+)
 from sqlspec.adapters.psycopg.events.backend import create_event_backend as psycopg_factory
 
 
@@ -31,15 +35,15 @@ def test_psycopg_listen_notify_backends() -> None:
     async_backend = psycopg_factory(async_config, "listen_notify", {})
     sync_backend = psycopg_factory(sync_config, "listen_notify", {})
 
-    assert isinstance(async_backend, PsycopgEventsBackend)
-    assert isinstance(sync_backend, PsycopgEventsBackend)
+    assert isinstance(async_backend, PsycopgAsyncEventsBackend)
+    assert isinstance(sync_backend, PsycopgSyncEventsBackend)
 
 
 def test_psycopg_hybrid_backend_factory() -> None:
     config = PsycopgAsyncConfig(connection_config={"dbname": "example"}, extension_config={"events": {}})
     backend = psycopg_factory(config, "listen_notify_durable", {"queue_table": "sqlspec_event_queue"})
 
-    assert isinstance(backend, PsycopgHybridEventsBackend)
+    assert isinstance(backend, PsycopgAsyncHybridEventsBackend)
 
 
 def test_psqlpy_backends() -> None:

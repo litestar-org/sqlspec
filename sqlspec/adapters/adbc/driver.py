@@ -605,6 +605,16 @@ class AdbcDriver(SyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        ADBC uses explicit BEGIN and does not expose reliable transaction state.
+
+        Returns:
+            False - ADBC requires explicit transaction management.
+        """
+        return False
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.

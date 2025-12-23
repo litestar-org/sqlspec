@@ -550,6 +550,16 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             await cursor.execute(statement)
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        AsyncMy uses explicit BEGIN and does not expose reliable transaction state.
+
+        Returns:
+            False - AsyncMy requires explicit transaction management.
+        """
+        return False
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.

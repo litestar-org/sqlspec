@@ -23,7 +23,7 @@ from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_query_builder_parameters
+from sqlspec.utils.type_guards import has_attr, has_expression_and_sql, has_parameter_builder
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -95,7 +95,7 @@ class _MergeAssignmentMixin:
     def _process_assignment(self, target_column: str, value: Any) -> exp.Expression:
         column_identifier = exp.column(target_column) if isinstance(target_column, str) else target_column
 
-        if hasattr(value, "expression") and hasattr(value, "sql"):
+        if has_expression_and_sql(value):
             value_expr = extract_sql_object_expression(value, builder=self)
             return exp.EQ(this=column_identifier, expression=value_expr)
         if isinstance(value, exp.Expression):
@@ -370,7 +370,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 source_expr = exp.Subquery(this=paren_expr.this, alias=exp.to_identifier(alias))
             else:
                 source_expr = paren_expr
-        elif has_query_builder_parameters(source) and hasattr(source, "_expression"):
+        elif has_parameter_builder(source) and has_attr(source, "_expression"):
             parameters_obj = getattr(source, "parameters", None)
             if isinstance(parameters_obj, dict):
                 for param_name, param_value in parameters_obj.items():
@@ -597,7 +597,7 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
                 using_alias = None
                 using_expr = current_expr.args.get("using")
                 if using_expr is not None and (
-                    isinstance(using_expr, (exp.Subquery, exp.Table)) or hasattr(using_expr, "alias")
+                    isinstance(using_expr, (exp.Subquery, exp.Table)) or has_attr(using_expr, "alias")
                 ):
                     using_alias = using_expr.alias
                 column_values = [f"{using_alias}.{col}" for col in column_names] if using_alias else column_names
@@ -611,7 +611,7 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
 
         insert_values: list[exp.Expression] = []
         for column_name, value in zip(column_names, column_values, strict=True):
-            if hasattr(value, "expression") and hasattr(value, "sql"):
+            if has_expression_and_sql(value):
                 insert_values.append(extract_sql_object_expression(value, builder=self))
             elif isinstance(value, exp.Expression):
                 insert_values.append(value)
@@ -678,7 +678,7 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
         set_expressions: list[exp.Expression] = []
         for column_name, value in combined_assignments.items():
             column_identifier = exp.column(column_name)
-            if hasattr(value, "expression") and hasattr(value, "sql"):
+            if has_expression_and_sql(value):
                 value_expr = extract_sql_object_expression(value, builder=self)
             elif isinstance(value, exp.Expression):
                 value_expr = value

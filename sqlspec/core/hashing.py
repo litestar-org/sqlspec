@@ -115,7 +115,7 @@ def hash_parameters(
         param_hash ^= hash(tuple(hashable_parameters))
 
     if named_parameters:
-        hashable_items = []
+        hashable_items: list[tuple[str, tuple[Any, Any]]] = []
         for key, value in sorted(named_parameters.items()):
             if is_typed_parameter(value):
                 if isinstance(value.value, (list, dict)):

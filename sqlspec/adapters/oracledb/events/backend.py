@@ -6,11 +6,12 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._models import EventMessage
+from sqlspec.extensions.events._payload import parse_event_timestamp
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
 try:  # pragma: no cover - optional dependency path
     import oracledb
@@ -19,24 +20,26 @@ except ImportError:  # pragma: no cover - optional dependency path
 
 logger = get_logger("events.oracle")
 
-__all__ = ("OracleAQEventBackend", "create_event_backend")
+__all__ = ("OracleAsyncAQEventBackend", "OracleSyncAQEventBackend", "create_event_backend")
 
 _DEFAULT_QUEUE_NAME = "SQLSPEC_EVENTS_QUEUE"
 
 
-class OracleAQEventBackend:
-    """Oracle AQ backend used by sync Oracle adapters."""
+class OracleSyncAQEventBackend:
+    """Oracle AQ backend for sync Oracle adapters."""
+
+    __slots__ = ("_config", "_queue_name", "_runtime", "_visibility", "_wait_seconds")
 
     supports_sync = True
     supports_async = False
     backend_name = "advanced_queue"
 
-    def __init__(self, config: "DatabaseConfigProtocol[Any, Any, Any]", settings: dict[str, Any] | None = None) -> None:
+    def __init__(self, config: "OracleSyncConfig", settings: "dict[str, Any] | None" = None) -> None:
         if "oracledb" not in type(config).__module__:
             msg = "Oracle AQ backend requires an Oracle adapter"
             raise ImproperConfigurationError(msg)
         if config.is_async:
-            msg = "Oracle AQ backend requires a synchronous Oracle configuration"
+            msg = "OracleSyncAQEventBackend requires a sync adapter"
             raise ImproperConfigurationError(msg)
         if oracledb is None:
             msg = "oracledb"
@@ -48,33 +51,29 @@ class OracleAQEventBackend:
         self._visibility: str | None = settings.get("aq_visibility")
         self._wait_seconds: int = int(settings.get("aq_wait_seconds", 5))
 
-    def publish_sync(self, channel: str, payload: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
+    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
-        envelope = self._build_envelope(channel, event_id, payload, metadata)
+        envelope = _build_envelope(channel, event_id, payload, metadata)
         session_cm = self._config.provide_session()
-        with session_cm as driver:  # type: ignore[union-attr]
+        with session_cm as driver:
             connection = getattr(driver, "connection", None)
             if connection is None:
                 msg = "Oracle driver does not expose a raw connection"
                 raise EventChannelError(msg)
-            queue = self._get_queue(connection, channel)
+            queue = _get_queue(connection, channel, self._queue_name)
             queue.enqone(payload=envelope)
             driver.commit()
         self._runtime.increment_metric("events.publish.native")
         return event_id
 
-    async def publish_async(self, *_: Any, **__: Any) -> str:  # pragma: no cover - guarded by supports_async
-        msg = "Oracle AQ backend does not support async adapters"
-        raise ImproperConfigurationError(msg)
-
-    def dequeue_sync(self, channel: str, poll_interval: float) -> EventMessage | None:
+    def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         session_cm = self._config.provide_session()
-        with session_cm as driver:  # type: ignore[union-attr]
+        with session_cm as driver:
             connection = getattr(driver, "connection", None)
             if connection is None:
                 msg = "Oracle driver does not expose a raw connection"
                 raise EventChannelError(msg)
-            queue = self._get_queue(connection, channel)
+            queue = _get_queue(connection, channel, self._queue_name)
             options = oracledb.AQDequeueOptions()  # type: ignore[attr-defined]
             options.wait = max(int(self._wait_seconds), 0)
             if self._visibility:
@@ -93,36 +92,9 @@ class OracleAQEventBackend:
                 return None
             payload = message.payload
             driver.commit()
-        if not isinstance(payload, dict):
-            payload = {"payload": payload}
-        payload_channel = payload.get("channel")
-        message_channel = payload_channel if isinstance(payload_channel, str) else channel
-        event_id = payload.get("event_id", uuid4().hex)
-        body = payload.get("payload")
-        if not isinstance(body, dict):
-            body = {"value": body}
-        metadata = payload.get("metadata")
-        if not (metadata is None or isinstance(metadata, dict)):
-            metadata = {"value": metadata}
-        published_at = payload.get("published_at")
-        timestamp = self._parse_timestamp(published_at)
-        self._runtime.increment_metric("events.deliver")
-        return EventMessage(
-            event_id=event_id,
-            channel=message_channel,
-            payload=body,
-            metadata=metadata,
-            attempts=0,
-            available_at=timestamp,
-            lease_expires_at=None,
-            created_at=timestamp,
-        )
+        return _parse_message(channel, payload)
 
-    async def dequeue_async(self, *_: Any, **__: Any) -> EventMessage | None:  # pragma: no cover - guarded
-        msg = "Oracle AQ backend does not support async adapters"
-        raise ImproperConfigurationError(msg)
-
-    def ack_sync(self, _event_id: str) -> None:
+    def ack(self, _event_id: str) -> None:
         """Acknowledge an event (no-op for Oracle AQ).
 
         Oracle AQ messages are removed upon commit, so acknowledgment
@@ -130,58 +102,156 @@ class OracleAQEventBackend:
         """
         self._runtime.increment_metric("events.ack")
 
-    async def ack_async(self, *_: Any, **__: Any) -> None:  # pragma: no cover - guarded
-        msg = "Oracle AQ backend does not support async adapters"
-        raise ImproperConfigurationError(msg)
+    def shutdown(self) -> None:
+        """Shutdown the backend (no-op for Oracle AQ)."""
 
-    def _get_queue(self, connection: Any, channel: str) -> Any:
-        queue_name = self._queue_name
-        if isinstance(queue_name, str) and "{" in queue_name:
-            with contextlib.suppress(Exception):
-                queue_name = queue_name.format(channel=channel.upper())
-        payload_type = getattr(oracledb, "DB_TYPE_JSON", None)
-        if payload_type is None:
-            payload_type = getattr(oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
-        return connection.queue(queue_name, payload_type=payload_type)
 
-    @staticmethod
-    def _build_envelope(
-        channel: str, event_id: str, payload: dict[str, Any], metadata: dict[str, Any] | None
-    ) -> dict[str, Any]:
-        timestamp = datetime.now(timezone.utc).isoformat()
-        return {
-            "channel": channel,
-            "event_id": event_id,
-            "payload": payload,
-            "metadata": metadata,
-            "published_at": timestamp,
-        }
+class OracleAsyncAQEventBackend:
+    """Oracle AQ backend for async Oracle adapters."""
 
-    @staticmethod
-    def _parse_timestamp(value: Any) -> datetime:
-        """Parse a timestamp value into a timezone-aware datetime.
+    __slots__ = ("_config", "_queue_name", "_runtime", "_visibility", "_wait_seconds")
 
-        Handles ISO format strings, datetime objects, and falls back to
-        current UTC time for invalid or missing values.
+    supports_sync = False
+    supports_async = True
+    backend_name = "advanced_queue"
+
+    def __init__(self, config: "OracleAsyncConfig", settings: "dict[str, Any] | None" = None) -> None:
+        if "oracledb" not in type(config).__module__:
+            msg = "Oracle AQ backend requires an Oracle adapter"
+            raise ImproperConfigurationError(msg)
+        if not config.is_async:
+            msg = "OracleAsyncAQEventBackend requires an async adapter"
+            raise ImproperConfigurationError(msg)
+        if oracledb is None:
+            msg = "oracledb"
+            raise MissingDependencyError(msg, install_package="oracledb")
+        self._config = config
+        self._runtime = config.get_observability_runtime()
+        settings = settings or {}
+        self._queue_name = settings.get("aq_queue", _DEFAULT_QUEUE_NAME)
+        self._visibility: str | None = settings.get("aq_visibility")
+        self._wait_seconds: int = int(settings.get("aq_wait_seconds", 5))
+
+    async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        event_id = uuid4().hex
+        envelope = _build_envelope(channel, event_id, payload, metadata)
+        session_cm = self._config.provide_session()
+        async with session_cm as driver:
+            connection = getattr(driver, "connection", None)
+            if connection is None:
+                msg = "Oracle driver does not expose a raw connection"
+                raise EventChannelError(msg)
+            queue = _get_queue(connection, channel, self._queue_name)
+            await queue.enqone(payload=envelope)
+            await driver.commit()
+        self._runtime.increment_metric("events.publish.native")
+        return event_id
+
+    async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
+        session_cm = self._config.provide_session()
+        async with session_cm as driver:
+            connection = getattr(driver, "connection", None)
+            if connection is None:
+                msg = "Oracle driver does not expose a raw connection"
+                raise EventChannelError(msg)
+            queue = _get_queue(connection, channel, self._queue_name)
+            options = oracledb.AQDequeueOptions()  # type: ignore[attr-defined]
+            options.wait = max(int(self._wait_seconds), 0)
+            if self._visibility:
+                default_visibility = getattr(oracledb, "AQMSG_VISIBLE", None)
+                options.visibility = getattr(oracledb, self._visibility, None) or default_visibility
+            try:
+                message = await queue.deqone(options=options)
+            except Exception as error:  # pragma: no cover - driver surfaced runtime
+                if oracledb is None or not isinstance(error, oracledb.DatabaseError):
+                    raise
+                logger.warning("Oracle AQ dequeue failed: %s", error)
+                await driver.rollback()
+                return None
+            if message is None:
+                await driver.rollback()
+                return None
+            payload = message.payload
+            await driver.commit()
+        return _parse_message(channel, payload)
+
+    async def ack(self, _event_id: str) -> None:
+        """Acknowledge an event (no-op for Oracle AQ).
+
+        Oracle AQ messages are removed upon commit, so acknowledgment
+        is handled automatically by the database transaction.
         """
-        if isinstance(value, datetime):
-            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-        if isinstance(value, str):
-            with contextlib.suppress(ValueError):
-                parsed = datetime.fromisoformat(value)
-                if parsed.tzinfo is None:
-                    return parsed.replace(tzinfo=timezone.utc)
-                return parsed
-        return datetime.now(timezone.utc)
+        self._runtime.increment_metric("events.ack")
+
+    async def shutdown(self) -> None:
+        """Shutdown the backend (no-op for Oracle AQ)."""
+
+
+def _get_queue(connection: Any, channel: str, queue_name: str) -> Any:
+    """Get Oracle AQ queue handle."""
+    if isinstance(queue_name, str) and "{" in queue_name:
+        with contextlib.suppress(Exception):
+            queue_name = queue_name.format(channel=channel.upper())
+    payload_type = getattr(oracledb, "DB_TYPE_JSON", None)
+    if payload_type is None:
+        payload_type = getattr(oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
+    return connection.queue(queue_name, payload_type=payload_type)
+
+
+def _build_envelope(
+    channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
+) -> "dict[str, Any]":
+    """Build event envelope for Oracle AQ."""
+    return {
+        "channel": channel,
+        "event_id": event_id,
+        "payload": payload,
+        "metadata": metadata,
+        "published_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _parse_message(channel: str, payload: Any) -> EventMessage:
+    """Parse Oracle AQ message payload into EventMessage."""
+    if not isinstance(payload, dict):
+        payload = {"payload": payload}
+    payload_channel = payload.get("channel")
+    message_channel = payload_channel if isinstance(payload_channel, str) else channel
+    event_id = payload.get("event_id", uuid4().hex)
+    body = payload.get("payload")
+    if not isinstance(body, dict):
+        body = {"value": body}
+    metadata = payload.get("metadata")
+    if not (metadata is None or isinstance(metadata, dict)):
+        metadata = {"value": metadata}
+    timestamp = parse_event_timestamp(payload.get("published_at"))
+    return EventMessage(
+        event_id=event_id,
+        channel=message_channel,
+        payload=body,
+        metadata=metadata,
+        attempts=0,
+        available_at=timestamp,
+        lease_expires_at=None,
+        created_at=timestamp,
+    )
 
 
 def create_event_backend(
-    config: "DatabaseConfigProtocol[Any, Any, Any]", backend_name: str, extension_settings: dict[str, Any]
-) -> OracleAQEventBackend | None:
+    config: "OracleAsyncConfig | OracleSyncConfig", backend_name: str, extension_settings: "dict[str, Any]"
+) -> OracleSyncAQEventBackend | OracleAsyncAQEventBackend | None:
     """Factory used by EventChannel to create the Oracle AQ backend."""
-    if backend_name != "advanced_queue":
-        return None
-    try:
-        return OracleAQEventBackend(config, extension_settings)
-    except (ImproperConfigurationError, MissingDependencyError):
-        return None
+    is_async = config.is_async
+    match (backend_name, is_async):
+        case ("advanced_queue", False):
+            try:
+                return OracleSyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case ("advanced_queue", True):
+            try:
+                return OracleAsyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case _:
+            return None

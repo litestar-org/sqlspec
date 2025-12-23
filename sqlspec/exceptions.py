@@ -54,7 +54,7 @@ class SQLSpecError(Exception):
         str_args = [str(arg) for arg in args if arg]
         if not detail:
             if str_args:
-                detail, *str_args = str_args
+                detail = str_args[0]
             elif hasattr(self, "detail"):
                 detail = self.detail
         self.detail = detail
@@ -66,7 +66,10 @@ class SQLSpecError(Exception):
         return self.__class__.__name__
 
     def __str__(self) -> str:
-        return " ".join((*self.args, self.detail)).strip()
+        parts = list(self.args)
+        if self.detail and self.detail not in self.args:
+            parts.append(self.detail)
+        return " ".join(parts).strip()
 
 
 class MissingDependencyError(SQLSpecError, ImportError):
