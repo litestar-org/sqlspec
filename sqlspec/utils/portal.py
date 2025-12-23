@@ -149,9 +149,7 @@ class PortalProvider:
         result: _R = await func(*args, **kwargs)
         return result
 
-    def call(
-        self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, timeout: float = 300.0, **kwargs: Any
-    ) -> _R:
+    def call(self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, **kwargs: Any) -> _R:
         """Call an async function from synchronous context.
 
         Executes the async function in the background event loop and blocks
@@ -160,8 +158,7 @@ class PortalProvider:
         Args:
             func: The async function to call.
             *args: Positional arguments to the function.
-            timeout: Maximum seconds to wait for result (default 300).
-            **kwargs: Keyword arguments to the function.
+            **kwargs: Keyword arguments. Supports 'timeout' (float, default 300.0).
 
         Returns:
             Result of the async function.
@@ -170,6 +167,7 @@ class PortalProvider:
             ImproperConfigurationError: If portal provider not started or timeout reached.
 
         """
+        timeout: float = float(kwargs.pop("timeout", 300.0))
         if self._loop is None or not self.is_running:
             msg = "Portal provider not running. Call start() first."
             raise ImproperConfigurationError(msg)
@@ -233,22 +231,19 @@ class Portal:
         """
         self._provider = provider
 
-    def call(
-        self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, timeout: float = 300.0, **kwargs: Any
-    ) -> _R:
+    def call(self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, **kwargs: Any) -> _R:
         """Call an async function using the portal provider.
 
         Args:
             func: The async function to call.
             *args: Positional arguments to the function.
-            timeout: Maximum seconds to wait for result (default 300).
-            **kwargs: Keyword arguments to the function.
+            **kwargs: Keyword arguments. Supports 'timeout' (float, default 300.0).
 
         Returns:
             Result of the async function.
 
         """
-        return self._provider.call(func, *args, timeout=timeout, **kwargs)
+        return self._provider.call(func, *args, **kwargs)
 
 
 class PortalManager(metaclass=SingletonMeta):
