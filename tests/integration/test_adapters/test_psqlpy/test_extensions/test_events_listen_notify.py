@@ -36,7 +36,7 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
 
     try:
         listener = channel.listen("alerts", _handler, poll_interval=0.2)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.3)  # Allow listener to subscribe before publishing
         event_id = await channel.publish("alerts", {"action": "native"})
         for _ in range(200):
             if received:
@@ -82,7 +82,7 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
 
     try:
         listener = channel.listen("alerts", _handler, poll_interval=0.2)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.3)  # Allow listener to subscribe before publishing
         event_id = await channel.publish("alerts", {"action": "hybrid"})
         for _ in range(200):
             if received:
