@@ -609,8 +609,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        # psqlpy transaction_status returns an object that stringifies to status
-        return "IDLE" not in str(self.connection.transaction_status).upper()
+        return bool(self.connection.in_transaction())
 
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":

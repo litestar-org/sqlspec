@@ -248,7 +248,9 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             )
 
     def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
-        with cast("AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session()) as driver:
+        with cast(
+            "AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session(transaction=True)
+        ) as driver:
             result = driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
             driver.commit()
             return result.rows_affected
@@ -347,7 +349,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
     async def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
         async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session()
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
         ) as driver:
             result = await driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
             await driver.commit()
