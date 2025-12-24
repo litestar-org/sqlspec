@@ -3,7 +3,9 @@
 from dataclasses import dataclass
 from typing import Any, Final
 
-__all__ = ("EventRuntimeHints", "get_runtime_hints")
+__all__ = ("EventRuntimeHints", "get_runtime_hints", "resolve_adapter_name")
+
+_ADAPTER_MODULE_PARTS = 3
 
 
 @dataclass(frozen=True)
@@ -23,7 +25,6 @@ _DEFAULT_HINTS: Final[EventRuntimeHints] = EventRuntimeHints()
 
 def get_runtime_hints(adapter: "str | None", config: "Any" = None) -> "EventRuntimeHints":
     """Return runtime hints provided by the adapter configuration."""
-
     if config is None:
         return _DEFAULT_HINTS
     provider = getattr(config, "get_event_runtime_hints", None)
@@ -33,3 +34,12 @@ def get_runtime_hints(adapter: "str | None", config: "Any" = None) -> "EventRunt
     if isinstance(hints, EventRuntimeHints):
         return hints
     return _DEFAULT_HINTS
+
+
+def resolve_adapter_name(config: Any) -> "str | None":
+    """Resolve adapter name from config module path."""
+    module_name = type(config).__module__
+    parts = module_name.split(".")
+    if len(parts) >= _ADAPTER_MODULE_PARTS and parts[0] == "sqlspec" and parts[1] == "adapters":
+        return parts[2]
+    return None

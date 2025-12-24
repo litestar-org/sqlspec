@@ -2,6 +2,7 @@
 
 import pytest
 
+from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events._store import normalize_event_channel_name, normalize_queue_table_name
 
 
@@ -30,32 +31,32 @@ def test_normalize_queue_table_name_three_segments() -> None:
 
 
 def test_normalize_queue_table_name_invalid_characters() -> None:
-    """Names with invalid characters raise ValueError."""
-    with pytest.raises(ValueError, match="Invalid events table name"):
+    """Names with invalid characters raise EventChannelError."""
+    with pytest.raises(EventChannelError, match="Invalid events table name"):
         normalize_queue_table_name("events-queue")
 
 
 def test_normalize_queue_table_name_starts_with_number() -> None:
     """Names starting with numbers are rejected."""
-    with pytest.raises(ValueError, match="Invalid events table name"):
+    with pytest.raises(EventChannelError, match="Invalid events table name"):
         normalize_queue_table_name("123_events")
 
 
 def test_normalize_queue_table_name_empty_segment() -> None:
     """Empty segments in schema-qualified names are rejected."""
-    with pytest.raises(ValueError, match="Invalid events table name"):
+    with pytest.raises(EventChannelError, match="Invalid events table name"):
         normalize_queue_table_name("schema..events")
 
 
 def test_normalize_queue_table_name_special_chars() -> None:
     """Special characters like @ are rejected."""
-    with pytest.raises(ValueError, match="Invalid events table name"):
+    with pytest.raises(EventChannelError, match="Invalid events table name"):
         normalize_queue_table_name("events@queue")
 
 
 def test_normalize_queue_table_name_spaces() -> None:
     """Spaces in names are rejected."""
-    with pytest.raises(ValueError, match="Invalid events table name"):
+    with pytest.raises(EventChannelError, match="Invalid events table name"):
         normalize_queue_table_name("events queue")
 
 
@@ -85,23 +86,23 @@ def test_normalize_event_channel_name_alphanumeric() -> None:
 
 def test_normalize_event_channel_name_invalid_hyphen() -> None:
     """Hyphens in channel names are rejected."""
-    with pytest.raises(ValueError, match="Invalid events channel name"):
+    with pytest.raises(EventChannelError, match="Invalid events channel name"):
         normalize_event_channel_name("user-events")
 
 
 def test_normalize_event_channel_name_dot_not_allowed() -> None:
     """Dots are not allowed in channel names (unlike table names)."""
-    with pytest.raises(ValueError, match="Invalid events channel name"):
+    with pytest.raises(EventChannelError, match="Invalid events channel name"):
         normalize_event_channel_name("app.notifications")
 
 
 def test_normalize_event_channel_name_starts_with_number() -> None:
     """Channel names starting with numbers are rejected."""
-    with pytest.raises(ValueError, match="Invalid events channel name"):
+    with pytest.raises(EventChannelError, match="Invalid events channel name"):
         normalize_event_channel_name("123events")
 
 
 def test_normalize_event_channel_name_empty() -> None:
     """Empty channel names are rejected."""
-    with pytest.raises(ValueError, match="Invalid events channel name"):
+    with pytest.raises(EventChannelError, match="Invalid events channel name"):
         normalize_event_channel_name("")

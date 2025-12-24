@@ -4,7 +4,7 @@ import contextlib
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlspec.extensions.events import EventMessage
+from sqlspec.extensions.events._models import EventMessage
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 

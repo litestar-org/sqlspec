@@ -1,15 +1,16 @@
 """Psqlpy LISTEN/NOTIFY and hybrid event backends."""
 
+# pyright: ignore=reportPrivateUsage
 import asyncio
 import contextlib
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.core import SQL
-from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventMessage
 from sqlspec.extensions.events._payload import decode_notify_payload, encode_notify_payload
-from sqlspec.extensions.events._queue import AsyncQueueEventBackend, build_queue_backend
+from sqlspec.extensions.events._queue import AsyncTableEventQueue, build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name as _normalize_channel
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
@@ -85,6 +86,9 @@ class PsqlpyEventsBackend:
     async def ack(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
 
+    async def nack(self, _event_id: str) -> None:
+        """Return an event to the queue (no-op for native LISTEN/NOTIFY)."""
+
     async def shutdown(self) -> None:
         """Shutdown the listener and release resources."""
         if self._listener is not None:
@@ -117,12 +121,12 @@ class PsqlpyHybridEventsBackend:
     supports_async = True
     backend_name = "listen_notify_durable"
 
-    def __init__(self, config: "PsqlpyConfig", queue_backend: "AsyncQueueEventBackend") -> None:
+    def __init__(self, config: "PsqlpyConfig", queue: "AsyncTableEventQueue") -> None:
         if "psqlpy" not in type(config).__module__:
             msg = "Psqlpy hybrid backend requires a Psqlpy adapter"
             raise ImproperConfigurationError(msg)
         self._config = config
-        self._queue = queue_backend
+        self._queue = queue
         self._runtime = config.get_observability_runtime()
         self._listener: Any | None = None
         self._listener_started: bool = False
@@ -152,7 +156,7 @@ class PsqlpyHybridEventsBackend:
             await asyncio.wait_for(event.wait(), timeout=poll_interval)
 
         await listener.clear_channel_callbacks(channel=channel)
-        return await self._queue.dequeue(channel, poll_interval=poll_interval)
+        return await self._queue.dequeue(channel, poll_interval)
 
     async def ack(self, event_id: str) -> None:
         await self._queue.ack(event_id)
@@ -184,26 +188,22 @@ class PsqlpyHybridEventsBackend:
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
     ) -> None:
         now = datetime.now(timezone.utc)
-        queue = getattr(self._queue, "_queue", None)
-        if queue is None:
-            msg = "Hybrid queue backend missing queue reference"
-            raise EventChannelError(msg)
         async with self._config.provide_session() as driver:
             await driver.execute(
                 SQL(
-                    queue._upsert_sql,
+                    self._queue._upsert_sql,  # pyright: ignore[reportPrivateUsage]
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": queue._encode_json(payload),
-                        "metadata_json": queue._encode_json(metadata),
+                        "payload_json": to_json(payload),
+                        "metadata_json": to_json(metadata) if metadata else None,
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
                         "attempts": 0,
                         "created_at": now,
                     },
-                    statement_config=queue.statement_config,
+                    statement_config=self._queue._statement_config,  # pyright: ignore[reportPrivateUsage]
                 )
             )
             await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, to_json({"event_id": event_id})))
@@ -223,9 +223,9 @@ def create_event_backend(
             except ImproperConfigurationError:
                 return None
         case "listen_notify_durable":
-            queue_backend = cast("AsyncQueueEventBackend", build_queue_backend(config, extension_settings, adapter_name="psqlpy"))
+            queue = cast("AsyncTableEventQueue", build_queue_backend(config, extension_settings, adapter_name="psqlpy"))
             try:
-                return PsqlpyHybridEventsBackend(config, queue_backend)
+                return PsqlpyHybridEventsBackend(config, queue)
             except ImproperConfigurationError:
                 return None
         case _:

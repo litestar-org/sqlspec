@@ -65,6 +65,18 @@ class AsyncEventBackendProtocol(Protocol):
         """
         ...
 
+    async def nack(self, event_id: str) -> None:
+        """Return an event to the queue for redelivery.
+
+        Args:
+            event_id: ID of the event to return.
+        """
+        ...
+
+    async def shutdown(self) -> None:
+        """Shutdown the backend and release resources."""
+        ...
+
 
 @runtime_checkable
 class SyncEventBackendProtocol(Protocol):
@@ -107,4 +119,16 @@ class SyncEventBackendProtocol(Protocol):
         Args:
             event_id: ID of the event to acknowledge.
         """
+        ...
+
+    def nack(self, event_id: str) -> None:
+        """Return an event to the queue for redelivery.
+
+        Args:
+            event_id: ID of the event to return.
+        """
+        ...
+
+    def shutdown(self) -> None:
+        """Shutdown the backend and release resources."""
         ...

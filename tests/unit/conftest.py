@@ -700,7 +700,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        return self.connection.in_transaction
+        return bool(self.connection.in_transaction)
 
 
 class MockAsyncDriver(AsyncDriverAdapterBase):
@@ -812,7 +812,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        return self.connection.in_transaction
+        return bool(self.connection.in_transaction)
 
 
 @pytest.fixture

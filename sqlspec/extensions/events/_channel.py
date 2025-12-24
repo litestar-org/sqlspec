@@ -4,12 +4,12 @@ import asyncio
 import importlib
 import inspect
 import threading
-from collections.abc import AsyncIterator, Awaitable, Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
-from sqlspec.extensions.events._hints import get_runtime_hints
+from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._queue import build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
@@ -18,7 +18,7 @@ from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-    from sqlspec.extensions.events.protocols import (
+    from sqlspec.extensions.events._protocols import (
         AsyncEventBackendProtocol,
         AsyncEventHandler,
         SyncEventBackendProtocol,
@@ -66,23 +66,6 @@ class SyncEventListener:
         self.thread.join()
 
 
-def _resolve_adapter_name(config: Any) -> "str | None":
-    """Resolve adapter name from config module path."""
-    module_name = type(config).__module__
-    parts = module_name.split(".")
-    if len(parts) >= _ADAPTER_MODULE_PARTS and parts[0] == "sqlspec" and parts[1] == "adapters":
-        return parts[2]
-    return None
-
-
-def _normalize_channel_name(channel: str) -> str:
-    """Normalize and validate channel name."""
-    try:
-        return normalize_event_channel_name(channel)
-    except ValueError as error:
-        raise ImproperConfigurationError(str(error)) from error
-
-
 def _resolve_poll_interval(poll_interval: "float | None", default: float) -> float:
     """Resolve poll interval with validation."""
     if poll_interval is None:
@@ -97,14 +80,7 @@ _POSTGRES_ADAPTERS = frozenset({"asyncpg", "psycopg", "psqlpy"})
 
 
 def _get_default_backend(adapter_name: "str | None") -> str:
-    """Return the default events backend for an adapter.
-
-    Args:
-        adapter_name: Name of the database adapter.
-
-    Returns:
-        Default backend name ('listen_notify' for PostgreSQL, 'table_queue' otherwise).
-    """
+    """Return the default events backend for an adapter."""
     if adapter_name in _POSTGRES_ADAPTERS:
         return "listen_notify"
     return "table_queue"
@@ -181,11 +157,7 @@ def _end_event_span(
 
 
 class SyncEventChannel:
-    """Event channel for synchronous database configurations.
-
-    Provides publish/subscribe functionality using sync database drivers.
-    Use with sync configs like SqliteConfig, DuckdbConfig, PsycopgSyncConfig.
-    """
+    """Event channel for synchronous database configurations."""
 
     __slots__ = (
         "_adapter_name",
@@ -204,7 +176,7 @@ class SyncEventChannel:
             msg = "SyncEventChannel requires a sync configuration"
             raise ImproperConfigurationError(msg)
         extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
-        self._adapter_name = _resolve_adapter_name(config)
+        self._adapter_name = resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
@@ -224,18 +196,9 @@ class SyncEventChannel:
         self._listeners: dict[str, SyncEventListener] = {}
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
-        """Publish an event to a channel.
-
-        Args:
-            channel: Target channel name.
-            payload: Event payload (must be JSON-serializable).
-            metadata: Optional metadata dict.
-
-        Returns:
-            The event ID.
-        """
-        channel = _normalize_channel_name(channel)
-        if not getattr(self._backend, "supports_sync", False):
+        """Publish an event to a channel."""
+        channel = normalize_event_channel_name(channel)
+        if not self._backend.supports_sync:
             msg = "Current events backend does not support sync publishing"
             raise ImproperConfigurationError(msg)
         span = _start_event_span(self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="sync")
@@ -248,17 +211,9 @@ class SyncEventChannel:
         return event_id
 
     def iter_events(self, channel: str, *, poll_interval: float | None = None) -> Iterator[EventMessage]:
-        """Yield events as they become available.
-
-        Args:
-            channel: Channel to consume from.
-            poll_interval: Override default poll interval.
-
-        Yields:
-            EventMessage objects.
-        """
-        channel = _normalize_channel_name(channel)
-        if not getattr(self._backend, "supports_sync", False):
+        """Yield events as they become available."""
+        channel = normalize_event_channel_name(channel)
+        if not self._backend.supports_sync:
             msg = "Current events backend does not support sync consumption"
             raise ImproperConfigurationError(msg)
         interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
@@ -281,19 +236,9 @@ class SyncEventChannel:
     def listen(
         self, channel: str, handler: "SyncEventHandler", *, poll_interval: float | None = None, auto_ack: bool = True
     ) -> SyncEventListener:
-        """Start a background thread that invokes handler for each event.
-
-        Args:
-            channel: Channel to listen on.
-            handler: Callback function for each event.
-            poll_interval: Override default poll interval.
-            auto_ack: Automatically acknowledge events after handler completes.
-
-        Returns:
-            SyncEventListener that can be used to stop the listener.
-        """
-        channel = _normalize_channel_name(channel)
-        if not getattr(self._backend, "supports_sync", False):
+        """Start a background thread that invokes handler for each event."""
+        channel = normalize_event_channel_name(channel)
+        if not self._backend.supports_sync:
             msg = "Current events backend does not support sync listeners"
             raise ImproperConfigurationError(msg)
         interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
@@ -309,11 +254,7 @@ class SyncEventChannel:
         return listener
 
     def stop_listener(self, listener_id: str) -> None:
-        """Stop a running listener.
-
-        Args:
-            listener_id: ID of the listener to stop.
-        """
+        """Stop a running listener."""
         listener = self._listeners.pop(listener_id, None)
         if listener is None:
             return
@@ -321,12 +262,8 @@ class SyncEventChannel:
         self._runtime.increment_metric("events.listener.stop")
 
     def ack(self, event_id: str) -> None:
-        """Acknowledge an event.
-
-        Args:
-            event_id: ID of the event to acknowledge.
-        """
-        if not getattr(self._backend, "supports_sync", False):
+        """Acknowledge an event."""
+        if not self._backend.supports_sync:
             msg = "Current events backend does not support sync ack"
             raise ImproperConfigurationError(msg)
         span = _start_event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="sync")
@@ -338,18 +275,10 @@ class SyncEventChannel:
         _end_event_span(self._runtime, span, result="acked")
 
     def nack(self, event_id: str) -> None:
-        """Return an event to the queue for redelivery.
-
-        Args:
-            event_id: ID of the event to return.
-        """
-        nack_method = getattr(self._backend, "nack", None)
-        if nack_method is None:
-            msg = "Current events backend does not support nack"
-            raise ImproperConfigurationError(msg)
+        """Return an event to the queue for redelivery."""
         span = _start_event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="sync")
         try:
-            nack_method(event_id)
+            self._backend.nack(event_id)
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
@@ -361,9 +290,7 @@ class SyncEventChannel:
         try:
             for listener_id in list(self._listeners):
                 self.stop_listener(listener_id)
-            backend_shutdown = getattr(self._backend, "shutdown", None)
-            if backend_shutdown is not None and callable(backend_shutdown):
-                backend_shutdown()
+            self._backend.shutdown()
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
@@ -398,18 +325,14 @@ class SyncEventChannel:
                     handler(event)
                     if auto_ack:
                         self._backend.ack(event.event_id)
-                except Exception as error:  # pragma: no cover - logging path
+                except Exception as error:
                     logger.warning("sync listener %s handler error: %s", listener_id, error)
         finally:
             self._listeners.pop(listener_id, None)
 
 
 class AsyncEventChannel:
-    """Event channel for asynchronous database configurations.
-
-    Provides publish/subscribe functionality using async database drivers.
-    Use with async configs like AsyncpgConfig, AiosqliteConfig, PsycopgAsyncConfig.
-    """
+    """Event channel for asynchronous database configurations."""
 
     __slots__ = (
         "_adapter_name",
@@ -428,7 +351,7 @@ class AsyncEventChannel:
             msg = "AsyncEventChannel requires an async configuration"
             raise ImproperConfigurationError(msg)
         extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
-        self._adapter_name = _resolve_adapter_name(config)
+        self._adapter_name = resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
@@ -448,18 +371,9 @@ class AsyncEventChannel:
         self._listeners: dict[str, AsyncEventListener] = {}
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
-        """Publish an event to a channel.
-
-        Args:
-            channel: Target channel name.
-            payload: Event payload (must be JSON-serializable).
-            metadata: Optional metadata dict.
-
-        Returns:
-            The event ID.
-        """
-        channel = _normalize_channel_name(channel)
-        if not getattr(self._backend, "supports_async", False):
+        """Publish an event to a channel."""
+        channel = normalize_event_channel_name(channel)
+        if not self._backend.supports_async:
             msg = "Current events backend does not support async publishing"
             raise ImproperConfigurationError(msg)
         span = _start_event_span(
@@ -474,17 +388,9 @@ class AsyncEventChannel:
         return event_id
 
     async def iter_events(self, channel: str, *, poll_interval: float | None = None) -> AsyncIterator[EventMessage]:
-        """Yield events as they become available.
-
-        Args:
-            channel: Channel to consume from.
-            poll_interval: Override default poll interval.
-
-        Yields:
-            EventMessage objects.
-        """
-        channel = _normalize_channel_name(channel)
-        if not getattr(self._backend, "supports_async", False):
+        """Yield events as they become available."""
+        channel = normalize_event_channel_name(channel)
+        if not self._backend.supports_async:
             msg = "Current events backend does not support async consumption"
             raise ImproperConfigurationError(msg)
         interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
@@ -512,19 +418,9 @@ class AsyncEventChannel:
         poll_interval: float | None = None,
         auto_ack: bool = True,
     ) -> AsyncEventListener:
-        """Start an async task that delivers events to handler.
-
-        Args:
-            channel: Channel to listen on.
-            handler: Callback function for each event (sync or async).
-            poll_interval: Override default poll interval.
-            auto_ack: Automatically acknowledge events after handler completes.
-
-        Returns:
-            AsyncEventListener that can be used to stop the listener.
-        """
-        channel = _normalize_channel_name(channel)
-        if not getattr(self._backend, "supports_async", False):
+        """Start an async task that delivers events to handler."""
+        channel = normalize_event_channel_name(channel)
+        if not self._backend.supports_async:
             msg = "Current events backend does not support async listeners"
             raise ImproperConfigurationError(msg)
         loop = asyncio.get_running_loop()
@@ -538,11 +434,7 @@ class AsyncEventChannel:
         return listener
 
     async def stop_listener(self, listener_id: str) -> None:
-        """Stop a running listener.
-
-        Args:
-            listener_id: ID of the listener to stop.
-        """
+        """Stop a running listener."""
         listener = self._listeners.pop(listener_id, None)
         if listener is None:
             return
@@ -550,12 +442,8 @@ class AsyncEventChannel:
         self._runtime.increment_metric("events.listener.stop")
 
     async def ack(self, event_id: str) -> None:
-        """Acknowledge an event.
-
-        Args:
-            event_id: ID of the event to acknowledge.
-        """
-        if not getattr(self._backend, "supports_async", False):
+        """Acknowledge an event."""
+        if not self._backend.supports_async:
             msg = "Current events backend does not support async ack"
             raise ImproperConfigurationError(msg)
         span = _start_event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="async")
@@ -567,18 +455,10 @@ class AsyncEventChannel:
         _end_event_span(self._runtime, span, result="acked")
 
     async def nack(self, event_id: str) -> None:
-        """Return an event to the queue for redelivery.
-
-        Args:
-            event_id: ID of the event to return.
-        """
-        nack_method = getattr(self._backend, "nack", None)
-        if nack_method is None:
-            msg = "Current events backend does not support nack"
-            raise ImproperConfigurationError(msg)
+        """Return an event to the queue for redelivery."""
         span = _start_event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="async")
         try:
-            await nack_method(event_id)
+            await self._backend.nack(event_id)
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
@@ -590,11 +470,7 @@ class AsyncEventChannel:
         try:
             for listener_id in list(self._listeners):
                 await self.stop_listener(listener_id)
-            backend_shutdown = getattr(self._backend, "shutdown", None)
-            if backend_shutdown is not None and callable(backend_shutdown):
-                result = backend_shutdown()
-                if result is not None:
-                    await cast("Awaitable[None]", result)
+            await self._backend.shutdown()
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
@@ -631,7 +507,7 @@ class AsyncEventChannel:
                         await result
                     if auto_ack:
                         await self._backend.ack(event.event_id)
-                except Exception as error:  # pragma: no cover - logging path
+                except Exception as error:
                     logger.warning("async listener %s handler error: %s", listener_id, error)
         finally:
             self._listeners.pop(listener_id, None)

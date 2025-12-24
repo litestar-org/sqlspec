@@ -48,16 +48,15 @@ def test_asyncpg_factory_passes_extension_settings() -> None:
     """Asyncpg factory passes extension settings to hybrid backend."""
     pytest.importorskip("asyncpg")
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-    from sqlspec.adapters.asyncpg.events.backend import create_event_backend
+    from sqlspec.adapters.asyncpg.events.backend import AsyncpgHybridEventsBackend, create_event_backend
 
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
     backend = create_event_backend(
         config, "listen_notify_durable", {"queue_table": "custom_queue", "lease_seconds": 60}
     )
-    assert backend is not None
-    queue = backend._queue._queue  # type: ignore[union-attr]
-    assert queue._table_name == "custom_queue"
-    assert queue._lease_seconds == 60
+    assert isinstance(backend, AsyncpgHybridEventsBackend)
+    assert backend._queue._table_name == "custom_queue"
+    assert backend._queue._lease_seconds == 60
 
 
 def test_psycopg_factory_listen_notify_async() -> None:
@@ -139,34 +138,19 @@ def test_psqlpy_factory_hybrid_backend() -> None:
     assert backend.backend_name == "listen_notify_durable"
 
 
-def test_psqlpy_factory_json_passthrough_enabled_by_default() -> None:
-    """Psqlpy hybrid backend enables json_passthrough by default.
-
-    Psqlpy's native bindings expect Python dicts for JSONB columns,
-    so json_passthrough must be enabled to avoid serializing to strings.
-    """
+def test_psqlpy_factory_hybrid_passes_settings() -> None:
+    """Psqlpy hybrid backend passes extension settings to queue."""
     pytest.importorskip("psqlpy")
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-    from sqlspec.adapters.psqlpy.events.backend import create_event_backend
+    from sqlspec.adapters.psqlpy.events.backend import PsqlpyHybridEventsBackend, create_event_backend
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
-    assert backend is not None
-    queue = backend._queue._queue  # type: ignore[union-attr]
-    assert queue._json_passthrough is True
-
-
-def test_psqlpy_factory_json_passthrough_explicit() -> None:
-    """Psqlpy hybrid backend accepts explicit json_passthrough setting."""
-    pytest.importorskip("psqlpy")
-    from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-    from sqlspec.adapters.psqlpy.events.backend import create_event_backend
-
-    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify_durable", {"json_passthrough": True})
-    assert backend is not None
-    queue = backend._queue._queue  # type: ignore[union-attr]
-    assert queue._json_passthrough is True
+    backend = create_event_backend(
+        config, "listen_notify_durable", {"queue_table": "custom_events", "lease_seconds": 45}
+    )
+    assert isinstance(backend, PsqlpyHybridEventsBackend)
+    assert backend._queue._table_name == "custom_events"
+    assert backend._queue._lease_seconds == 45
 
 
 def test_psqlpy_factory_unknown_returns_none() -> None:
@@ -469,11 +453,11 @@ async def test_psycopg_hybrid_backend_shutdown_idempotent() -> None:
     """Psycopg hybrid backend shutdown is idempotent when no listener exists."""
     pytest.importorskip("psycopg")
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
-    from sqlspec.adapters.psycopg.events.backend import create_event_backend
+    from sqlspec.adapters.psycopg.events.backend import PsycopgAsyncHybridEventsBackend, create_event_backend
 
     config = PsycopgAsyncConfig(connection_config={"dbname": "test"})
     backend = create_event_backend(config, "listen_notify_durable", {})
-    assert backend is not None
+    assert isinstance(backend, PsycopgAsyncHybridEventsBackend)
     await backend.shutdown()
     await backend.shutdown()
 

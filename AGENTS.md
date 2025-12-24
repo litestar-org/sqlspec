@@ -970,25 +970,36 @@ Available backends:
 PostgreSQL adapters (asyncpg, psycopg, psqlpy) default to `listen_notify`.
 All other adapters default to `table_queue`.
 
-**Stores** generate adapter-specific DDL for the queue table:
+**Stores** generate adapter-specific DDL using a hook-based pattern:
 
 ```python
 # In sqlspec/adapters/{adapter}/events/store.py
 class AdapterEventQueueStore(BaseEventQueueStore[AdapterConfig]):
     __slots__ = ()
 
+    # REQUIRED: Return (payload_type, metadata_type, timestamp_type)
     def _column_types(self) -> tuple[str, str, str]:
-        # Return (payload_type, metadata_type, timestamp_type)
         return "JSONB", "JSONB", "TIMESTAMPTZ"  # PostgreSQL
 
-    def _build_create_table_sql(self) -> str:
-        # Override for database-specific DDL syntax
-        return super()._build_create_table_sql()
+    # OPTIONAL hooks for dialect variations:
+    def _string_type(self, length: int) -> str:
+        return f"VARCHAR({length})"  # Override for STRING(N), VARCHAR2(N), etc.
 
-    def _wrap_create_statement(self, statement: str, object_type: str) -> str:
-        # Wrap with IF NOT EXISTS, PL/SQL blocks, etc.
-        return statement.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+    def _integer_type(self) -> str:
+        return "INTEGER"  # Override for INT64, NUMBER(10), etc.
+
+    def _timestamp_default(self) -> str:
+        return "CURRENT_TIMESTAMP"  # Override for CURRENT_TIMESTAMP(6), SYSTIMESTAMP, etc.
+
+    def _primary_key_syntax(self) -> str:
+        return ""  # Override for " PRIMARY KEY (event_id)" if PK must be inline
+
+    def _table_clause(self) -> str:
+        return ""  # Override for " CLUSTER BY ..." or " INMEMORY ..."
 ```
+
+Most adapters only override `_column_types()`. Complex dialects may override
+`_build_create_table_sql()` directly (Oracle PL/SQL, BigQuery CLUSTER BY, Spanner no-DEFAULT).
 
 **Backend factory pattern** for native backends:
 

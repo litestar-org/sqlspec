@@ -318,13 +318,23 @@ use `migration_config={"exclude_extensions": ["events"]}`.
 
 ### Event Queue Stores
 
-Stores generate adapter-specific DDL for the queue table. Each adapter has
-a store class in `sqlspec/adapters/{adapter}/events/store.py` that handles:
+Stores generate adapter-specific DDL for the queue table using a hook-based
+pattern. The base class `BaseEventQueueStore` provides a template for DDL
+generation, and adapters override hook methods for dialect-specific variations:
 
-- Column type mapping (JSON, JSONB, CLOB, etc.)
-- Timestamp types (TIMESTAMPTZ, DATETIME, TIMESTAMP)
-- Index creation strategies
-- Database-specific DDL wrapping (IF NOT EXISTS, PL/SQL blocks, etc.)
+**Required hook:**
+- `_column_types()` - Return tuple of (payload_type, metadata_type, timestamp_type)
+
+**Optional hooks for dialect variations:**
+- `_string_type(length)` - String type syntax (default: `VARCHAR(N)`)
+- `_integer_type()` - Integer type syntax (default: `INTEGER`)
+- `_timestamp_default()` - Timestamp default expression (default: `CURRENT_TIMESTAMP`)
+- `_primary_key_syntax()` - Inline PRIMARY KEY clause (default: empty, PK on column)
+- `_table_clause()` - Additional table options (default: empty)
+
+Most adapters only need to override `_column_types()`. Complex dialects
+(Oracle PL/SQL, BigQuery CLUSTER BY, Spanner no-DEFAULT) may override
+`_build_create_table_sql()` directly.
 
 Example store implementations:
 

@@ -10,11 +10,11 @@ from sqlspec.core import SQL
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import EventMessage
 from sqlspec.extensions.events._payload import decode_notify_payload, encode_notify_payload
-from sqlspec.extensions.events._queue import AsyncQueueEventBackend, TableEventQueue, build_queue_backend
+from sqlspec.extensions.events._queue import AsyncTableEventQueue, build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_attr, is_notification
+from sqlspec.utils.type_guards import is_notification
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ class AsyncpgHybridEventsBackend:
     supports_async = True
     backend_name = "listen_notify_durable"
 
-    def __init__(self, config: "AsyncpgConfig", queue: "AsyncQueueEventBackend") -> None:
+    def __init__(self, config: "AsyncpgConfig", queue: "AsyncTableEventQueue") -> None:
         if not config.is_async:
             msg = "Asyncpg hybrid backend requires an async adapter"
             raise ImproperConfigurationError(msg)
@@ -56,7 +56,7 @@ class AsyncpgHybridEventsBackend:
         if notifies_queue is not None:
             message = await self._dequeue_with_notifies(connection, channel, poll_interval)
         else:
-            message = await self._queue.dequeue(channel, poll_interval=poll_interval)
+            message = await self._queue.dequeue(channel, poll_interval)
         return message
 
     async def ack(self, event_id: str) -> None:
@@ -90,36 +90,26 @@ class AsyncpgHybridEventsBackend:
     ) -> None:
         """Insert event into durable queue and send NOTIFY wakeup signal."""
         now = datetime.now(timezone.utc)
-        queue_backend = self._get_queue_backend()
-        statement_config = queue_backend.statement_config
         async with self._config.provide_session() as driver:
             await driver.execute(
                 SQL(
-                    queue_backend._upsert_sql,
+                    self._queue._upsert_sql,
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": queue_backend._encode_json(payload),
-                        "metadata_json": queue_backend._encode_json(metadata),
+                        "payload_json": to_json(payload),
+                        "metadata_json": to_json(metadata) if metadata else None,
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
                         "attempts": 0,
                         "created_at": now,
                     },
-                    statement_config=statement_config,
+                    statement_config=self._queue._statement_config,
                 )
             )
             await driver.execute(SQL("SELECT pg_notify($1, $2)", channel, to_json({"event_id": event_id})))
             await driver.commit()
-
-    def _get_queue_backend(self) -> "TableEventQueue":
-        """Return the underlying TableEventQueue from the wrapper."""
-        queue_backend = self._queue._queue if has_attr(self._queue, "_queue") else None
-        if queue_backend is None:
-            msg = "Hybrid queue backend missing queue reference"
-            raise EventChannelError(msg)
-        return queue_backend
 
     async def _dequeue_with_notifies(self, connection: Any, channel: str, poll_interval: float) -> EventMessage | None:
         """Wait for a NOTIFY wakeup then dequeue from the durable table."""
@@ -180,6 +170,9 @@ class AsyncpgEventsBackend:
     async def ack(self, _event_id: str) -> None:
         """Acknowledge an event. Native notifications are fire-and-forget."""
         self._runtime.increment_metric("events.ack")
+
+    async def nack(self, _event_id: str) -> None:
+        """Return an event to the queue (no-op for native LISTEN/NOTIFY)."""
 
     async def shutdown(self) -> None:
         """Shutdown the listener connection and release resources."""
@@ -253,7 +246,9 @@ def create_event_backend(
             except ImproperConfigurationError:
                 return None
         case "listen_notify_durable":
-            queue_backend = cast("AsyncQueueEventBackend", build_queue_backend(config, extension_settings, adapter_name="asyncpg"))
+            queue_backend = cast(
+                "AsyncTableEventQueue", build_queue_backend(config, extension_settings, adapter_name="asyncpg")
+            )
             try:
                 return AsyncpgHybridEventsBackend(config, queue_backend)
             except ImproperConfigurationError:

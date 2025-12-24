@@ -102,6 +102,12 @@ class OracleSyncAQEventBackend:
         """
         self._runtime.increment_metric("events.ack")
 
+    def nack(self, _event_id: str) -> None:
+        """Return an event to the queue (no-op for Oracle AQ).
+
+        Oracle AQ does not support returning messages after commit.
+        """
+
     def shutdown(self) -> None:
         """Shutdown the backend (no-op for Oracle AQ)."""
 
@@ -182,6 +188,12 @@ class OracleAsyncAQEventBackend:
         is handled automatically by the database transaction.
         """
         self._runtime.increment_metric("events.ack")
+
+    async def nack(self, _event_id: str) -> None:
+        """Return an event to the queue (no-op for Oracle AQ).
+
+        Oracle AQ does not support returning messages after commit.
+        """
 
     async def shutdown(self) -> None:
         """Shutdown the backend (no-op for Oracle AQ)."""

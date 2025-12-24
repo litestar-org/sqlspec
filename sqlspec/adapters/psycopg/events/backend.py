@@ -6,15 +6,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.core import SQL
-from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventMessage
 from sqlspec.extensions.events._payload import decode_notify_payload, encode_notify_payload
-from sqlspec.extensions.events._queue import (
-    AsyncQueueEventBackend,
-    SyncQueueEventBackend,
-    TableEventQueue,
-    build_queue_backend,
-)
+from sqlspec.extensions.events._queue import AsyncTableEventQueue, SyncTableEventQueue, build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
@@ -81,6 +76,9 @@ class PsycopgSyncEventsBackend:
     def ack(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
 
+    def nack(self, _event_id: str) -> None:
+        """Return an event to the queue (no-op for native LISTEN/NOTIFY)."""
+
     def shutdown(self) -> None:
         """Shutdown the listener and release resources."""
         if self._listen_connection_cm is not None:
@@ -146,6 +144,9 @@ class PsycopgAsyncEventsBackend:
     async def ack(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
 
+    async def nack(self, _event_id: str) -> None:
+        """Return an event to the queue (no-op for native LISTEN/NOTIFY)."""
+
     async def shutdown(self) -> None:
         """Shutdown the listener and release resources."""
         if self._listen_connection_cm is not None:
@@ -175,7 +176,7 @@ class PsycopgSyncHybridEventsBackend:
     supports_async = False
     backend_name = "listen_notify_durable"
 
-    def __init__(self, config: "PsycopgSyncConfig", queue_backend: "SyncQueueEventBackend") -> None:
+    def __init__(self, config: "PsycopgSyncConfig", queue: "SyncTableEventQueue") -> None:
         if "psycopg" not in type(config).__module__:
             msg = "Psycopg hybrid backend requires a Psycopg adapter"
             raise ImproperConfigurationError(msg)
@@ -183,7 +184,7 @@ class PsycopgSyncHybridEventsBackend:
             msg = "PsycopgSyncHybridEventsBackend requires a sync adapter"
             raise ImproperConfigurationError(msg)
         self._config = config
-        self._queue = queue_backend
+        self._queue = queue
         self._runtime = config.get_observability_runtime()
         self._listen_connection: Any | None = None
         self._listen_connection_cm: Any | None = None
@@ -199,7 +200,7 @@ class PsycopgSyncHybridEventsBackend:
         notify_iter = connection.notifies(timeout=poll_interval, stop_after=1)
         with contextlib.suppress(StopIteration):
             next(notify_iter)
-        return self._queue.dequeue(channel, poll_interval=poll_interval)
+        return self._queue.dequeue(channel, poll_interval)
 
     def ack(self, event_id: str) -> None:
         self._queue.ack(event_id)
@@ -228,37 +229,27 @@ class PsycopgSyncHybridEventsBackend:
                 self._listen_connection.execute(f"LISTEN {validated_channel}")
         return self._listen_connection
 
-    def _get_table_queue(self) -> "TableEventQueue":
-        """Get the underlying TableEventQueue from the queue backend."""
-        queue = self._queue._queue
-        if queue is None:
-            msg = "Hybrid queue backend missing queue reference"
-            raise EventChannelError(msg)
-        return queue
-
     def _publish_durable(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
     ) -> None:
         """Publish event to durable queue and send NOTIFY."""
         now = datetime.now(timezone.utc)
-        queue = self._get_table_queue()
-        session_cm = self._config.provide_session()
-        with session_cm as driver:
+        with self._config.provide_session() as driver:
             driver.execute(
                 SQL(
-                    queue._upsert_sql,
+                    self._queue._upsert_sql,
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": queue._encode_json(payload),
-                        "metadata_json": queue._encode_json(metadata),
+                        "payload_json": to_json(payload),
+                        "metadata_json": to_json(metadata) if metadata else None,
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
                         "attempts": 0,
                         "created_at": now,
                     },
-                    statement_config=queue.statement_config,
+                    statement_config=self._queue._statement_config,
                 )
             )
             driver.execute(
@@ -279,7 +270,7 @@ class PsycopgAsyncHybridEventsBackend:
     supports_async = True
     backend_name = "listen_notify_durable"
 
-    def __init__(self, config: "PsycopgAsyncConfig", queue_backend: "AsyncQueueEventBackend") -> None:
+    def __init__(self, config: "PsycopgAsyncConfig", queue: "AsyncTableEventQueue") -> None:
         if "psycopg" not in type(config).__module__:
             msg = "Psycopg hybrid backend requires a Psycopg adapter"
             raise ImproperConfigurationError(msg)
@@ -287,7 +278,7 @@ class PsycopgAsyncHybridEventsBackend:
             msg = "PsycopgAsyncHybridEventsBackend requires an async adapter"
             raise ImproperConfigurationError(msg)
         self._config = config
-        self._queue = queue_backend
+        self._queue = queue
         self._runtime = config.get_observability_runtime()
         self._listen_connection: Any | None = None
         self._listen_connection_cm: Any | None = None
@@ -302,7 +293,7 @@ class PsycopgAsyncHybridEventsBackend:
         connection = await self._ensure_listener(channel)
         async for _notify in connection.notifies(timeout=poll_interval, stop_after=1):
             break
-        return await self._queue.dequeue(channel, poll_interval=poll_interval)
+        return await self._queue.dequeue(channel, poll_interval)
 
     async def ack(self, event_id: str) -> None:
         await self._queue.ack(event_id)
@@ -331,37 +322,27 @@ class PsycopgAsyncHybridEventsBackend:
                 await self._listen_connection.execute(f"LISTEN {validated_channel}")
         return self._listen_connection
 
-    def _get_table_queue(self) -> "TableEventQueue":
-        """Get the underlying TableEventQueue from the queue backend."""
-        queue = self._queue._queue
-        if queue is None:
-            msg = "Hybrid queue backend missing queue reference"
-            raise EventChannelError(msg)
-        return queue
-
     async def _publish_durable(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
     ) -> None:
         """Publish event to durable queue and send NOTIFY."""
         now = datetime.now(timezone.utc)
-        queue = self._get_table_queue()
-        session_cm = self._config.provide_session()
-        async with session_cm as driver:
+        async with self._config.provide_session() as driver:
             await driver.execute(
                 SQL(
-                    queue._upsert_sql,
+                    self._queue._upsert_sql,
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": queue._encode_json(payload),
-                        "metadata_json": queue._encode_json(metadata),
+                        "payload_json": to_json(payload),
+                        "metadata_json": to_json(metadata) if metadata else None,
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
                         "attempts": 0,
                         "created_at": now,
                     },
-                    statement_config=queue.statement_config,
+                    statement_config=self._queue._statement_config,
                 )
             )
             await driver.execute(
@@ -398,15 +379,19 @@ def create_event_backend(
             except ImproperConfigurationError:
                 return None
         case ("listen_notify_durable", False):
-            sync_queue_backend = cast("SyncQueueEventBackend", build_queue_backend(config, extension_settings, adapter_name="psycopg"))
+            sync_queue = cast(
+                "SyncTableEventQueue", build_queue_backend(config, extension_settings, adapter_name="psycopg")
+            )
             try:
-                return PsycopgSyncHybridEventsBackend(config, sync_queue_backend)  # type: ignore[arg-type]
+                return PsycopgSyncHybridEventsBackend(config, sync_queue)  # type: ignore[arg-type]
             except ImproperConfigurationError:
                 return None
         case ("listen_notify_durable", True):
-            async_queue_backend = cast("AsyncQueueEventBackend", build_queue_backend(config, extension_settings, adapter_name="psycopg"))
+            async_queue = cast(
+                "AsyncTableEventQueue", build_queue_backend(config, extension_settings, adapter_name="psycopg")
+            )
             try:
-                return PsycopgAsyncHybridEventsBackend(config, async_queue_backend)  # type: ignore[arg-type]
+                return PsycopgAsyncHybridEventsBackend(config, async_queue)  # type: ignore[arg-type]
             except ImproperConfigurationError:
                 return None
         case _:

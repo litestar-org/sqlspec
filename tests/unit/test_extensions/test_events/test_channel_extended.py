@@ -107,23 +107,24 @@ def test_async_event_channel_rejects_sync_config(tmp_path) -> None:
 
 def test_event_channel_normalize_channel_name_valid(tmp_path) -> None:
     """Valid channel names are accepted."""
-    from sqlspec.extensions.events.channel import _normalize_channel_name
+    from sqlspec.extensions.events._store import normalize_event_channel_name
 
-    result = _normalize_channel_name("notifications")
+    result = normalize_event_channel_name("notifications")
     assert result == "notifications"
 
 
 def test_event_channel_normalize_channel_name_invalid(tmp_path) -> None:
-    """Invalid channel names raise ImproperConfigurationError."""
-    from sqlspec.extensions.events.channel import _normalize_channel_name
+    """Invalid channel names raise EventChannelError."""
+    from sqlspec.exceptions import EventChannelError
+    from sqlspec.extensions.events._store import normalize_event_channel_name
 
-    with pytest.raises(ImproperConfigurationError, match="Invalid events channel name"):
-        _normalize_channel_name("invalid-channel")
+    with pytest.raises(EventChannelError, match="Invalid events channel name"):
+        normalize_event_channel_name("invalid-channel")
 
 
 def test_event_channel_resolve_poll_interval_default(tmp_path) -> None:
     """None poll_interval uses configured default."""
-    from sqlspec.extensions.events.channel import _resolve_poll_interval
+    from sqlspec.extensions.events._channel import _resolve_poll_interval
 
     result = _resolve_poll_interval(None, 2.5)
     assert result == 2.5
@@ -131,7 +132,7 @@ def test_event_channel_resolve_poll_interval_default(tmp_path) -> None:
 
 def test_event_channel_resolve_poll_interval_explicit(tmp_path) -> None:
     """Explicit poll_interval overrides default."""
-    from sqlspec.extensions.events.channel import _resolve_poll_interval
+    from sqlspec.extensions.events._channel import _resolve_poll_interval
 
     result = _resolve_poll_interval(0.1, 2.5)
     assert result == 0.1
@@ -139,7 +140,7 @@ def test_event_channel_resolve_poll_interval_explicit(tmp_path) -> None:
 
 def test_event_channel_resolve_poll_interval_zero_raises(tmp_path) -> None:
     """Zero poll_interval raises ImproperConfigurationError."""
-    from sqlspec.extensions.events.channel import _resolve_poll_interval
+    from sqlspec.extensions.events._channel import _resolve_poll_interval
 
     with pytest.raises(ImproperConfigurationError, match="poll_interval must be greater than zero"):
         _resolve_poll_interval(0, 1.0)
@@ -147,7 +148,7 @@ def test_event_channel_resolve_poll_interval_zero_raises(tmp_path) -> None:
 
 def test_event_channel_resolve_poll_interval_negative_raises(tmp_path) -> None:
     """Negative poll_interval raises ImproperConfigurationError."""
-    from sqlspec.extensions.events.channel import _resolve_poll_interval
+    from sqlspec.extensions.events._channel import _resolve_poll_interval
 
     with pytest.raises(ImproperConfigurationError, match="poll_interval must be greater than zero"):
         _resolve_poll_interval(-1.0, 1.0)
@@ -179,7 +180,7 @@ def test_event_channel_listeners_initialized_empty(tmp_path) -> None:
 
 def test_event_channel_resolve_adapter_name_non_sqlspec_module(tmp_path) -> None:
     """_resolve_adapter_name returns None for non-sqlspec configs."""
-    from sqlspec.extensions.events.channel import _resolve_adapter_name
+    from sqlspec.extensions.events._hints import resolve_adapter_name as _resolve_adapter_name
 
     class CustomConfig:
         is_async = False
@@ -200,7 +201,7 @@ def test_event_channel_resolve_adapter_name_non_sqlspec_module(tmp_path) -> None
 
 def test_event_channel_load_native_backend_table_queue_returns_none(tmp_path) -> None:
     """_load_native_backend returns None for table_queue backend name."""
-    from sqlspec.extensions.events.channel import _load_native_backend
+    from sqlspec.extensions.events._channel import _load_native_backend
 
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     result = _load_native_backend(config, "table_queue", {})
@@ -210,7 +211,7 @@ def test_event_channel_load_native_backend_table_queue_returns_none(tmp_path) ->
 
 def test_event_channel_load_native_backend_none_returns_none(tmp_path) -> None:
     """_load_native_backend returns None when backend_name is None."""
-    from sqlspec.extensions.events.channel import _load_native_backend
+    from sqlspec.extensions.events._channel import _load_native_backend
 
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     result = _load_native_backend(config, None, {})
@@ -226,8 +227,8 @@ def test_event_channel_custom_queue_table_via_extension(tmp_path) -> None:
     )
     channel = SyncEventChannel(config)
 
-    queue = channel._backend._queue
-    assert queue._table_name == "custom_events"
+    backend = channel._backend
+    assert backend._table_name == "custom_events"
 
 
 def test_event_channel_custom_lease_seconds_via_extension(tmp_path) -> None:
@@ -237,8 +238,8 @@ def test_event_channel_custom_lease_seconds_via_extension(tmp_path) -> None:
     )
     channel = SyncEventChannel(config)
 
-    queue = channel._backend._queue
-    assert queue._lease_seconds == 120
+    backend = channel._backend
+    assert backend._lease_seconds == 120
 
 
 def test_event_channel_custom_retention_seconds_via_extension(tmp_path) -> None:
@@ -249,5 +250,5 @@ def test_event_channel_custom_retention_seconds_via_extension(tmp_path) -> None:
     )
     channel = SyncEventChannel(config)
 
-    queue = channel._backend._queue
-    assert queue._retention_seconds == 7200
+    backend = channel._backend
+    assert backend._retention_seconds == 7200
