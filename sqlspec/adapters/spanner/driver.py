@@ -244,6 +244,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             self.connection.rollback()
 
     def commit(self) -> None:
+        # Spanner Transaction has a `committed` property set after commit
+        # Check it to avoid "Transaction already committed" errors
+        if has_attr(self.connection, "committed") and self.connection.committed is not None:
+            return
         if has_attr(self.connection, "commit"):
             self.connection.commit()
 

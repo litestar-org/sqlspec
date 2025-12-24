@@ -218,7 +218,10 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                 txn.__enter__()
                 try:
                     yield cast("SpannerConnection", txn)
-                    if hasattr(txn, "_transaction_id") and txn._transaction_id is not None:
+                    # Only commit if not already committed (driver.commit() may have been called)
+                    has_txn_id = hasattr(txn, "_transaction_id") and txn._transaction_id is not None
+                    already_committed = hasattr(txn, "committed") and txn.committed is not None
+                    if has_txn_id and not already_committed:
                         txn.commit()
                 except Exception:
                     if hasattr(txn, "_transaction_id") and txn._transaction_id is not None:
