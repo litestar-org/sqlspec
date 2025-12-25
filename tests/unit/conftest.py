@@ -698,6 +698,10 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Mock commit transaction."""
         self.connection.commit()
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.in_transaction)
+
 
 class MockAsyncDriver(AsyncDriverAdapterBase):
     """Mock async driver with adapter interface."""
@@ -805,6 +809,10 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     async def commit(self) -> None:
         """Mock async commit transaction."""
         await self.connection.commit()
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.in_transaction)
 
 
 @pytest.fixture

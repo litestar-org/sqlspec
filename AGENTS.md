@@ -96,6 +96,35 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - **Single-Pass Processing**: Parse once → transform once → validate once - SQL object is single source of truth
 - **Abstract Methods with Concrete Implementations**: Protocol defines abstract methods, base classes provide concrete sync/async implementations
 
+### Adapter Transaction Detection Pattern
+
+Each adapter MUST override `_connection_in_transaction()` with direct attribute access instead of using the base class fallback which relies on `getattr()` chains.
+
+```python
+# In each adapter's driver.py
+class MyAdapterDriver(SyncDriverBase):
+    def _connection_in_transaction(self) -> bool:
+        # AsyncPG: uses is_in_transaction() method
+        return self.connection.is_in_transaction()
+
+        # SQLite/DuckDB: uses in_transaction property
+        return self.connection.in_transaction
+
+        # Psycopg: uses status attribute
+        return self.connection.status != psycopg.pq.TransactionStatus.IDLE
+
+        # BigQuery: No transaction support
+        return False
+```
+
+**Why this matters:**
+
+- The base class uses `getattr()` chains which are slow and prevent mypyc optimization
+- Each adapter knows exactly which attribute to check
+- Direct attribute access is 10-50x faster in hot paths
+
+**Reference implementations:** All adapters in `sqlspec/adapters/*/driver.py` have this override.
+
 ### Query Stack Implementation Guidelines
 
 - **Builder Discipline**
@@ -289,6 +318,60 @@ def test_starlette_autocommit_mode() -> None:
 - Type guards instead of `hasattr()` checks
 - No inline comments - use docstrings
 - Google-style docstrings with Args, Returns, Raises sections
+
+### Type Guards Pattern
+
+When checking object capabilities, ALWAYS use type guards from `sqlspec.utils.type_guards` instead of `hasattr()`:
+
+```python
+# NEVER do this - breaks mypyc and is slow
+if hasattr(obj, "expression") and hasattr(obj, "sql"):
+    sql = obj.sql
+    expr = obj.expression
+
+# ALWAYS do this - type-safe and fast
+from sqlspec.utils.type_guards import has_expression_and_sql
+if has_expression_and_sql(obj):
+    sql = obj.sql  # Type checker knows these exist
+    expr = obj.expression
+```
+
+**Available type guards:**
+
+| Guard | Checks For | Use When |
+|-------|------------|----------|
+| `is_readable(obj)` | `.read()` method | Checking LOB/stream objects |
+| `has_array_interface(obj)` | `.dtype` and `.shape` | NumPy-like arrays |
+| `has_cursor_metadata(obj)` | `.description` | Cursor metadata access |
+| `has_expression_and_sql(obj)` | `.expression` and `.sql` | SQL statement objects |
+| `has_expression_and_parameters(obj)` | `.expression` and `.parameters` | Parameterized statements |
+| `is_statement_filter(obj)` | `.append_to_statement()` | Statement filter objects |
+
+**Creating new type guards:**
+
+1. Add protocol to `sqlspec/protocols.py`:
+
+```python
+class MyProtocol(Protocol):
+    """Protocol for objects with specific capability."""
+    my_attribute: str
+    def my_method(self) -> None: ...
+```
+
+2. Add type guard to `sqlspec/utils/type_guards.py`:
+
+```python
+def has_my_capability(obj: Any) -> TypeGuard[MyProtocol]:
+    """Check if object has my_attribute and my_method."""
+    return hasattr(obj, "my_attribute") and hasattr(obj, "my_method")
+```
+
+**Key principles:**
+
+- Type guards centralize `hasattr()` calls in ONE place
+- Protocols provide type narrowing after the guard passes
+- Type checkers understand the guard's implications
+- Works with mypyc compilation
 
 ### Testing
 
@@ -887,25 +970,36 @@ Available backends:
 PostgreSQL adapters (asyncpg, psycopg, psqlpy) default to `listen_notify`.
 All other adapters default to `table_queue`.
 
-**Stores** generate adapter-specific DDL for the queue table:
+**Stores** generate adapter-specific DDL using a hook-based pattern:
 
 ```python
 # In sqlspec/adapters/{adapter}/events/store.py
 class AdapterEventQueueStore(BaseEventQueueStore[AdapterConfig]):
     __slots__ = ()
 
+    # REQUIRED: Return (payload_type, metadata_type, timestamp_type)
     def _column_types(self) -> tuple[str, str, str]:
-        # Return (payload_type, metadata_type, timestamp_type)
         return "JSONB", "JSONB", "TIMESTAMPTZ"  # PostgreSQL
 
-    def _build_create_table_sql(self) -> str:
-        # Override for database-specific DDL syntax
-        return super()._build_create_table_sql()
+    # OPTIONAL hooks for dialect variations:
+    def _string_type(self, length: int) -> str:
+        return f"VARCHAR({length})"  # Override for STRING(N), VARCHAR2(N), etc.
 
-    def _wrap_create_statement(self, statement: str, object_type: str) -> str:
-        # Wrap with IF NOT EXISTS, PL/SQL blocks, etc.
-        return statement.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+    def _integer_type(self) -> str:
+        return "INTEGER"  # Override for INT64, NUMBER(10), etc.
+
+    def _timestamp_default(self) -> str:
+        return "CURRENT_TIMESTAMP"  # Override for CURRENT_TIMESTAMP(6), SYSTIMESTAMP, etc.
+
+    def _primary_key_syntax(self) -> str:
+        return ""  # Override for " PRIMARY KEY (event_id)" if PK must be inline
+
+    def _table_clause(self) -> str:
+        return ""  # Override for " CLUSTER BY ..." or " INMEMORY ..."
 ```
+
+Most adapters only override `_column_types()`. Complex dialects may override
+`_build_create_table_sql()` directly (Oracle PL/SQL, BigQuery CLUSTER BY, Spanner no-DEFAULT).
 
 **Backend factory pattern** for native backends:
 

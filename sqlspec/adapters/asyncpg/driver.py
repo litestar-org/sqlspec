@@ -347,34 +347,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     ) -> "tuple[StackResult, ...]":
         results: list[StackResult] = []
 
-        async def _run_operations(observer: StackExecutionObserver) -> None:
-            for index, operation in enumerate(stack.operations):
-                try:
-                    normalized = None
-                    if operation.method == "execute":
-                        normalized = self._normalize_stack_execute_operation(operation)
-
-                    if normalized is not None and self._can_prepare_stack_operation(normalized):
-                        stack_result = await self._execute_stack_operation_prepared(normalized)
-                    else:
-                        result = await self._execute_stack_operation(operation)
-                        stack_result = StackResult(result=result)
-                except Exception as exc:
-                    stack_error = StackExecutionError(
-                        index,
-                        describe_stack_statement(operation.statement),
-                        exc,
-                        adapter=type(self).__name__,
-                        mode="continue-on-error" if continue_on_error else "fail-fast",
-                    )
-                    if continue_on_error:
-                        observer.record_operation_error(stack_error)
-                        results.append(StackResult.from_error(stack_error))
-                        continue
-                    raise stack_error from exc
-
-                results.append(stack_result)
-
         transaction_cm = None
         if not continue_on_error and not self._connection_in_transaction():
             transaction_cm = self.connection.transaction()
@@ -382,11 +354,49 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
             if transaction_cm is not None:
                 async with transaction_cm:
-                    await _run_operations(observer)
+                    await self._run_stack_operations(stack, continue_on_error, observer, results)
             else:
-                await _run_operations(observer)
+                await self._run_stack_operations(stack, continue_on_error, observer, results)
 
         return tuple(results)
+
+    async def _run_stack_operations(
+        self,
+        stack: "StatementStack",
+        continue_on_error: bool,
+        observer: "StackExecutionObserver",
+        results: "list[StackResult]",
+    ) -> None:
+        """Run operations for statement stack execution.
+
+        Extracted from _execute_stack_native to avoid closure compilation issues.
+        """
+        for index, operation in enumerate(stack.operations):
+            try:
+                normalized = None
+                if operation.method == "execute":
+                    normalized = self._normalize_stack_execute_operation(operation)
+
+                if normalized is not None and self._can_prepare_stack_operation(normalized):
+                    stack_result = await self._execute_stack_operation_prepared(normalized)
+                else:
+                    result = await self._execute_stack_operation(operation)
+                    stack_result = StackResult(result=result)
+            except Exception as exc:
+                stack_error = StackExecutionError(
+                    index,
+                    describe_stack_statement(operation.statement),
+                    exc,
+                    adapter=type(self).__name__,
+                    mode="continue-on-error" if continue_on_error else "fail-fast",
+                )
+                if continue_on_error:
+                    observer.record_operation_error(stack_error)
+                    results.append(StackResult.from_error(stack_error))
+                    continue
+                raise stack_error from exc
+
+            results.append(stack_result)
 
     async def _execute_statement(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -622,6 +632,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         except asyncpg.PostgresError as exc:
             msg = f"Failed to truncate table '{table}': {exc}"
             raise SQLSpecError(msg) from exc
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.is_in_transaction())
 
 
 def _convert_datetime_param(value: Any) -> Any:

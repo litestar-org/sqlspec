@@ -13,7 +13,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterable
 
-    from sqlspec.extensions.events.channel import AsyncEventChannel
+    from sqlspec.extensions.events import AsyncEventChannel
 
 logger = get_logger("extensions.litestar.channels")
 

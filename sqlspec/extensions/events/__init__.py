@@ -1,17 +1,27 @@
 """Event channel package exports."""
 
+from sqlspec.extensions.events._channel import (
+    AsyncEventChannel,
+    AsyncEventListener,
+    SyncEventChannel,
+    SyncEventListener,
+)
 from sqlspec.extensions.events._models import EventMessage
-from sqlspec.extensions.events._queue import QueueEvent, TableEventQueue
-from sqlspec.extensions.events._store import BaseEventQueueStore
-from sqlspec.extensions.events.channel import AsyncEventChannel, AsyncEventListener, SyncEventChannel, SyncEventListener
+from sqlspec.extensions.events._protocols import (
+    AsyncEventBackendProtocol,
+    AsyncEventHandler,
+    SyncEventBackendProtocol,
+    SyncEventHandler,
+)
 
 __all__ = (
+    "AsyncEventBackendProtocol",
     "AsyncEventChannel",
+    "AsyncEventHandler",
     "AsyncEventListener",
-    "BaseEventQueueStore",
     "EventMessage",
-    "QueueEvent",
+    "SyncEventBackendProtocol",
     "SyncEventChannel",
+    "SyncEventHandler",
     "SyncEventListener",
-    "TableEventQueue",
 )

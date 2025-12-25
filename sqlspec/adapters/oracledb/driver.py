@@ -3,7 +3,7 @@
 import contextlib
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, cast
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
@@ -48,6 +48,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_guards import has_attr, has_pipeline_capability, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -292,7 +293,7 @@ class OraclePipelineMixin:
             names = [getattr(column, "name", f"column_{index}") for index, column in enumerate(columns)]
         else:
             first = rows[0]
-            names = [f"column_{index}" for index in range(len(first) if hasattr(first, "__len__") else 0)]
+            names = [f"column_{index}" for index in range(len(first) if has_attr(first, "__len__") else 0)]
         names = _normalize_column_names(names, driver.driver_features)
 
         normalized_rows: list[dict[str, Any]] = []
@@ -349,7 +350,7 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     """
     coerced_values: list[Any] = []
     for value in row:
-        if hasattr(value, "read"):
+        if is_readable(value):
             try:
                 processed_value = value.read()
             except Exception:
@@ -377,7 +378,7 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     """
     coerced_values: list[Any] = []
     for value in row:
-        if hasattr(value, "read"):
+        if is_readable(value):
             try:
                 processed_value = await _type_converter.process_lob(value)
             except Exception:
@@ -397,6 +398,27 @@ ORA_INTEGRITY_RANGE_END = 2300
 ORA_PARSING_RANGE_START = 900
 ORA_PARSING_RANGE_END = 1000
 ORA_TABLESPACE_FULL = 1652
+
+_ERROR_CODE_MAPPING: dict[int, tuple[type[SQLSpecError], str]] = {
+    1: (UniqueViolationError, "unique constraint violation"),
+    2291: (ForeignKeyViolationError, "foreign key constraint violation"),
+    2292: (ForeignKeyViolationError, "foreign key constraint violation"),
+    ORA_CHECK_CONSTRAINT: (CheckViolationError, "check constraint violation"),
+    1400: (NotNullViolationError, "not-null constraint violation"),
+    1407: (NotNullViolationError, "not-null constraint violation"),
+    1017: (DatabaseConnectionError, "connection error"),
+    12154: (DatabaseConnectionError, "connection error"),
+    12541: (DatabaseConnectionError, "connection error"),
+    12545: (DatabaseConnectionError, "connection error"),
+    12514: (DatabaseConnectionError, "connection error"),
+    12505: (DatabaseConnectionError, "connection error"),
+    60: (TransactionError, "transaction error"),
+    8176: (TransactionError, "transaction error"),
+    1722: (DataError, "data error"),
+    1858: (DataError, "data error"),
+    1840: (DataError, "data error"),
+    ORA_TABLESPACE_FULL: (OperationalError, "operational error"),
+}
 
 
 class OracleSyncCursor:
@@ -448,87 +470,52 @@ class OracleExceptionHandler:
 
     __slots__ = ()
 
-    def _map_oracle_exception(self, e: Any) -> None:
+    def _map_oracle_exception(self, e: "oracledb.DatabaseError") -> None:
         """Map Oracle exception to SQLSpec exception.
 
         Args:
             e: oracledb.DatabaseError instance
+
+        Raises:
+            SQLSpecError: Mapped exception based on Oracle error code.
         """
         error_obj = e.args[0] if e.args else None
         if not error_obj:
-            self._raise_generic_error(e, None)
+            self._raise_error(e, None, SQLSpecError, "database error")
 
         error_code = getattr(error_obj, "code", None)
-
         if not error_code:
-            self._raise_generic_error(e, None)
+            self._raise_error(e, None, SQLSpecError, "database error")
 
-        if error_code == 1:
-            self._raise_unique_violation(e, error_code)
-        elif error_code in {2291, 2292}:
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == ORA_CHECK_CONSTRAINT:
-            self._raise_check_violation(e, error_code)
-        elif error_code in {1400, 1407}:
-            self._raise_not_null_violation(e, error_code)
-        elif error_code and ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
-            self._raise_integrity_error(e, error_code)
-        elif error_code in {1017, 12154, 12541, 12545, 12514, 12505}:
-            self._raise_connection_error(e, error_code)
-        elif error_code in {60, 8176}:
-            self._raise_transaction_error(e, error_code)
-        elif error_code in {1722, 1858, 1840}:
-            self._raise_data_error(e, error_code)
-        elif error_code and ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
-            self._raise_parsing_error(e, error_code)
-        elif error_code == ORA_TABLESPACE_FULL:
-            self._raise_operational_error(e, error_code)
-        else:
-            self._raise_generic_error(e, error_code)
+        mapping = _ERROR_CODE_MAPPING.get(error_code)
+        if mapping:
+            error_class, error_desc = mapping
+            self._raise_error(e, error_code, error_class, error_desc)
 
-    def _raise_unique_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle unique constraint violation [ORA-{code:05d}]: {e}"
-        raise UniqueViolationError(msg) from e
+        if ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
+            self._raise_error(e, error_code, IntegrityError, "integrity constraint violation")
 
-    def _raise_foreign_key_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle foreign key constraint violation [ORA-{code:05d}]: {e}"
-        raise ForeignKeyViolationError(msg) from e
+        if ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
+            self._raise_error(e, error_code, SQLParsingError, "SQL syntax error")
 
-    def _raise_check_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle check constraint violation [ORA-{code:05d}]: {e}"
-        raise CheckViolationError(msg) from e
+        self._raise_error(e, error_code, SQLSpecError, "database error")
 
-    def _raise_not_null_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle not-null constraint violation [ORA-{code:05d}]: {e}"
-        raise NotNullViolationError(msg) from e
+    def _raise_error(
+        self, e: "oracledb.DatabaseError", code: "int | None", error_class: type[SQLSpecError], description: str
+    ) -> NoReturn:
+        """Raise a mapped exception with formatted message.
 
-    def _raise_integrity_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle integrity constraint violation [ORA-{code:05d}]: {e}"
-        raise IntegrityError(msg) from e
+        Args:
+            e: Original Oracle exception.
+            code: Oracle error code (ORA-XXXXX).
+            error_class: Exception class to raise.
+            description: Human-readable error description.
 
-    def _raise_parsing_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle SQL syntax error [ORA-{code:05d}]: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle connection error [ORA-{code:05d}]: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_transaction_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle transaction error [ORA-{code:05d}]: {e}"
-        raise TransactionError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle data error [ORA-{code:05d}]: {e}"
-        raise DataError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle operational error [ORA-{code:05d}]: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_generic_error(self, e: Any, code: "int | None") -> None:
-        msg = f"Oracle database error [ORA-{code:05d}]: {e}" if code else f"Oracle database error: {e}"
-        raise SQLSpecError(msg) from e
+        Raises:
+            SQLSpecError: The mapped exception.
+        """
+        msg = f"Oracle {description} [ORA-{code:05d}]: {e}" if code else f"Oracle {description}: {e}"
+        raise error_class(msg) from e
 
 
 class OracleSyncExceptionHandler(OracleExceptionHandler):
@@ -613,7 +600,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleSyncExceptionHandler()
 
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+    def _try_special_handling(self, cursor: "Cursor", statement: "SQL") -> "SQLResult | None":
         """Hook for Oracle-specific special operations.
 
         Oracle doesn't have complex special operations like PostgreSQL COPY,
@@ -629,7 +616,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         _ = (cursor, statement)  # Mark as intentionally unused
         return None
 
-    def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def _execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -672,7 +659,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         return self._execute_stack_native(stack, continue_on_error=continue_on_error)
 
-    def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def _execute_many(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
 
         Args:
@@ -736,7 +723,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         return tuple(results)
 
-    def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def _execute_statement(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
         Args:
@@ -762,7 +749,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
-            column_names = _normalize_column_names(column_names, self.driver_features)
+            column_names = _normalize_column_names(column_names, self.driver_features)  # pyright: ignore[reportArgumentType]
 
             # Oracle returns tuples - convert to consistent dict format after LOB hydration
             data = [dict(zip(column_names, _coerce_sync_row_values(row), strict=False)) for row in fetched_data]
@@ -822,7 +809,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             self._pipeline_support_reason = "driver_version"
             return False
 
-        if not hasattr(self.connection, "run_pipeline"):
+        if not has_pipeline_capability(self.connection):
             self._pipeline_support = False
             self._pipeline_support_reason = "driver_api_missing"
             return False
@@ -1012,6 +999,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         with self.handle_database_exceptions():
             self.connection.execute(statement)
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return False
+
 
 class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     """Asynchronous Oracle Database driver.
@@ -1059,7 +1050,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleAsyncExceptionHandler()
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+    async def _try_special_handling(self, cursor: "AsyncCursor", statement: "SQL") -> "SQLResult | None":
         """Hook for Oracle-specific special operations.
 
         Oracle doesn't have complex special operations like PostgreSQL COPY,
@@ -1075,7 +1066,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         _ = (cursor, statement)  # Mark as intentionally unused
         return None
 
-    async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def _execute_script(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -1120,7 +1111,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
 
-    async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def _execute_many(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
 
         Args:
@@ -1195,7 +1186,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             self._pipeline_support_reason = "driver_version"
             return False
 
-        if not hasattr(self.connection, "run_pipeline"):
+        if not has_pipeline_capability(self.connection):
             self._pipeline_support = False
             self._pipeline_support_reason = "driver_api_missing"
             return False
@@ -1220,7 +1211,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return _ORACLEDB_VERSION
 
-    async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def _execute_statement(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
         Args:
@@ -1248,7 +1239,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if is_select_like:
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
-            column_names = _normalize_column_names(column_names, self.driver_features)
+            column_names = _normalize_column_names(column_names, self.driver_features)  # pyright: ignore[reportArgumentType]
 
             # Oracle returns tuples - convert to consistent dict format after LOB hydration
             data = []
@@ -1463,6 +1454,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         statement = _oracle_truncate_statement(table)
         async with self.handle_database_exceptions():
             await self.connection.execute(statement)
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return False
 
 
 def _build_oracledb_profile() -> DriverParameterProfile:

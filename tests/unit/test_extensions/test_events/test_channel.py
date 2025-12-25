@@ -6,8 +6,9 @@ import pytest
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel, TableEventQueue
+from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events._queue import SyncTableEventQueue
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 
@@ -198,10 +199,9 @@ def test_event_channel_runtime_hints_for_asyncmy(tmp_path) -> None:
     assert channel._poll_interval_default == pytest.approx(0.25)
     assert channel._adapter_name == "asyncmy"
 
-    queue = channel._backend._queue
-    assert queue._lease_seconds == 5
-    assert queue._select_for_update is True
-    assert queue._skip_locked is True
+    backend = channel._backend
+    assert backend._lease_seconds == 5
+    assert "FOR UPDATE SKIP LOCKED" in backend._select_sql.upper()
 
 
 def test_event_channel_runtime_hints_for_duckdb(tmp_path) -> None:
@@ -225,15 +225,15 @@ def test_event_channel_extension_config_overrides_hints(tmp_path) -> None:
     channel = SyncEventChannel(config)
     assert channel._poll_interval_default == pytest.approx(3.5)
 
-    queue = channel._backend._queue
-    assert queue._lease_seconds == 42
-    assert queue._retention_seconds == 99
+    backend = channel._backend
+    assert backend._lease_seconds == 42
+    assert backend._retention_seconds == 99
 
 
 def test_table_event_queue_locking_clause(tmp_path) -> None:
     """Locking hints are embedded when select_for_update/skip_locked are enabled."""
 
     config = SqliteConfig(connection_config={"database": str(tmp_path / "locks.db")})
-    queue = TableEventQueue(config, select_for_update=True, skip_locked=True)
+    queue = SyncTableEventQueue(config, select_for_update=True, skip_locked=True)
 
     assert "FOR UPDATE SKIP LOCKED" in queue._select_sql.upper()

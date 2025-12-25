@@ -724,6 +724,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             cursor.execute(truncate_sql)
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
+
 
 class PsycopgAsyncCursor:
     """Async context manager for PostgreSQL psycopg cursor management."""
@@ -1262,6 +1266,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         truncate_sql = _build_truncate_command(table)
         async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             await cursor.execute(truncate_sql)
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
 
 def _identity(value: Any) -> Any:

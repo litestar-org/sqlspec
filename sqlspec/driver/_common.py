@@ -27,7 +27,7 @@ from sqlspec.core import (
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.type_guards import is_statement_filter
+from sqlspec.utils.type_guards import has_array_interface, has_cursor_metadata, is_statement_filter
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -260,7 +260,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
         else:
             return ("array", typecode, length)
 
-    if hasattr(obj, "__array__"):
+    if has_array_interface(obj):
         try:
             dtype_str = getattr(obj.dtype, "str", str(type(obj)))
             shape = tuple(int(s) for s in obj.shape)
@@ -794,8 +794,9 @@ class CommonDriverAttributesMixin:
         if isinstance(statement_type, str) and statement_type.upper() == "SELECT":
             return True
 
-        description = getattr(cursor, "description", None)
-        return bool(description)
+        if has_cursor_metadata(cursor):
+            return bool(cursor.description)
+        return False
 
     def prepare_statement(
         self,
@@ -819,108 +820,108 @@ class CommonDriverAttributesMixin:
             Prepared SQL statement
         """
         kwargs = kwargs or {}
+        filters, data_parameters = self._split_parameters(parameters)
 
+        if isinstance(statement, QueryBuilder):
+            sql_statement = self._prepare_from_builder(statement, data_parameters, statement_config, kwargs)
+        elif isinstance(statement, SQL):
+            sql_statement = self._prepare_from_sql(statement, data_parameters, statement_config, kwargs)
+        else:
+            sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
+
+        return self._apply_filters(sql_statement, filters)
+
+    def _split_parameters(
+        self, parameters: "tuple[StatementParameters | StatementFilter, ...]"
+    ) -> "tuple[list[StatementFilter], list[StatementParameters]]":
         filters: list[StatementFilter] = []
         data_parameters: list[StatementParameters] = []
-
         for param in parameters:
             if is_statement_filter(param):
                 filters.append(param)
             else:
                 data_parameters.append(param)
+        return filters, data_parameters
 
-        if isinstance(statement, QueryBuilder):
-            sql_statement = statement.to_statement(statement_config)
-            if data_parameters or kwargs:
-                merged_parameters = (
-                    (*sql_statement.positional_parameters, *tuple(data_parameters))
-                    if data_parameters
-                    else sql_statement.positional_parameters
-                )
-                sql_statement = SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+    def _prepare_from_builder(
+        self,
+        builder: "QueryBuilder",
+        data_parameters: "list[StatementParameters]",
+        statement_config: "StatementConfig",
+        kwargs: "dict[str, Any]",
+    ) -> "SQL":
+        sql_statement = builder.to_statement(statement_config)
+        if data_parameters or kwargs:
+            merged_parameters = (
+                (*sql_statement.positional_parameters, *tuple(data_parameters))
+                if data_parameters
+                else sql_statement.positional_parameters
+            )
+            return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+        return sql_statement
 
-            for filter_obj in filters:
-                sql_statement = filter_obj.append_to_statement(sql_statement)
+    def _prepare_from_sql(
+        self,
+        sql_statement: "SQL",
+        data_parameters: "list[StatementParameters]",
+        statement_config: "StatementConfig",
+        kwargs: "dict[str, Any]",
+    ) -> "SQL":
+        if data_parameters or kwargs:
+            merged_parameters = (
+                (*sql_statement.positional_parameters, *tuple(data_parameters))
+                if data_parameters
+                else sql_statement.positional_parameters
+            )
+            return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
 
-            return sql_statement
+        needs_rebuild = False
+        if statement_config.dialect and (
+            not sql_statement.statement_config.dialect
+            or sql_statement.statement_config.dialect != statement_config.dialect
+        ):
+            needs_rebuild = True
 
-        if isinstance(statement, SQL):
-            sql_statement = statement
+        if (
+            sql_statement.statement_config.parameter_config.default_execution_parameter_style
+            != statement_config.parameter_config.default_execution_parameter_style
+        ):
+            needs_rebuild = True
 
-            if data_parameters or kwargs:
-                merged_parameters = (
-                    (*sql_statement.positional_parameters, *tuple(data_parameters))
-                    if data_parameters
-                    else sql_statement.positional_parameters
-                )
-                sql_statement = SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
-            else:
-                needs_rebuild = False
+        if needs_rebuild:
+            sql_text = sql_statement.raw_sql or sql_statement.sql
+            if sql_statement.is_many and sql_statement.parameters:
+                return SQL(sql_text, sql_statement.parameters, statement_config=statement_config, is_many=True)
+            if sql_statement.named_parameters:
+                return SQL(sql_text, statement_config=statement_config, **sql_statement.named_parameters)
+            return SQL(sql_text, *sql_statement.positional_parameters, statement_config=statement_config)
+        return sql_statement
 
-                if statement_config.dialect and (
-                    not sql_statement.statement_config.dialect
-                    or sql_statement.statement_config.dialect != statement_config.dialect
-                ):
-                    needs_rebuild = True
+    def _prepare_from_string(
+        self,
+        statement: "Statement",
+        data_parameters: "list[StatementParameters]",
+        statement_config: "StatementConfig",
+        kwargs: "dict[str, Any]",
+    ) -> "SQL":
+        return SQL(statement, *tuple(data_parameters), statement_config=statement_config, **kwargs)
 
-                if (
-                    sql_statement.statement_config.parameter_config.default_execution_parameter_style
-                    != statement_config.parameter_config.default_execution_parameter_style
-                ):
-                    needs_rebuild = True
-
-                if needs_rebuild:
-                    sql_text = sql_statement.raw_sql or sql_statement.sql
-
-                    if sql_statement.is_many and sql_statement.parameters:
-                        sql_statement = SQL(
-                            sql_text, sql_statement.parameters, statement_config=statement_config, is_many=True
-                        )
-                    elif sql_statement.named_parameters:
-                        sql_statement = SQL(
-                            sql_text, statement_config=statement_config, **sql_statement.named_parameters
-                        )
-                    else:
-                        sql_statement = SQL(
-                            sql_text, *sql_statement.positional_parameters, statement_config=statement_config
-                        )
-
-            for filter_obj in filters:
-                sql_statement = filter_obj.append_to_statement(sql_statement)
-
-            return sql_statement
-
-        sql_statement = SQL(statement, *tuple(data_parameters), statement_config=statement_config, **kwargs)
-
+    def _apply_filters(self, sql_statement: "SQL", filters: "list[StatementFilter]") -> "SQL":
         for filter_obj in filters:
             sql_statement = filter_obj.append_to_statement(sql_statement)
-
         return sql_statement
 
     def _connection_in_transaction(self) -> bool:
-        """Best-effort detection of whether the underlying connection is inside a transaction."""
+        """Check if the connection is inside a transaction.
 
-        connection = getattr(self, "connection", None)
-        if connection is None:
-            return False
+        Each adapter MUST override this method with direct attribute access
+        for optimal mypyc performance. Do not use getattr chains.
 
-        indicator = getattr(connection, "in_transaction", None)
-        if isinstance(indicator, bool):
-            return indicator
-
-        checker = getattr(connection, "is_in_transaction", None)
-        if callable(checker):
-            try:
-                return bool(checker())
-            except Exception:  # pragma: no cover - driver-specific edge cases
-                return False
-
-        status = getattr(connection, "transaction_status", None)
-        if isinstance(status, str):
-            lowered = status.lower()
-            return "idle" not in lowered
-
-        return False
+        Raises:
+            NotImplementedError: Always - subclasses must override.
+        """
+        msg = "Adapters must override _connection_in_transaction()"
+        raise NotImplementedError(msg)
 
     def split_script_statements(
         self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
@@ -1247,7 +1248,7 @@ class CommonDriverAttributesMixin:
                 # Fallback: try alternate keys or inferred tables
                 from_clause = expr.args.get("froms")
             if from_clause is None:
-                tables = list(expr.find_all(exp.Table)) if hasattr(expr, "find_all") else []
+                tables = list(expr.find_all(exp.Table))
                 if tables:
                     first_table = tables[0]
                     from_clause = exp.from_(first_table)

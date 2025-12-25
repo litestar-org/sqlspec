@@ -53,21 +53,44 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
         """Return Spanner-specific column types."""
         return "JSON", "JSON", "TIMESTAMP"
 
+    def _string_type(self, length: int) -> str:
+        """Return Spanner STRING(N) type syntax."""
+        return f"STRING({length})"
+
+    def _integer_type(self) -> str:
+        """Return Spanner INT64 type."""
+        return "INT64"
+
+    def _primary_key_syntax(self) -> str:
+        """Return Spanner inline PRIMARY KEY clause."""
+        return " PRIMARY KEY (event_id)"
+
     def _build_create_table_sql(self) -> str:
-        """Build Spanner CREATE TABLE with PRIMARY KEY inline."""
+        """Build Spanner CREATE TABLE with PRIMARY KEY inline.
+
+        Spanner does not support DEFAULT clauses on non-computed columns,
+        so we omit them entirely. Values must be provided at insert time.
+        """
+        payload_type, metadata_type, timestamp_type = self._column_types()
+        string_64 = self._string_type(64)
+        string_128 = self._string_type(128)
+        string_32 = self._string_type(32)
+        integer_type = self._integer_type()
+        pk_inline = self._primary_key_syntax()
+
         return (
             f"CREATE TABLE {self.table_name} ("
-            "event_id STRING(64) NOT NULL,"
-            " channel STRING(128) NOT NULL,"
-            " payload_json JSON NOT NULL,"
-            " metadata_json JSON,"
-            " status STRING(32) NOT NULL,"
-            " available_at TIMESTAMP NOT NULL,"
-            " lease_expires_at TIMESTAMP,"
-            " attempts INT64 NOT NULL,"
-            " created_at TIMESTAMP NOT NULL,"
-            " acknowledged_at TIMESTAMP"
-            ") PRIMARY KEY (event_id)"
+            f"event_id {string_64} NOT NULL,"
+            f" channel {string_128} NOT NULL,"
+            f" payload_json {payload_type} NOT NULL,"
+            f" metadata_json {metadata_type},"
+            f" status {string_32} NOT NULL,"
+            f" available_at {timestamp_type} NOT NULL,"
+            f" lease_expires_at {timestamp_type},"
+            f" attempts {integer_type} NOT NULL,"
+            f" created_at {timestamp_type} NOT NULL,"
+            f" acknowledged_at {timestamp_type}"
+            f"){pk_inline}"
         )
 
     def _build_index_sql(self) -> str | None:

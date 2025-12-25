@@ -776,12 +776,16 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         if bind_key is not None:
             get_config_by_bind_key(ctx, bind_key)
             # Convert single config to list format for compatibility
-            all_configs = ctx.obj["configs"]
-            migration_configs = []
+            all_configs: list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] = ctx.obj[
+                "configs"
+            ]
+            migration_configs: list[
+                tuple[str, AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]
+            ] = []
             for cfg in all_configs:
                 config_name = cfg.bind_key
-                if config_name == bind_key and hasattr(cfg, "migration_config") and cfg.migration_config:
-                    migration_configs.append((config_name, cfg))
+                if config_name == bind_key and getattr(cfg, "migration_config", None):
+                    migration_configs.append((config_name, cfg))  # pyright: ignore[reportArgumentType]
         else:
             migration_configs = get_configs_with_migrations(ctx)
 

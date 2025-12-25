@@ -45,6 +45,7 @@ from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer
+from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -465,10 +466,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Number of rows affected, -1 if unable to determine
         """
         try:
-            if hasattr(result, "tag") and result.tag:
-                return self._parse_command_tag(result.tag)
-            if hasattr(result, "status") and result.status:
-                return self._parse_command_tag(result.status)
+            if has_query_result_metadata(result):
+                if result.tag:
+                    return self._parse_command_tag(result.tag)
+                if result.status:
+                    return self._parse_command_tag(result.status)
             if isinstance(result, str):
                 return self._parse_command_tag(result)
         except Exception as e:
@@ -604,6 +606,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         qualified = _format_table_identifier(table)
         async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             await cursor.execute(f"TRUNCATE TABLE {qualified}")
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.in_transaction())
 
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":

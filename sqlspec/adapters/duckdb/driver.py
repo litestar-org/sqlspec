@@ -400,6 +400,16 @@ class DuckDBDriver(SyncDriverAdapterBase):
             msg = f"Failed to commit DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        DuckDB uses explicit BEGIN TRANSACTION and does not expose transaction state.
+
+        Returns:
+            False - DuckDB requires explicit transaction management.
+        """
+        return False
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.

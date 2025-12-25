@@ -5,7 +5,9 @@ import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.protocols import HasStatementConfigProtocol
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_attr, has_statement_config_factory
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -57,10 +59,10 @@ class MigrationContext:
         """
         dialect = None
         try:
-            if hasattr(config, "statement_config") and config.statement_config:
+            if isinstance(config, HasStatementConfigProtocol) and config.statement_config:
                 dialect = getattr(config.statement_config, "dialect", None)
-            elif hasattr(config, "_create_statement_config") and callable(config._create_statement_config):
-                stmt_config = config._create_statement_config()
+            elif has_statement_config_factory(config):
+                stmt_config = config._create_statement_config()  # pyright: ignore[reportPrivateUsage]
                 dialect = getattr(stmt_config, "dialect", None)
         except Exception:
             logger.debug("Unable to extract dialect from config")
@@ -91,8 +93,11 @@ class MigrationContext:
         if self.driver is None:
             return False
 
-        execute_method = getattr(self.driver, "execute_script", None)
-        return execute_method is not None and inspect.iscoroutinefunction(execute_method)
+        if not has_attr(self.driver, "execute_script"):
+            return False
+
+        execute_method = self.driver.execute_script
+        return inspect.iscoroutinefunction(execute_method)
 
     @property
     def execution_mode(self) -> str:

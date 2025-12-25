@@ -454,6 +454,14 @@ class SqliteDriver(SyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        Returns:
+            True if connection is in an active transaction.
+        """
+        return bool(self.connection.in_transaction)
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -482,9 +490,11 @@ def _format_sqlite_identifier(identifier: str) -> str:
     if not cleaned:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
-    parts = [part for part in cleaned.split(".") if part]
-    formatted = ".".join(_quote_sqlite_identifier(part) for part in parts)
-    return formatted or _quote_sqlite_identifier(cleaned)
+
+    if "." not in cleaned:
+        return _quote_sqlite_identifier(cleaned)
+
+    return ".".join(_quote_sqlite_identifier(part) for part in cleaned.split(".") if part)
 
 
 def _build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:

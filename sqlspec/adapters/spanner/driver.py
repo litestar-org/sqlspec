@@ -27,6 +27,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json
+from sqlspec.utils.type_guards import has_attr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -170,7 +171,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        if hasattr(conn, "execute_update"):
+        if has_attr(conn, "execute_update"):
             row_count = conn.execute_update(sql, params=coerced_params, param_types=param_types_map)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
@@ -184,7 +185,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         count = 0
         for stmt in statements:
-            if hasattr(conn, "execute_update") and not stmt.upper().strip().startswith("SELECT"):
+            if has_attr(conn, "execute_update") and not stmt.upper().strip().startswith("SELECT"):
                 coerced_params = self._coerce_params(params)
                 conn.execute_update(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
             else:
@@ -199,7 +200,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
-        if not hasattr(cursor, "batch_update"):
+        if not has_attr(cursor, "batch_update"):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
         conn = cast("Any", cursor)
@@ -239,11 +240,15 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return None
 
     def rollback(self) -> None:
-        if hasattr(self.connection, "rollback"):
+        if has_attr(self.connection, "rollback"):
             self.connection.rollback()
 
     def commit(self) -> None:
-        if hasattr(self.connection, "commit"):
+        # Spanner Transaction has a `committed` property set after commit
+        # Check it to avoid "Transaction already committed" errors
+        if has_attr(self.connection, "committed") and self.connection.committed is not None:
+            return
+        if has_attr(self.connection, "commit"):
             self.connection.commit()
 
     @property
@@ -306,7 +311,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 batch_args.append((insert_sql, coerced, self._infer_param_types(coerced)))
 
             conn = cast("Any", self.connection)
-            if hasattr(conn, "batch_update"):
+            if has_attr(conn, "batch_update"):
                 conn.batch_update(batch_args)
             else:
                 for batch_sql, batch_params, batch_types in batch_args:
@@ -334,8 +339,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """Delete all rows from table (Spanner doesn't have TRUNCATE)."""
         delete_sql = f"DELETE FROM {table} WHERE TRUE"
         conn = cast("Any", self.connection)
-        if hasattr(conn, "execute_update"):
+        if has_attr(conn, "execute_update"):
             conn.execute_update(delete_sql)
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return False
 
 
 def _build_spanner_profile() -> DriverParameterProfile:

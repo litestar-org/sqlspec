@@ -60,29 +60,51 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
         """
         return "JSON", "JSON", "TIMESTAMP"
 
+    def _string_type(self, length: int) -> str:
+        """Return BigQuery STRING type (length is ignored)."""
+        del length
+        return "STRING"
+
+    def _integer_type(self) -> str:
+        """Return BigQuery INT64 type."""
+        return "INT64"
+
+    def _timestamp_default(self) -> str:
+        """Return BigQuery timestamp default expression."""
+        return "CURRENT_TIMESTAMP()"
+
+    def _table_clause(self) -> str:
+        """Return BigQuery CLUSTER BY clause for query optimization."""
+        return " CLUSTER BY channel, status, available_at"
+
     def _build_create_table_sql(self) -> str:
         """Build BigQuery CREATE TABLE with CLUSTER BY optimization.
 
-        Returns:
-            DDL statement for creating the event queue table.
+        BigQuery uses CLUSTER BY for query optimization instead of indexes.
+        The clustering columns match the typical polling query pattern.
 
-        Notes:
-            BigQuery uses CLUSTER BY for query optimization instead of indexes.
-            The clustering columns match the typical polling query pattern.
+        Note: BigQuery does not support column-level PRIMARY KEY, so we
+        omit it entirely. event_id uniqueness must be enforced at insert time.
         """
+        payload_type, metadata_type, timestamp_type = self._column_types()
+        string_type = self._string_type(0)
+        integer_type = self._integer_type()
+        ts_default = self._timestamp_default()
+        table_clause = self._table_clause()
+
         return (
             f"CREATE TABLE IF NOT EXISTS {self.table_name} ("
-            "event_id STRING NOT NULL,"
-            " channel STRING NOT NULL,"
-            " payload_json JSON NOT NULL,"
-            " metadata_json JSON,"
-            " status STRING NOT NULL DEFAULT 'pending',"
-            " available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),"
-            " lease_expires_at TIMESTAMP,"
-            " attempts INT64 NOT NULL DEFAULT 0,"
-            " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),"
-            " acknowledged_at TIMESTAMP"
-            ") CLUSTER BY channel, status, available_at"
+            f"event_id {string_type} NOT NULL,"
+            f" channel {string_type} NOT NULL,"
+            f" payload_json {payload_type} NOT NULL,"
+            f" metadata_json {metadata_type},"
+            f" status {string_type} NOT NULL DEFAULT 'pending',"
+            f" available_at {timestamp_type} NOT NULL DEFAULT {ts_default},"
+            f" lease_expires_at {timestamp_type},"
+            f" attempts {integer_type} NOT NULL DEFAULT 0,"
+            f" created_at {timestamp_type} NOT NULL DEFAULT {ts_default},"
+            f" acknowledged_at {timestamp_type}"
+            f"){table_clause}"
         )
 
     def _build_index_sql(self) -> str | None:
