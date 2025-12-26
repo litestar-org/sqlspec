@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._dml import DeleteFromClauseMixin
+from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
@@ -20,7 +21,7 @@ from sqlspec.exceptions import SQLBuilderError
 __all__ = ("Delete",)
 
 
-class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin):
+class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin, ExplainMixin):
     """Builder for DELETE statements.
 
     Constructs SQL DELETE statements with parameter binding and validation.

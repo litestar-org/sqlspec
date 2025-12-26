@@ -11,6 +11,7 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._dml import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin
+from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import ReturningClauseMixin
 from sqlspec.core import SQLResult
@@ -28,7 +29,9 @@ ERR_MSG_INTERNAL_EXPRESSION_TYPE: Final[str] = "Internal error: expression is no
 ERR_MSG_EXPRESSION_NOT_INITIALIZED: Final[str] = "Internal error: base expression not initialized."
 
 
-class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin):
+class Insert(
+    QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin, ExplainMixin
+):
     """Builder for INSERT statements.
 
     Constructs SQL INSERT queries with parameter binding and validation.

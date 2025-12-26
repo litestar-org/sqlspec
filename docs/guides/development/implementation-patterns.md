@@ -2,6 +2,8 @@
 
 This guide documents the key implementation patterns used throughout SQLSpec. Reference these patterns when implementing new adapters, features, or framework extensions.
 
+<a id="protocol-abstract-methods-pattern"></a>
+
 ## Protocol Abstract Methods Pattern
 
 When adding methods that need to support both sync and async configurations:
@@ -67,6 +69,8 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol):
 - Async base classes implement with `async def` and `await`
 - All 4 base classes inherit working methods automatically
 
+<a id="driver-features-pattern"></a>
+
 ## driver_features Pattern
 
 ### TypedDict Definition (MANDATORY)
@@ -127,6 +131,8 @@ class AdapterConfig(AsyncDatabaseConfig):
 - Feature has performance implications
 - Feature changes database behavior in non-obvious ways
 - Feature is experimental
+
+<a id="type-handler-pattern"></a>
 
 ## Type Handler Pattern
 
@@ -230,6 +236,8 @@ async def _init_connection(self, connection: "Connection") -> None:
         from ._feature_handlers import register_handlers
         register_handlers(connection)
 ```
+
+<a id="framework-extension-pattern"></a>
 
 ## Framework Extension Pattern
 
@@ -513,3 +521,114 @@ from sqlspec.utils.sync_tools import await_
 sync_add = await_(async_add)
 result = sync_add(5, 3)  # Returns 8, using portal internally
 ```
+
+<a id="explain-builder-pattern"></a>
+
+## EXPLAIN Builder Pattern
+
+The EXPLAIN builder demonstrates dialect-aware SQL generation for a non-standard statement type.
+
+### Dialect Dispatch Pattern
+
+```python
+POSTGRES_DIALECTS = frozenset({"postgres", "postgresql", "redshift"})
+MYSQL_DIALECTS = frozenset({"mysql", "mariadb"})
+
+def build_explain_sql(
+    statement_sql: str,
+    options: "ExplainOptions",
+    dialect: "DialectType | None" = None,
+) -> str:
+    """Build dialect-specific EXPLAIN SQL."""
+    dialect_name = _normalize_dialect_name(dialect)
+
+    if dialect_name in POSTGRES_DIALECTS:
+        return _build_postgres_explain(statement_sql, options)
+    if dialect_name in MYSQL_DIALECTS:
+        return _build_mysql_explain(statement_sql, options)
+    # ... more dialects
+
+    return _build_generic_explain(statement_sql, options)
+```
+
+### Options Class with Immutable Copy
+
+```python
+@mypyc_attr(allow_interpreted_subclasses=False)
+class ExplainOptions:
+    """Mypyc-compatible options class with immutable copy pattern."""
+
+    __slots__ = ("analyze", "verbose", "format", ...)
+
+    def __init__(self, analyze: bool = False, ...) -> None:
+        self.analyze = analyze
+        # ... set all slots
+
+    def copy(self, analyze: "bool | None" = None, ...) -> "ExplainOptions":
+        """Create a copy with optional modifications."""
+        return ExplainOptions(
+            analyze=analyze if analyze is not None else self.analyze,
+            # ... copy all fields with overrides
+        )
+```
+
+### Mixin for QueryBuilder Integration
+
+```python
+class ExplainMixin:
+    """Add .explain() to QueryBuilder subclasses."""
+
+    __slots__ = ()
+
+    dialect: "DialectType | None"
+
+    def explain(
+        self,
+        analyze: bool = False,
+        verbose: bool = False,
+        format: "ExplainFormat | str | None" = None,
+    ) -> "Explain":
+        """Create an EXPLAIN builder for this query."""
+        options = ExplainOptions(
+            analyze=analyze,
+            verbose=verbose,
+            format=ExplainFormat(format.lower()) if isinstance(format, str) else format,
+        )
+        return Explain(self, dialect=self.dialect, options=options)
+```
+
+### Statement Resolution Pattern
+
+```python
+def _resolve_statement_sql(
+    self, statement: "str | exp.Expression | SQL | SQLBuilderProtocol"
+) -> str:
+    """Resolve different statement types to SQL string."""
+    if isinstance(statement, str):
+        return statement
+
+    if isinstance(statement, SQL):
+        self._parameters.update(statement.named_parameters)
+        return statement.raw_sql
+
+    if is_expression(statement):
+        return statement.sql(dialect=self._dialect)
+
+    if has_parameter_builder(statement):
+        safe_query = statement.build(dialect=self._dialect)
+        if safe_query.parameters:
+            self._parameters.update(safe_query.parameters)
+        return str(safe_query.sql)
+
+    if has_expression_and_sql(statement):
+        return statement.sql
+
+    msg = f"Cannot resolve statement to SQL: {type(statement).__name__}"
+    raise SQLBuilderError(msg)
+```
+
+**Key principles:**
+- Use frozenset for dialect groupings (hashable, immutable)
+- Normalize dialect names to lowercase for consistent matching
+- Preserve parameters from underlying statements
+- Use type guards instead of `isinstance()` for protocol checks

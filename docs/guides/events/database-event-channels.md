@@ -277,6 +277,8 @@ channel.shutdown()
 config.close_pool()
 ```
 
+<a id="events-architecture"></a>
+
 ## Architecture
 
 The events extension consists of two layers that work together:

@@ -11,6 +11,7 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._dml import UpdateFromClauseMixin, UpdateSetClauseMixin, UpdateTableClauseMixin
+from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import build_join_clause
 from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
 from sqlspec.core import SQLResult
@@ -32,6 +33,7 @@ class Update(
     UpdateSetClauseMixin,
     UpdateFromClauseMixin,
     UpdateTableClauseMixin,
+    ExplainMixin,
 ):
     """Builder for UPDATE statements.
 

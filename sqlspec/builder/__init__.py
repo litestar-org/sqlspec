@@ -33,6 +33,7 @@ from sqlspec.builder._dml import (
     UpdateSetClauseMixin,
     UpdateTableClauseMixin,
 )
+from sqlspec.builder._explain import Explain, ExplainMixin
 from sqlspec.builder._expression_wrappers import (
     AggregateExpression,
     ConversionExpression,
@@ -101,6 +102,8 @@ __all__ = (
     "DropSchema",
     "DropTable",
     "DropView",
+    "Explain",
+    "ExplainMixin",
     "FunctionColumn",
     "FunctionExpression",
     "HavingClauseMixin",

@@ -593,6 +593,40 @@ class SQL:
         new_sql._filters = self._filters.copy()
         return new_sql
 
+    def explain(self, analyze: bool = False, verbose: bool = False, format: "str | None" = None) -> "SQL":
+        """Create an EXPLAIN statement for this SQL.
+
+        Wraps the current SQL statement in an EXPLAIN clause with
+        dialect-aware syntax generation.
+
+        Args:
+            analyze: Execute the statement and show actual runtime statistics
+            verbose: Show additional information
+            format: Output format (TEXT, JSON, XML, YAML, TREE, TRADITIONAL)
+
+        Returns:
+            New SQL instance containing the EXPLAIN statement
+
+        Examples:
+            Basic EXPLAIN:
+                stmt = SQL("SELECT * FROM users")
+                explain_stmt = stmt.explain()
+
+            With options:
+                explain_stmt = stmt.explain(analyze=True, format="json")
+        """
+        from sqlspec.builder._explain import Explain
+        from sqlspec.core.explain import ExplainFormat, ExplainOptions
+
+        fmt = None
+        if format is not None:
+            fmt = ExplainFormat(format.lower())
+
+        options = ExplainOptions(analyze=analyze, verbose=verbose, format=fmt)
+
+        explain_builder = Explain(self, dialect=self._dialect, options=options)
+        return explain_builder.build()
+
     def __hash__(self) -> int:
         """Hash value computation."""
         if self._hash is None:

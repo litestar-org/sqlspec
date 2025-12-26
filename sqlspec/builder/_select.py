@@ -14,6 +14,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import JoinClauseMixin
 from sqlspec.builder._parsing_utils import (
     extract_column_name,
@@ -1339,6 +1340,7 @@ class Select(
     CommonTableExpressionMixin,
     PivotClauseMixin,
     UnpivotClauseMixin,
+    ExplainMixin,
 ):
     """Builder for SELECT queries.
 

@@ -104,6 +104,8 @@ def use_numpy_feature():
 - **Preferred**: 30-50 lines for most functions
 - Split longer functions into smaller helpers
 
+<a id="type-guards"></a>
+
 ### Anti-Patterns to Avoid
 
 ```python
@@ -310,6 +312,8 @@ def parse_content(content: str, source: str) -> "dict[str, Result]":
 - Build locally: `make docs` before submission
 - Use reStructuredText (.rst) and Markdown (.md via MyST)
 
+<a id="mypyc-compatible-class-pattern"></a>
+
 ## Mypyc-Compatible Class Pattern
 
 For data-holding classes in `sqlspec/core/` and `sqlspec/driver/`:
@@ -343,6 +347,8 @@ class MyMetadata:
 - `__slots__` reduces memory and speeds up attribute access
 - Explicit `__init__`, `__repr__`, `__eq__`, `__hash__` for full control
 - Avoid `@dataclass` decorators in mypyc-compiled modules
+
+<a id="testing-standards"></a>
 
 ## Testing Standards
 
