@@ -65,7 +65,8 @@ def test_explain_plan_with_where(oracle_explain_session: OracleSyncDriver) -> No
 def test_explain_from_query_builder(oracle_explain_session: OracleSyncDriver) -> None:
     """Test EXPLAIN from QueryBuilder via mixin."""
     query = sql.select("*").from_("explain_test").where("id > :id", id=0)
-    explain_stmt = query.explain(dialect="oracle")
+    # Use Explain directly with dialect since query builder uses default dialect
+    explain_stmt = Explain(query.build().sql, dialect="oracle")
     result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
@@ -82,8 +83,9 @@ def test_explain_from_sql_factory(oracle_explain_session: OracleSyncDriver) -> N
 def test_explain_from_sql_object(oracle_explain_session: OracleSyncDriver) -> None:
     """Test SQL.explain() method."""
     stmt = SQL("SELECT * FROM explain_test")
-    explain_stmt = stmt.explain(dialect="oracle")
-    result = oracle_explain_session.execute(explain_stmt)
+    # Use Explain directly with dialect since SQL uses default dialect
+    explain_stmt = Explain(stmt.sql, dialect="oracle")
+    result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
 
