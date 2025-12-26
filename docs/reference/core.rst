@@ -17,6 +17,7 @@ Core components:
 - **Compiler** (``compiler.py``) - SQL compilation and validation using sqlglot
 - **Cache** (``cache.py``) - Statement caching for performance
 - **Filters** (``filters.py``) - SQL transformation filters
+- **Explain** (``explain.py``) - EXPLAIN plan options and format definitions
 
 SQL Statement
 =============
@@ -372,6 +373,32 @@ Filters can be composed and chained:
    #         WHERE name ILIKE '%Alice%'
    #         ORDER BY created_at DESC
    #         LIMIT 10 OFFSET 0
+
+EXPLAIN Plan Support
+====================
+
+.. currentmodule:: sqlspec.core.explain
+
+.. autoclass:: ExplainOptions
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Configuration options for EXPLAIN statements. Encapsulates all possible
+   EXPLAIN options across different database dialects.
+
+.. autoclass:: ExplainFormat
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Output formats for EXPLAIN statements. Different databases support
+   different output formats (TEXT, JSON, XML, YAML, TREE, TRADITIONAL).
+
+For EXPLAIN statement building and dialect-specific SQL generation, see:
+
+- :doc:`/guides/builder/explain` - EXPLAIN Builder Guide
+- :doc:`builder` - SQL Builder API (includes Explain class)
 
 Type Conversions
 ================
