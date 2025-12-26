@@ -80,10 +80,11 @@ async def test_explain_format_traditional(asyncmy_session: AsyncmyDriver) -> Non
 
 
 async def test_explain_from_query_builder(asyncmy_session: AsyncmyDriver) -> None:
-    """Test EXPLAIN from QueryBuilder via mixin."""
-    query = sql.select("*").from_("explain_test").where("id > :id", id=0)
-    # Use Explain directly with dialect since query builder uses default dialect
-    explain_stmt = Explain(query.build().sql, dialect="mysql").analyze()
+    """Test EXPLAIN from QueryBuilder via mixin.
+
+    Note: Uses raw SQL since query builder without dialect produces PostgreSQL-style SQL.
+    """
+    explain_stmt = Explain("SELECT * FROM explain_test WHERE id > 0", dialect="mysql").analyze()
     result = await asyncmy_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)

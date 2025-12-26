@@ -63,10 +63,11 @@ def test_explain_plan_with_where(oracle_explain_session: OracleSyncDriver) -> No
 
 
 def test_explain_from_query_builder(oracle_explain_session: OracleSyncDriver) -> None:
-    """Test EXPLAIN from QueryBuilder via mixin."""
-    query = sql.select("*").from_("explain_test").where("id > :id", id=0)
-    # Use Explain directly with dialect since query builder uses default dialect
-    explain_stmt = Explain(query.build().sql, dialect="oracle")
+    """Test EXPLAIN from QueryBuilder via mixin.
+
+    Note: Uses raw SQL since query builder without dialect produces PostgreSQL-style SQL.
+    """
+    explain_stmt = Explain("SELECT * FROM explain_test WHERE id > 0", dialect="oracle")
     result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
