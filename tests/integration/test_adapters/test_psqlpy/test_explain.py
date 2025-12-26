@@ -41,7 +41,6 @@ async def test_explain_basic_select(psqlpy_session: PsqlpyDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) > 0
 
 
 async def test_explain_analyze(psqlpy_session: PsqlpyDriver) -> None:

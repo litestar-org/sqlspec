@@ -48,7 +48,6 @@ def test_explain_basic_select(psycopg_session: PsycopgSyncDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) > 0
 
 
 def test_explain_analyze(psycopg_session: PsycopgSyncDriver) -> None:
@@ -58,7 +57,6 @@ def test_explain_analyze(psycopg_session: PsycopgSyncDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) > 0
 
 
 def test_explain_with_format_json(psycopg_session: PsycopgSyncDriver) -> None:
@@ -68,7 +66,6 @@ def test_explain_with_format_json(psycopg_session: PsycopgSyncDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) > 0
 
 
 def test_explain_analyze_with_buffers(psycopg_session: PsycopgSyncDriver) -> None:

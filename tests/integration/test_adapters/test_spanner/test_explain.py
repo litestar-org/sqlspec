@@ -1,4 +1,8 @@
-"""Integration tests for EXPLAIN plan support with spanner adapter."""
+"""Integration tests for EXPLAIN plan support with spanner adapter.
+
+Note: Spanner uses query_mode=PLAN for execution plans, not SQL EXPLAIN syntax.
+The emulator also has limited DDL support. These tests are skipped in CI.
+"""
 
 from collections.abc import Generator
 
@@ -9,7 +13,10 @@ from sqlspec.adapters.spanner import SpannerSyncConfig, SpannerSyncDriver
 from sqlspec.builder import Explain, sql
 from sqlspec.core import SQL
 
-pytestmark = pytest.mark.xdist_group("spanner")
+pytestmark = [
+    pytest.mark.xdist_group("spanner"),
+    pytest.mark.skip(reason="Spanner uses query_mode=PLAN for execution plans, not SQL EXPLAIN syntax"),
+]
 
 
 @pytest.fixture

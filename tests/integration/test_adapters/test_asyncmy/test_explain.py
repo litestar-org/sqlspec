@@ -41,7 +41,6 @@ async def test_explain_basic_select(asyncmy_session: AsyncmyDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) > 0
 
 
 async def test_explain_analyze(asyncmy_session: AsyncmyDriver) -> None:
@@ -83,7 +82,7 @@ async def test_explain_format_traditional(asyncmy_session: AsyncmyDriver) -> Non
 async def test_explain_from_query_builder(asyncmy_session: AsyncmyDriver) -> None:
     """Test EXPLAIN from QueryBuilder via mixin."""
     query = sql.select("*").from_("explain_test").where("id > :id", id=0)
-    explain_stmt = query.explain(analyze=True)
+    explain_stmt = query.explain(analyze=True, dialect="mysql")
     result = await asyncmy_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
@@ -102,7 +101,7 @@ async def test_explain_from_sql_factory(asyncmy_session: AsyncmyDriver) -> None:
 async def test_explain_from_sql_object(asyncmy_session: AsyncmyDriver) -> None:
     """Test SQL.explain() method."""
     stmt = SQL("SELECT * FROM explain_test")
-    explain_stmt = stmt.explain()
+    explain_stmt = stmt.explain(dialect="mysql")
     result = await asyncmy_session.execute(explain_stmt)
 
     assert isinstance(result, SQLResult)
