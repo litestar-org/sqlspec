@@ -13,9 +13,9 @@ pytestmark = pytest.mark.xdist_group("duckdb")
 
 
 @pytest.fixture
-def duckdb_session(duckdb_sync_config: DuckDBConfig) -> Generator[DuckDBDriver, None, None]:
+def duckdb_session(duckdb_basic_config: DuckDBConfig) -> Generator[DuckDBDriver, None, None]:
     """Create a duckdb session with test table."""
-    with duckdb_sync_config.provide_session() as session:
+    with duckdb_basic_config.provide_session() as session:
         session.execute_script("DROP TABLE IF EXISTS explain_test")
         session.execute_script(
             """

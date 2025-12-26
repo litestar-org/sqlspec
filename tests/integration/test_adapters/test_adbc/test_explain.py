@@ -13,12 +13,12 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-def adbc_session(adbc_sync_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
+def adbc_session(adbc_postgres_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
     """Create an adbc session with test table.
 
     ADBC typically connects to PostgreSQL for these tests.
     """
-    with adbc_sync_config.provide_session() as session:
+    with adbc_postgres_config.provide_session() as session:
         session.execute_script("DROP TABLE IF EXISTS explain_test")
         session.execute_script(
             """

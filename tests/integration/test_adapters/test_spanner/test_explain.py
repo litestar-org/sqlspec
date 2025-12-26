@@ -13,9 +13,9 @@ pytestmark = pytest.mark.xdist_group("spanner")
 
 
 @pytest.fixture
-def spanner_session(spanner_sync_config: SpannerSyncConfig) -> Generator[SpannerSyncDriver, None, None]:
+def spanner_explain_session(spanner_config: SpannerSyncConfig) -> Generator[SpannerSyncDriver, None, None]:
     """Create a spanner session with test table."""
-    with spanner_sync_config.provide_session() as session:
+    with spanner_config.provide_session() as session:
         try:
             session.execute_script("DROP TABLE explain_test")
         except Exception:
@@ -38,51 +38,51 @@ def spanner_session(spanner_sync_config: SpannerSyncConfig) -> Generator[Spanner
             pass
 
 
-def test_explain_basic_select(spanner_session: SpannerSyncDriver) -> None:
+def test_explain_basic_select(spanner_explain_session: SpannerSyncDriver) -> None:
     """Test basic EXPLAIN on SELECT statement.
 
     Spanner uses EXPLAIN syntax similar to generic SQL.
     """
     explain_stmt = Explain("SELECT * FROM explain_test", dialect="spanner")
-    result = spanner_session.execute(explain_stmt.build())
+    result = spanner_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
 
 
-def test_explain_with_where(spanner_session: SpannerSyncDriver) -> None:
+def test_explain_with_where(spanner_explain_session: SpannerSyncDriver) -> None:
     """Test EXPLAIN with WHERE clause."""
     explain_stmt = Explain("SELECT * FROM explain_test WHERE id = 1", dialect="spanner")
-    result = spanner_session.execute(explain_stmt.build())
+    result = spanner_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
 
 
-def test_explain_from_query_builder(spanner_session: SpannerSyncDriver) -> None:
+def test_explain_from_query_builder(spanner_explain_session: SpannerSyncDriver) -> None:
     """Test EXPLAIN from QueryBuilder via mixin."""
     query = sql.select("*").from_("explain_test").where("id > :id", id=0)
     explain_stmt = query.explain()
-    result = spanner_session.execute(explain_stmt.build())
+    result = spanner_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
 
 
-def test_explain_from_sql_factory(spanner_session: SpannerSyncDriver) -> None:
+def test_explain_from_sql_factory(spanner_explain_session: SpannerSyncDriver) -> None:
     """Test sql.explain() factory method."""
     explain_stmt = sql.explain("SELECT * FROM explain_test", dialect="spanner")
-    result = spanner_session.execute(explain_stmt.build())
+    result = spanner_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
 
 
-def test_explain_from_sql_object(spanner_session: SpannerSyncDriver) -> None:
+def test_explain_from_sql_object(spanner_explain_session: SpannerSyncDriver) -> None:
     """Test SQL.explain() method."""
     stmt = SQL("SELECT * FROM explain_test")
     explain_stmt = stmt.explain()
-    result = spanner_session.execute(explain_stmt)
+    result = spanner_explain_session.execute(explain_stmt)
 
     assert isinstance(result, SQLResult)
     assert result.data is not None

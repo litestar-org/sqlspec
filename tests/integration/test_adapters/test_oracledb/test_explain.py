@@ -13,9 +13,9 @@ pytestmark = pytest.mark.xdist_group("oracle")
 
 
 @pytest.fixture
-def oracle_session(oracledb_sync_config: OracleSyncConfig) -> Generator[OracleSyncDriver, None, None]:
+def oracle_explain_session(oracle_sync_config: OracleSyncConfig) -> Generator[OracleSyncDriver, None, None]:
     """Create an oracledb session with test table."""
-    with oracledb_sync_config.provide_session() as session:
+    with oracle_sync_config.provide_session() as session:
         try:
             session.execute_script("DROP TABLE explain_test")
         except Exception:
@@ -39,7 +39,7 @@ def oracle_session(oracledb_sync_config: OracleSyncConfig) -> Generator[OracleSy
             pass
 
 
-def test_explain_plan_for_select(oracle_session: OracleSyncDriver) -> None:
+def test_explain_plan_for_select(oracle_explain_session: OracleSyncDriver) -> None:
     """Test EXPLAIN PLAN FOR on SELECT statement.
 
     Oracle uses a two-step process:
@@ -49,70 +49,70 @@ def test_explain_plan_for_select(oracle_session: OracleSyncDriver) -> None:
     This test only verifies step 1 executes without error.
     """
     explain_stmt = Explain("SELECT * FROM explain_test", dialect="oracle")
-    result = oracle_session.execute(explain_stmt.build())
+    result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
 
 
-def test_explain_plan_with_where(oracle_session: OracleSyncDriver) -> None:
+def test_explain_plan_with_where(oracle_explain_session: OracleSyncDriver) -> None:
     """Test EXPLAIN PLAN FOR with WHERE clause."""
     explain_stmt = Explain("SELECT * FROM explain_test WHERE id = 1", dialect="oracle")
-    result = oracle_session.execute(explain_stmt.build())
+    result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
 
 
-def test_explain_from_query_builder(oracle_session: OracleSyncDriver) -> None:
+def test_explain_from_query_builder(oracle_explain_session: OracleSyncDriver) -> None:
     """Test EXPLAIN from QueryBuilder via mixin."""
     query = sql.select("*").from_("explain_test").where("id > :id", id=0)
     explain_stmt = query.explain()
-    result = oracle_session.execute(explain_stmt.build())
+    result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
 
 
-def test_explain_from_sql_factory(oracle_session: OracleSyncDriver) -> None:
+def test_explain_from_sql_factory(oracle_explain_session: OracleSyncDriver) -> None:
     """Test sql.explain() factory method."""
     explain_stmt = sql.explain("SELECT * FROM explain_test", dialect="oracle")
-    result = oracle_session.execute(explain_stmt.build())
+    result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
 
 
-def test_explain_from_sql_object(oracle_session: OracleSyncDriver) -> None:
+def test_explain_from_sql_object(oracle_explain_session: OracleSyncDriver) -> None:
     """Test SQL.explain() method."""
     stmt = SQL("SELECT * FROM explain_test")
     explain_stmt = stmt.explain()
-    result = oracle_session.execute(explain_stmt)
+    result = oracle_explain_session.execute(explain_stmt)
 
     assert isinstance(result, SQLResult)
 
 
-def test_explain_insert(oracle_session: OracleSyncDriver) -> None:
+def test_explain_insert(oracle_explain_session: OracleSyncDriver) -> None:
     """Test EXPLAIN PLAN FOR on INSERT statement."""
     explain_stmt = Explain("INSERT INTO explain_test (name, value) VALUES ('test', 1)", dialect="oracle")
-    result = oracle_session.execute(explain_stmt.build())
+    result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
 
 
-def test_explain_update(oracle_session: OracleSyncDriver) -> None:
+def test_explain_update(oracle_explain_session: OracleSyncDriver) -> None:
     """Test EXPLAIN PLAN FOR on UPDATE statement."""
     explain_stmt = Explain("UPDATE explain_test SET value = 100 WHERE id = 1", dialect="oracle")
-    result = oracle_session.execute(explain_stmt.build())
+    result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
 
 
-def test_explain_delete(oracle_session: OracleSyncDriver) -> None:
+def test_explain_delete(oracle_explain_session: OracleSyncDriver) -> None:
     """Test EXPLAIN PLAN FOR on DELETE statement."""
     explain_stmt = Explain("DELETE FROM explain_test WHERE id = 1", dialect="oracle")
-    result = oracle_session.execute(explain_stmt.build())
+    result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)
 
 
-def test_display_execution_plan(oracle_session: OracleSyncDriver) -> None:
+def test_display_execution_plan(oracle_explain_session: OracleSyncDriver) -> None:
     """Test retrieving execution plan with DBMS_XPLAN.DISPLAY.
 
     This test demonstrates the full Oracle EXPLAIN workflow:
@@ -120,9 +120,9 @@ def test_display_execution_plan(oracle_session: OracleSyncDriver) -> None:
     2. Query DBMS_XPLAN.DISPLAY() to get the plan
     """
     explain_stmt = Explain("SELECT * FROM explain_test WHERE id = 1", dialect="oracle")
-    oracle_session.execute(explain_stmt.build())
+    oracle_explain_session.execute(explain_stmt.build())
 
-    plan_result = oracle_session.execute(SQL("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY())"))
+    plan_result = oracle_explain_session.execute(SQL("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY())"))
     assert isinstance(plan_result, SQLResult)
     assert plan_result.data is not None
     assert len(plan_result.data) > 0
