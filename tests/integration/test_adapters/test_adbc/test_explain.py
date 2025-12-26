@@ -1,4 +1,8 @@
-"""Integration tests for EXPLAIN plan support with adbc adapter."""
+"""Integration tests for EXPLAIN plan support with adbc adapter.
+
+Note: ADBC uses COPY protocol which wraps queries in COPY (query) TO STDOUT,
+making EXPLAIN statements incompatible. These tests are skipped.
+"""
 
 from collections.abc import Generator
 
@@ -9,7 +13,10 @@ from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.builder import Explain, sql
 from sqlspec.core import SQL
 
-pytestmark = pytest.mark.xdist_group("postgres")
+pytestmark = [
+    pytest.mark.xdist_group("postgres"),
+    pytest.mark.skip(reason="ADBC uses COPY protocol which is incompatible with EXPLAIN statements"),
+]
 
 
 @pytest.fixture
