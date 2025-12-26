@@ -18,6 +18,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
+from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.core import SQLResult
@@ -724,6 +725,7 @@ class Merge(
     MergeNotMatchedClauseMixin,
     MergeIntoClauseMixin,
     MergeNotMatchedBySourceClauseMixin,
+    ExplainMixin,
 ):
     """Builder for MERGE statements.
 

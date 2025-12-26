@@ -1,5 +1,7 @@
 # Custom SQLglot Dialects
 
+<a id="custom-sqlglot-dialect"></a>
+
 This guide explains how SQLSpec implements and uses custom SQLglot dialects for database-specific SQL features.
 
 ## Overview

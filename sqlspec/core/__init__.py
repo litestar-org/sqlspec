@@ -122,6 +122,7 @@ from sqlspec.core.compiler import (
     is_copy_operation,
     is_copy_to_operation,
 )
+from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.filters import (
     AnyCollectionFilter,
     BeforeAfterFilter,
@@ -220,6 +221,8 @@ __all__ = (
     "CachedStatement",
     "CompiledSQL",
     "DriverParameterProfile",
+    "ExplainFormat",
+    "ExplainOptions",
     "FilterTypeT",
     "FilterTypes",
     "FiltersView",

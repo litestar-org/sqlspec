@@ -750,3 +750,87 @@ def test_special_handling(driver):
 4. **Special Handling Hook** - _try_special_handling for database-specific operations
 5. **Proper Abstraction** - Clear separation between compilation and execution
 6. **Test Coverage** - Comprehensive testing of all execution paths
+
+## EXPLAIN Plan Support
+
+SQLSpec provides dialect-aware EXPLAIN statement generation for query plan analysis.
+
+### Basic Usage
+
+```python
+from sqlspec.builder import sql, Explain
+from sqlspec.core import SQL
+
+# Method 1: SQL class method
+stmt = SQL("SELECT * FROM users WHERE status = :status", {"status": "active"})
+explain_stmt = stmt.explain()
+
+# Method 2: SQLFactory method
+explain = sql.explain("SELECT * FROM users", analyze=True)
+
+# Method 3: QueryBuilder integration
+query = sql.select("*").from_("users").where_eq("id", 1)
+explain = query.explain(analyze=True, format="json").build()
+
+# Method 4: Direct Explain builder
+explain = (
+    Explain("SELECT * FROM users", dialect="postgres")
+    .analyze()
+    .format("json")
+    .buffers()
+    .build()
+)
+```
+
+### Dialect-Specific Output
+
+| Database | Basic | With ANALYZE | Formats |
+|----------|-------|--------------|---------|
+| PostgreSQL | `EXPLAIN stmt` | `EXPLAIN (ANALYZE) stmt` | TEXT, JSON, XML, YAML |
+| MySQL | `EXPLAIN stmt` | `EXPLAIN ANALYZE stmt` | TRADITIONAL, JSON, TREE |
+| SQLite | `EXPLAIN QUERY PLAN stmt` | N/A | TEXT only |
+| DuckDB | `EXPLAIN stmt` | `EXPLAIN ANALYZE stmt` | TEXT, JSON |
+| Oracle | `EXPLAIN PLAN FOR stmt` | N/A | TEXT (via DBMS_XPLAN) |
+| BigQuery | `EXPLAIN stmt` | `EXPLAIN ANALYZE stmt` | TEXT |
+
+### PostgreSQL Full Options
+
+```python
+explain = (
+    Explain("SELECT * FROM users", dialect="postgres")
+    .analyze()         # Execute for actual statistics
+    .verbose()         # Additional information
+    .costs()           # Show cost estimates
+    .buffers()         # Buffer usage (requires ANALYZE)
+    .timing()          # Actual timing (requires ANALYZE)
+    .summary()         # Summary information
+    .memory()          # Memory usage (PostgreSQL 17+)
+    .settings()        # Configuration parameters (PostgreSQL 12+)
+    .wal()             # WAL usage (PostgreSQL 13+)
+    .generic_plan()    # Ignore parameter values (PostgreSQL 16+)
+    .format("json")    # Output format
+    .build()
+)
+```
+
+### ExplainOptions Class
+
+```python
+from sqlspec.core.explain import ExplainOptions, ExplainFormat
+
+# Create reusable options
+options = ExplainOptions(
+    analyze=True,
+    verbose=True,
+    format=ExplainFormat.JSON,
+    buffers=True,
+)
+
+# Apply to Explain builder
+explain = Explain(query, dialect="postgres", options=options).build()
+
+# Copy and modify
+debug_options = options.copy(timing=True, summary=True)
+```
+
+See the [EXPLAIN Plan Guide](../builder/explain.md) for comprehensive examples.

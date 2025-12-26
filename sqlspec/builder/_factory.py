@@ -31,6 +31,7 @@ from sqlspec.builder._ddl import (
     Truncate,
 )
 from sqlspec.builder._delete import Delete
+from sqlspec.builder._explain import Explain
 from sqlspec.builder._expression_wrappers import (
     AggregateExpression,
     ConversionExpression,
@@ -52,6 +53,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from sqlspec.builder._expression_wrappers import ExpressionWrapper
+    from sqlspec.core.explain import ExplainFormat
+    from sqlspec.protocols import SQLBuilderProtocol
 
 
 __all__ = (
@@ -70,6 +73,7 @@ __all__ = (
     "DropSchema",
     "DropTable",
     "DropView",
+    "Explain",
     "Insert",
     "Merge",
     "RenameTable",
@@ -378,6 +382,69 @@ class SQLFactory:
             return self._populate_merge_from_sql(builder, table_or_sql)
 
         return Merge(table_or_sql, dialect=builder_dialect) if table_or_sql else Merge(dialect=builder_dialect)
+
+    def explain(
+        self,
+        statement: "str | exp.Expression | SQL | SQLBuilderProtocol",
+        *,
+        analyze: bool = False,
+        verbose: bool = False,
+        format: "ExplainFormat | str | None" = None,
+        dialect: DialectType = None,
+    ) -> "Explain":
+        """Create an EXPLAIN builder for a SQL statement.
+
+        Wraps any SQL statement in an EXPLAIN clause with dialect-aware
+        syntax generation.
+
+        Args:
+            statement: SQL statement to explain (string, expression, SQL object, or builder)
+            analyze: Execute the statement and show actual runtime statistics
+            verbose: Show additional information
+            format: Output format (TEXT, JSON, XML, YAML, TREE, TRADITIONAL)
+            dialect: Optional SQL dialect override
+
+        Returns:
+            Explain builder for further configuration
+
+        Examples:
+            Basic EXPLAIN:
+                plan = sql.explain("SELECT * FROM users").build()
+
+            With options:
+                plan = (
+                    sql.explain("SELECT * FROM users", analyze=True, format="json")
+                    .buffers()
+                    .timing()
+                    .build()
+                )
+
+            From QueryBuilder:
+                query = sql.select("*").from_("users").where("id = :id", id=1)
+                plan = sql.explain(query, analyze=True).build()
+
+            Chained configuration:
+                plan = (
+                    sql.explain(sql.select("*").from_("large_table"))
+                    .analyze()
+                    .format("json")
+                    .buffers()
+                    .timing()
+                    .build()
+                )
+        """
+        from sqlspec.core.explain import ExplainFormat as ExplainFmt
+        from sqlspec.core.explain import ExplainOptions
+
+        builder_dialect = dialect or self.dialect
+
+        fmt = None
+        if format is not None:
+            fmt = ExplainFmt(format.lower()) if isinstance(format, str) else format
+
+        options = ExplainOptions(analyze=analyze, verbose=verbose, format=fmt)
+
+        return Explain(statement, dialect=builder_dialect, options=options)
 
     @property
     def merge_(self) -> "Merge":
