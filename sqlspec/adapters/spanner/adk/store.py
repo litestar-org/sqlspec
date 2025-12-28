@@ -8,14 +8,23 @@ from google.cloud.spanner_v1 import param_types
 from sqlspec.adapters.spanner._type_handlers import bytes_to_spanner, spanner_to_bytes
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
     from google.cloud.spanner_v1.transaction import Transaction
 
+SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
+
 __all__ = ("SpannerSyncADKStore",)
+
+
+def _json_param_type() -> Any:
+    try:
+        return SPANNER_PARAM_TYPES.JSON
+    except AttributeError:
+        return SPANNER_PARAM_TYPES.STRING
 
 
 class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
@@ -49,40 +58,40 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         self._database().run_in_transaction(_txn_job)  # type: ignore[no-untyped-call]
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
-        json_type = param_types.JSON if supports_json_type(param_types) else param_types.STRING
+        json_type = _json_param_type()
         types: dict[str, Any] = {
-            "id": param_types.STRING,
-            "app_name": param_types.STRING,
-            "user_id": param_types.STRING,
+            "id": SPANNER_PARAM_TYPES.STRING,
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
             "state": json_type,
         }
         if include_owner and self._owner_id_column_name:
-            types["owner_id"] = param_types.STRING
+            types["owner_id"] = SPANNER_PARAM_TYPES.STRING
         return types
 
     def _event_param_types(self, has_branch: bool) -> "dict[str, Any]":
-        json_type = param_types.JSON if supports_json_type(param_types) else param_types.STRING
+        json_type = _json_param_type()
         types: dict[str, Any] = {
-            "id": param_types.STRING,
-            "session_id": param_types.STRING,
-            "app_name": param_types.STRING,
-            "user_id": param_types.STRING,
-            "author": param_types.STRING,
-            "actions": param_types.BYTES,
+            "id": SPANNER_PARAM_TYPES.STRING,
+            "session_id": SPANNER_PARAM_TYPES.STRING,
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "author": SPANNER_PARAM_TYPES.STRING,
+            "actions": SPANNER_PARAM_TYPES.BYTES,
             "long_running_tool_ids_json": json_type,
-            "invocation_id": param_types.STRING,
-            "timestamp": param_types.TIMESTAMP,
+            "invocation_id": SPANNER_PARAM_TYPES.STRING,
+            "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
             "content": json_type,
             "grounding_metadata": json_type,
             "custom_metadata": json_type,
-            "partial": param_types.BOOL,
-            "turn_complete": param_types.BOOL,
-            "interrupted": param_types.BOOL,
-            "error_code": param_types.STRING,
-            "error_message": param_types.STRING,
+            "partial": SPANNER_PARAM_TYPES.BOOL,
+            "turn_complete": SPANNER_PARAM_TYPES.BOOL,
+            "interrupted": SPANNER_PARAM_TYPES.BOOL,
+            "error_code": SPANNER_PARAM_TYPES.STRING,
+            "error_message": SPANNER_PARAM_TYPES.STRING,
         }
         if has_branch:
-            types["branch"] = param_types.STRING
+            types["branch"] = SPANNER_PARAM_TYPES.STRING
         return types
 
     def _decode_state(self, raw: Any) -> Any:
@@ -136,7 +145,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
         sql = f"{sql} LIMIT 1"
         params = {"id": session_id}
-        rows = self._run_read(sql, params, {"id": param_types.STRING})
+        rows = self._run_read(sql, params, {"id": SPANNER_PARAM_TYPES.STRING})
         if not rows:
             return None
 
@@ -154,7 +163,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         params = {"id": session_id, "state": to_json(state)}
-        json_type = param_types.JSON if supports_json_type(param_types) else param_types.STRING
+        json_type = _json_param_type()
         sql = f"""
             UPDATE {self._session_table}
             SET state = @state, update_time = PENDING_COMMIT_TIMESTAMP()
@@ -162,7 +171,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         """
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
-        self._run_write([(sql, params, {"id": param_types.STRING, "state": json_type})])
+        self._run_write([(sql, params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type})])
 
     def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
         sql = f"""
@@ -171,11 +180,11 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             WHERE app_name = @app_name
         """
         params: dict[str, Any] = {"app_name": app_name}
-        types: dict[str, Any] = {"app_name": param_types.STRING}
+        types: dict[str, Any] = {"app_name": SPANNER_PARAM_TYPES.STRING}
         if user_id is not None:
             sql = f"{sql} AND user_id = @user_id"
             params["user_id"] = user_id
-            types["user_id"] = param_types.STRING
+            types["user_id"] = SPANNER_PARAM_TYPES.STRING
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(id), {self._shard_count})"
 
@@ -201,7 +210,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = @session_id{shard_clause}"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE id = @session_id{shard_clause}"
         params = {"session_id": session_id}
-        types = {"session_id": param_types.STRING}
+        types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         self._run_write([(delete_events_sql, params, types), (delete_session_sql, params, types)])
 
     def create_event(
@@ -332,7 +341,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         sql = f"{sql} ORDER BY timestamp ASC"
         params = {"session_id": session_id}
-        types = {"session_id": param_types.STRING}
+        types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         rows = self._run_read(sql, params, types)
         return [
             {

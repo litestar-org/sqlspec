@@ -7,8 +7,9 @@ from typing import Any, Literal
 
 import pytest
 
-from sqlspec import SQL, SQLResult, StatementStack
+from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
+from sqlspec.core import StatementConfig
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -413,8 +414,6 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     except Exception:
         pass
 
-    from sqlspec.core import StatementConfig
-
     non_strict_config = StatementConfig(enable_parsing=False, enable_validation=False)
 
     await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", statement_config=non_strict_config)
@@ -477,7 +476,6 @@ async def test_aiosqlite_core_result_features(aiosqlite_session: AiosqliteDriver
 
 async def test_aiosqlite_for_update_generates_sql(aiosqlite_session: AiosqliteDriver) -> None:
     """Test that FOR UPDATE generates SQL for aiosqlite (though SQLite doesn't support row-level locking)."""
-    from sqlspec import sql
 
     # Create test table
     await aiosqlite_session.execute_script("""
@@ -508,7 +506,6 @@ async def test_aiosqlite_for_update_generates_sql(aiosqlite_session: AiosqliteDr
 
 async def test_aiosqlite_for_share_generates_sql_but_may_not_work(aiosqlite_session: AiosqliteDriver) -> None:
     """Test that FOR SHARE generates SQL for aiosqlite but note it doesn't provide row-level locking."""
-    from sqlspec import sql
 
     # Create test table
     await aiosqlite_session.execute_script("""
@@ -539,7 +536,6 @@ async def test_aiosqlite_for_share_generates_sql_but_may_not_work(aiosqlite_sess
 
 async def test_aiosqlite_for_update_skip_locked_generates_sql(aiosqlite_session: AiosqliteDriver) -> None:
     """Test that FOR UPDATE SKIP LOCKED generates SQL for aiosqlite."""
-    from sqlspec import sql
 
     # Create test table
     await aiosqlite_session.execute_script("""

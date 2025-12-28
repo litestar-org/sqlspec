@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
+from sqlspec.observability import NullObservabilityRuntime
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -115,7 +116,6 @@ def test_event_channel_normalize_channel_name_valid(tmp_path) -> None:
 
 def test_event_channel_normalize_channel_name_invalid(tmp_path) -> None:
     """Invalid channel names raise EventChannelError."""
-    from sqlspec.exceptions import EventChannelError
     from sqlspec.extensions.events._store import normalize_event_channel_name
 
     with pytest.raises(EventChannelError, match="Invalid events channel name"):
@@ -189,7 +189,6 @@ def test_event_channel_resolve_adapter_name_non_sqlspec_module(tmp_path) -> None
         statement_config = None
 
         def get_observability_runtime(self) -> Any:
-            from sqlspec.observability import NullObservabilityRuntime
 
             return NullObservabilityRuntime()
 

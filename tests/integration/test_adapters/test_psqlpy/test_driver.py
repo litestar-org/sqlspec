@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 
-from sqlspec import SQL, SQLResult, StatementStack
+from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.psqlpy import PsqlpyDriver
 
 if TYPE_CHECKING:
@@ -466,7 +466,6 @@ async def test_postgresql_specific_features(psqlpy_session: PsqlpyDriver) -> Non
 
 async def test_psqlpy_for_update_locking(psqlpy_session: PsqlpyDriver) -> None:
     """Test FOR UPDATE row locking with psqlpy (async)."""
-    from sqlspec import sql
 
     # Setup test table
     await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")
@@ -502,7 +501,6 @@ async def test_psqlpy_for_update_locking(psqlpy_session: PsqlpyDriver) -> None:
 
 async def test_psqlpy_for_update_skip_locked(psqlpy_session: PsqlpyDriver) -> None:
     """Test FOR UPDATE SKIP LOCKED with psqlpy (async)."""
-    from sqlspec import sql
 
     # Setup test table
     await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")
@@ -537,7 +535,6 @@ async def test_psqlpy_for_update_skip_locked(psqlpy_session: PsqlpyDriver) -> No
 
 async def test_psqlpy_for_share_locking(psqlpy_session: PsqlpyDriver) -> None:
     """Test FOR SHARE row locking with psqlpy (async)."""
-    from sqlspec import sql
 
     # Setup test table
     await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")

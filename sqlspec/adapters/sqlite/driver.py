@@ -6,6 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
 from sqlspec.core import (
     ArrowResult,
     DriverParameterProfile,
@@ -475,8 +476,6 @@ class SqliteDriver(SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
-
             self._data_dictionary = SqliteSyncDataDictionary()
         return self._data_dictionary
 

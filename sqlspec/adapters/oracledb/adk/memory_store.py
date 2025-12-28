@@ -1,6 +1,5 @@
 """Oracle ADK memory store for Google Agent Development Kit memory storage."""
 
-import inspect
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import oracledb
@@ -15,7 +14,7 @@ from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary,
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_guards import is_readable
+from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
@@ -40,22 +39,17 @@ def _extract_json_value(data: Any) -> "dict[str, Any]":
 
 
 async def _read_lob_async(data: Any) -> Any:
-    try:
-        reader = data.read
-    except AttributeError:
-        return data
-    payload = reader()
-    if inspect.isawaitable(payload):
-        return await payload
-    return payload
+    if is_async_readable(data):
+        return await data.read()
+    if is_readable(data):
+        return data.read()
+    return data
 
 
 def _read_lob_sync(data: Any) -> Any:
-    try:
-        reader = data.read
-    except AttributeError:
-        return data
-    return reader()
+    if is_readable(data):
+        return data.read()
+    return data
 
 
 class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
@@ -104,7 +98,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         if data is None:
             return None
 
-        if is_readable(data):
+        if is_async_readable(data) or is_readable(data):
             data = await _read_lob_async(data)
 
         return _extract_json_value(data)
@@ -233,6 +227,17 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             await driver.execute_script(await self._get_create_memory_table_sql())
         logger.debug("Created ADK memory table: %s", self._memory_table)
 
+    async def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
+        """Execute an insert and skip duplicate key errors."""
+        try:
+            await cursor.execute(sql, params)
+        except oracledb.DatabaseError as exc:
+            error_obj = exc.args[0] if exc.args else None
+            if error_obj and error_obj.code == ORACLE_DUPLICATE_KEY_ERROR:
+                return False
+            raise
+        return True
+
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -257,31 +262,25 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             for entry in entries:
-                try:
-                    content_json = await self._serialize_json_field(entry["content_json"])
-                    metadata_json = await self._serialize_json_field(entry["metadata_json"])
-                    params = {
-                        "id": entry["id"],
-                        "session_id": entry["session_id"],
-                        "app_name": entry["app_name"],
-                        "user_id": entry["user_id"],
-                        "event_id": entry["event_id"],
-                        "author": entry["author"],
-                        "timestamp": entry["timestamp"],
-                        "content_json": content_json,
-                        "content_text": entry["content_text"],
-                        "metadata_json": metadata_json,
-                        "inserted_at": entry["inserted_at"],
-                    }
-                    if self._owner_id_column_name:
-                        params["owner_id"] = owner_id
-                    await cursor.execute(sql, params)
+                content_json = await self._serialize_json_field(entry["content_json"])
+                metadata_json = await self._serialize_json_field(entry["metadata_json"])
+                params = {
+                    "id": entry["id"],
+                    "session_id": entry["session_id"],
+                    "app_name": entry["app_name"],
+                    "user_id": entry["user_id"],
+                    "event_id": entry["event_id"],
+                    "author": entry["author"],
+                    "timestamp": entry["timestamp"],
+                    "content_json": content_json,
+                    "content_text": entry["content_text"],
+                    "metadata_json": metadata_json,
+                    "inserted_at": entry["inserted_at"],
+                }
+                if self._owner_id_column_name:
+                    params["owner_id"] = str(owner_id) if owner_id is not None else None
+                if await self._execute_insert_entry(cursor, sql, params):
                     inserted_count += 1
-                except oracledb.DatabaseError as exc:
-                    error_obj = exc.args[0] if exc.args else None
-                    if error_obj and error_obj.code == ORACLE_DUPLICATE_KEY_ERROR:
-                        continue
-                    raise
             await conn.commit()
 
         return inserted_count
@@ -376,7 +375,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             content_json = await self._deserialize_json_field(row[7]) if row[7] is not None else {}
             metadata_json = await self._deserialize_json_field(row[9])
             content_text = row[8]
-            if is_readable(content_text):
+            if is_async_readable(content_text) or is_readable(content_text):
                 content_text = await _read_lob_async(content_text)
             records.append({
                 "id": row[0],
@@ -569,6 +568,17 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             driver.execute_script(self._get_create_memory_table_sql())
         logger.debug("Created ADK memory table: %s", self._memory_table)
 
+    def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
+        """Execute an insert and skip duplicate key errors."""
+        try:
+            cursor.execute(sql, params)
+        except oracledb.DatabaseError as exc:
+            error_obj = exc.args[0] if exc.args else None
+            if error_obj and error_obj.code == ORACLE_DUPLICATE_KEY_ERROR:
+                return False
+            raise
+        return True
+
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -593,31 +603,25 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             for entry in entries:
-                try:
-                    content_json = self._serialize_json_field(entry["content_json"])
-                    metadata_json = self._serialize_json_field(entry["metadata_json"])
-                    params = {
-                        "id": entry["id"],
-                        "session_id": entry["session_id"],
-                        "app_name": entry["app_name"],
-                        "user_id": entry["user_id"],
-                        "event_id": entry["event_id"],
-                        "author": entry["author"],
-                        "timestamp": entry["timestamp"],
-                        "content_json": content_json,
-                        "content_text": entry["content_text"],
-                        "metadata_json": metadata_json,
-                        "inserted_at": entry["inserted_at"],
-                    }
-                    if self._owner_id_column_name:
-                        params["owner_id"] = owner_id
-                    cursor.execute(sql, params)
+                content_json = self._serialize_json_field(entry["content_json"])
+                metadata_json = self._serialize_json_field(entry["metadata_json"])
+                params = {
+                    "id": entry["id"],
+                    "session_id": entry["session_id"],
+                    "app_name": entry["app_name"],
+                    "user_id": entry["user_id"],
+                    "event_id": entry["event_id"],
+                    "author": entry["author"],
+                    "timestamp": entry["timestamp"],
+                    "content_json": content_json,
+                    "content_text": entry["content_text"],
+                    "metadata_json": metadata_json,
+                    "inserted_at": entry["inserted_at"],
+                }
+                if self._owner_id_column_name:
+                    params["owner_id"] = str(owner_id) if owner_id is not None else None
+                if self._execute_insert_entry(cursor, sql, params):
                     inserted_count += 1
-                except oracledb.DatabaseError as exc:
-                    error_obj = exc.args[0] if exc.args else None
-                    if error_obj and error_obj.code == ORACLE_DUPLICATE_KEY_ERROR:
-                        continue
-                    raise
             conn.commit()
 
         return inserted_count

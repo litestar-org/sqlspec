@@ -17,7 +17,14 @@ import pytest
 
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
-from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
+from sqlspec.loader import (
+    CachedSQLFile,
+    NamedStatement,
+    SQLFile,
+    SQLFileLoader,
+    _normalize_dialect,
+    _normalize_query_name,
+)
 
 pytestmark = pytest.mark.xdist_group("loader")
 
@@ -641,15 +648,12 @@ def test_dialect_normalization() -> None:
     ]
 
     for input_dialect, expected in test_cases:
-        from sqlspec.loader import _normalize_dialect
-
         result = _normalize_dialect(input_dialect)
         assert result == expected, f"Failed for {input_dialect}: got {result}, expected {expected}"
 
 
 def test_query_name_normalization_edge_cases() -> None:
     """Test edge cases in query name normalization."""
-    from sqlspec.loader import _normalize_query_name
 
     test_cases = [
         ("simple", "simple"),
@@ -715,7 +719,6 @@ def test_checksum_calculation_error() -> None:
 )
 def test_dialect_aliases_parametrized(dialect: str, expected: str) -> None:
     """Parameterized test for dialect aliases."""
-    from sqlspec.loader import _normalize_dialect
 
     result = _normalize_dialect(dialect)
     assert result == expected
@@ -734,7 +737,6 @@ def test_dialect_aliases_parametrized(dialect: str, expected: str) -> None:
 )
 def test_query_name_normalization_parametrized(name: str, expected: str) -> None:
     """Parameterized test for query name normalization."""
-    from sqlspec.loader import _normalize_query_name
 
     result = _normalize_query_name(name)
     assert result == expected
@@ -748,7 +750,6 @@ def fixture_parsing_path() -> Path:
 
 def test_parse_postgres_database_details_fixture(fixture_parsing_path: Path) -> None:
     """Test parsing complex PostgreSQL database details fixture."""
-    from sqlspec.loader import NamedStatement, SQLFileLoader
 
     fixture_file = fixture_parsing_path / "postgres" / "collection-database_details.sql"
 
@@ -774,7 +775,6 @@ def test_parse_postgres_database_details_fixture(fixture_parsing_path: Path) -> 
 
 def test_parse_mysql_data_types_fixture(fixture_parsing_path: Path) -> None:
     """Test parsing MySQL data types fixture."""
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_parsing_path / "mysql" / "collection-data_types.sql"
 
@@ -793,7 +793,6 @@ def test_parse_mysql_data_types_fixture(fixture_parsing_path: Path) -> None:
 
 def test_parse_init_fixture(fixture_parsing_path: Path) -> None:
     """Test parsing the init.sql fixture with multiple small queries."""
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_parsing_path / "init.sql"
 
@@ -815,8 +814,6 @@ def test_parse_init_fixture(fixture_parsing_path: Path) -> None:
 
 def test_parse_oracle_ddl_fixture(fixture_parsing_path: Path) -> None:
     """Test parsing Oracle DDL fixture for complex SQL structures."""
-    from sqlspec.exceptions import SQLFileParseError
-    from sqlspec.loader import NamedStatement, SQLFileLoader
 
     fixture_file = fixture_parsing_path / "oracle.ddl.sql"
 
@@ -839,7 +836,6 @@ def test_parse_oracle_ddl_fixture(fixture_parsing_path: Path) -> None:
 
 def test_large_fixture_parsing_performance(fixture_parsing_path: Path) -> None:
     """Test parsing performance with large fixture files."""
-    from sqlspec.loader import SQLFileLoader
 
     large_fixtures = [
         "postgres/collection-database_details.sql",
@@ -867,7 +863,6 @@ def test_large_fixture_parsing_performance(fixture_parsing_path: Path) -> None:
 
 def test_fixture_parameter_style_detection(fixture_parsing_path: Path) -> None:
     """Test parameter style detection in fixture files."""
-    from sqlspec.loader import SQLFileLoader
 
     test_cases = [
         ("postgres/collection-database_details.sql", ":PKEY"),
@@ -896,7 +891,6 @@ def test_fixture_parameter_style_detection(fixture_parsing_path: Path) -> None:
 
 def test_complex_cte_parsing_from_fixtures(fixture_parsing_path: Path) -> None:
     """Test parsing complex CTE queries from fixtures."""
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_parsing_path / "postgres" / "collection-database_details.sql"
 
@@ -915,8 +909,6 @@ def test_complex_cte_parsing_from_fixtures(fixture_parsing_path: Path) -> None:
 
 def test_multi_dialect_fixture_parsing(fixture_parsing_path: Path) -> None:
     """Test parsing fixtures from multiple database dialects."""
-    from sqlspec.exceptions import SQLFileParseError
-    from sqlspec.loader import NamedStatement, SQLFileLoader
 
     dialect_fixtures = [
         ("postgres", "collection-extensions.sql"),
@@ -961,8 +953,6 @@ def fixture_integration_path() -> Path:
 
 def test_load_and_execute_fixture_queries(fixture_integration_path: Path) -> None:
     """Test loading and creating SQL objects from fixture queries."""
-    from sqlspec.core import SQL
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "init.sql"
 
@@ -980,7 +970,6 @@ def test_load_and_execute_fixture_queries(fixture_integration_path: Path) -> Non
 
 def test_fixture_query_metadata_preservation(fixture_integration_path: Path) -> None:
     """Test that fixture query metadata is preserved."""
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "postgres" / "collection-database_details.sql"
 
@@ -999,8 +988,6 @@ def test_fixture_query_metadata_preservation(fixture_integration_path: Path) -> 
 
 def test_fixture_parameter_extraction(fixture_integration_path: Path) -> None:
     """Test parameter extraction from fixture queries."""
-    from sqlspec.core import SQL
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "postgres" / "collection-database_details.sql"
 

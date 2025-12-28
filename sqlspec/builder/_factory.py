@@ -46,6 +46,7 @@ from sqlspec.builder._parsing_utils import extract_expression, to_expression
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.builder._update import Update
 from sqlspec.core import SQL
+from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 
@@ -53,7 +54,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from sqlspec.builder._expression_wrappers import ExpressionWrapper
-    from sqlspec.core.explain import ExplainFormat
     from sqlspec.protocols import SQLBuilderProtocol
 
 
@@ -433,14 +433,11 @@ class SQLFactory:
                     .build()
                 )
         """
-        from sqlspec.core.explain import ExplainFormat as ExplainFmt
-        from sqlspec.core.explain import ExplainOptions
-
         builder_dialect = dialect or self.dialect
 
         fmt = None
         if format is not None:
-            fmt = ExplainFmt(format.lower()) if isinstance(format, str) else format
+            fmt = ExplainFormat(format.lower()) if isinstance(format, str) else format
 
         options = ExplainOptions(analyze=analyze, verbose=verbose, format=fmt)
 

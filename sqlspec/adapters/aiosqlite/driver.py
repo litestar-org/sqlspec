@@ -2,12 +2,14 @@
 
 import asyncio
 import contextlib
+import random
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 import aiosqlite
 
+from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteAsyncDataDictionary
 from sqlspec.core import (
     ArrowResult,
     DriverParameterProfile,
@@ -99,7 +101,7 @@ class AiosqliteExceptionHandler:
         if issubclass(exc_type, aiosqlite.Error):
             self._map_sqlite_exception(exc_val)
 
-    def _map_sqlite_exception(self, e: Any) -> None:
+    def _map_sqlite_exception(self, e: BaseException) -> None:
         """Map SQLite exception to SQLSpec exception.
 
         Args:
@@ -108,17 +110,18 @@ class AiosqliteExceptionHandler:
         Raises:
             Specific SQLSpec exception based on error code
         """
+        exc: BaseException = e
         if has_sqlite_error(e):
             error_code = e.sqlite_errorcode
             error_name = e.sqlite_errorname
         else:
             error_code = None
             error_name = None
-        error_msg = str(e).lower()
+        error_msg = str(exc).lower()
 
         if "locked" in error_msg:
-            msg = f"AIOSQLite database locked: {e}. Consider enabling WAL mode or reducing concurrency."
-            raise SQLSpecError(msg) from e
+            msg = f"AIOSQLite database locked: {exc}. Consider enabling WAL mode or reducing concurrency."
+            raise SQLSpecError(msg) from exc
 
         if not error_code:
             if "unique constraint" in error_msg:
@@ -358,8 +361,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             if not self.connection.in_transaction:
                 await self.connection.execute("BEGIN IMMEDIATE")
         except aiosqlite.Error as e:
-            import random
-
             max_retries = 3
             for attempt in range(max_retries):
                 delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
@@ -411,8 +412,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteAsyncDataDictionary
-
             self._data_dictionary = AiosqliteAsyncDataDictionary()
         return self._data_dictionary
 

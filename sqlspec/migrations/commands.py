@@ -20,7 +20,7 @@ from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version
+from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version, parse_version
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -369,8 +369,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     if revision == "head":
                         pending.append((version, file_path))
                     else:
-                        from sqlspec.utils.version import parse_version
-
                         parsed_version = parse_version(version)
                         parsed_revision = parse_version(revision)
                         if parsed_version <= parsed_revision:
@@ -458,8 +456,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             elif revision == "base":
                 to_revert = list(reversed(applied))
             else:
-                from sqlspec.utils.version import parse_version
-
                 parsed_revision = parse_version(revision)
                 for migration in reversed(applied):
                     parsed_migration_version = parse_version(migration["version_num"])
@@ -852,8 +848,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     if revision == "head":
                         pending.append((version, file_path))
                     else:
-                        from sqlspec.utils.version import parse_version
-
                         parsed_version = parse_version(version)
                         parsed_revision = parse_version(revision)
                         if parsed_version <= parsed_revision:
@@ -939,8 +933,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             elif revision == "base":
                 to_revert = list(reversed(applied))
             else:
-                from sqlspec.utils.version import parse_version
-
                 parsed_revision = parse_version(revision)
                 for migration in reversed(applied):
                     parsed_migration_version = parse_version(migration["version_num"])

@@ -599,8 +599,6 @@ def test_large_fixture_loading_performance(fixtures_path: Path) -> None:
     """Test performance loading large fixture files."""
     import time
 
-    from sqlspec.loader import SQLFileLoader
-
     large_fixtures = [
         "postgres/collection-database_details.sql",
         "postgres/collection-table_details.sql",
@@ -646,8 +644,6 @@ def test_multiple_fixture_batch_loading(fixtures_path: Path) -> None:
     """Test performance when loading multiple fixture files at once."""
     import time
 
-    from sqlspec.loader import SQLFileLoader
-
     fixture_files = [
         fixtures_path / "init.sql",
         fixtures_path / "postgres" / "collection-extensions.sql",
@@ -679,8 +675,6 @@ def test_fixture_directory_scanning_performance(fixtures_path: Path) -> None:
     """Test performance when scanning fixture directories."""
     import time
 
-    from sqlspec.loader import SQLFileLoader
-
     test_dirs = [fixtures_path / "postgres", fixtures_path / "mysql"]
 
     for test_dir in test_dirs:
@@ -708,8 +702,6 @@ def test_fixture_cache_performance(fixtures_path: Path) -> None:
     """Test performance benefits of caching with fixture files."""
     import time
 
-    from sqlspec.loader import SQLFileLoader
-
     fixture_file = fixtures_path / "postgres" / "collection-database_details.sql"
     if not fixture_file.exists():
         pytest.skip("Large fixture file not available")
@@ -732,8 +724,6 @@ def test_fixture_cache_performance(fixtures_path: Path) -> None:
 def test_concurrent_fixture_access_simulation(fixtures_path: Path) -> None:
     """Test simulated concurrent access to fixture files."""
     import time
-
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixtures_path / "init.sql"
 
@@ -762,8 +752,6 @@ def test_concurrent_fixture_access_simulation(fixtures_path: Path) -> None:
 
 def test_memory_usage_with_large_fixtures(fixtures_path: Path) -> None:
     """Test memory usage patterns with large fixture files."""
-    from sqlspec.loader import SQLFileLoader
-
     large_fixtures = ["postgres/collection-database_details.sql", "postgres/collection-table_details.sql"]
 
     loader = SQLFileLoader()

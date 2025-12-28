@@ -9,16 +9,18 @@ explicit param_types mapping. This module provides helpers to:
 
 import base64
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from google.cloud.spanner_v1 import JsonObject, param_types
 
+from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.type_converters import should_json_encode_sequence
-from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 
 __all__ = (
     "bytes_to_spanner",
@@ -29,6 +31,13 @@ __all__ = (
     "spanner_to_uuid",
     "uuid_to_spanner",
 )
+
+
+def _json_param_type() -> Any:
+    try:
+        return SPANNER_PARAM_TYPES.JSON
+    except AttributeError:
+        return SPANNER_PARAM_TYPES.STRING
 
 
 def bytes_to_spanner(value: "bytes | None") -> "bytes | None":
@@ -180,37 +189,38 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
         return {}
 
     types: dict[str, Any] = {}
+    json_type = _json_param_type()
     for key, value in params.items():
         if isinstance(value, bool):
-            types[key] = param_types.BOOL
+            types[key] = SPANNER_PARAM_TYPES.BOOL
         elif isinstance(value, int):
-            types[key] = param_types.INT64
+            types[key] = SPANNER_PARAM_TYPES.INT64
         elif isinstance(value, float):
-            types[key] = param_types.FLOAT64
+            types[key] = SPANNER_PARAM_TYPES.FLOAT64
         elif isinstance(value, str):
-            types[key] = param_types.STRING
+            types[key] = SPANNER_PARAM_TYPES.STRING
         elif isinstance(value, bytes):
-            types[key] = param_types.BYTES
+            types[key] = SPANNER_PARAM_TYPES.BYTES
         elif isinstance(value, datetime):
-            types[key] = param_types.TIMESTAMP
+            types[key] = SPANNER_PARAM_TYPES.TIMESTAMP
         elif isinstance(value, date):
-            types[key] = param_types.DATE
-        elif supports_json_type(param_types) and isinstance(value, (dict, JsonObject)):
-            types[key] = param_types.JSON
+            types[key] = SPANNER_PARAM_TYPES.DATE
+        elif isinstance(value, (dict, JsonObject)):
+            types[key] = json_type
         elif isinstance(value, (list, tuple)):
-            if should_json_encode_sequence(value) and supports_json_type(param_types):
-                types[key] = param_types.JSON
+            if should_json_encode_sequence(value):
+                types[key] = json_type
                 continue
             sequence = list(value)
             if not sequence:
                 continue
             first = sequence[0]
             if isinstance(first, int):
-                types[key] = param_types.Array(param_types.INT64)  # type: ignore[no-untyped-call]
+                types[key] = SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.INT64)
             elif isinstance(first, str):
-                types[key] = param_types.Array(param_types.STRING)  # type: ignore[no-untyped-call]
+                types[key] = SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.STRING)
             elif isinstance(first, float):
-                types[key] = param_types.Array(param_types.FLOAT64)  # type: ignore[no-untyped-call]
+                types[key] = SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.FLOAT64)
             elif isinstance(first, bool):
-                types[key] = param_types.Array(param_types.BOOL)  # type: ignore[no-untyped-call]
+                types[key] = SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.BOOL)
     return types

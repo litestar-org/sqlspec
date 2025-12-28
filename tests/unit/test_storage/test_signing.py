@@ -12,26 +12,24 @@ from pathlib import Path
 
 import pytest
 
+from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 
 
 def test_protocol_defines_sign_sync_method() -> None:
     """Test ObjectStoreProtocol includes sign_sync method."""
-    from sqlspec.protocols import ObjectStoreProtocol
 
     assert hasattr(ObjectStoreProtocol, "sign_sync")
 
 
 def test_protocol_defines_sign_async_method() -> None:
     """Test ObjectStoreProtocol includes sign_async method."""
-    from sqlspec.protocols import ObjectStoreProtocol
 
     assert hasattr(ObjectStoreProtocol, "sign_async")
 
 
 def test_protocol_defines_supports_signing_property() -> None:
     """Test ObjectStoreProtocol includes supports_signing property."""
-    from sqlspec.protocols import ObjectStoreProtocol
 
     assert hasattr(ObjectStoreProtocol, "supports_signing")
 

@@ -5,6 +5,7 @@ custom type handling. All handlers are optional and must be explicitly enabled
 via SqliteDriverFeatures configuration.
 """
 
+import json
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
@@ -31,8 +32,6 @@ def json_adapter(value: Any, serializer: "Callable[[Any], str] | None" = None) -
         JSON string representation.
     """
     if serializer is None:
-        import json
-
         return json.dumps(value, ensure_ascii=False)
     return serializer(value)
 
@@ -48,8 +47,6 @@ def json_converter(value: bytes, deserializer: "Callable[[str], Any] | None" = N
         Deserialized Python object (dict or list).
     """
     if deserializer is None:
-        import json
-
         return json.loads(value.decode("utf-8"))
     return deserializer(value.decode("utf-8"))
 

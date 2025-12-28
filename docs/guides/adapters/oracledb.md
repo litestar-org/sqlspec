@@ -905,7 +905,8 @@ For comprehensive examples and migration guides, see:
 - Set `extension_config={"events": {"backend": "advanced_queue"}}` to enable native
   Advanced Queuing support. Event publishing uses `connection.queue()` and
   inherits the AQ options from `extension_config["events"]`
-  (`aq_queue`, `aq_wait_seconds`, `aq_visibility`).
+  (`aq_queue`, `aq_wait_seconds`, `aq_visibility`). Use `AQMSG_VISIBLE` or
+  `AQMSG_INVISIBLE` (string or int constant) for visibility control.
 - AQ requires DBA-provisioned queues plus enqueue/dequeue privileges. When the
   driver detects missing privileges it logs a warning and falls back to the
   durable queue backend automatically.

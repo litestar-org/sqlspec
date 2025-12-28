@@ -15,7 +15,7 @@ from sqlspec.adapters.oracledb.data_dictionary import (
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_guards import is_readable
+from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -115,6 +115,17 @@ def _from_oracle_bool(value: "int | None") -> "bool | None":
     if value is None:
         return None
     return bool(value)
+
+
+def _coerce_bytes_payload(value: Any) -> bytes:
+    """Coerce a LOB payload into bytes."""
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    return str(value).encode("utf-8")
 
 
 class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
@@ -265,8 +276,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             Handles LOB reading if data has read() method.
             Oracle JSON type may return dict directly.
         """
-        if is_readable(data):
+        if is_async_readable(data):
             data = await data.read()
+        elif is_readable(data):
+            data = data.read()
 
         if isinstance(data, dict):
             return cast("dict[str, Any]", _coerce_decimal_values(data))
@@ -313,8 +326,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         if data is None:
             return None
 
-        if is_readable(data):
+        if is_async_readable(data):
             data = await data.read()
+        elif is_readable(data):
+            data = data.read()
 
         if isinstance(data, dict):
             return cast("dict[str, Any]", _coerce_decimal_values(data))
@@ -838,8 +853,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 results = []
                 for row in rows:
                     actions_blob = row[6]
-                    if is_readable(actions_blob):
+                    if is_async_readable(actions_blob):
                         actions_data = await actions_blob.read()
+                    elif is_readable(actions_blob):
+                        actions_data = actions_blob.read()
                     else:
                         actions_data = actions_blob
 
@@ -855,7 +872,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                             user_id=row[3],
                             invocation_id=row[4],
                             author=row[5],
-                            actions=bytes(actions_data) if actions_data is not None else b"",
+                            actions=_coerce_bytes_payload(actions_data),
                             long_running_tool_ids_json=row[7],
                             branch=row[8],
                             timestamp=row[9],
@@ -1625,7 +1642,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                             user_id=row[3],
                             invocation_id=row[4],
                             author=row[5],
-                            actions=bytes(actions_data) if actions_data is not None else b"",
+                            actions=_coerce_bytes_payload(actions_data),
                             long_running_tool_ids_json=row[7],
                             branch=row[8],
                             timestamp=row[9],

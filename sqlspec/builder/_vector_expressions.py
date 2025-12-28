@@ -8,6 +8,12 @@ from contextlib import suppress
 from typing import Any
 
 from sqlglot import exp
+from sqlglot.dialects.bigquery import BigQuery
+from sqlglot.dialects.duckdb import DuckDB
+from sqlglot.dialects.mysql import MySQL
+from sqlglot.dialects.oracle import Oracle
+from sqlglot.dialects.postgres import Postgres
+from sqlglot.generator import Generator
 
 __all__ = ("VectorDistance",)
 
@@ -188,13 +194,6 @@ class VectorDistance(exp.Expression):
 
 def _register_with_sqlglot() -> None:
     """Register VectorDistance with SQLGlot's generator dispatch system."""
-    from sqlglot.dialects.bigquery import BigQuery
-    from sqlglot.dialects.duckdb import DuckDB
-    from sqlglot.dialects.mysql import MySQL
-    from sqlglot.dialects.oracle import Oracle
-    from sqlglot.dialects.postgres import Postgres
-    from sqlglot.generator import Generator
-
     spanner_dialect: type | None = None
     spangres_dialect: type | None = None
     with suppress(ImportError):

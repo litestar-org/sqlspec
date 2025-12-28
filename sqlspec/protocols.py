@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from sqlglot import exp
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
@@ -24,6 +25,7 @@ __all__ = (
     "AsyncCursorProtocol",
     "AsyncDeleteProtocol",
     "AsyncReadBytesProtocol",
+    "AsyncReadableProtocol",
     "AsyncWriteBytesProtocol",
     "ConnectionProtocol",
     "ConnectionStateProtocol",
@@ -44,6 +46,7 @@ __all__ = (
     "HasFieldNameProtocol",
     "HasFilterAttributesProtocol",
     "HasGetDataProtocol",
+    "HasLastRowIdProtocol",
     "HasMigrationConfigProtocol",
     "HasNameProtocol",
     "HasNotifiesProtocol",
@@ -73,6 +76,7 @@ __all__ = (
     "ReadableProtocol",
     "SQLBuilderProtocol",
     "SpanAttributeProtocol",
+    "SpannerParamTypesProtocol",
     "StatementProtocol",
     "SupportsArrayProtocol",
     "SupportsArrowResults",
@@ -89,6 +93,15 @@ class ReadableProtocol(Protocol):
     """Protocol for objects that have a read method (e.g., LOBs)."""
 
     def read(self, size: "int | None" = None) -> "bytes | str":
+        """Read content from the object."""
+        ...
+
+
+@runtime_checkable
+class AsyncReadableProtocol(Protocol):
+    """Protocol for objects that have an async read method."""
+
+    async def read(self, size: "int | None" = None) -> "bytes | str":
         """Read content from the object."""
         ...
 
@@ -191,6 +204,13 @@ class HasRowcountProtocol(Protocol):
 
 
 @runtime_checkable
+class HasLastRowIdProtocol(Protocol):
+    """Protocol for cursors exposing lastrowid metadata."""
+
+    lastrowid: int | None
+
+
+@runtime_checkable
 class HasSqlStateProtocol(Protocol):
     """Protocol for exceptions exposing sqlstate."""
 
@@ -232,6 +252,10 @@ class HasNotifiesProtocol(Protocol):
 
     notifies: Any
 
+    async def execute(self, query: str, *args: Any, **kwargs: Any) -> Any:
+        """Execute a SQL command on the connection."""
+        ...
+
 
 @runtime_checkable
 class HasAddListenerProtocol(Protocol):
@@ -245,6 +269,20 @@ class SupportsJsonTypeProtocol(Protocol):
     """Protocol for parameter type modules exposing JSON."""
 
     JSON: Any
+
+
+@runtime_checkable
+class SpannerParamTypesProtocol(SupportsJsonTypeProtocol, Protocol):
+    """Protocol for Google Spanner param_types module."""
+
+    BOOL: Any
+    INT64: Any
+    FLOAT64: Any
+    STRING: Any
+    BYTES: Any
+    TIMESTAMP: Any
+    DATE: Any
+    Array: "Callable[[Any], Any]"
 
 
 @runtime_checkable
@@ -461,7 +499,10 @@ class HasDatabaseUrlAndBindKeyProtocol(Protocol):
 class HasExtensionConfigProtocol(Protocol):
     """Protocol for configs exposing extension_config mapping."""
 
-    extension_config: "Mapping[str, Any]"
+    @property
+    def extension_config(self) -> "ExtensionConfigs":
+        """Return extension configuration mapping."""
+        ...
 
 
 @runtime_checkable

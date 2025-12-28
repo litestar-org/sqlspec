@@ -1,8 +1,9 @@
-# pyright: reportPrivateUsage=false
-
 from typing import Any, cast
 
 import pytest
+
+# pyright: reportPrivateUsage=false
+
 
 pytest.importorskip("oracledb")
 

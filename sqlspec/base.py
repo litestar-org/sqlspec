@@ -23,6 +23,7 @@ from sqlspec.core import (
     update_cache_config,
 )
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 from sqlspec.loader import SQLFileLoader
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
 from sqlspec.typing import ConnectionT
@@ -33,7 +34,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlspec.core import SQL
-    from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
     from sqlspec.typing import PoolT
 
 
@@ -44,10 +44,6 @@ logger = get_logger()
 
 def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager[Any]]:
     return isinstance(obj, AbstractAsyncContextManager)
-
-
-def _is_sync_context_manager(obj: Any) -> TypeGuard[AbstractContextManager[Any]]:
-    return isinstance(obj, AbstractContextManager)
 
 
 class SQLSpec:
@@ -97,7 +93,7 @@ class SQLSpec:
         This method should be called before application shutdown for proper cleanup.
         """
         cleanup_tasks = []
-        sync_configs = []
+        sync_configs: list[DatabaseConfigProtocol[Any, Any, Any]] = []
 
         for config in self._configs.values():
             if config.supports_connection_pooling:
@@ -105,24 +101,24 @@ class SQLSpec:
                     if config.is_async:
                         close_pool_awaitable = config.close_pool()
                         if close_pool_awaitable is not None:
-                            cleanup_tasks.append(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                            cleanup_tasks.append(cast("Coroutine[Any, Any, None]", close_pool_awaitable))  # pyright: ignore
                     else:
-                        sync_configs.append(config)
+                        sync_configs.append(config)  # pyright: ignore
                 except Exception as e:
                     logger.debug("Failed to prepare cleanup for config %s: %s", config.__class__.__name__, e)
 
         if cleanup_tasks:
             try:
-                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
-                logger.debug("Async pool cleanup completed. Cleaned %d pools.", len(cleanup_tasks))
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)  # pyright: ignore
+                logger.debug("Async pool cleanup completed. Cleaned %d pools.", len(cleanup_tasks))  # pyright: ignore
             except Exception as e:
                 logger.debug("Failed to complete async pool cleanup: %s", e)
 
-        for config in sync_configs:
-            config.close_pool()
+        for config in sync_configs:  # pyright: ignore
+            config.close_pool()  # pyright: ignore
 
         if sync_configs:
-            logger.debug("Sync pool cleanup completed. Cleaned %d pools.", len(sync_configs))
+            logger.debug("Sync pool cleanup completed. Cleaned %d pools.", len(sync_configs))  # pyright: ignore
 
     async def __aenter__(self) -> "SQLSpec":
         """Async context manager entry."""
@@ -193,8 +189,6 @@ class SQLSpec:
         Returns:
             The appropriate event channel type for the configuration.
         """
-        from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
-
         if isinstance(config, type):
             config_obj: DatabaseConfigProtocol[Any, Any, Any] | None = None
             for registered_config in self._configs.values():

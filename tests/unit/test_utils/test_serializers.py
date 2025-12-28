@@ -10,7 +10,14 @@ from typing import Any
 
 import pytest
 
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers import (
+    __all__,
+    from_json,
+    numpy_array_dec_hook,
+    numpy_array_enc_hook,
+    numpy_array_predicate,
+    to_json,
+)
 
 pytestmark = pytest.mark.xdist_group("utils")
 
@@ -448,7 +455,6 @@ def test_imports_work_correctly() -> None:
 
 def test_module_all_exports() -> None:
     """Test that __all__ contains the expected exports."""
-    from sqlspec.utils.serializers import __all__
 
     expected = {
         "SchemaSerializer",
@@ -486,8 +492,6 @@ def test_numpy_array_enc_hook_basic() -> None:
     """Test basic NumPy array encoding to list."""
     import numpy as np
 
-    from sqlspec.utils.serializers import numpy_array_enc_hook
-
     arr = np.array([1.0, 2.0, 3.0])
     result = numpy_array_enc_hook(arr)
 
@@ -499,8 +503,6 @@ def test_numpy_array_enc_hook_basic() -> None:
 def test_numpy_array_enc_hook_multidimensional() -> None:
     """Test NumPy array encoding for multi-dimensional arrays."""
     import numpy as np
-
-    from sqlspec.utils.serializers import numpy_array_enc_hook
 
     arr_2d = np.array([[1, 2], [3, 4]])
     result = numpy_array_enc_hook(arr_2d)
@@ -518,8 +520,6 @@ def test_numpy_array_enc_hook_empty() -> None:
     """Test NumPy array encoding for empty arrays."""
     import numpy as np
 
-    from sqlspec.utils.serializers import numpy_array_enc_hook
-
     empty_arr = np.array([])
     result = numpy_array_enc_hook(empty_arr)
 
@@ -530,8 +530,6 @@ def test_numpy_array_enc_hook_empty() -> None:
 def test_numpy_array_enc_hook_various_dtypes() -> None:
     """Test NumPy array encoding for various dtypes."""
     import numpy as np
-
-    from sqlspec.utils.serializers import numpy_array_enc_hook
 
     arr_float32 = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     assert numpy_array_enc_hook(arr_float32) == [1.0, 2.0, 3.0]
@@ -549,7 +547,6 @@ def test_numpy_array_enc_hook_various_dtypes() -> None:
 @pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
 def test_numpy_array_enc_hook_non_array() -> None:
     """Test that non-array values are passed through unchanged."""
-    from sqlspec.utils.serializers import numpy_array_enc_hook
 
     assert numpy_array_enc_hook([1, 2, 3]) == [1, 2, 3]
     assert numpy_array_enc_hook("string") == "string"
@@ -562,8 +559,6 @@ def test_numpy_array_dec_hook_basic() -> None:
     """Test basic list decoding to NumPy array."""
     import numpy as np
 
-    from sqlspec.utils.serializers import numpy_array_dec_hook
-
     result = numpy_array_dec_hook([1.0, 2.0, 3.0])
 
     assert isinstance(result, np.ndarray)
@@ -574,8 +569,6 @@ def test_numpy_array_dec_hook_basic() -> None:
 def test_numpy_array_dec_hook_multidimensional() -> None:
     """Test list decoding for multi-dimensional arrays."""
     import numpy as np
-
-    from sqlspec.utils.serializers import numpy_array_dec_hook
 
     result_2d = numpy_array_dec_hook([[1, 2], [3, 4]])
     expected_2d = np.array([[1, 2], [3, 4]])
@@ -589,8 +582,6 @@ def test_numpy_array_dec_hook_empty() -> None:
     """Test list decoding for empty lists."""
     import numpy as np
 
-    from sqlspec.utils.serializers import numpy_array_dec_hook
-
     result = numpy_array_dec_hook([])
 
     assert isinstance(result, np.ndarray)
@@ -600,7 +591,6 @@ def test_numpy_array_dec_hook_empty() -> None:
 @pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
 def test_numpy_array_dec_hook_non_list() -> None:
     """Test that non-list values are passed through unchanged."""
-    from sqlspec.utils.serializers import numpy_array_dec_hook
 
     assert numpy_array_dec_hook("string") == "string"
     assert numpy_array_dec_hook(42) == 42
@@ -611,8 +601,6 @@ def test_numpy_array_dec_hook_non_list() -> None:
 def test_numpy_array_predicate_basic() -> None:
     """Test NumPy array predicate for type checking."""
     import numpy as np
-
-    from sqlspec.utils.serializers import numpy_array_predicate
 
     arr = np.array([1, 2, 3])
     assert numpy_array_predicate(arr) is True
@@ -627,8 +615,6 @@ def test_numpy_array_predicate_basic() -> None:
 def test_numpy_round_trip() -> None:
     """Test round-trip NumPy array serialization."""
     import numpy as np
-
-    from sqlspec.utils.serializers import numpy_array_dec_hook, numpy_array_enc_hook
 
     original = np.array([1.5, 2.5, 3.5])
 
@@ -645,8 +631,6 @@ def test_numpy_round_trip_multidimensional() -> None:
     """Test round-trip for multi-dimensional NumPy arrays."""
     import numpy as np
 
-    from sqlspec.utils.serializers import numpy_array_dec_hook, numpy_array_enc_hook
-
     original = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
 
     encoded = numpy_array_enc_hook(original)
@@ -661,8 +645,6 @@ def test_numpy_round_trip_multidimensional() -> None:
 def test_numpy_serialization_with_to_json() -> None:
     """Test that NumPy arrays can be serialized with to_json via hook."""
     import numpy as np
-
-    from sqlspec.utils.serializers import numpy_array_enc_hook
 
     arr = np.array([1.0, 2.0, 3.0])
 

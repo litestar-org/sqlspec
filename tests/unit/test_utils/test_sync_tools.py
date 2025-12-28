@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError
+from sqlspec.utils.portal import PortalManager
 from sqlspec.utils.sync_tools import (
     CapacityLimiter,
     NoValue,
@@ -435,7 +436,6 @@ def test_await_portal_with_complex_types() -> None:
 
 def test_await_portal_cleanup() -> None:
     """Test await_ portal integration - verify portal is running and can be stopped."""
-    from sqlspec.utils.portal import PortalManager
 
     async def async_func() -> int:
         await asyncio.sleep(0.01)

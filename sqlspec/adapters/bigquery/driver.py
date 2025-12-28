@@ -19,6 +19,7 @@ from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
+from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
 from sqlspec.core import (
     DriverParameterProfile,
@@ -34,6 +35,7 @@ from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
+    MissingDependencyError,
     NotFoundError,
     OperationalError,
     SQLParsingError,
@@ -42,6 +44,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
@@ -431,7 +434,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return True
 
         try:
-            inner_connection = connection._connection
+            inner_connection = cast("Any", connection)._connection
         except AttributeError:
             inner_connection = None
         if inner_connection is None:
@@ -528,15 +531,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def _build_load_job_telemetry(self, job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":
         try:
-            properties = job._properties
+            properties = cast("Any", job)._properties
         except AttributeError:
             properties = {}
         load_stats = properties.get("statistics", {}).get("load", {})
-        try:
-            output_rows = job.output_rows
-        except AttributeError:
-            output_rows = 0
-        rows_processed = int(load_stats.get("outputRows") or output_rows or 0)
+        rows_processed = int(load_stats.get("outputRows") or 0)
         bytes_processed = int(load_stats.get("outputBytes") or load_stats.get("inputFileBytes", 0) or 0)
         duration = 0.0
         if job.ended and job.started:
@@ -844,8 +843,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
-
             self._data_dictionary = BigQuerySyncDataDictionary()
         return self._data_dictionary
 
@@ -913,15 +910,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ...     "SELECT * FROM dataset.users", native_only=True
             ... )
         """
-        from sqlspec.utils.module_loader import ensure_pyarrow
-
         ensure_pyarrow()
 
         # Check Storage API availability
         if not self._storage_api_available():
             if native_only:
-                from sqlspec.exceptions import MissingDependencyError
-
                 msg = (
                     "BigQuery native Arrow requires Storage API.\n"
                     "1. Install: pip install google-cloud-bigquery-storage\n"
@@ -1013,8 +1006,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         self._require_capability("parquet_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-        from sqlspec.utils.module_loader import ensure_pyarrow
-
         ensure_pyarrow()
 
         import pyarrow.parquet as pq

@@ -6,11 +6,68 @@ understand type narrowing, replacing defensive hasattr() and duck typing pattern
 
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from dataclasses import Field, fields
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlglot import exp
 from typing_extensions import is_typeddict
 
+from sqlspec._typing import Empty
+from sqlspec.core.parameters._types import TypedParameter
+from sqlspec.protocols import (
+    ArrowTableStatsProtocol,
+    AsyncDeleteProtocol,
+    AsyncReadableProtocol,
+    AsyncReadBytesProtocol,
+    AsyncWriteBytesProtocol,
+    CursorMetadataProtocol,
+    DictProtocol,
+    HasAddListenerProtocol,
+    HasArrowStoreProtocol,
+    HasConfigProtocol,
+    HasConnectionConfigProtocol,
+    HasDatabaseUrlAndBindKeyProtocol,
+    HasErrorsProtocol,
+    HasExpressionAndParametersProtocol,
+    HasExpressionAndSQLProtocol,
+    HasExpressionProtocol,
+    HasExtensionConfigProtocol,
+    HasFieldNameProtocol,
+    HasFilterAttributesProtocol,
+    HasGetDataProtocol,
+    HasLastRowIdProtocol,
+    HasMigrationConfigProtocol,
+    HasNameProtocol,
+    HasNotifiesProtocol,
+    HasParameterBuilderProtocol,
+    HasReadArrowProtocol,
+    HasRowcountProtocol,
+    HasSQLGlotExpressionProtocol,
+    HasSqliteErrorProtocol,
+    HasSqlStateProtocol,
+    HasStatementConfigFactoryProtocol,
+    HasStatementTypeProtocol,
+    HasTracerProviderProtocol,
+    HasTypeCodeProtocol,
+    HasTypecodeProtocol,
+    HasTypecodeSizedProtocol,
+    HasValueProtocol,
+    HasWhereProtocol,
+    NotificationProtocol,
+    ObjectStoreProtocol,
+    PipelineCapableProtocol,
+    QueryResultProtocol,
+    ReadableProtocol,
+    SpanAttributeProtocol,
+    SupportsArrayProtocol,
+    SupportsArrowResults,
+    SupportsCloseProtocol,
+    SupportsDtypeStrProtocol,
+    SupportsJsonTypeProtocol,
+    ToSchemaProtocol,
+    WithMethodProtocol,
+)
 from sqlspec.typing import (
     ATTRS_INSTALLED,
     LITESTAR_INSTALLED,
@@ -23,64 +80,14 @@ from sqlspec.typing import (
     attrs_fields,
     attrs_has,
 )
+from sqlspec.utils.text import camelize, kebabize, pascalize
 
 if TYPE_CHECKING:
-    from dataclasses import Field
     from typing import TypeGuard
-
-    from sqlglot import exp
 
     from sqlspec._typing import AttrsInstanceStub, BaseModelStub, DTODataStub, StructStub
     from sqlspec.builder import Select
-    from sqlspec.core import LimitOffsetFilter, StatementFilter, TypedParameter
-    from sqlspec.protocols import (
-        ArrowTableStatsProtocol,
-        AsyncDeleteProtocol,
-        AsyncReadBytesProtocol,
-        AsyncWriteBytesProtocol,
-        CursorMetadataProtocol,
-        DictProtocol,
-        HasAddListenerProtocol,
-        HasConfigProtocol,
-        HasConnectionConfigProtocol,
-        HasDatabaseUrlAndBindKeyProtocol,
-        HasErrorsProtocol,
-        HasExpressionAndParametersProtocol,
-        HasExpressionAndSQLProtocol,
-        HasExpressionProtocol,
-        HasExtensionConfigProtocol,
-        HasFieldNameProtocol,
-        HasFilterAttributesProtocol,
-        HasGetDataProtocol,
-        HasMigrationConfigProtocol,
-        HasNameProtocol,
-        HasNotifiesProtocol,
-        HasParameterBuilderProtocol,
-        HasRowcountProtocol,
-        HasSQLGlotExpressionProtocol,
-        HasSqliteErrorProtocol,
-        HasSqlStateProtocol,
-        HasStatementConfigFactoryProtocol,
-        HasStatementTypeProtocol,
-        HasTracerProviderProtocol,
-        HasTypeCodeProtocol,
-        HasTypecodeProtocol,
-        HasTypecodeSizedProtocol,
-        HasValueProtocol,
-        HasWhereProtocol,
-        NotificationProtocol,
-        PipelineCapableProtocol,
-        QueryResultProtocol,
-        ReadableProtocol,
-        SpanAttributeProtocol,
-        SupportsArrayProtocol,
-        SupportsArrowResults,
-        SupportsCloseProtocol,
-        SupportsDtypeStrProtocol,
-        SupportsJsonTypeProtocol,
-        ToSchemaProtocol,
-        WithMethodProtocol,
-    )
+    from sqlspec.core import LimitOffsetFilter, StatementFilter
     from sqlspec.typing import SupportedSchemaModel
 
 __all__ = (
@@ -114,6 +121,7 @@ __all__ = (
     "has_field_name",
     "has_filter_attributes",
     "has_get_data",
+    "has_lastrowid",
     "has_migration_config",
     "has_name",
     "has_notifies",
@@ -135,6 +143,7 @@ __all__ = (
     "has_typecode_and_len",
     "has_value_attribute",
     "has_with_method",
+    "is_async_readable",
     "is_attrs_instance",
     "is_attrs_instance_with_field",
     "is_attrs_instance_without_field",
@@ -186,246 +195,186 @@ __all__ = (
 
 def is_readable(obj: Any) -> "TypeGuard[ReadableProtocol]":
     """Check if an object is readable (has a read method)."""
-    from sqlspec.protocols import ReadableProtocol
-
     return isinstance(obj, ReadableProtocol)
+
+
+def is_async_readable(obj: Any) -> "TypeGuard[AsyncReadableProtocol]":
+    """Check if an object exposes an async read method."""
+    return isinstance(obj, AsyncReadableProtocol)
 
 
 def is_notification(obj: Any) -> "TypeGuard[NotificationProtocol]":
     """Check if an object is a database notification with channel and payload."""
-    from sqlspec.protocols import NotificationProtocol
-
     return isinstance(obj, NotificationProtocol)
 
 
 def has_pipeline_capability(obj: Any) -> "TypeGuard[PipelineCapableProtocol]":
     """Check if a connection supports pipeline execution."""
-    from sqlspec.protocols import PipelineCapableProtocol
-
     return isinstance(obj, PipelineCapableProtocol)
 
 
 def has_query_result_metadata(obj: Any) -> "TypeGuard[QueryResultProtocol]":
     """Check if an object has query result metadata (tag/status)."""
-    from sqlspec.protocols import QueryResultProtocol
-
     return isinstance(obj, QueryResultProtocol)
 
 
 def has_array_interface(obj: Any) -> "TypeGuard[SupportsArrayProtocol]":
     """Check if an object supports the array interface (like NumPy arrays)."""
-    from sqlspec.protocols import SupportsArrayProtocol
-
     return isinstance(obj, SupportsArrayProtocol)
 
 
 def has_cursor_metadata(obj: Any) -> "TypeGuard[CursorMetadataProtocol]":
     """Check if an object has cursor metadata (description)."""
-    from sqlspec.protocols import CursorMetadataProtocol
-
     return isinstance(obj, CursorMetadataProtocol)
 
 
 def has_add_listener(obj: Any) -> "TypeGuard[HasAddListenerProtocol]":
     """Check if an object exposes add_listener()."""
-    from sqlspec.protocols import HasAddListenerProtocol
-
     return isinstance(obj, HasAddListenerProtocol)
 
 
 def has_notifies(obj: Any) -> "TypeGuard[HasNotifiesProtocol]":
     """Check if an object exposes notifies."""
-    from sqlspec.protocols import HasNotifiesProtocol
-
     return isinstance(obj, HasNotifiesProtocol)
 
 
 def has_extension_config(obj: Any) -> "TypeGuard[HasExtensionConfigProtocol]":
     """Check if an object exposes extension_config mapping."""
-    from sqlspec.protocols import HasExtensionConfigProtocol
-
     return isinstance(obj, HasExtensionConfigProtocol)
 
 
 def has_config_attribute(obj: Any) -> "TypeGuard[HasConfigProtocol]":
     """Check if an object exposes config attribute."""
-    from sqlspec.protocols import HasConfigProtocol
-
     return isinstance(obj, HasConfigProtocol)
 
 
 def has_connection_config(obj: Any) -> "TypeGuard[HasConnectionConfigProtocol]":
     """Check if an object exposes connection_config mapping."""
-    from sqlspec.protocols import HasConnectionConfigProtocol
-
     return isinstance(obj, HasConnectionConfigProtocol)
 
 
 def has_database_url_and_bind_key(obj: Any) -> "TypeGuard[HasDatabaseUrlAndBindKeyProtocol]":
     """Check if an object exposes database_url and bind_key."""
-    from sqlspec.protocols import HasDatabaseUrlAndBindKeyProtocol
-
     return isinstance(obj, HasDatabaseUrlAndBindKeyProtocol)
 
 
 def has_name(obj: Any) -> "TypeGuard[HasNameProtocol]":
     """Check if an object exposes __name__."""
-    from sqlspec.protocols import HasNameProtocol
-
     return isinstance(obj, HasNameProtocol)
 
 
 def has_field_name(obj: Any) -> "TypeGuard[HasFieldNameProtocol]":
     """Check if an object exposes field_name attribute."""
-    from sqlspec.protocols import HasFieldNameProtocol
-
     return isinstance(obj, HasFieldNameProtocol)
 
 
 def has_filter_attributes(obj: Any) -> "TypeGuard[HasFilterAttributesProtocol]":
     """Check if an object exposes filter attribute set."""
-    from sqlspec.protocols import HasFilterAttributesProtocol
-
     return isinstance(obj, HasFilterAttributesProtocol)
 
 
 def has_get_data(obj: Any) -> "TypeGuard[HasGetDataProtocol]":
     """Check if an object exposes get_data()."""
-    from sqlspec.protocols import HasGetDataProtocol
-
     return isinstance(obj, HasGetDataProtocol)
 
 
 def has_arrow_table_stats(obj: Any) -> "TypeGuard[ArrowTableStatsProtocol]":
     """Check if an object exposes Arrow row/byte stats."""
-    from sqlspec.protocols import ArrowTableStatsProtocol
-
     return isinstance(obj, ArrowTableStatsProtocol)
 
 
 def has_rowcount(obj: Any) -> "TypeGuard[HasRowcountProtocol]":
     """Check if a cursor exposes rowcount metadata."""
-    from sqlspec.protocols import HasRowcountProtocol
-
     return isinstance(obj, HasRowcountProtocol)
+
+
+def has_lastrowid(obj: Any) -> "TypeGuard[HasLastRowIdProtocol]":
+    """Check if a cursor exposes lastrowid metadata."""
+    return isinstance(obj, HasLastRowIdProtocol)
 
 
 def has_dtype_str(obj: Any) -> "TypeGuard[SupportsDtypeStrProtocol]":
     """Check if a dtype exposes string descriptor."""
-    from sqlspec.protocols import SupportsDtypeStrProtocol
-
     return isinstance(obj, SupportsDtypeStrProtocol)
 
 
 def has_statement_type(obj: Any) -> "TypeGuard[HasStatementTypeProtocol]":
     """Check if a cursor exposes statement_type metadata."""
-    from sqlspec.protocols import HasStatementTypeProtocol
-
     return isinstance(obj, HasStatementTypeProtocol)
 
 
 def has_typecode(obj: Any) -> "TypeGuard[HasTypecodeProtocol]":
     """Check if an array-like object exposes typecode."""
-    from sqlspec.protocols import HasTypecodeProtocol
-
     return isinstance(obj, HasTypecodeProtocol)
 
 
 def has_typecode_and_len(obj: Any) -> "TypeGuard[HasTypecodeSizedProtocol]":
     """Check if an array-like object exposes typecode and length."""
-    from sqlspec.protocols import HasTypecodeSizedProtocol
-
     return isinstance(obj, HasTypecodeSizedProtocol)
 
 
 def has_type_code(obj: Any) -> "TypeGuard[HasTypeCodeProtocol]":
     """Check if an object exposes type_code."""
-    from sqlspec.protocols import HasTypeCodeProtocol
-
     return isinstance(obj, HasTypeCodeProtocol)
 
 
 def has_sqlstate(obj: Any) -> "TypeGuard[HasSqlStateProtocol]":
     """Check if an exception exposes sqlstate."""
-    from sqlspec.protocols import HasSqlStateProtocol
-
     return isinstance(obj, HasSqlStateProtocol)
 
 
 def has_sqlite_error(obj: Any) -> "TypeGuard[HasSqliteErrorProtocol]":
     """Check if an exception exposes sqlite error details."""
-    from sqlspec.protocols import HasSqliteErrorProtocol
-
     return isinstance(obj, HasSqliteErrorProtocol)
 
 
 def has_value_attribute(obj: Any) -> "TypeGuard[HasValueProtocol]":
     """Check if an object exposes a value attribute."""
-    from sqlspec.protocols import HasValueProtocol
-
     return isinstance(obj, HasValueProtocol)
 
 
 def has_errors(obj: Any) -> "TypeGuard[HasErrorsProtocol]":
     """Check if an exception exposes errors."""
-    from sqlspec.protocols import HasErrorsProtocol
-
     return isinstance(obj, HasErrorsProtocol)
 
 
 def has_span_attribute(obj: Any) -> "TypeGuard[SpanAttributeProtocol]":
     """Check if a span exposes set_attribute."""
-    from sqlspec.protocols import SpanAttributeProtocol
-
     return isinstance(obj, SpanAttributeProtocol)
 
 
 def has_tracer_provider(obj: Any) -> "TypeGuard[HasTracerProviderProtocol]":
     """Check if an object exposes get_tracer."""
-    from sqlspec.protocols import HasTracerProviderProtocol
-
     return isinstance(obj, HasTracerProviderProtocol)
 
 
 def supports_async_read_bytes(obj: Any) -> "TypeGuard[AsyncReadBytesProtocol]":
     """Check if backend supports async read_bytes."""
-    from sqlspec.protocols import AsyncReadBytesProtocol
-
     return isinstance(obj, AsyncReadBytesProtocol)
 
 
 def supports_async_write_bytes(obj: Any) -> "TypeGuard[AsyncWriteBytesProtocol]":
     """Check if backend supports async write_bytes."""
-    from sqlspec.protocols import AsyncWriteBytesProtocol
-
     return isinstance(obj, AsyncWriteBytesProtocol)
 
 
 def supports_json_type(obj: Any) -> "TypeGuard[SupportsJsonTypeProtocol]":
     """Check if an object exposes JSON type support."""
-    from sqlspec.protocols import SupportsJsonTypeProtocol
-
     return isinstance(obj, SupportsJsonTypeProtocol)
 
 
 def supports_close(obj: Any) -> "TypeGuard[SupportsCloseProtocol]":
     """Check if an object exposes close()."""
-    from sqlspec.protocols import SupportsCloseProtocol
-
     return isinstance(obj, SupportsCloseProtocol)
 
 
 def supports_async_delete(obj: Any) -> "TypeGuard[AsyncDeleteProtocol]":
     """Check if backend supports async delete."""
-    from sqlspec.protocols import AsyncDeleteProtocol
-
     return isinstance(obj, AsyncDeleteProtocol)
 
 
 def supports_where(obj: Any) -> "TypeGuard[HasWhereProtocol]":
     """Check if an SQL expression supports WHERE clauses."""
-    from sqlspec.protocols import HasWhereProtocol
-
     return isinstance(obj, HasWhereProtocol)
 
 
@@ -518,8 +467,6 @@ def has_with_method(obj: Any) -> "TypeGuard[WithMethodProtocol]":
     Returns:
         True if the object has a callable with_ method, False otherwise
     """
-    from sqlspec.protocols import WithMethodProtocol
-
     return isinstance(obj, WithMethodProtocol)
 
 
@@ -534,8 +481,6 @@ def can_convert_to_schema(obj: Any) -> "TypeGuard[ToSchemaProtocol]":
     Returns:
         True if the object has to_schema method, False otherwise
     """
-    from sqlspec.protocols import ToSchemaProtocol
-
     return isinstance(obj, ToSchemaProtocol)
 
 
@@ -705,8 +650,8 @@ def is_msgspec_struct_with_field(obj: Any, field_name: str) -> "TypeGuard[Struct
         return False
     from msgspec import structs
 
-    struct_type = cast("type[Struct]", obj if isinstance(obj, type) else type(obj))
-    fields = structs.fields(struct_type)
+    struct_type = obj if isinstance(obj, type) else type(obj)
+    fields = structs.fields(cast("Any", struct_type))
     return any(field.name == field_name for field in fields)
 
 
@@ -724,8 +669,8 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
         return False
     from msgspec import structs
 
-    struct_type = cast("type[Struct]", obj if isinstance(obj, type) else type(obj))
-    fields = structs.fields(struct_type)
+    struct_type = obj if isinstance(obj, type) else type(obj)
+    fields = structs.fields(cast("Any", struct_type))
     return all(field.name != field_name for field in fields)
 
 
@@ -740,8 +685,6 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     Returns:
         The detected rename pattern ("camel", "kebab", "pascal") or None
     """
-    from sqlspec.utils.text import camelize, kebabize, pascalize
-
     if encode_name == camelize(field_name) and encode_name != field_name:
         return "camel"
 
@@ -786,8 +729,7 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
 
     from msgspec import structs
 
-    struct_type = cast("type[Struct]", schema_type)
-    fields = structs.fields(struct_type)
+    fields = structs.fields(cast("Any", schema_type))
     if not fields:
         return None
 
@@ -993,8 +935,6 @@ def is_expression(obj: Any) -> "TypeGuard[exp.Expression]":
     Returns:
         bool
     """
-    from sqlglot import exp
-
     return isinstance(obj, exp.Expression)
 
 
@@ -1007,8 +947,6 @@ def has_dict_attribute(obj: Any) -> "TypeGuard[DictProtocol]":
     Returns:
         bool
     """
-    from sqlspec.protocols import DictProtocol
-
     return isinstance(obj, DictProtocol)
 
 
@@ -1034,10 +972,6 @@ def extract_dataclass_fields(
     Returns:
         A tuple of dataclass fields.
     """
-    from dataclasses import Field, fields
-
-    from sqlspec._typing import Empty
-
     include = include or set()
     exclude = exclude or set()
 
@@ -1320,8 +1254,6 @@ def is_copy_statement(expression: Any) -> "TypeGuard[exp.Expression]":
     Returns:
         True if this is a COPY statement, False otherwise
     """
-    from sqlglot import exp
-
     if expression is None:
         return False
 
@@ -1348,8 +1280,6 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[TypedParameter]":
     Returns:
         True if the object is a TypedParameter, False otherwise
     """
-    from sqlspec.core import TypedParameter
-
     return isinstance(obj, TypedParameter)
 
 
@@ -1364,8 +1294,6 @@ def has_expression_and_sql(obj: Any) -> "TypeGuard[HasExpressionAndSQLProtocol]"
     Returns:
         True if the object has both attributes, False otherwise
     """
-    from sqlspec.protocols import HasExpressionAndSQLProtocol
-
     return isinstance(obj, HasExpressionAndSQLProtocol)
 
 
@@ -1381,8 +1309,6 @@ def has_expression_and_parameters(obj: Any) -> "TypeGuard[HasExpressionAndParame
     Returns:
         True if the object has both attributes, False otherwise
     """
-    from sqlspec.protocols import HasExpressionAndParametersProtocol
-
     return isinstance(obj, HasExpressionAndParametersProtocol)
 
 
@@ -1450,8 +1376,6 @@ def supports_arrow_native(backend: Any) -> bool:
         >>> supports_arrow_native(backend)
         False
     """
-    from sqlspec.protocols import HasArrowStoreProtocol, HasReadArrowProtocol, ObjectStoreProtocol
-
     if not isinstance(backend, ObjectStoreProtocol):
         return False
     if not isinstance(backend, HasArrowStoreProtocol):
@@ -1477,29 +1401,21 @@ def supports_arrow_results(obj: Any) -> "TypeGuard[SupportsArrowResults]":
         >>> supports_arrow_results(driver)
         True
     """
-    from sqlspec.protocols import SupportsArrowResults
-
     return isinstance(obj, SupportsArrowResults)
 
 
 def has_parameter_builder(obj: Any) -> "TypeGuard[HasParameterBuilderProtocol]":
     """Check if an object has an add_parameter method."""
-    from sqlspec.protocols import HasParameterBuilderProtocol
-
     return isinstance(obj, HasParameterBuilderProtocol)
 
 
 def has_expression_attr(obj: Any) -> "TypeGuard[HasExpressionProtocol]":
     """Check if an object has an _expression attribute."""
-    from sqlspec.protocols import HasExpressionProtocol
-
     return isinstance(obj, HasExpressionProtocol)
 
 
 def has_sqlglot_expression(obj: Any) -> "TypeGuard[HasSQLGlotExpressionProtocol]":
     """Check if an object has a sqlglot_expression property."""
-    from sqlspec.protocols import HasSQLGlotExpressionProtocol
-
     return isinstance(obj, HasSQLGlotExpressionProtocol)
 
 
@@ -1514,8 +1430,6 @@ def has_statement_config_factory(obj: Any) -> "TypeGuard[HasStatementConfigFacto
     Returns:
         True if the object has a _create_statement_config method.
     """
-    from sqlspec.protocols import HasStatementConfigFactoryProtocol
-
     return isinstance(obj, HasStatementConfigFactoryProtocol)
 
 
@@ -1530,6 +1444,4 @@ def has_migration_config(obj: Any) -> "TypeGuard[HasMigrationConfigProtocol]":
     Returns:
         True if the object has a migration_config attribute.
     """
-    from sqlspec.protocols import HasMigrationConfigProtocol
-
     return isinstance(obj, HasMigrationConfigProtocol)

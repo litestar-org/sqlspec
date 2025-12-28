@@ -66,6 +66,7 @@ from sqlspec.utils.type_guards import (
     is_schema_without_field,
     is_string_literal,
     is_typed_dict,
+    supports_arrow_results,
 )
 
 pytestmark = pytest.mark.xdist_group("utils")
@@ -1056,7 +1057,6 @@ def test_get_msgspec_rename_config_performance() -> None:
 
 def test_supports_arrow_results_with_protocol_implementation() -> None:
     """Test supports_arrow_results with object implementing SupportsArrowResults."""
-    from sqlspec.utils.type_guards import supports_arrow_results
 
     class MockDriverWithArrow:
         def select_to_arrow(
@@ -1079,7 +1079,6 @@ def test_supports_arrow_results_with_protocol_implementation() -> None:
 
 def test_supports_arrow_results_without_protocol_implementation() -> None:
     """Test supports_arrow_results with object not implementing protocol."""
-    from sqlspec.utils.type_guards import supports_arrow_results
 
     class MockDriverWithoutArrow:
         def execute(self, sql):
@@ -1091,14 +1090,12 @@ def test_supports_arrow_results_without_protocol_implementation() -> None:
 
 def test_supports_arrow_results_with_none() -> None:
     """Test supports_arrow_results with None."""
-    from sqlspec.utils.type_guards import supports_arrow_results
 
     assert supports_arrow_results(None) is False
 
 
 def test_supports_arrow_results_with_primitive_types() -> None:
     """Test supports_arrow_results with primitive types."""
-    from sqlspec.utils.type_guards import supports_arrow_results
 
     assert supports_arrow_results("string") is False
     assert supports_arrow_results(42) is False

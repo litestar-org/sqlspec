@@ -17,6 +17,7 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
+from sqlspec.builder._vector_expressions import VectorDistance
 from sqlspec.core import (
     SQL,
     ParameterStyle,
@@ -318,8 +319,6 @@ class QueryBuilder(ABC):
         Returns:
             A new expression with literals replaced by parameter placeholders
         """
-
-        from sqlspec.builder._vector_expressions import VectorDistance
 
         def replacer(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Literal):

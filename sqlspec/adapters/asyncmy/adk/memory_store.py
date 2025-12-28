@@ -1,6 +1,7 @@
 """AsyncMy ADK memory store for Google Agent Development Kit memory storage."""
 
 import json
+import re
 from typing import TYPE_CHECKING, Any, Final
 
 import asyncmy
@@ -28,8 +29,6 @@ def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
     Returns:
         Tuple of (column_definition, foreign_key_constraint).
     """
-    import re
-
     references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
     if not references_match:
         return (column_ddl.strip(), "")

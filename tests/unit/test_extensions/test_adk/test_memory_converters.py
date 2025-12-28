@@ -9,6 +9,7 @@ if importlib.util.find_spec("google.genai") is None or importlib.util.find_spec(
     pytest.skip("google-adk not installed", allow_module_level=True)
 
 from google.adk.events.event import Event
+from google.adk.events.event_actions import EventActions
 from google.adk.sessions.session import Session
 from google.genai import types
 
@@ -27,7 +28,7 @@ def _event(event_id: str, text: str | None) -> Event:
         invocation_id="inv-1",
         author="user",
         content=content,
-        actions=[],
+        actions=EventActions(),
         timestamp=datetime.now(timezone.utc).timestamp(),
         partial=False,
         turn_complete=True,
@@ -63,4 +64,6 @@ def test_session_to_memory_records_roundtrip() -> None:
 
     entry = record_to_memory_entry(records[0])
     assert entry.author == "user"
+    assert entry.content is not None
+    assert entry.content.parts is not None
     assert entry.content.parts[0].text == "Hello memory"

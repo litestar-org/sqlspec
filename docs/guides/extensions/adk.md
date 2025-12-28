@@ -225,6 +225,12 @@ config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."},
 - Schedule periodic cleanup with adapter-provided pruning helpers or ad-hoc SQL that removes stale rows.
 - Back up tables like any other transactional data; events can grow quickly, so consider partitioning or TTL policies in PostgreSQL (`CREATE POLICY ... USING (create_time > now() - interval '90 days')`).
 
+## Future Enhancements
+
+- Vector/embedding search hooks for adapter-specific similarity queries.
+- Vertex AI Memory Bank and RAG bridge helpers for hybrid deployments.
+- Background TTL pruning workflows for high-volume memory tables.
+
 ## Additional Resources
 
 - API reference: `docs/extensions/adk/`

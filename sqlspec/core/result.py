@@ -25,6 +25,7 @@ from sqlspec.storage import (
     StorageTelemetry,
     SyncStoragePipeline,
 )
+from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.schema import to_schema
 
@@ -608,8 +609,6 @@ class SQLResult(StatementResult):
         if self.data is None:
             msg = "No data available"
             raise ValueError(msg)
-
-        from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
         return convert_dict_to_arrow(self.data, return_format="table")
 

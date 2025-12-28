@@ -24,6 +24,7 @@ from sqlglot import expressions as exp
 
 from sqlspec.core import (
     SQL,
+    CompiledSQL,
     OperationType,
     ParameterStyle,
     ParameterStyleConfig,
@@ -249,8 +250,6 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
     stmt = SQL("SELECT * FROM users")
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters=[],
@@ -278,8 +277,6 @@ def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
@@ -300,8 +297,6 @@ def test_sql_single_pass_processing_triggered_by_operation_type_property() -> No
     stmt = SQL("INSERT INTO users (name) VALUES ('john')")
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="INSERT INTO users (name) VALUES ('john')",
             execution_parameters={},
@@ -343,7 +338,6 @@ def test_sql_expression_caching_enabled() -> None:
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
         expr = exp.select("*").from_("users")
-        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", expression=expr
@@ -370,7 +364,6 @@ def test_sql_expression_caching_disabled() -> None:
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
         expr = exp.select("*").from_("users")
-        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", expression=expr
@@ -440,8 +433,6 @@ def test_sql_parameters_property_returns_processed_parameters() -> None:
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
@@ -483,8 +474,6 @@ def test_sql_operation_type_detection(sql_statement: str, expected_operation_typ
     stmt = SQL(sql_statement)
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql=sql_statement,
             execution_parameters={},
@@ -499,8 +488,6 @@ def test_sql_operation_type_detection(sql_statement: str, expected_operation_typ
 
 def test_sql_returns_rows_detection() -> None:
     """Test SQL.returns_rows() method for different operation types."""
-
-    from sqlspec.core import ProcessedState
 
     select_stmt = SQL("SELECT * FROM users")
     select_stmt._processed_state = ProcessedState(
@@ -626,8 +613,6 @@ def test_sql_compile_method_compatibility() -> None:
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
@@ -682,8 +667,6 @@ def test_sql_validation_errors_property_compatibility() -> None:
     stmt = SQL("SELECT * FROM users")
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
@@ -730,8 +713,6 @@ def test_sql_single_parse_guarantee() -> None:
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
@@ -768,8 +749,6 @@ def test_sql_processing_caching_performance() -> None:
     stmt = SQL("SELECT * FROM users")
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
@@ -990,8 +969,6 @@ def test_sql_processing_state_stability() -> None:
     stmt = SQL("SELECT * FROM users")
 
     with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
-        from sqlspec.core import CompiledSQL
-
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},

@@ -4,6 +4,8 @@ import bisect
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from sqlglot import exp as _exp
+
 from sqlspec.core.parameters._alignment import (
     collect_null_parameter_ordinals,
     looks_like_execute_many,
@@ -78,8 +80,6 @@ def replace_null_parameters_with_literals(
 
     sorted_null_positions = sorted(null_positions)
 
-    from sqlglot import exp as _exp  # Imported lazily to avoid module-level dependency
-
     qmark_position = 0
 
     def transform_node(node: Any) -> Any:
@@ -143,8 +143,6 @@ def replace_null_parameters_with_literals(
 
 def _create_literal_expression(value: Any, json_serializer: "Callable[[Any], str]") -> Any:
     """Create a SQLGlot literal expression for the given value."""
-    from sqlglot import exp as _exp
-
     if value is None:
         return _exp.Null()
     if isinstance(value, bool):
@@ -168,8 +166,6 @@ def replace_placeholders_with_literals(
     """Replace placeholders in an expression tree with literal values."""
     if not parameters:
         return expression
-
-    from sqlglot import exp as _exp
 
     placeholder_counter = {"index": 0}
 

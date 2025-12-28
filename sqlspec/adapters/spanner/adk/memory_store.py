@@ -8,6 +8,7 @@ from google.cloud.spanner_v1 import param_types
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -17,14 +18,16 @@ if TYPE_CHECKING:
     from sqlspec.config import ADKConfig
     from sqlspec.extensions.adk.memory._types import MemoryRecord
 
+SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
+
 __all__ = ("SpannerSyncADKMemoryStore",)
 
 
 def _json_param_type() -> Any:
     try:
-        return param_types.JSON
+        return SPANNER_PARAM_TYPES.JSON
     except AttributeError:
-        return param_types.STRING
+        return SPANNER_PARAM_TYPES.STRING
 
 
 class _SpannerReadProtocol(Protocol):
@@ -70,20 +73,20 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {
-            "id": param_types.STRING,
-            "session_id": param_types.STRING,
-            "app_name": param_types.STRING,
-            "user_id": param_types.STRING,
-            "event_id": param_types.STRING,
-            "author": param_types.STRING,
-            "timestamp": param_types.TIMESTAMP,
+            "id": SPANNER_PARAM_TYPES.STRING,
+            "session_id": SPANNER_PARAM_TYPES.STRING,
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "event_id": SPANNER_PARAM_TYPES.STRING,
+            "author": SPANNER_PARAM_TYPES.STRING,
+            "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
             "content_json": _json_param_type(),
-            "content_text": param_types.STRING,
+            "content_text": SPANNER_PARAM_TYPES.STRING,
             "metadata_json": _json_param_type(),
-            "inserted_at": param_types.TIMESTAMP,
+            "inserted_at": SPANNER_PARAM_TYPES.TIMESTAMP,
         }
         if include_owner and self._owner_id_column_name:
-            types["owner_id"] = param_types.STRING
+            types["owner_id"] = SPANNER_PARAM_TYPES.STRING
         return types
 
     def _decode_json(self, raw: Any) -> Any:
@@ -112,10 +115,10 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
         if self._owner_id_column_ddl:
             owner_line = f",\n  {self._owner_id_column_ddl}"
 
-        token_line = ""
+        fts_column_line = ""
         fts_index = ""
         if self._use_fts:
-            token_line = "\n  content_tokens TOKENLIST AS (TOKENIZE_FULLTEXT(content_text)) HIDDEN"
+            fts_column_line = "\n  content_tokens TOKENLIST AS (TOKENIZE_FULLTEXT(content_text)) HIDDEN"
             fts_index = f"CREATE SEARCH INDEX idx_{self._memory_table}_fts ON {self._memory_table}(content_tokens)"
 
         shard_column = ""
@@ -136,7 +139,7 @@ CREATE TABLE {self._memory_table} (
   content_json JSON NOT NULL,
   content_text STRING(MAX) NOT NULL,
   metadata_json JSON,
-  inserted_at TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true){token_line}{shard_column}
+  inserted_at TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true){fts_column_line}{shard_column}
 ) {pk}
 """
 
@@ -192,7 +195,7 @@ CREATE TABLE {self._memory_table} (
                 "inserted_at": entry["inserted_at"],
             }
             if self._owner_id_column_name:
-                params["owner_id"] = owner_id
+                params["owner_id"] = str(owner_id) if owner_id is not None else None
             statements.append((insert_sql, params, self._memory_param_types(self._owner_id_column_name is not None)))
             inserted_count += 1
 
@@ -202,7 +205,7 @@ CREATE TABLE {self._memory_table} (
 
     def _event_exists(self, event_id: str) -> bool:
         sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id = @event_id LIMIT 1"
-        rows = self._run_read(sql, {"event_id": event_id}, {"event_id": param_types.STRING})
+        rows = self._run_read(sql, {"event_id": event_id}, {"event_id": SPANNER_PARAM_TYPES.STRING})
         return bool(rows)
 
     def search_entries(
@@ -231,10 +234,10 @@ CREATE TABLE {self._memory_table} (
         """
         params = {"app_name": app_name, "user_id": user_id, "query": query, "limit": limit}
         types = {
-            "app_name": param_types.STRING,
-            "user_id": param_types.STRING,
-            "query": param_types.STRING,
-            "limit": param_types.INT64,
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "query": SPANNER_PARAM_TYPES.STRING,
+            "limit": SPANNER_PARAM_TYPES.INT64,
         }
         rows = self._run_read(sql, params, types)
         return self._rows_to_records(rows)
@@ -253,10 +256,10 @@ CREATE TABLE {self._memory_table} (
         pattern = f"%{query.lower()}%"
         params = {"app_name": app_name, "user_id": user_id, "pattern": pattern, "limit": limit}
         types = {
-            "app_name": param_types.STRING,
-            "user_id": param_types.STRING,
-            "pattern": param_types.STRING,
-            "limit": param_types.INT64,
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "pattern": SPANNER_PARAM_TYPES.STRING,
+            "limit": SPANNER_PARAM_TYPES.INT64,
         }
         rows = self._run_read(sql, params, types)
         return self._rows_to_records(rows)
@@ -264,14 +267,14 @@ CREATE TABLE {self._memory_table} (
     def delete_entries_by_session(self, session_id: str) -> int:
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = @session_id"
         params = {"session_id": session_id}
-        types = {"session_id": param_types.STRING}
+        types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         return self._execute_update(sql, params, types)
 
     def delete_entries_older_than(self, days: int) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < @cutoff"
         params = {"cutoff": cutoff}
-        types = {"cutoff": param_types.TIMESTAMP}
+        types = {"cutoff": SPANNER_PARAM_TYPES.TIMESTAMP}
         return self._execute_update(sql, params, types)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":

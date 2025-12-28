@@ -6,7 +6,19 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import sql
-from sqlspec.builder import SQLFactory
+from sqlspec.builder import (
+    Case,
+    Delete,
+    Insert,
+    JoinBuilder,
+    Select,
+    SQLFactory,
+    SubqueryBuilder,
+    Update,
+    WindowFunctionBuilder,
+)
+from sqlspec.builder._column import Column
+from sqlspec.builder._expression_wrappers import AggregateExpression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 
@@ -422,7 +434,6 @@ def test_all_ddl_methods_exist() -> None:
 
 def test_count_function() -> None:
     """Test sql.count() function."""
-    from sqlspec.builder._expression_wrappers import AggregateExpression
 
     expr = sql.count()
     assert isinstance(expr, AggregateExpression)
@@ -439,7 +450,6 @@ def test_count_function() -> None:
 
 def test_sum_function() -> None:
     """Test sql.sum() function."""
-    from sqlspec.builder._expression_wrappers import AggregateExpression
 
     expr = sql.sum("amount")
     assert isinstance(expr, AggregateExpression)
@@ -450,7 +460,6 @@ def test_sum_function() -> None:
 
 def test_avg_function() -> None:
     """Test sql.avg() function."""
-    from sqlspec.builder._expression_wrappers import AggregateExpression
 
     expr = sql.avg("score")
     assert isinstance(expr, AggregateExpression)
@@ -461,7 +470,6 @@ def test_avg_function() -> None:
 
 def test_max_function() -> None:
     """Test sql.max() function."""
-    from sqlspec.builder._expression_wrappers import AggregateExpression
 
     expr = sql.max("created_at")
     assert isinstance(expr, AggregateExpression)
@@ -472,7 +480,6 @@ def test_max_function() -> None:
 
 def test_min_function() -> None:
     """Test sql.min() function."""
-    from sqlspec.builder._expression_wrappers import AggregateExpression
 
     expr = sql.min("price")
     assert isinstance(expr, AggregateExpression)
@@ -638,7 +645,6 @@ def test_case_expression_type_compatibility() -> None:
 
 def test_case_property_returns_case_builder() -> None:
     """Test that sql.case_ returns a Case builder instance."""
-    from sqlspec.builder import Case
 
     case_builder = sql.case_
     assert isinstance(case_builder, Case)
@@ -650,7 +656,6 @@ def test_case_property_returns_case_builder() -> None:
 
 def test_window_function_shortcuts() -> None:
     """Test window function shortcuts like sql.row_number_."""
-    from sqlspec.builder import WindowFunctionBuilder
 
     assert isinstance(sql.row_number_, WindowFunctionBuilder)
     assert isinstance(sql.rank_, WindowFunctionBuilder)
@@ -716,12 +721,8 @@ def test_window_function_multiple_partition_columns() -> None:
 def test_normal_column_access_preserved() -> None:
     """Test that normal column access still works after adding window functions."""
 
-    from sqlspec.builder._column import Column
-
     assert isinstance(sql.department, Column)
     assert isinstance(sql.some_normal_column, Column)
-
-    from sqlspec.builder import WindowFunctionBuilder
 
     assert isinstance(sql.row_number_, WindowFunctionBuilder)
     assert isinstance(sql.rank_, WindowFunctionBuilder)
@@ -729,7 +730,6 @@ def test_normal_column_access_preserved() -> None:
 
 def test_subquery_builders() -> None:
     """Test subquery builder shortcuts."""
-    from sqlspec.builder import SubqueryBuilder
 
     assert isinstance(sql.exists_, SubqueryBuilder)
     assert isinstance(sql.in_, SubqueryBuilder)
@@ -782,7 +782,6 @@ def test_all_subquery() -> None:
 
 def test_join_builders() -> None:
     """Test join builder shortcuts."""
-    from sqlspec.builder import JoinBuilder
 
     assert isinstance(sql.left_join_, JoinBuilder)
     assert isinstance(sql.inner_join_, JoinBuilder)
@@ -882,8 +881,6 @@ def test_backward_compatibility_preserved() -> None:
     query3 = sql.select("name", window_func).from_("employees")
     stmt3 = query3.build()
     assert "ROW_NUMBER" in stmt3.sql
-
-    from sqlspec.builder._column import Column
 
     assert isinstance(sql.users, Column)
     assert isinstance(sql.posts, Column)
@@ -1662,7 +1659,6 @@ def test_sql_call_rejects_delete_without_returning() -> None:
 
 def test_sql_update_method_with_returning() -> None:
     """Test that sql.update() returns Update builder for statements with RETURNING (use sql() for SQL object)."""
-    from sqlspec.builder import Update
 
     update_sql = "UPDATE books SET title = :title WHERE id = :id RETURNING *"
     query = sql.update(update_sql)
@@ -1676,7 +1672,6 @@ def test_sql_update_method_with_returning() -> None:
 
 def test_sql_insert_method_with_returning() -> None:
     """Test that sql.insert() returns Insert builder for statements with RETURNING (use sql() for SQL object)."""
-    from sqlspec.builder import Insert
 
     insert_sql = "INSERT INTO books (title) VALUES (:title) RETURNING id, title"
     query = sql.insert(insert_sql)
@@ -1690,7 +1685,6 @@ def test_sql_insert_method_with_returning() -> None:
 
 def test_sql_delete_method_with_returning() -> None:
     """Test that sql.delete() returns Delete builder for statements with RETURNING (use sql() for SQL object)."""
-    from sqlspec.builder import Delete
 
     delete_sql = "DELETE FROM books WHERE id = :id RETURNING *"
     query = sql.delete(delete_sql)
@@ -1704,7 +1698,6 @@ def test_sql_delete_method_with_returning() -> None:
 
 def test_sql_update_method_without_returning_returns_builder() -> None:
     """Test that sql.update() returns Update builder for statements without RETURNING."""
-    from sqlspec.builder import Update
 
     update_sql = "UPDATE books SET title = :title WHERE id = :id"
     query = sql.update(update_sql)
@@ -1715,7 +1708,6 @@ def test_sql_update_method_without_returning_returns_builder() -> None:
 
 def test_sql_insert_method_without_returning_returns_builder() -> None:
     """Test that sql.insert() returns Insert builder for statements without RETURNING."""
-    from sqlspec.builder import Insert
 
     insert_sql = "INSERT INTO books (title) VALUES (:title)"
     query = sql.insert(insert_sql)
@@ -1726,7 +1718,6 @@ def test_sql_insert_method_without_returning_returns_builder() -> None:
 
 def test_sql_delete_method_without_returning_returns_builder() -> None:
     """Test that sql.delete() returns Delete builder for statements without RETURNING."""
-    from sqlspec.builder import Delete
 
     delete_sql = "DELETE FROM books WHERE id = :id"
     query = sql.delete(delete_sql)
@@ -1737,7 +1728,6 @@ def test_sql_delete_method_without_returning_returns_builder() -> None:
 
 def test_select_statements_still_work_with_sql_call() -> None:
     """Test that SELECT statements continue to work with sql()."""
-    from sqlspec.builder import Select
 
     select_sql = "SELECT * FROM books WHERE id = :id"
     query = sql(select_sql)
@@ -1748,7 +1738,6 @@ def test_select_statements_still_work_with_sql_call() -> None:
 
 def test_with_statements_still_work_with_sql_call() -> None:
     """Test that WITH statements continue to work with sql()."""
-    from sqlspec.builder import Select
 
     with_sql = "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (ORDER BY id) as rn FROM books) SELECT * FROM ranked"
     query = sql(with_sql)

@@ -8,7 +8,9 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
+from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
+from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.parameters import (
     ParameterConverter,
     ParameterProfile,
@@ -26,7 +28,6 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.core.cache import FiltersView
     from sqlspec.core.filters import StatementFilter
 
 
@@ -344,8 +345,6 @@ class SQL:
         Returns:
             Read-only view of filters without copying
         """
-        from sqlspec.core.cache import FiltersView
-
         return FiltersView(self._filters)
 
     @property
@@ -616,7 +615,6 @@ class SQL:
                 explain_stmt = stmt.explain(analyze=True, format="json")
         """
         from sqlspec.builder._explain import Explain
-        from sqlspec.core.explain import ExplainFormat, ExplainOptions
 
         fmt = None
         if format is not None:

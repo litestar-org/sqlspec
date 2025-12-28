@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 
+from sqlspec.core.parameters import TypedParameter
 from sqlspec.protocols import DictProtocol
-from sqlspec.utils.type_guards import is_typed_parameter
+from sqlspec.utils.type_guards import is_expression, is_typed_parameter
 
 if TYPE_CHECKING:
     from sqlspec.core.filters import StatementFilter
@@ -95,8 +96,6 @@ def hash_parameters(
     param_hash = 0
 
     if positional_parameters:
-        from sqlspec.core.parameters import TypedParameter
-
         hashable_parameters: list[tuple[Any, Any]] = []
         for param in positional_parameters:
             if isinstance(param, TypedParameter):
@@ -183,8 +182,6 @@ def hash_sql_statement(statement: "SQL") -> str:
     Returns:
         Cache key string
     """
-    from sqlspec.utils.type_guards import is_expression
-
     stmt_expr = statement.statement_expression
     expr_hash = hash_expression(stmt_expr) if is_expression(stmt_expr) else hash(statement.raw_sql)
 

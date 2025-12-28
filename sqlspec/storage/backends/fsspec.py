@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, overload
+from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
 
@@ -115,8 +116,6 @@ class FSSpecBackend:
 
             # For S3/cloud URIs, extract bucket/path from URI as base_path
             if self.protocol in {"s3", "gs", "az", "gcs"}:
-                from urllib.parse import urlparse
-
                 parsed = urlparse(uri)
                 # Combine netloc (bucket) and path for base_path
                 if parsed.netloc:

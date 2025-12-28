@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Union, cast, overload
 
 from sqlspec.core import SQL
+from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
@@ -77,8 +78,6 @@ class BaseMigrationRunner(ABC):
         """
         self.migrations_path = migrations_path
         self.extension_migrations = extension_migrations or {}
-        from sqlspec.loader import SQLFileLoader
-
         self.runtime = runtime
         self.loader = SQLFileLoader(runtime=runtime)
         self.project_root: Path | None = None

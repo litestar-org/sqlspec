@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
-from sqlspec.core import SQLResult
+from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -164,7 +164,6 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 
 async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with SQL object on AsyncPG."""
-    from sqlspec.core import SQL
 
     parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 

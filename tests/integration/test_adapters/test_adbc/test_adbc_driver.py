@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 import pytest
 
-from sqlspec import SQLResult, StatementStack
+from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.adbc import AdbcDriver
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
@@ -396,7 +396,6 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
 @pytest.mark.xdist_group("sqlite")
 def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR UPDATE is stripped by sqlglot for ADBC SQLite backend."""
-    from sqlspec import sql
 
     # Setup test table
     adbc_sqlite_session.execute_script("DROP TABLE IF EXISTS test_table")
@@ -429,7 +428,6 @@ def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
 @pytest.mark.xdist_group("sqlite")
 def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR SHARE is stripped by sqlglot for ADBC SQLite backend."""
-    from sqlspec import sql
 
     # Setup test table
     adbc_sqlite_session.execute_script("DROP TABLE IF EXISTS test_table")
@@ -462,7 +460,6 @@ def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
 @pytest.mark.xdist_group("sqlite")
 def test_adbc_for_update_skip_locked_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR UPDATE SKIP LOCKED generates SQL for ADBC."""
-    from sqlspec import sql
 
     # Setup test table
     adbc_sqlite_session.execute_script("DROP TABLE IF EXISTS test_table")

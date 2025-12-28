@@ -1,7 +1,6 @@
 """PostgreSQL psycopg driver implementation."""
 
 import datetime
-import io
 from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
 
@@ -9,6 +8,7 @@ import psycopg
 from psycopg import sql as psycopg_sql
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -97,13 +97,9 @@ logger = get_logger("adapters.psycopg")
 
 def _psycopg_pipeline_supported() -> bool:
     """Return True when libpq pipeline support is available."""
-
-
-try:
-    capabilities = psycopg.capabilities
-except AttributeError:
-    capabilities = None
-    if capabilities is None:
+    try:
+        capabilities = psycopg.capabilities
+    except AttributeError:
         return False
     try:
         return bool(capabilities.has_pipeline())
@@ -429,16 +425,16 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         if is_copy_from_operation(operation_type):
             if isinstance(copy_data, (str, bytes)):
-                data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
+                data_to_write = copy_data
             elif is_readable(copy_data):
-                data_file = copy_data
+                data_to_write = copy_data.read()
             else:
-                data_file = io.StringIO(str(copy_data))
+                data_to_write = str(copy_data)
+
+            if isinstance(data_to_write, str):
+                data_to_write = data_to_write.encode()
 
             with cursor.copy(sql) as copy_ctx:
-                data_to_write = data_file.read() if is_readable(data_file) else str(copy_data)
-                if isinstance(data_to_write, str):
-                    data_to_write = data_to_write.encode()
                 copy_ctx.write(data_to_write)
 
             rows_affected = max(cursor.rowcount, 0)
@@ -715,8 +711,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.psycopg.data_dictionary import PostgresSyncDataDictionary
-
             self._data_dictionary = PostgresSyncDataDictionary()
         return self._data_dictionary
 
@@ -969,16 +963,16 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         if is_copy_from_operation(operation_type) and "FROM STDIN" in sql_upper:
             if isinstance(copy_data, (str, bytes)):
-                data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
+                data_to_write = copy_data
             elif is_readable(copy_data):
-                data_file = copy_data
+                data_to_write = copy_data.read()
             else:
-                data_file = io.StringIO(str(copy_data))
+                data_to_write = str(copy_data)
+
+            if isinstance(data_to_write, str):
+                data_to_write = data_to_write.encode()
 
             async with cursor.copy(sql) as copy_ctx:
-                data_to_write = data_file.read() if is_readable(data_file) else str(copy_data)
-                if isinstance(data_to_write, str):
-                    data_to_write = data_to_write.encode()
                 await copy_ctx.write(data_to_write)
 
             rows_affected = max(cursor.rowcount, 0)
@@ -1259,8 +1253,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary
-
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
 

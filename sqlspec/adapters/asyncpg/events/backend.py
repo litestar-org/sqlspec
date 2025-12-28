@@ -4,7 +4,7 @@
 import asyncio
 import contextlib
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import SQL
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
@@ -235,8 +235,6 @@ def create_event_backend(
     config: "AsyncpgConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> AsyncpgEventsBackend | AsyncpgHybridEventsBackend | None:
     """Factory used by EventChannel to create the native backend."""
-    from typing import cast
-
     match backend_name:
         case "listen_notify":
             try:

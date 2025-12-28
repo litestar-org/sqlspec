@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-from sqlspec.core import SQLResult
+from sqlspec.core import SQL, SQLResult
 
 if TYPE_CHECKING:
     pass
@@ -69,7 +69,6 @@ async def test_connection_error_handling(psqlpy_config: PsqlpyConfig) -> None:
 
 async def test_connection_with_core_round_3(psqlpy_config: PsqlpyConfig) -> None:
     """Test connection integration."""
-    from sqlspec.core import SQL
 
     test_sql = SQL("SELECT $1::text as test_value")
 

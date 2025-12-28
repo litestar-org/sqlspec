@@ -155,6 +155,15 @@ class MyAdapterDriver(SyncDriverBase):
     - Add integration tests under `tests/integration/test_adapters/<adapter>/test_driver.py::test_*statement_stack*` that cover native path, sequential fallback, and continue-on-error.
     - Guard base behavior (empty stacks, large stacks, transaction boundaries) via `tests/integration/test_stack_edge_cases.py`.
 
+### ADK Memory Store Pattern
+
+- `SQLSpecMemoryService` delegates storage to adapter-backed memory stores (`BaseAsyncADKMemoryStore` / `BaseSyncADKMemoryStore`).
+- All ADK settings live in `extension_config["adk"]`; memory flags are `enable_memory`, `include_memory_migration`, `memory_table`, `memory_use_fts`, and `memory_max_results`.
+- Search strategy is driver-determined: `memory_use_fts=True` enables adapter FTS when available, otherwise fall back to `LIKE`/`ILIKE` with warning on failure.
+- Deduplication is keyed by `event_id` with idempotent inserts (ignore duplicates, return inserted count).
+- Multi-tenancy uses the shared `owner_id_column` DDL; stores parse the column name to bind filter parameters.
+- TTL cleanup is explicit via store helpers or CLI (`delete_entries_older_than`, `sqlspec adk memory cleanup`).
+
 ### Driver Parameter Profile Registry
 
 - All adapter parameter defaults live in `DriverParameterProfile` entries inside `sqlspec/core/parameters.py`.

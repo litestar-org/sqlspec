@@ -18,9 +18,6 @@ Test Coverage:
 - Integration with all query builders that use ExplainMixin
 """
 
-# pyright: reportPrivateUsage=false
-# mypy: disable-error-code="comparison-overlap,arg-type"
-
 import pytest
 from sqlglot import exp
 
@@ -40,6 +37,12 @@ from sqlspec.builder._explain import (
 from sqlspec.builder._factory import SQLFactory, sql
 from sqlspec.core import SQL
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
+from sqlspec.core.statement import StatementConfig
+from sqlspec.exceptions import SQLBuilderError
+
+# pyright: reportPrivateUsage=false
+# mypy: disable-error-code="comparison-overlap,arg-type"
+
 
 pytestmark = pytest.mark.xdist_group("explain")
 
@@ -1393,7 +1396,6 @@ def test_sql_class_explain_preserves_parameters():
 
 def test_sql_class_explain_with_dialect():
     """Test SQL.explain() respects statement dialect."""
-    from sqlspec.core.statement import StatementConfig
 
     config = StatementConfig(dialect="postgres")
     stmt = SQL("SELECT * FROM users", statement_config=config)
@@ -1497,7 +1499,6 @@ def test_normalize_dialect_name_with_dialect_object():
 
 def test_explain_construction_invalid_statement_raises():
     """Test Explain raises SQLBuilderError for unsupported statement type."""
-    from sqlspec.exceptions import SQLBuilderError
 
     class UnsupportedType:
         pass

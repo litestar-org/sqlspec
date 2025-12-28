@@ -8,6 +8,7 @@ from litestar.testing import TestClient
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
+from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -44,7 +45,6 @@ def test_litestar_disable_di_disables_providers() -> None:
 
 def test_litestar_default_di_enabled() -> None:
     """Test that default behavior has disable_di=False."""
-    from sqlspec.driver import AsyncDriverAdapterBase
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()

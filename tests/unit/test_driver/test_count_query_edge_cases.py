@@ -4,13 +4,13 @@ This module tests COUNT query generation validation, particularly for edge cases
 where SELECT statements are missing required clauses (FROM, etc.).
 """
 
-# pyright: reportPrivateUsage=false
-
 import pytest
 
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
+
+# pyright: reportPrivateUsage=false
 
 
 class MockSyncDriver(SyncDriverAdapterBase):

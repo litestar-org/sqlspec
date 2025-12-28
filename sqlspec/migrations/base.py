@@ -6,9 +6,12 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
+from rich.console import Console
+
 from sqlspec.builder import Delete, Insert, Select, Update, sql
 from sqlspec.builder._ddl import CreateTable
 from sqlspec.loader import SQLFileLoader
+from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateDescriptionHints, build_template_settings
 from sqlspec.utils.logging import get_logger
@@ -301,8 +304,6 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             The extracted version string or None.
         """
-        from pathlib import Path
-
         stem = Path(filename).stem
 
         if stem.startswith("ext_"):
@@ -378,8 +379,6 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         for ext_name, ext_path in self.extension_migrations.items():
             if file_path.parent == ext_path:
                 if ext_name in self.extension_configs and self.context:
-                    from sqlspec.migrations.context import MigrationContext
-
                     context_to_use = MigrationContext(
                         dialect=self.context.dialect,
                         config=self.context.config,
@@ -677,8 +676,6 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
             directory: Directory to initialize migrations in.
             package: Whether to create __init__.py file.
         """
-        from rich.console import Console
-
         console = Console()
 
         migrations_dir = Path(directory)

@@ -9,8 +9,9 @@ from typing_extensions import NotRequired, TypedDict
 from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.extensions.events._hints import EventRuntimeHints
-from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker
-from sqlspec.observability import ObservabilityConfig
+from sqlspec.loader import SQLFileLoader
+from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker, create_migration_commands
+from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 
@@ -19,9 +20,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-    from sqlspec.loader import SQLFileLoader
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
-    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage import StorageCapabilities
 
 
@@ -83,9 +82,9 @@ class LifecycleConfig(TypedDict):
     on_pool_destroy: NotRequired[list[Callable[[Any], None]]]
     on_session_start: NotRequired[list[Callable[[Any], None]]]
     on_session_end: NotRequired[list[Callable[[Any], None]]]
-    on_query_start: NotRequired[list[Callable[[str, dict], None]]]
-    on_query_complete: NotRequired[list[Callable[[str, dict, Any], None]]]
-    on_error: NotRequired[list[Callable[[Exception, str, dict], None]]]
+    on_query_start: NotRequired[list[Callable[[str, dict[str, Any]], None]]]
+    on_query_complete: NotRequired[list[Callable[[str, dict[str, Any], Any], None]]]
+    on_error: NotRequired[list[Callable[[Exception, str, dict[str, Any]], None]]]
 
 
 class MigrationConfig(TypedDict):
@@ -650,7 +649,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     )
 
     _migration_loader: "SQLFileLoader"
-    _migration_commands: "SyncMigrationCommands | AsyncMigrationCommands"
+    _migration_commands: "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]"
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
@@ -720,7 +719,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         exclude_extensions = migration_config.get("exclude_extensions", [])
         if isinstance(exclude_extensions, tuple):
-            exclude_extensions = list(exclude_extensions)
+            exclude_extensions = list(exclude_extensions)  # pyright: ignore
 
         extensions_to_add: list[str] = []
 
@@ -748,7 +747,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             include_list: list[str] = []
             migration_config["include_extensions"] = include_list
         elif isinstance(include_extensions, tuple):
-            include_list = list(include_extensions)
+            include_list = list(include_extensions)  # pyright: ignore
             migration_config["include_extensions"] = include_list
         else:
             include_list = cast("list[str]", include_extensions)
@@ -836,8 +835,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             callback = self.driver_features.pop(hook_name, None)
             if callback is None:
                 continue
-            callbacks = callback if isinstance(callback, (list, tuple)) else (callback,)
-            wrapped_callbacks = [self._wrap_driver_feature_hook(cb, context_key) for cb in callbacks]
+            callbacks = callback if isinstance(callback, (list, tuple)) else (callback,)  # pyright: ignore
+            wrapped_callbacks = [self._wrap_driver_feature_hook(cb, context_key) for cb in callbacks]  # pyright: ignore
             lifecycle_hooks.setdefault(hook_name, []).extend(wrapped_callbacks)
 
         if not lifecycle_hooks:
@@ -879,11 +878,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
     def attach_observability(self, registry_config: "ObservabilityConfig | None") -> None:
         """Attach merged observability runtime composed from registry and adapter overrides."""
-
-        from sqlspec.observability import ObservabilityConfig as ObservabilityConfigImpl
-        from sqlspec.observability import ObservabilityRuntime
-
-        merged = ObservabilityConfigImpl.merge(registry_config, self.observability_config)
+        merged = ObservabilityConfig.merge(registry_config, self.observability_config)
         self._observability_runtime = ObservabilityRuntime(
             merged, bind_key=self.bind_key, config_name=type(self).__name__
         )
@@ -960,14 +955,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         return {}
 
     def _initialize_migration_components(self) -> None:
-        """Initialize migration loader and commands with necessary imports.
-
-        Handles the circular import between config and commands by importing
-        at runtime when needed.
-        """
-        from sqlspec.loader import SQLFileLoader
-        from sqlspec.migrations import create_migration_commands
-
+        """Initialize migration loader and migration command helpers."""
         runtime = self.get_observability_runtime()
         self._migration_loader = SQLFileLoader(runtime=runtime)
         self._migration_commands = create_migration_commands(self)  # pyright: ignore
@@ -988,7 +976,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         return self._migration_loader
 
-    def _ensure_migration_commands(self) -> "SyncMigrationCommands | AsyncMigrationCommands":
+    def _ensure_migration_commands(self) -> "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]":
         """Get the migration commands instance.
 
         Returns:
@@ -1023,7 +1011,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             else:
                 logger.warning("Migration path does not exist: %s", path_obj)
 
-    def get_migration_commands(self) -> "SyncMigrationCommands | AsyncMigrationCommands":
+    def get_migration_commands(self) -> "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]":
         """Get migration commands for this configuration.
 
         Returns:
@@ -1212,7 +1200,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         Returns:
             Current migration version or None if no migrations applied.
         """
-        commands = cast("SyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
         return commands.current(verbose=verbose)
 
     def create_migration(self, message: str, file_type: str = "sql") -> None:
@@ -1335,7 +1323,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             auto_sync: Auto-reconcile renamed migrations.
             dry_run: Show what would be done without applying.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.upgrade(revision, allow_missing, auto_sync, dry_run)
 
     async def migrate_down(self, revision: str = "-1", *, dry_run: bool = False) -> None:
@@ -1345,7 +1333,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             revision: Target revision, "-1" for one step back, or "base" for all migrations.
             dry_run: Show what would be done without applying.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.downgrade(revision, dry_run=dry_run)
 
     async def get_current_migration(self, verbose: bool = False) -> "str | None":
@@ -1357,7 +1345,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         Returns:
             Current migration version or None if no migrations applied.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         return await commands.current(verbose=verbose)
 
     async def create_migration(self, message: str, file_type: str = "sql") -> None:
@@ -1367,7 +1355,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.revision(message, file_type)
 
     async def init_migrations(self, directory: "str | None" = None, package: bool = True) -> None:
@@ -1381,7 +1369,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             migration_config = self.migration_config or {}
             directory = str(migration_config.get("script_location") or "migrations")
 
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         assert directory is not None
         await commands.init(directory, package)
 
@@ -1391,7 +1379,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         Args:
             revision: The revision to stamp.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.stamp(revision)
 
     async def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
@@ -1402,7 +1390,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             update_database: Update migration records in database.
             yes: Skip confirmation prompt.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.fix(dry_run, update_database, yes)
 
 
@@ -1532,7 +1520,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Returns:
             Current migration version or None if no migrations applied.
         """
-        commands = cast("SyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
         return commands.current(verbose=verbose)
 
     def create_migration(self, message: str, file_type: str = "sql") -> None:
@@ -1687,7 +1675,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             auto_sync: Auto-reconcile renamed migrations.
             dry_run: Show what would be done without applying.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.upgrade(revision, allow_missing, auto_sync, dry_run)
 
     async def migrate_down(self, revision: str = "-1", *, dry_run: bool = False) -> None:
@@ -1697,7 +1685,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             revision: Target revision, "-1" for one step back, or "base" for all migrations.
             dry_run: Show what would be done without applying.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.downgrade(revision, dry_run=dry_run)
 
     async def get_current_migration(self, verbose: bool = False) -> "str | None":
@@ -1709,7 +1697,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Returns:
             Current migration version or None if no migrations applied.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         return await commands.current(verbose=verbose)
 
     async def create_migration(self, message: str, file_type: str = "sql") -> None:
@@ -1719,7 +1707,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.revision(message, file_type)
 
     async def init_migrations(self, directory: "str | None" = None, package: bool = True) -> None:
@@ -1733,7 +1721,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             migration_config = self.migration_config or {}
             directory = str(migration_config.get("script_location") or "migrations")
 
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         assert directory is not None
         await commands.init(directory, package)
 
@@ -1743,7 +1731,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Args:
             revision: The revision to stamp.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.stamp(revision)
 
     async def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
@@ -1754,5 +1742,5 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             update_database: Update migration records in database.
             yes: Skip confirmation prompt.
         """
-        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
         await commands.fix(dry_run, update_database, yes)

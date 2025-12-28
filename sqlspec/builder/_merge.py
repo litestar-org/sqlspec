@@ -12,6 +12,7 @@ from decimal import Decimal
 from itertools import starmap
 from typing import TYPE_CHECKING, Any, cast
 
+import sqlglot as sg
 from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.errors import ParseError
@@ -238,8 +239,6 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         column_selects = ", ".join(columns)
         from_sql = f"SELECT {column_selects} FROM jsonb_to_recordset(:{json_param_name}::jsonb) AS {alias_name}({column_type_spec})"
 
-        import sqlglot as sg
-
         parsed = sg.parse_one(from_sql, dialect="postgres")
         paren_expr = exp.paren(parsed)
         paren_expr.set("alias", exp.TableAlias(this=exp.to_identifier(alias_name)))
@@ -267,8 +266,6 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         columns_clause = ", ".join(json_columns)
 
         from_sql = f"SELECT {column_selects} FROM JSON_TABLE(:{json_param_name}, '$[*]' COLUMNS ({columns_clause}))"
-
-        import sqlglot as sg
 
         parsed = sg.parse_one(from_sql, dialect="oracle")
         paren_expr = exp.paren(parsed)

@@ -17,6 +17,7 @@ from sqlspec.core import (
     ParameterStyle,
     StatementConfig,
     build_statement_config_from_profile,
+    create_arrow_result,
     get_cache_config,
     register_driver_profile,
 )
@@ -35,6 +36,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 from sqlspec.utils.type_guards import has_rowcount
@@ -457,13 +459,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
             ... )
             >>> df = result.to_pandas()  # Fast zero-copy conversion
         """
-        from sqlspec.utils.module_loader import ensure_pyarrow
-
         ensure_pyarrow()
 
         import pyarrow as pa
-
-        from sqlspec.core import create_arrow_result
 
         # Prepare statement
         config = statement_config or self.statement_config

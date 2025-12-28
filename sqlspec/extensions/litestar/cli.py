@@ -3,10 +3,13 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
+import anyio
 import rich_click as click
 from litestar.cli._utils import LitestarGroup
 
 from sqlspec.cli import add_migration_commands
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
 if TYPE_CHECKING:
     from litestar import Litestar
@@ -26,7 +29,6 @@ def get_database_migration_plugin(app: "Litestar") -> "SQLSpecPlugin":
     Raises:
         ImproperConfigurationError: If the SQLSpec plugin is not found
     """
-    from sqlspec.exceptions import ImproperConfigurationError
     from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 
     with suppress(KeyError):
@@ -66,19 +68,15 @@ def add_sessions_delete_expired_command() -> None:
             litestar sessions delete-expired
             litestar sessions delete-expired --verbose
         """
-        import anyio
-
         backend = get_session_backend(app)
         store = backend.config.get_store_from_app(app)
 
-        try:
-            delete_expired = store.delete_expired  # type: ignore[assignment]
-        except AttributeError:
+        if not isinstance(store, BaseSQLSpecStore):
             console.print(f"[red]{type(store).__name__} does not support deleting expired sessions")
             return
 
         async def _delete_expired() -> int:
-            return await delete_expired()  # type: ignore[no-any-return]
+            return await store.delete_expired()
 
         count = anyio.run(_delete_expired)
 

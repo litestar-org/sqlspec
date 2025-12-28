@@ -10,6 +10,7 @@ import asyncmy.errors  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
+from sqlspec.adapters.asyncmy.data_dictionary import MySQLAsyncDataDictionary
 from sqlspec.core import (
     ArrowResult,
     DriverParameterProfile,
@@ -33,7 +34,14 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_guards import has_cursor_metadata, has_rowcount, has_sqlstate, has_type_code, supports_json_type
+from sqlspec.utils.type_guards import (
+    has_cursor_metadata,
+    has_lastrowid,
+    has_rowcount,
+    has_sqlstate,
+    has_type_code,
+    supports_json_type,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -444,11 +452,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
         last_id = None
-        if has_rowcount(cursor) and cursor.rowcount and cursor.rowcount > 0:
-            try:
-                last_id = cursor.lastrowid
-            except AttributeError:
-                last_id = None
+        if has_rowcount(cursor) and cursor.rowcount and cursor.rowcount > 0 and has_lastrowid(cursor):
+            last_id = cursor.lastrowid
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     async def select_to_storage(
@@ -579,8 +584,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.asyncmy.data_dictionary import MySQLAsyncDataDictionary
-
             self._data_dictionary = MySQLAsyncDataDictionary()
         return self._data_dictionary
 

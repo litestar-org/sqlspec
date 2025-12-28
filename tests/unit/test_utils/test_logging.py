@@ -18,6 +18,7 @@ import pytest
 from sqlspec.utils.logging import (
     CorrelationIDFilter,
     StructuredFormatter,
+    __all__,
     correlation_id_var,
     get_correlation_id,
     get_logger,
@@ -627,7 +628,6 @@ class TestEdgeCases:
 
 def test_module_exports() -> None:
     """Test that all expected functions and classes are exported."""
-    from sqlspec.utils.logging import __all__
 
     expected_exports = {
         "StructuredFormatter",

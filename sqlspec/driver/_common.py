@@ -26,6 +26,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
+from sqlspec.observability import ObservabilityRuntime
 from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import (
@@ -43,7 +44,6 @@ if TYPE_CHECKING:
 
     from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.core.stack import StatementStack
-    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.typing import StatementParameters
 
 
@@ -671,8 +671,6 @@ class CommonDriverAttributesMixin:
         """Return the observability runtime, creating a disabled instance when absent."""
 
         if self._observability is None:
-            from sqlspec.observability import ObservabilityRuntime
-
             self._observability = ObservabilityRuntime(config_name=type(self).__name__)
         return self._observability
 

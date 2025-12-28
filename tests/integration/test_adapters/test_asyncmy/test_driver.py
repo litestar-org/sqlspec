@@ -11,7 +11,7 @@ from typing import Literal
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec import SQL, SQLResult, StatementStack
+from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -436,7 +436,6 @@ async def test_asyncmy_sql_object_execution(asyncmy_driver: AsyncmyDriver) -> No
 
 async def test_asyncmy_for_update_locking(asyncmy_driver: AsyncmyDriver) -> None:
     """Test FOR UPDATE row locking with MySQL."""
-    from sqlspec import sql
 
     driver = asyncmy_driver
 
@@ -462,7 +461,6 @@ async def test_asyncmy_for_update_locking(asyncmy_driver: AsyncmyDriver) -> None
 
 async def test_asyncmy_for_update_skip_locked(asyncmy_driver: AsyncmyDriver) -> None:
     """Test FOR UPDATE SKIP LOCKED with MySQL (MySQL 8.0+ feature)."""
-    from sqlspec import sql
 
     driver = asyncmy_driver
 
@@ -487,7 +485,6 @@ async def test_asyncmy_for_update_skip_locked(asyncmy_driver: AsyncmyDriver) -> 
 
 async def test_asyncmy_for_share_locking(asyncmy_driver: AsyncmyDriver) -> None:
     """Test FOR SHARE row locking with MySQL."""
-    from sqlspec import sql
 
     driver = asyncmy_driver
 

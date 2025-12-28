@@ -3,6 +3,8 @@
 
 import pytest
 
+from sqlspec.core import StatementConfig
+
 
 def test_asyncmy_store_column_types() -> None:
     """Asyncmy store uses MySQL-compatible column types."""
@@ -581,7 +583,6 @@ def test_adbc_store_statement_config_dialect_fallback() -> None:
     pytest.importorskip("adbc_driver_manager")
     from sqlspec.adapters.adbc import AdbcConfig
     from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
-    from sqlspec.core import StatementConfig
 
     config = AdbcConfig(
         connection_config={"driver_name": "generic"}, statement_config=StatementConfig(dialect="duckdb")

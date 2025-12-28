@@ -3,10 +3,12 @@
 import datetime
 import re
 from collections import OrderedDict
+from io import BytesIO
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 
 import asyncpg
 
+from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -262,11 +264,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             statement: SQL statement with COPY operation
         """
 
-        try:
-            metadata_obj = statement.metadata
-        except AttributeError:
-            metadata_obj = {}
-        metadata: dict[str, Any] = dict(metadata_obj) if metadata_obj else {}
+        execution_args = statement.statement_config.execution_args
+        metadata: dict[str, Any] = dict(execution_args) if execution_args else {}
         sql_text = statement.sql
         sql_upper = sql_text.upper()
         copy_data = metadata.get("postgres_copy_data")
@@ -282,8 +281,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 data_str = str(copy_data[0]) if len(copy_data) == 1 else "\n".join(str(value) for value in copy_data)
             else:
                 data_str = str(copy_data)
-
-            from io import BytesIO
 
             data_io = BytesIO(data_str.encode("utf-8"))
             await cursor.copy_from_query(sql_text, output=data_io)
@@ -626,8 +623,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
-
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
 

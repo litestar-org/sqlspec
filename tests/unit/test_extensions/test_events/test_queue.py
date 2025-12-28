@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.core import StatementConfig
+from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import EventMessage
 from sqlspec.extensions.events._payload import parse_event_timestamp
 from sqlspec.extensions.events._queue import SyncTableEventQueue
@@ -34,7 +36,6 @@ def test_table_event_queue_schema_qualified_table(tmp_path) -> None:
 
 def test_table_event_queue_invalid_table_name_raises(tmp_path) -> None:
     """Invalid table names raise EventChannelError."""
-    from sqlspec.exceptions import EventChannelError
 
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     with pytest.raises(EventChannelError, match="Invalid events table name"):
@@ -109,7 +110,6 @@ def test_table_event_queue_select_sql_contains_table(tmp_path) -> None:
 
 def test_table_event_queue_oracle_dialect_uses_fetch_first(tmp_path) -> None:
     """Oracle dialect uses FETCH FIRST instead of LIMIT."""
-    from sqlspec.core import StatementConfig
 
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "test.db")}, statement_config=StatementConfig(dialect="oracle")

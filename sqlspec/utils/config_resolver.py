@@ -27,7 +27,7 @@ __all__ = ("resolve_config_async", "resolve_config_sync")
 
 async def resolve_config_async(
     config_path: str,
-) -> "list[AsyncDatabaseConfig | SyncDatabaseConfig] | AsyncDatabaseConfig | SyncDatabaseConfig":
+) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
     """Resolve config from dotted path, handling callables and direct instances.
 
     This is the async-first version that handles both sync and async callables efficiently.
@@ -64,7 +64,7 @@ async def resolve_config_async(
 
 def resolve_config_sync(
     config_path: str,
-) -> "list[AsyncDatabaseConfig | SyncDatabaseConfig] | AsyncDatabaseConfig | SyncDatabaseConfig":
+) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
     """Synchronous wrapper for resolve_config.
 
     Args:
@@ -96,7 +96,7 @@ def resolve_config_sync(
 
 def _validate_config_result(
     config_result: Any, config_path: str
-) -> "list[AsyncDatabaseConfig | SyncDatabaseConfig] | AsyncDatabaseConfig | SyncDatabaseConfig":
+) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
     """Validate that the config result is a valid config or list of configs.
 
     Args:
@@ -118,18 +118,18 @@ def _validate_config_result(
             msg = f"Config '{config_path}' resolved to empty list. Expected at least one config."
             raise ConfigResolverError(msg)
 
-        for i, config in enumerate(config_result):
+        for i, config in enumerate(config_result):  # pyright: ignore
             if not _is_valid_config(config):
                 msg = f"Config '{config_path}' returned invalid config at index {i}. Expected database config instance."
                 raise ConfigResolverError(msg)
 
-        return cast("list[AsyncDatabaseConfig | SyncDatabaseConfig]", list(config_result))
+        return cast("list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]", list(config_result))  # pyright: ignore
 
     if not _is_valid_config(config_result):
         msg = f"Config '{config_path}' returned invalid type '{type(config_result).__name__}'. Expected database config instance or list."
         raise ConfigResolverError(msg)
 
-    return cast("AsyncDatabaseConfig | SyncDatabaseConfig", config_result)
+    return cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config_result)
 
 
 def _is_valid_config(config: Any) -> bool:
