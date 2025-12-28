@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from enum import Enum
 from functools import lru_cache, partial
 from pathlib import Path, PurePath
-from typing import Any, Final, TypeGuard, overload
+from typing import Any, Final, TypeGuard, cast, overload
 from uuid import UUID
 
 from typing_extensions import TypeVar
@@ -26,6 +26,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
     get_msgspec_rename_config,
+    is_attrs_instance,
     is_attrs_schema,
     is_dataclass,
     is_dict,
@@ -48,14 +49,16 @@ DataT = TypeVar("DataT", default=dict[str, Any])
 logger = get_logger(__name__)
 
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
+_DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
 
 
 def _is_list_type_target(target_type: Any) -> TypeGuard[list[object]]:
     """Check if target type is a list type (e.g., list[float])."""
     try:
-        return hasattr(target_type, "__origin__") and target_type.__origin__ is list
+        origin = target_type.__origin__
     except (AttributeError, TypeError):
         return False
+    return origin is list
 
 
 def _convert_numpy_to_list(target_type: Any, value: Any) -> Any:
@@ -145,8 +148,9 @@ def _default_msgspec_deserializer(
     if target_type is UUID and isinstance(value, UUID):
         return value.hex
 
-    if target_type in _DATETIME_TYPES and hasattr(value, "isoformat"):
-        return value.isoformat()  # pyright: ignore
+    if target_type in _DATETIME_TYPES and isinstance(value, _DATETIME_TYPE_TUPLE):
+        datetime_value = cast("datetime.datetime | datetime.date | datetime.time", value)
+        return datetime_value.isoformat()
 
     if isinstance(target_type, type) and issubclass(target_type, Enum) and isinstance(value, Enum):
         return value.value
@@ -225,17 +229,12 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
     if CATTRS_INSTALLED:
         if isinstance(data, Sequence):
             return cattrs_structure(data, list[schema_type])
-        return cattrs_structure(cattrs_unstructure(data) if hasattr(data, "__attrs_attrs__") else data, schema_type)
+        structured = cattrs_unstructure(data) if is_attrs_instance(data) else data
+        return cattrs_structure(structured, schema_type)
 
     if isinstance(data, list):
-        return [
-            schema_type(**dict(item)) if hasattr(item, "keys") else schema_type(**attrs_asdict(item)) for item in data
-        ]
-    return (
-        schema_type(**dict(data))
-        if hasattr(data, "keys")
-        else (schema_type(**data) if isinstance(data, dict) else data)
-    )
+        return [schema_type(**dict(item)) if is_dict(item) else schema_type(**attrs_asdict(item)) for item in data]
+    return schema_type(**dict(data)) if is_dict(data) else data
 
 
 _SCHEMA_CONVERTERS: "dict[str, Callable[[Any, Any], Any]]" = {

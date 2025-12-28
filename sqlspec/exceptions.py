@@ -42,7 +42,7 @@ __all__ = (
 class SQLSpecError(Exception):
     """Base exception class for SQLSpec exceptions."""
 
-    detail: str
+    detail: str = ""
 
     def __init__(self, *args: Any, detail: str = "") -> None:
         """Initialize SQLSpecError.
@@ -53,10 +53,7 @@ class SQLSpecError(Exception):
         """
         str_args = [str(arg) for arg in args if arg]
         if not detail:
-            if str_args:
-                detail = str_args[0]
-            elif hasattr(self, "detail"):
-                detail = self.detail
+            detail = str_args[0] if str_args else self.detail
         self.detail = detail
         super().__init__(*str_args)
 

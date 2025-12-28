@@ -40,6 +40,7 @@ from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -141,7 +142,7 @@ class AdbcExceptionHandler:
         Args:
             e: ADBC exception instance
         """
-        sqlstate = getattr(e, "sqlstate", None)
+        sqlstate = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if sqlstate:
             self._map_sqlstate_exception(e, sqlstate)

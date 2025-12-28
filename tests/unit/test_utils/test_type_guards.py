@@ -32,7 +32,6 @@ from sqlspec.utils.type_guards import (
     get_node_this,
     get_param_style_and_name,
     get_value_attribute,
-    has_attr,
     has_expressions_attribute,
     has_parent_attribute,
     has_this_attribute,
@@ -470,23 +469,6 @@ def test_is_expression_with_non_expression() -> None:
     assert is_expression({}) is False
 
 
-def test_has_attr_with_existing_attribute() -> None:
-    """Test has_attr returns True when attribute exists."""
-    obj = MockValueWrapper("test")
-    assert has_attr(obj, "value") is True
-
-
-def test_has_attr_with_missing_attribute() -> None:
-    """Test has_attr returns False when attribute doesn't exist."""
-    obj = MockValueWrapper("test")
-    assert has_attr(obj, "nonexistent") is False
-
-
-def test_has_attr_with_none() -> None:
-    """Test has_attr handles None gracefully."""
-    assert has_attr(None, "any_attr") is False
-
-
 def test_get_node_this_with_this_attribute() -> None:
     """Test get_node_this returns this attribute when present."""
     node = cast("exp.Expression", MockSQLGlotExpression(this="test_value"))
@@ -884,10 +866,8 @@ def test_serializer_pipeline_arrow_conversion() -> None:
         (is_dict, [], False),
         (is_dataclass_instance, SampleDataclass("test", 25), True),
         (is_dataclass_instance, {}, False),
-        (lambda obj: has_attr(obj, "value"), MockValueWrapper("test"), True),
-        (lambda obj: has_attr(obj, "nonexistent"), MockValueWrapper("test"), False),
     ],
-    ids=["dict_true", "dict_false", "dataclass_true", "dataclass_false", "attr_true", "attr_false"],
+    ids=["dict_true", "dict_false", "dataclass_true", "dataclass_false"],
 )
 def test_type_guard_performance(guard_func: Any, test_obj: Any, expected: bool) -> None:
     """Test that type guards perform efficiently and return expected results."""

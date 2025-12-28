@@ -1,6 +1,6 @@
 """AsyncPG ADK memory store for Google Agent Development Kit memory storage."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import asyncpg
 
@@ -148,7 +148,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             await driver.execute_script(await self._get_create_memory_table_sql())
         logger.debug("Created ADK memory table: %s", self._memory_table)
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         Uses UPSERT pattern (ON CONFLICT DO NOTHING) to skip duplicates

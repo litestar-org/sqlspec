@@ -23,8 +23,9 @@ from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
+from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_attr, has_expression_and_sql, has_parameter_builder
+from sqlspec.utils.type_guards import has_expression_and_sql
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -64,8 +65,9 @@ class _MergeAssignmentMixin:
         if not isinstance(value, str):
             return False
 
+        builder = cast("QueryBuilder", self)
         with contextlib.suppress(ParseError):
-            parsed: exp.Expression | None = exp.maybe_parse(value.strip(), dialect=getattr(self, "dialect", None))
+            parsed: exp.Expression | None = exp.maybe_parse(value.strip(), dialect=builder.dialect)
             if parsed is None:
                 return False
 
@@ -102,7 +104,8 @@ class _MergeAssignmentMixin:
         if isinstance(value, exp.Expression):
             return exp.EQ(this=column_identifier, expression=value)
         if isinstance(value, str) and self._is_column_reference(value):
-            parsed_expression: exp.Expression | None = exp.maybe_parse(value, dialect=getattr(self, "dialect", None))
+            builder = cast("QueryBuilder", self)
+            parsed_expression: exp.Expression | None = exp.maybe_parse(value, dialect=builder.dialect)
             if parsed_expression is None:
                 msg = f"Could not parse assignment expression: {value}"
                 raise SQLBuilderError(msg)
@@ -198,7 +201,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             raise SQLBuilderError(msg)
 
         columns = list(data[0].keys())
-        dialect = getattr(self, "dialect_name", None)
+        builder = cast("QueryBuilder", self)
+        dialect = builder.dialect_name
 
         if dialect == "postgres":
             return self._create_postgres_json_source(data, columns, is_list, alias)
@@ -371,17 +375,10 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 source_expr = exp.Subquery(this=paren_expr.this, alias=exp.to_identifier(alias))
             else:
                 source_expr = paren_expr
-        elif has_parameter_builder(source) and has_attr(source, "_expression"):
-            parameters_obj = getattr(source, "parameters", None)
-            if isinstance(parameters_obj, dict):
-                for param_name, param_value in parameters_obj.items():
-                    self.add_parameter(param_value, name=param_name)
-            elif isinstance(parameters_obj, (list, tuple)):
-                for param_value in parameters_obj:
-                    self.add_parameter(param_value)
-            elif parameters_obj is not None:
-                self.add_parameter(parameters_obj)
-            subquery_expression_source = getattr(source, "_expression", None)
+        elif isinstance(source, SQLBuilderProtocol):
+            for param_name, param_value in source.parameters.items():
+                self.add_parameter(param_value, name=param_name)
+            subquery_expression_source = source.get_expression()
             if not isinstance(subquery_expression_source, exp.Expression):
                 subquery_expression_source = exp.select()
 
@@ -430,7 +427,8 @@ class MergeOnClauseMixin:
 
         assert current_expr is not None
         if isinstance(condition, str):
-            parsed_condition: exp.Expression | None = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
+            builder = cast("QueryBuilder", self)
+            parsed_condition: exp.Expression | None = exp.maybe_parse(condition, dialect=builder.dialect)
             if parsed_condition is None:
                 msg = f"Could not parse ON condition: {condition}"
                 raise SQLBuilderError(msg)
@@ -490,9 +488,8 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
         when_kwargs: dict[str, Any] = {"matched": True, "then": update_expression}
         if condition is not None:
             if isinstance(condition, str):
-                parsed_condition: exp.Expression | None = exp.maybe_parse(
-                    condition, dialect=getattr(self, "dialect", None)
-                )
+                builder = cast("QueryBuilder", self)
+                parsed_condition: exp.Expression | None = exp.maybe_parse(condition, dialect=builder.dialect)
                 if parsed_condition is None:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -503,7 +500,8 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
 
-            dialect_name = getattr(self, "dialect_name", None)
+            builder = cast("QueryBuilder", self)
+            dialect_name = builder.dialect_name
             if dialect_name == "oracle":
                 update_expression.set("where", condition_expr)
             else:
@@ -526,9 +524,8 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
         when_kwargs: dict[str, Any] = {"matched": True, "then": exp.Var(this="DELETE")}
         if condition is not None:
             if isinstance(condition, str):
-                parsed_condition: exp.Expression | None = exp.maybe_parse(
-                    condition, dialect=getattr(self, "dialect", None)
-                )
+                builder = cast("QueryBuilder", self)
+                parsed_condition: exp.Expression | None = exp.maybe_parse(condition, dialect=builder.dialect)
                 if parsed_condition is None:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -597,10 +594,13 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
             if values is None:
                 using_alias = None
                 using_expr = current_expr.args.get("using")
-                if using_expr is not None and (
-                    isinstance(using_expr, (exp.Subquery, exp.Table)) or has_attr(using_expr, "alias")
-                ):
+                if using_expr is not None and isinstance(using_expr, (exp.Subquery, exp.Table)):
                     using_alias = using_expr.alias
+                elif using_expr is not None:
+                    try:
+                        using_alias = using_expr.alias
+                    except AttributeError:
+                        using_alias = None
                 column_values = [f"{using_alias}.{col}" for col in column_names] if using_alias else column_names
             else:
                 column_values = list(values)
@@ -618,7 +618,8 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
                 insert_values.append(value)
             elif isinstance(value, str):
                 if self._is_column_reference(value):
-                    parsed_value: exp.Expression | None = exp.maybe_parse(value, dialect=getattr(self, "dialect", None))
+                    builder = cast("QueryBuilder", self)
+                    parsed_value: exp.Expression | None = exp.maybe_parse(value, dialect=builder.dialect)
                     if parsed_value is None:
                         msg = f"Could not parse column reference: {value}"
                         raise SQLBuilderError(msg)
@@ -684,7 +685,8 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
             elif isinstance(value, exp.Expression):
                 value_expr = value
             elif isinstance(value, str) and self._is_column_reference(value):
-                parsed_value: exp.Expression | None = exp.maybe_parse(value, dialect=getattr(self, "dialect", None))
+                builder = cast("QueryBuilder", self)
+                parsed_value: exp.Expression | None = exp.maybe_parse(value, dialect=builder.dialect)
                 if parsed_value is None:
                     msg = f"Could not parse assignment expression: {value}"
                     raise SQLBuilderError(msg)
@@ -816,7 +818,12 @@ class Merge(
         """
         self._validate_dialect_support()
         target_dialect = dialect or self.dialect
-        dialect_name = target_dialect if isinstance(target_dialect, str) else getattr(target_dialect, "__name__", None)
+        if isinstance(target_dialect, str):
+            dialect_name = target_dialect
+        elif isinstance(target_dialect, type):
+            dialect_name = target_dialect.__name__
+        else:
+            dialect_name = None
         if dialect_name:
             dialect_name = dialect_name.lower()
         self._normalize_merge_conditions_for_dialect(dialect_name)

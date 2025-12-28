@@ -174,7 +174,7 @@ def _resolve_author_callable(import_path: str, config: "DatabaseConfigProtocol[A
     if not module_name or not attr_name:
         _raise_callable_error("Callable author path must be in 'module:function' format")
     module = importlib.import_module(module_name)
-    candidate_obj = getattr(module, attr_name, None)
+    candidate_obj = module.__dict__.get(attr_name)
     if candidate_obj is None or not callable(candidate_obj):
         _raise_callable_error(f"Callable '{import_path}' is not callable")
     candidate = cast("Callable[..., Any]", candidate_obj)
@@ -230,8 +230,8 @@ def _derive_project_slug(config: "DatabaseConfigProtocol[Any, Any, Any] | None")
 def _resolve_adapter_name(config: "DatabaseConfigProtocol[Any, Any, Any] | None") -> str:
     if config is None:
         return "UnknownAdapter"
-    driver_type = getattr(config, "driver_type", None)
-    if driver_type is not None and hasattr(driver_type, "__name__"):
+    driver_type = config.driver_type
+    if driver_type is not None:
         return str(driver_type.__name__)
     return type(config).__name__
 

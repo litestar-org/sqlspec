@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Final, cast
 
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
-from sqlspec.utils.type_guards import has_attr
 
 __all__ = ("BaseMigrationLoader", "MigrationLoadError", "PythonFileLoader", "SQLFileLoader", "get_migration_loader")
 
@@ -30,9 +29,9 @@ def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., An
     Returns:
         The callable if it exists and is callable, None otherwise.
     """
-    if not has_attr(module, name):
+    attr = module.__dict__.get(name)
+    if attr is None:
         return None
-    attr = getattr(module, name)
     if callable(attr):
         return cast("Callable[..., Any]", attr)
     return None

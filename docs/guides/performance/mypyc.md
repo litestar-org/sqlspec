@@ -279,6 +279,29 @@ class ExtensibleBase:
         self._data = data
 ```
 
+## Driver Layer Compilation
+
+SQLSpec compiles the driver base classes and mixins to reduce dispatch overhead while leaving adapters interpreted.
+
+```python
+from mypy_extensions import mypyc_attr
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class CommonDriverAttributesMixin:
+    __slots__ = ("connection", "dialect")
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
+    __slots__ = ()
+    is_async: bool = True
+```
+
+**Guidelines:**
+
+- Avoid `getattr()`/`hasattr()` in compiled driver code paths; use protocols and type guards.
+- Keep driver classes `__slots__`-only and explicitly typed.
+- Compile the driver layer by including `sqlspec/driver/*.py` in mypyc build config.
+
 ## Performance Patterns
 
 ### Early Binding with Final

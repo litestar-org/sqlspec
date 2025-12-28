@@ -14,7 +14,7 @@ from sqlspec.extensions.events._queue import AsyncTableEventQueue, build_queue_b
 from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import is_notification
+from sqlspec.utils.type_guards import has_add_listener, has_notifies, is_notification
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -52,8 +52,7 @@ class AsyncpgHybridEventsBackend:
 
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         connection = await self._ensure_listener(channel)
-        notifies_queue = getattr(connection, "notifies", None)
-        if notifies_queue is not None:
+        if has_notifies(connection):
             message = await self._dequeue_with_notifies(connection, channel, poll_interval)
         else:
             message = await self._queue.dequeue(channel, poll_interval)
@@ -189,10 +188,9 @@ class AsyncpgEventsBackend:
             validated_channel = normalize_event_channel_name(channel)
             self._listen_connection_cm = self._config.provide_connection()
             self._listen_connection = await self._listen_connection_cm.__aenter__()
-            add_listener = getattr(self._listen_connection, "add_listener", None)
-            if add_listener is not None and callable(add_listener):
+            if self._listen_connection is not None and has_add_listener(self._listen_connection):
                 self._notify_mode = "add_listener"
-            elif getattr(self._listen_connection, "notifies", None) is not None:
+            elif self._listen_connection is not None and has_notifies(self._listen_connection):
                 self._notify_mode = "notifies"
                 if self._listen_connection is not None:
                     await self._listen_connection.execute(f"LISTEN {validated_channel}")

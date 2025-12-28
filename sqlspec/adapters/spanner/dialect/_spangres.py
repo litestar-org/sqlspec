@@ -1,6 +1,6 @@
 r"""Google Cloud Spanner PostgreSQL-interface dialect ("Spangres")."""
 
-from typing import Any, cast
+from typing import cast
 
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
@@ -40,9 +40,9 @@ class Spangres(Postgres):
         """Generate Spanner row deletion policies."""
 
         def property_sql(self, expression: exp.Property) -> str:
-            if getattr(expression.this, "name", "").upper() == _ROW_DELETION_NAME:
-                values = cast("Any", expression.args.get("value"))
-                if values and getattr(values, "expressions", None) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
+            if isinstance(expression.this, exp.Literal) and expression.this.name.upper() == _ROW_DELETION_NAME:
+                values = expression.args.get("value")
+                if isinstance(values, exp.Tuple) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
                     column = self.sql(values.expressions[0])
                     interval_sql = self.sql(values.expressions[1])
                     if not interval_sql.upper().startswith("INTERVAL"):

@@ -38,6 +38,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -120,7 +121,7 @@ class AsyncpgExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
             self._raise_generic_error(e, None)
@@ -261,7 +262,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             statement: SQL statement with COPY operation
         """
 
-        metadata: dict[str, Any] = getattr(statement, "metadata", {})
+        try:
+            metadata_obj = statement.metadata
+        except AttributeError:
+            metadata_obj = {}
+        metadata: dict[str, Any] = dict(metadata_obj) if metadata_obj else {}
         sql_text = statement.sql
         sql_upper = sql_text.upper()
         copy_data = metadata.get("postgres_copy_data")

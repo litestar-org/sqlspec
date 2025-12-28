@@ -134,7 +134,7 @@ class ADBCTypeConverter(BaseTypeConverter):
                 return str(self.convert_value(value, target_type))
             if target_type == "json":
                 return self.convert_value(value, target_type)
-        return self.convert_value(value, target_type) if hasattr(self, "convert_value") else value
+        return self.convert_value(value, target_type)
 
 
 def get_adbc_type_converter(dialect: str, cache_size: int = 5000) -> ADBCTypeConverter:

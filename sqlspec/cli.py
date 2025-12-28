@@ -7,10 +7,12 @@ from typing import TYPE_CHECKING, Any, cast
 import rich_click as click
 from click.core import ParameterSource
 
+from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+
 if TYPE_CHECKING:
     from rich_click import Group
 
-    from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+    from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 __all__ = ("add_migration_commands", "get_sqlspec_group")
@@ -210,6 +212,41 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 sys.exit(1)
 
         return cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config)
+
+    def _get_adk_configs(
+        ctx: "click.Context", bind_key: str | None
+    ) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]":
+        if bind_key is not None:
+            return [get_config_by_bind_key(ctx, bind_key)]
+
+        configs = ctx.obj["configs"]
+        return [cfg for cfg in configs if "adk" in cfg.extension_config]
+
+    def _get_memory_store_class(
+        config: "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]",
+    ) -> "type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]] | None":
+        from sqlspec.utils.module_loader import import_string
+
+        config_module = type(config).__module__
+        config_name = type(config).__name__
+
+        if not config_module.startswith("sqlspec.adapters."):
+            return None
+
+        adapter_name = config_module.split(".")[2]
+        store_class_name = config_name.replace("Config", "ADKMemoryStore")
+        store_path = f"sqlspec.adapters.{adapter_name}.adk.memory_store.{store_class_name}"
+
+        try:
+            return cast("type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]]", import_string(store_path))
+        except ImportError:
+            return None
+
+    def _is_adk_memory_enabled(
+        config: "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]",
+    ) -> bool:
+        adk_config = cast("dict[str, Any]", config.extension_config.get("adk", {}))
+        return bool(adk_config.get("enable_memory", True))
 
     def get_configs_with_migrations(
         ctx: "click.Context", enabled_only: bool = False
@@ -784,7 +821,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             ] = []
             for cfg in all_configs:
                 config_name = cfg.bind_key
-                if config_name == bind_key and getattr(cfg, "migration_config", None):
+                if config_name == bind_key and cfg.migration_config:
                     migration_configs.append((config_name, cfg))  # pyright: ignore[reportArgumentType]
         else:
             migration_configs = get_configs_with_migrations(ctx)
@@ -805,5 +842,93 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         console.print(table)
         console.print(f"[blue]Found {len(migration_configs)} configuration(s) with migrations enabled.[/]")
+
+    @database_group.group(name="adk", help="ADK extension commands")
+    def adk_group() -> None:  # pyright: ignore[reportUnusedFunction]
+        """ADK extension commands."""
+
+    @adk_group.group(name="memory", help="ADK memory store commands")
+    def adk_memory_group() -> None:  # pyright: ignore[reportUnusedFunction]
+        """ADK memory store commands."""
+
+    @adk_memory_group.command(name="cleanup", help="Delete memory entries older than N days")
+    @bind_key_option
+    @click.option("--days", type=int, required=True, help="Delete entries older than this many days")
+    def cleanup_memory(bind_key: str | None, days: int) -> None:  # pyright: ignore[reportUnusedFunction]
+        """Cleanup memory entries older than N days."""
+        ctx = _ensure_click_context()
+        configs = _get_adk_configs(ctx, bind_key)
+        from sqlspec.utils.sync_tools import run_
+
+        if not configs:
+            console.print("[yellow]No ADK configurations found.[/]")
+            return
+
+        for cfg in configs:
+            config_name = cfg.bind_key or "default"
+            if not _is_adk_memory_enabled(cfg):
+                console.print(f"[yellow]Memory disabled for {config_name}; skipping.[/]")
+                continue
+
+            store_class = _get_memory_store_class(cfg)
+            if store_class is None:
+                console.print(f"[yellow]No memory store found for {config_name}; skipping.[/]")
+                continue
+
+            if isinstance(cfg, AsyncDatabaseConfig):
+                async_store = cast("BaseAsyncADKMemoryStore[Any]", store_class(cfg))
+
+                async def async_cleanup() -> int:
+                    return await async_store.delete_entries_older_than(days)
+
+                deleted = run_(async_cleanup)()
+                console.print(f"[green]✓[/] {config_name}: deleted {deleted} memory entries older than {days} days")
+                continue
+            sync_store = cast("BaseSyncADKMemoryStore[Any]", store_class(cfg))
+            deleted = sync_store.delete_entries_older_than(days)
+            console.print(f"[green]✓[/] {config_name}: deleted {deleted} memory entries older than {days} days")
+
+    @adk_memory_group.command(name="verify", help="Verify memory table exists and is reachable")
+    @bind_key_option
+    def verify_memory(bind_key: str | None) -> None:  # pyright: ignore[reportUnusedFunction]
+        """Verify memory tables are reachable for configured adapters."""
+        ctx = _ensure_click_context()
+        configs = _get_adk_configs(ctx, bind_key)
+        from sqlspec.utils.sync_tools import run_
+
+        if not configs:
+            console.print("[yellow]No ADK configurations found.[/]")
+            return
+
+        for cfg in configs:
+            config_name = cfg.bind_key or "default"
+            if not _is_adk_memory_enabled(cfg):
+                console.print(f"[yellow]Memory disabled for {config_name}; skipping.[/]")
+                continue
+
+            store_class = _get_memory_store_class(cfg)
+            if store_class is None:
+                console.print(f"[yellow]No memory store found for {config_name}; skipping.[/]")
+                continue
+
+            try:
+                if isinstance(cfg, AsyncDatabaseConfig):
+                    async_store = cast("BaseAsyncADKMemoryStore[Any]", store_class(cfg))
+                    sql = f"SELECT 1 FROM {async_store.memory_table} WHERE 1 = 0"
+
+                    async def async_verify() -> None:
+                        async with cfg.provide_session() as driver:
+                            await driver.execute(sql)
+
+                    run_(async_verify)()
+                    console.print(f"[green]✓[/] {config_name}: memory table reachable")
+                    continue
+                sync_store = cast("BaseSyncADKMemoryStore[Any]", store_class(cfg))
+                sql = f"SELECT 1 FROM {sync_store.memory_table} WHERE 1 = 0"
+                with cfg.provide_session() as driver:
+                    driver.execute(sql)
+                console.print(f"[green]✓[/] {config_name}: memory table reachable")
+            except Exception as exc:
+                console.print(f"[red]✗[/] {config_name}: {exc}")
 
     return database_group

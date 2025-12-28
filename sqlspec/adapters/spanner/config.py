@@ -15,6 +15,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials
@@ -190,8 +191,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return pool_factory(**pool_kwargs)
 
     def _close_pool(self) -> None:
-        if self.connection_instance and hasattr(self.connection_instance, "close"):
-            cast("Any", self.connection_instance).close()
+        if self.connection_instance and supports_close(self.connection_instance):
+            self.connection_instance.close()
 
     @contextmanager
     def provide_connection(
@@ -219,12 +220,24 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                 try:
                     yield cast("SpannerConnection", txn)
                     # Only commit if not already committed (driver.commit() may have been called)
-                    has_txn_id = hasattr(txn, "_transaction_id") and txn._transaction_id is not None
-                    already_committed = hasattr(txn, "committed") and txn.committed is not None
+                    try:
+                        txn_id = txn._transaction_id
+                    except AttributeError:
+                        txn_id = None
+                    try:
+                        committed = txn.committed
+                    except AttributeError:
+                        committed = None
+                    has_txn_id = txn_id is not None
+                    already_committed = committed is not None
                     if has_txn_id and not already_committed:
                         txn.commit()
                 except Exception:
-                    if hasattr(txn, "_transaction_id") and txn._transaction_id is not None:
+                    try:
+                        rollback_txn_id = txn._transaction_id
+                    except AttributeError:
+                        rollback_txn_id = None
+                    if rollback_txn_id is not None:
                         txn.rollback()
                     raise
             finally:

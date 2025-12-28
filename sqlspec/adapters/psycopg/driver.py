@@ -46,6 +46,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
+from sqlspec.utils.type_guards import has_sqlstate, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -97,7 +98,11 @@ logger = get_logger("adapters.psycopg")
 def _psycopg_pipeline_supported() -> bool:
     """Return True when libpq pipeline support is available."""
 
-    capabilities = getattr(psycopg, "capabilities", None)
+
+try:
+    capabilities = psycopg.capabilities
+except AttributeError:
+    capabilities = None
     if capabilities is None:
         return False
     try:
@@ -238,7 +243,7 @@ class PsycopgSyncExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
             self._raise_generic_error(e, None)
@@ -351,9 +356,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         try:
-            if hasattr(self.connection, "autocommit") and not self.connection.autocommit:
-                pass
-            else:
+            if self.connection.autocommit:
                 self.connection.autocommit = False
         except Exception as e:
             msg = f"Failed to begin transaction: {e}"
@@ -382,12 +385,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def _handle_transaction_error_cleanup(self) -> None:
         """Handle transaction cleanup after database errors."""
         try:
-            if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
-                status = self.connection.info.transaction_status
-
-                if status == TRANSACTION_STATUS_INERROR:
-                    logger.debug("Connection in aborted transaction state, performing rollback")
-                    self.connection.rollback()
+            status = self.connection.info.transaction_status
+            if status == TRANSACTION_STATUS_INERROR:
+                logger.debug("Connection in aborted transaction state, performing rollback")
+                self.connection.rollback()
         except Exception as cleanup_error:
             logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
@@ -429,13 +430,13 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         if is_copy_from_operation(operation_type):
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
-            elif hasattr(copy_data, "read"):
+            elif is_readable(copy_data):
                 data_file = copy_data
             else:
                 data_file = io.StringIO(str(copy_data))
 
             with cursor.copy(sql) as copy_ctx:
-                data_to_write = data_file.read() if hasattr(data_file, "read") else str(copy_data)  # pyright: ignore
+                data_to_write = data_file.read() if is_readable(data_file) else str(copy_data)
                 if isinstance(data_to_write, str):
                     data_to_write = data_to_write.encode()
                 copy_ctx.write(data_to_write)
@@ -775,7 +776,7 @@ class PsycopgAsyncExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
             self._raise_generic_error(e, None)
@@ -889,7 +890,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         try:
-            autocommit_flag = getattr(self.connection, "autocommit", None)
+            try:
+                autocommit_flag = self.connection.autocommit
+            except AttributeError:
+                autocommit_flag = None
             if isinstance(autocommit_flag, bool) and not autocommit_flag:
                 return
             await self.connection.set_autocommit(False)
@@ -920,12 +924,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def _handle_transaction_error_cleanup_async(self) -> None:
         """Handle async transaction cleanup after database errors."""
         try:
-            if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
-                status = self.connection.info.transaction_status
-
-                if status == TRANSACTION_STATUS_INERROR:
-                    logger.debug("Connection in aborted transaction state, performing async rollback")
-                    await self.connection.rollback()
+            status = self.connection.info.transaction_status
+            if status == TRANSACTION_STATUS_INERROR:
+                logger.debug("Connection in aborted transaction state, performing async rollback")
+                await self.connection.rollback()
         except Exception as cleanup_error:
             logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
@@ -968,13 +970,13 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         if is_copy_from_operation(operation_type) and "FROM STDIN" in sql_upper:
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
-            elif hasattr(copy_data, "read"):
+            elif is_readable(copy_data):
                 data_file = copy_data
             else:
                 data_file = io.StringIO(str(copy_data))
 
             async with cursor.copy(sql) as copy_ctx:
-                data_to_write = data_file.read() if hasattr(data_file, "read") else str(copy_data)  # pyright: ignore
+                data_to_write = data_file.read() if is_readable(data_file) else str(copy_data)
                 if isinstance(data_to_write, str):
                     data_to_write = data_to_write.encode()
                 await copy_ctx.write(data_to_write)

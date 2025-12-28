@@ -20,6 +20,7 @@ from sqlspec.typing import (
     DataclassProtocol,
     DTOData,
     Struct,
+    attrs_fields,
     attrs_has,
 )
 
@@ -39,9 +40,11 @@ if TYPE_CHECKING:
         AsyncWriteBytesProtocol,
         CursorMetadataProtocol,
         DictProtocol,
+        HasAddListenerProtocol,
         HasConfigProtocol,
         HasConnectionConfigProtocol,
         HasDatabaseUrlAndBindKeyProtocol,
+        HasErrorsProtocol,
         HasExpressionAndParametersProtocol,
         HasExpressionAndSQLProtocol,
         HasExpressionProtocol,
@@ -50,12 +53,20 @@ if TYPE_CHECKING:
         HasFilterAttributesProtocol,
         HasGetDataProtocol,
         HasMigrationConfigProtocol,
+        HasNameProtocol,
+        HasNotifiesProtocol,
         HasParameterBuilderProtocol,
+        HasRowcountProtocol,
         HasSQLGlotExpressionProtocol,
+        HasSqliteErrorProtocol,
+        HasSqlStateProtocol,
         HasStatementConfigFactoryProtocol,
         HasStatementTypeProtocol,
         HasTracerProviderProtocol,
+        HasTypeCodeProtocol,
         HasTypecodeProtocol,
+        HasTypecodeSizedProtocol,
+        HasValueProtocol,
         HasWhereProtocol,
         NotificationProtocol,
         PipelineCapableProtocol,
@@ -64,7 +75,9 @@ if TYPE_CHECKING:
         SpanAttributeProtocol,
         SupportsArrayProtocol,
         SupportsArrowResults,
+        SupportsCloseProtocol,
         SupportsDtypeStrProtocol,
+        SupportsJsonTypeProtocol,
         ToSchemaProtocol,
         WithMethodProtocol,
     )
@@ -83,15 +96,16 @@ __all__ = (
     "get_node_this",
     "get_param_style_and_name",
     "get_value_attribute",
+    "has_add_listener",
     "has_array_interface",
     "has_arrow_table_stats",
-    "has_attr",
     "has_config_attribute",
     "has_connection_config",
     "has_cursor_metadata",
     "has_database_url_and_bind_key",
     "has_dict_attribute",
     "has_dtype_str",
+    "has_errors",
     "has_expression_and_parameters",
     "has_expression_and_sql",
     "has_expression_attr",
@@ -101,17 +115,25 @@ __all__ = (
     "has_filter_attributes",
     "has_get_data",
     "has_migration_config",
+    "has_name",
+    "has_notifies",
     "has_parameter_builder",
     "has_parent_attribute",
     "has_pipeline_capability",
     "has_query_result_metadata",
+    "has_rowcount",
     "has_span_attribute",
     "has_sqlglot_expression",
+    "has_sqlite_error",
+    "has_sqlstate",
     "has_statement_config_factory",
     "has_statement_type",
     "has_this_attribute",
     "has_tracer_provider",
+    "has_type_code",
     "has_typecode",
+    "has_typecode_and_len",
+    "has_value_attribute",
     "has_with_method",
     "is_attrs_instance",
     "is_attrs_instance_with_field",
@@ -156,6 +178,8 @@ __all__ = (
     "supports_async_delete",
     "supports_async_read_bytes",
     "supports_async_write_bytes",
+    "supports_close",
+    "supports_json_type",
     "supports_where",
 )
 
@@ -202,6 +226,20 @@ def has_cursor_metadata(obj: Any) -> "TypeGuard[CursorMetadataProtocol]":
     return isinstance(obj, CursorMetadataProtocol)
 
 
+def has_add_listener(obj: Any) -> "TypeGuard[HasAddListenerProtocol]":
+    """Check if an object exposes add_listener()."""
+    from sqlspec.protocols import HasAddListenerProtocol
+
+    return isinstance(obj, HasAddListenerProtocol)
+
+
+def has_notifies(obj: Any) -> "TypeGuard[HasNotifiesProtocol]":
+    """Check if an object exposes notifies."""
+    from sqlspec.protocols import HasNotifiesProtocol
+
+    return isinstance(obj, HasNotifiesProtocol)
+
+
 def has_extension_config(obj: Any) -> "TypeGuard[HasExtensionConfigProtocol]":
     """Check if an object exposes extension_config mapping."""
     from sqlspec.protocols import HasExtensionConfigProtocol
@@ -228,6 +266,13 @@ def has_database_url_and_bind_key(obj: Any) -> "TypeGuard[HasDatabaseUrlAndBindK
     from sqlspec.protocols import HasDatabaseUrlAndBindKeyProtocol
 
     return isinstance(obj, HasDatabaseUrlAndBindKeyProtocol)
+
+
+def has_name(obj: Any) -> "TypeGuard[HasNameProtocol]":
+    """Check if an object exposes __name__."""
+    from sqlspec.protocols import HasNameProtocol
+
+    return isinstance(obj, HasNameProtocol)
 
 
 def has_field_name(obj: Any) -> "TypeGuard[HasFieldNameProtocol]":
@@ -258,6 +303,13 @@ def has_arrow_table_stats(obj: Any) -> "TypeGuard[ArrowTableStatsProtocol]":
     return isinstance(obj, ArrowTableStatsProtocol)
 
 
+def has_rowcount(obj: Any) -> "TypeGuard[HasRowcountProtocol]":
+    """Check if a cursor exposes rowcount metadata."""
+    from sqlspec.protocols import HasRowcountProtocol
+
+    return isinstance(obj, HasRowcountProtocol)
+
+
 def has_dtype_str(obj: Any) -> "TypeGuard[SupportsDtypeStrProtocol]":
     """Check if a dtype exposes string descriptor."""
     from sqlspec.protocols import SupportsDtypeStrProtocol
@@ -277,6 +329,48 @@ def has_typecode(obj: Any) -> "TypeGuard[HasTypecodeProtocol]":
     from sqlspec.protocols import HasTypecodeProtocol
 
     return isinstance(obj, HasTypecodeProtocol)
+
+
+def has_typecode_and_len(obj: Any) -> "TypeGuard[HasTypecodeSizedProtocol]":
+    """Check if an array-like object exposes typecode and length."""
+    from sqlspec.protocols import HasTypecodeSizedProtocol
+
+    return isinstance(obj, HasTypecodeSizedProtocol)
+
+
+def has_type_code(obj: Any) -> "TypeGuard[HasTypeCodeProtocol]":
+    """Check if an object exposes type_code."""
+    from sqlspec.protocols import HasTypeCodeProtocol
+
+    return isinstance(obj, HasTypeCodeProtocol)
+
+
+def has_sqlstate(obj: Any) -> "TypeGuard[HasSqlStateProtocol]":
+    """Check if an exception exposes sqlstate."""
+    from sqlspec.protocols import HasSqlStateProtocol
+
+    return isinstance(obj, HasSqlStateProtocol)
+
+
+def has_sqlite_error(obj: Any) -> "TypeGuard[HasSqliteErrorProtocol]":
+    """Check if an exception exposes sqlite error details."""
+    from sqlspec.protocols import HasSqliteErrorProtocol
+
+    return isinstance(obj, HasSqliteErrorProtocol)
+
+
+def has_value_attribute(obj: Any) -> "TypeGuard[HasValueProtocol]":
+    """Check if an object exposes a value attribute."""
+    from sqlspec.protocols import HasValueProtocol
+
+    return isinstance(obj, HasValueProtocol)
+
+
+def has_errors(obj: Any) -> "TypeGuard[HasErrorsProtocol]":
+    """Check if an exception exposes errors."""
+    from sqlspec.protocols import HasErrorsProtocol
+
+    return isinstance(obj, HasErrorsProtocol)
 
 
 def has_span_attribute(obj: Any) -> "TypeGuard[SpanAttributeProtocol]":
@@ -305,6 +399,20 @@ def supports_async_write_bytes(obj: Any) -> "TypeGuard[AsyncWriteBytesProtocol]"
     from sqlspec.protocols import AsyncWriteBytesProtocol
 
     return isinstance(obj, AsyncWriteBytesProtocol)
+
+
+def supports_json_type(obj: Any) -> "TypeGuard[SupportsJsonTypeProtocol]":
+    """Check if an object exposes JSON type support."""
+    from sqlspec.protocols import SupportsJsonTypeProtocol
+
+    return isinstance(obj, SupportsJsonTypeProtocol)
+
+
+def supports_close(obj: Any) -> "TypeGuard[SupportsCloseProtocol]":
+    """Check if an object exposes close()."""
+    from sqlspec.protocols import SupportsCloseProtocol
+
+    return isinstance(obj, SupportsCloseProtocol)
 
 
 def supports_async_delete(obj: Any) -> "TypeGuard[AsyncDeleteProtocol]":
@@ -481,12 +589,8 @@ def is_dataclass_with_field(obj: Any, field_name: str) -> "TypeGuard[DataclassPr
     """
     if not is_dataclass(obj):
         return False
-    try:
-        _ = getattr(obj, field_name)
-    except AttributeError:
-        return False
-    else:
-        return True
+    fields_map = obj.__dataclass_fields__ if isinstance(obj, type) else type(obj).__dataclass_fields__
+    return field_name in fields_map
 
 
 def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[DataclassProtocol]":
@@ -501,12 +605,8 @@ def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[Dataclas
     """
     if not is_dataclass(obj):
         return False
-    try:
-        _ = getattr(obj, field_name)
-    except AttributeError:
-        return True
-    else:
-        return False
+    fields_map = obj.__dataclass_fields__ if isinstance(obj, type) else type(obj).__dataclass_fields__
+    return field_name not in fields_map
 
 
 def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModelStub]":
@@ -541,11 +641,13 @@ def is_pydantic_model_with_field(obj: Any, field_name: str) -> "TypeGuard[BaseMo
     if not is_pydantic_model(obj):
         return False
     try:
-        _ = getattr(obj, field_name)
+        fields = obj.model_fields
     except AttributeError:
-        return False
-    else:
-        return True
+        try:
+            fields = obj.__fields__  # type: ignore[attr-defined]
+        except AttributeError:
+            return False
+    return field_name in fields
 
 
 def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[BaseModelStub]":
@@ -561,11 +663,13 @@ def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[Bas
     if not is_pydantic_model(obj):
         return False
     try:
-        _ = getattr(obj, field_name)
+        fields = obj.model_fields
     except AttributeError:
-        return True
-    else:
-        return False
+        try:
+            fields = obj.__fields__  # type: ignore[attr-defined]
+        except AttributeError:
+            return True
+    return field_name not in fields
 
 
 def is_msgspec_struct(obj: Any) -> "TypeGuard[StructStub]":
@@ -599,12 +703,11 @@ def is_msgspec_struct_with_field(obj: Any, field_name: str) -> "TypeGuard[Struct
     """
     if not is_msgspec_struct(obj):
         return False
-    try:
-        _ = getattr(obj, field_name)
+    from msgspec import structs
 
-    except AttributeError:
-        return False
-    return True
+    struct_type = cast("type[Struct]", obj if isinstance(obj, type) else type(obj))
+    fields = structs.fields(struct_type)
+    return any(field.name == field_name for field in fields)
 
 
 def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[StructStub]":
@@ -619,11 +722,11 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
     """
     if not is_msgspec_struct(obj):
         return False
-    try:
-        _ = getattr(obj, field_name)
-    except AttributeError:
-        return True
-    return False
+    from msgspec import structs
+
+    struct_type = cast("type[Struct]", obj if isinstance(obj, type) else type(obj))
+    fields = structs.fields(struct_type)
+    return all(field.name != field_name for field in fields)
 
 
 @lru_cache(maxsize=500)
@@ -683,7 +786,8 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
 
     from msgspec import structs
 
-    fields = structs.fields(schema_type)  # type: ignore[arg-type]
+    struct_type = cast("type[Struct]", schema_type)
+    fields = structs.fields(struct_type)
     if not fields:
         return None
 
@@ -728,7 +832,9 @@ def is_attrs_instance_with_field(obj: Any, field_name: str) -> "TypeGuard[AttrsI
     Returns:
         bool
     """
-    return is_attrs_instance(obj) and hasattr(obj, field_name)
+    if not is_attrs_instance(obj):
+        return False
+    return any(field.name == field_name for field in attrs_fields(obj.__class__))
 
 
 def is_attrs_instance_without_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstanceStub]":
@@ -741,7 +847,9 @@ def is_attrs_instance_without_field(obj: Any, field_name: str) -> "TypeGuard[Att
     Returns:
         bool
     """
-    return is_attrs_instance(obj) and not hasattr(obj, field_name)
+    if not is_attrs_instance(obj):
+        return False
+    return all(field.name != field_name for field in attrs_fields(obj.__class__))
 
 
 def is_dict(obj: Any) -> "TypeGuard[dict[str, Any]]":
@@ -939,9 +1047,11 @@ def extract_dataclass_fields(
 
     dataclass_fields: list[Field[Any]] = list(fields(obj))
     if exclude_none:
-        dataclass_fields = [field for field in dataclass_fields if getattr(obj, field.name) is not None]
+        dataclass_fields = [field for field in dataclass_fields if object.__getattribute__(obj, field.name) is not None]
     if exclude_empty:
-        dataclass_fields = [field for field in dataclass_fields if getattr(obj, field.name) is not Empty]
+        dataclass_fields = [
+            field for field in dataclass_fields if object.__getattribute__(obj, field.name) is not Empty
+        ]
     if include:
         dataclass_fields = [field for field in dataclass_fields if field.name in include]
     if exclude:
@@ -970,7 +1080,7 @@ def extract_dataclass_items(
         A tuple of key/value pairs.
     """
     dataclass_fields = extract_dataclass_fields(obj, exclude_none, exclude_empty, include, exclude)
-    return tuple((field.name, getattr(obj, field.name)) for field in dataclass_fields)
+    return tuple((field.name, object.__getattribute__(obj, field.name)) for field in dataclass_fields)
 
 
 def dataclass_to_dict(
@@ -994,29 +1104,12 @@ def dataclass_to_dict(
     """
     ret = {}
     for field in extract_dataclass_fields(obj, exclude_none, exclude_empty, exclude=exclude):
-        value = getattr(obj, field.name)
+        value = object.__getattribute__(obj, field.name)
         if is_dataclass_instance(value) and convert_nested:
             ret[field.name] = dataclass_to_dict(value, exclude_none, exclude_empty)
         else:
-            ret[field.name] = getattr(obj, field.name)
+            ret[field.name] = value
     return cast("dict[str, Any]", ret)
-
-
-def has_attr(obj: Any, attr: str) -> bool:
-    """Safe replacement for hasattr() that works with mypyc.
-
-    Args:
-        obj: Object to check
-        attr: Attribute name to look for
-
-    Returns:
-        True if attribute exists, False otherwise
-    """
-    try:
-        getattr(obj, attr)
-    except AttributeError:
-        return False
-    return True
 
 
 def get_node_this(node: "exp.Expression", default: Any | None = None) -> Any:
@@ -1232,7 +1325,11 @@ def is_copy_statement(expression: Any) -> "TypeGuard[exp.Expression]":
     if expression is None:
         return False
 
-    if has_attr(exp, "Copy") and isinstance(expression, getattr(exp, "Copy", type(None))):
+    try:
+        copy_expr = exp.Copy
+    except AttributeError:
+        copy_expr = None
+    if copy_expr is not None and isinstance(expression, copy_expr):
         return True
 
     if isinstance(expression, (exp.Command, exp.Anonymous)):
@@ -1353,16 +1450,13 @@ def supports_arrow_native(backend: Any) -> bool:
         >>> supports_arrow_native(backend)
         False
     """
-    from sqlspec.protocols import ObjectStoreProtocol
+    from sqlspec.protocols import HasArrowStoreProtocol, HasReadArrowProtocol, ObjectStoreProtocol
 
     if not isinstance(backend, ObjectStoreProtocol):
         return False
-
-    try:
-        store = backend.store  # type: ignore[attr-defined]
-        return callable(getattr(store, "read_arrow", None))
-    except AttributeError:
+    if not isinstance(backend, HasArrowStoreProtocol):
         return False
+    return isinstance(backend.store, HasReadArrowProtocol)
 
 
 def supports_arrow_results(obj: Any) -> "TypeGuard[SupportsArrowResults]":

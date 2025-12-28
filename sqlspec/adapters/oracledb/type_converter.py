@@ -13,6 +13,7 @@ from typing import Any, Final
 from sqlspec.core import BaseTypeConverter
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
+from sqlspec.utils.type_guards import is_readable
 
 ORACLE_JSON_STORAGE_REGEX: Final[re.Pattern[str]] = re.compile(
     r"^(?:"
@@ -78,7 +79,7 @@ class OracleTypeConverter(BaseTypeConverter):
         Returns:
             LOB content if value is a LOB, original value otherwise.
         """
-        if not hasattr(value, "read"):
+        if not is_readable(value):
             return value
 
         read_func = ensure_async_(value.read)
@@ -117,20 +118,32 @@ class OracleTypeConverter(BaseTypeConverter):
         Returns:
             Complete LOB content as bytes.
         """
-        if not hasattr(lob_obj, "read"):
+        if not is_readable(lob_obj):
             return lob_obj if isinstance(lob_obj, bytes) else str(lob_obj).encode("utf-8")
 
-        chunks = []
+        first_chunk = lob_obj.read(chunk_size)
+        if not first_chunk:
+            return b""
+
+        if isinstance(first_chunk, bytes):
+            chunks: list[bytes] = [first_chunk]
+            while True:
+                chunk = lob_obj.read(chunk_size)
+                if not chunk:
+                    break
+                if isinstance(chunk, bytes):
+                    chunks.append(chunk)
+                else:
+                    chunks.append(str(chunk).encode("utf-8"))
+            return b"".join(chunks)
+
+        text_chunks: list[str] = [str(first_chunk)]
         while True:
             chunk = lob_obj.read(chunk_size)
             if not chunk:
                 break
-            chunks.append(chunk)
-
-        if not chunks:
-            return b""
-
-        return b"".join(chunks) if isinstance(chunks[0], bytes) else "".join(chunks).encode("utf-8")
+            text_chunks.append(str(chunk))
+        return "".join(text_chunks).encode("utf-8")
 
     def convert_oracle_value(self, value: Any, column_info: dict[str, Any]) -> Any:
         """Convert Oracle-specific value with column context.
@@ -142,7 +155,7 @@ class OracleTypeConverter(BaseTypeConverter):
         Returns:
             Converted value appropriate for the column type.
         """
-        if hasattr(value, "read"):
+        if is_readable(value):
             if self.detect_json_storage_type(column_info):
                 content = self.handle_large_lob(value)
                 content_str = content.decode("utf-8") if isinstance(content, bytes) else content

@@ -9,6 +9,7 @@ from sqlspec.adapters.spanner._type_handlers import bytes_to_spanner, spanner_to
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
@@ -48,17 +49,19 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         self._database().run_in_transaction(_txn_job)  # type: ignore[no-untyped-call]
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
+        json_type = param_types.JSON if supports_json_type(param_types) else param_types.STRING
         types: dict[str, Any] = {
             "id": param_types.STRING,
             "app_name": param_types.STRING,
             "user_id": param_types.STRING,
-            "state": param_types.JSON if hasattr(param_types, "JSON") else param_types.STRING,
+            "state": json_type,
         }
         if include_owner and self._owner_id_column_name:
             types["owner_id"] = param_types.STRING
         return types
 
     def _event_param_types(self, has_branch: bool) -> "dict[str, Any]":
+        json_type = param_types.JSON if supports_json_type(param_types) else param_types.STRING
         types: dict[str, Any] = {
             "id": param_types.STRING,
             "session_id": param_types.STRING,
@@ -66,12 +69,12 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "user_id": param_types.STRING,
             "author": param_types.STRING,
             "actions": param_types.BYTES,
-            "long_running_tool_ids_json": param_types.JSON if hasattr(param_types, "JSON") else param_types.STRING,
+            "long_running_tool_ids_json": json_type,
             "invocation_id": param_types.STRING,
             "timestamp": param_types.TIMESTAMP,
-            "content": param_types.JSON if hasattr(param_types, "JSON") else param_types.STRING,
-            "grounding_metadata": param_types.JSON if hasattr(param_types, "JSON") else param_types.STRING,
-            "custom_metadata": param_types.JSON if hasattr(param_types, "JSON") else param_types.STRING,
+            "content": json_type,
+            "grounding_metadata": json_type,
+            "custom_metadata": json_type,
             "partial": param_types.BOOL,
             "turn_complete": param_types.BOOL,
             "interrupted": param_types.BOOL,
@@ -151,6 +154,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         params = {"id": session_id, "state": to_json(state)}
+        json_type = param_types.JSON if supports_json_type(param_types) else param_types.STRING
         sql = f"""
             UPDATE {self._session_table}
             SET state = @state, update_time = PENDING_COMMIT_TIMESTAMP()
@@ -158,16 +162,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         """
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
-        self._run_write([
-            (
-                sql,
-                params,
-                {
-                    "id": param_types.STRING,
-                    "state": param_types.JSON if hasattr(param_types, "JSON") else param_types.STRING,
-                },
-            )
-        ])
+        self._run_write([(sql, params, {"id": param_types.STRING, "state": json_type})])
 
     def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
         sql = f"""

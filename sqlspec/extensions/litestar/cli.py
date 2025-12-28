@@ -71,12 +71,14 @@ def add_sessions_delete_expired_command() -> None:
         backend = get_session_backend(app)
         store = backend.config.get_store_from_app(app)
 
-        if not hasattr(store, "delete_expired"):
+        try:
+            delete_expired = store.delete_expired  # type: ignore[assignment]
+        except AttributeError:
             console.print(f"[red]{type(store).__name__} does not support deleting expired sessions")
             return
 
         async def _delete_expired() -> int:
-            return await store.delete_expired()  # type: ignore[no-any-return]
+            return await delete_expired()  # type: ignore[no-any-return]
 
         count = anyio.run(_delete_expired)
 

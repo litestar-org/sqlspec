@@ -16,12 +16,7 @@ from sqlspec.storage.errors import execute_async_storage_operation, execute_sync
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import from_json, get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
-from sqlspec.utils.type_guards import (
-    has_arrow_table_stats,
-    supports_async_delete,
-    supports_async_read_bytes,
-    supports_async_write_bytes,
-)
+from sqlspec.utils.type_guards import supports_async_delete, supports_async_read_bytes, supports_async_write_bytes
 
 if TYPE_CHECKING:
     from sqlspec.protocols import ObjectStoreProtocol
@@ -291,7 +286,7 @@ class SyncStoragePipeline:
         return self._write_bytes(
             payload,
             destination,
-            rows=int(table.num_rows) if has_arrow_table_stats(table) else 0,
+            rows=int(table.num_rows),
             format_label=format_choice,
             storage_options=storage_options or {},
         )
@@ -307,7 +302,7 @@ class SyncStoragePipeline:
             partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
         )
         table = _decode_arrow_payload(payload, file_format)
-        rows_processed = int(table.num_rows) if has_arrow_table_stats(table) else 0
+        rows_processed = int(table.num_rows)
         telemetry: StorageTelemetry = {
             "destination": path,
             "bytes_processed": len(payload),
@@ -459,7 +454,7 @@ class AsyncStoragePipeline:
         return await self._write_bytes_async(
             payload,
             destination,
-            rows=int(table.num_rows) if has_arrow_table_stats(table) else 0,
+            rows=int(table.num_rows),
             format_label=format_choice,
             storage_options=storage_options or {},
         )
@@ -561,7 +556,7 @@ class AsyncStoragePipeline:
             payload = await async_(_read_sync)()
 
         table = _decode_arrow_payload(payload, file_format)
-        rows_processed = int(table.num_rows) if has_arrow_table_stats(table) else 0
+        rows_processed = int(table.num_rows)
         telemetry: StorageTelemetry = {
             "destination": path,
             "bytes_processed": len(payload),

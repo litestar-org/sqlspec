@@ -31,6 +31,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
+from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -107,8 +108,12 @@ class AiosqliteExceptionHandler:
         Raises:
             Specific SQLSpec exception based on error code
         """
-        error_code = getattr(e, "sqlite_errorcode", None)
-        error_name = getattr(e, "sqlite_errorname", None)
+        if has_sqlite_error(e):
+            error_code = e.sqlite_errorcode
+            error_name = e.sqlite_errorname
+        else:
+            error_code = None
+            error_name = None
         error_msg = str(e).lower()
 
         if "locked" in error_msg:

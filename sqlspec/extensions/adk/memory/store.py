@@ -212,7 +212,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         Uses UPSERT pattern to skip duplicates based on event_id.
@@ -278,11 +278,11 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> "str | list[str]":
         """Get the CREATE TABLE SQL for the memory table.
 
         Returns:
-            SQL statement to create the memory table with indexes.
+            SQL statement(s) to create the memory table with indexes.
         """
         raise NotImplementedError
 
@@ -430,7 +430,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         Uses UPSERT pattern to skip duplicates based on event_id.
@@ -496,11 +496,11 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_create_memory_table_sql(self) -> str:
+    def _get_create_memory_table_sql(self) -> "str | list[str]":
         """Get the CREATE TABLE SQL for the memory table.
 
         Returns:
-            SQL statement to create the memory table with indexes.
+            SQL statement(s) to create the memory table with indexes.
         """
         raise NotImplementedError
 

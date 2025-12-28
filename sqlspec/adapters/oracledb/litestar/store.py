@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.type_guards import is_readable
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
@@ -562,13 +563,10 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                     cursor.execute(update_sql, {"expires_at": new_expires_at, "session_id": key})
                     conn.commit()
 
-            try:
-                if hasattr(data_blob, "read"):
-                    blob_data = data_blob.read()
-                    return bytes(blob_data) if blob_data is not None else bytes(data_blob)
-                return bytes(data_blob)
-            except AttributeError:
-                return bytes(data_blob)
+            if is_readable(data_blob):
+                blob_data = data_blob.read()
+                return bytes(blob_data) if blob_data is not None else bytes(data_blob)
+            return bytes(data_blob)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.

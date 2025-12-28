@@ -1,5 +1,6 @@
 """DuckDB sync ADK memory store for Google Agent Development Kit memory storage."""
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -69,12 +70,48 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         Notes:
             Configuration is read from config.extension_config["adk"]:
             - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_search_strategy: Search strategy (default: "simple")
+            - memory_use_fts: Enable full-text search when supported (default: False)
             - memory_max_results: Max search results (default: 20)
             - owner_id_column: Optional owner FK column DDL (default: None)
             - enable_memory: Whether memory is enabled (default: True)
         """
         super().__init__(config)
+
+    def _ensure_fts_extension(self, conn: Any) -> bool:
+        """Ensure the DuckDB FTS extension is available for this connection."""
+        with contextlib.suppress(Exception):
+            conn.execute("INSTALL fts")
+
+        try:
+            conn.execute("LOAD fts")
+        except Exception as exc:
+            logger.debug("DuckDB FTS extension unavailable: %s", exc)
+            return False
+
+        return True
+
+    def _create_fts_index(self, conn: Any) -> None:
+        """Create FTS index for the memory table."""
+        if not self._ensure_fts_extension(conn):
+            return
+
+        try:
+            conn.execute(f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text')")
+        except Exception as exc:
+            logger.debug("Failed to create DuckDB FTS index: %s", exc)
+
+    def _refresh_fts_index(self, conn: Any) -> None:
+        """Rebuild the FTS index to reflect recent changes."""
+        if not self._ensure_fts_extension(conn):
+            return
+
+        with contextlib.suppress(Exception):
+            conn.execute(f"PRAGMA drop_fts_index('{self._memory_table}')")
+
+        try:
+            conn.execute(f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text')")
+        except Exception as exc:
+            logger.debug("Failed to refresh DuckDB FTS index: %s", exc)
 
     def _get_create_memory_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL for memory entries.
@@ -138,9 +175,11 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
         with self._config.provide_connection() as conn:
             conn.execute(self._get_create_memory_table_sql())
+            if self._use_fts:
+                self._create_fts_index(conn)
         logger.debug("Created ADK memory table: %s", self._memory_table)
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         Uses INSERT OR IGNORE to skip duplicates based on event_id
@@ -220,6 +259,8 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                         continue
                     raise
 
+            if self._use_fts and inserted_count > 0:
+                self._refresh_fts_index(conn)
             conn.commit()
 
         return inserted_count
@@ -228,9 +269,6 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query.
-
-        Uses simple ILIKE pattern matching. DuckDB does not have
-        built-in full-text search like PostgreSQL.
 
         Args:
             query: Text query to search for.
@@ -249,7 +287,45 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             raise RuntimeError(msg)
 
         effective_limit = limit if limit is not None else self._max_results
+        try:
+            if self._use_fts:
+                try:
+                    return self._search_entries_fts(query, app_name, user_id, effective_limit)
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    logger.warning("FTS search failed; falling back to simple search: %s", exc)
+            return self._search_entries_simple(query, app_name, user_id, effective_limit)
+        except Exception as exc:
+            if DUCKDB_TABLE_NOT_FOUND_ERROR in str(exc):
+                return []
+            raise
 
+    def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        fts_schema = f"fts_main_{self._memory_table}"
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at
+        FROM (
+            SELECT id, session_id, app_name, user_id, event_id, author,
+                   timestamp, content_json, content_text, metadata_json, inserted_at,
+                   {fts_schema}.match_bm25(id, ?) AS score
+            FROM {self._memory_table}
+            WHERE app_name = ?
+              AND user_id = ?
+        ) AS ranked
+        WHERE score IS NOT NULL
+        ORDER BY score DESC, timestamp DESC
+        LIMIT ?
+        """
+        params: tuple[Any, ...] = (query, app_name, user_id, limit)
+        with self._config.provide_connection() as conn:
+            if not self._ensure_fts_extension(conn):
+                msg = "DuckDB FTS extension not available"
+                raise RuntimeError(msg)
+            cursor = conn.execute(sql, params)
+            rows = cursor.fetchall()
+        return _rows_to_records(rows)
+
+    def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
         SELECT id, session_id, app_name, user_id, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
@@ -261,33 +337,11 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         LIMIT ?
         """
         pattern = f"%{query}%"
-        params: tuple[Any, ...] = (app_name, user_id, pattern, effective_limit)
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.execute(sql, params)
-                rows = cursor.fetchall()
-
-                return [
-                    {
-                        "id": row[0],
-                        "session_id": row[1],
-                        "app_name": row[2],
-                        "user_id": row[3],
-                        "event_id": row[4],
-                        "author": row[5],
-                        "timestamp": row[6],
-                        "content_json": from_json(row[7]) if row[7] else {},
-                        "content_text": row[8],
-                        "metadata_json": from_json(row[9]) if row[9] else None,
-                        "inserted_at": row[10],
-                    }
-                    for row in rows
-                ]
-        except Exception as e:
-            if DUCKDB_TABLE_NOT_FOUND_ERROR in str(e):
-                return []
-            raise
+        params: tuple[Any, ...] = (app_name, user_id, pattern, limit)
+        with self._config.provide_connection() as conn:
+            cursor = conn.execute(sql, params)
+            rows = cursor.fetchall()
+        return _rows_to_records(rows)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session.
@@ -307,6 +361,8 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             count = count_row[0] if count_row else 0
 
             conn.execute(delete_sql, (session_id,))
+            if self._use_fts and count > 0:
+                self._refresh_fts_index(conn)
             conn.commit()
 
         return count
@@ -337,6 +393,27 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             count = count_row[0] if count_row else 0
 
             conn.execute(delete_sql)
+            if self._use_fts and count > 0:
+                self._refresh_fts_index(conn)
             conn.commit()
 
         return count
+
+
+def _rows_to_records(rows: "list[tuple[Any, ...]]") -> "list[MemoryRecord]":
+    return [
+        {
+            "id": row[0],
+            "session_id": row[1],
+            "app_name": row[2],
+            "user_id": row[3],
+            "event_id": row[4],
+            "author": row[5],
+            "timestamp": row[6],
+            "content_json": from_json(row[7]) if row[7] else {},
+            "content_text": row[8],
+            "metadata_json": from_json(row[9]) if row[9] else None,
+            "inserted_at": row[10],
+        }
+        for row in rows
+    ]

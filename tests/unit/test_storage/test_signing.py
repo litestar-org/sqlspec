@@ -9,7 +9,6 @@ Tests cover:
 """
 
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 
@@ -292,8 +291,6 @@ def test_obstore_signable_protocols_s3_supports_signing() -> None:
             store.protocol = "s3"
             store.backend_type = "obstore"
             store.base_path = ""
-            cast("Any", store)._is_local_store = False
-
             assert store.supports_signing is True
 
 
@@ -306,8 +303,6 @@ def test_obstore_signable_protocols_gs_supports_signing() -> None:
     store.protocol = "gs"
     store.backend_type = "obstore"
     store.base_path = ""
-    cast("Any", store)._is_local_store = False
-
     assert store.supports_signing is True
 
 
@@ -320,8 +315,6 @@ def test_obstore_signable_protocols_gcs_supports_signing() -> None:
     store.protocol = "gcs"
     store.backend_type = "obstore"
     store.base_path = ""
-    cast("Any", store)._is_local_store = False
-
     assert store.supports_signing is True
 
 
@@ -334,8 +327,6 @@ def test_obstore_signable_protocols_az_supports_signing() -> None:
     store.protocol = "az"
     store.backend_type = "obstore"
     store.base_path = ""
-    cast("Any", store)._is_local_store = False
-
     assert store.supports_signing is True
 
 
@@ -348,8 +339,6 @@ def test_obstore_signable_protocols_azure_supports_signing() -> None:
     store.protocol = "azure"
     store.backend_type = "obstore"
     store.base_path = ""
-    cast("Any", store)._is_local_store = False
-
     assert store.supports_signing is True
 
 
@@ -362,8 +351,6 @@ def test_obstore_unsupported_protocol_http_supports_signing_false() -> None:
     store.protocol = "http"
     store.backend_type = "obstore"
     store.base_path = ""
-    cast("Any", store)._is_local_store = False
-
     assert store.supports_signing is False
 
 
@@ -376,8 +363,6 @@ def test_obstore_unsupported_protocol_https_supports_signing_false() -> None:
     store.protocol = "https"
     store.backend_type = "obstore"
     store.base_path = ""
-    cast("Any", store)._is_local_store = False
-
     assert store.supports_signing is False
 
 

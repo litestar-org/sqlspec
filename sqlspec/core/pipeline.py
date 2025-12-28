@@ -117,8 +117,15 @@ class StatementPipelineRegistry:
             metrics = pipeline.metrics()
             if metrics is None:
                 continue
-            entry = {"config": key, "dialect": pipeline.dialect, "parameter_style": pipeline.parameter_style}
-            entry.update(metrics)
+            entry: dict[str, Any] = {
+                "config": key,
+                "dialect": pipeline.dialect,
+                "parameter_style": pipeline.parameter_style,
+            }
+            entry["hits"] = metrics["hits"]
+            entry["misses"] = metrics["misses"]
+            entry["size"] = metrics["size"]
+            entry["max_size"] = metrics["max_size"]
             snapshots.append(entry)
         return snapshots
 

@@ -218,7 +218,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             driver.execute_script(self._get_create_memory_table_sql())
         logger.debug("Created ADK memory table: %s", self._memory_table)
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         Uses INSERT OR IGNORE to skip duplicates based on event_id

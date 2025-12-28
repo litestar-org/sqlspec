@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -49,16 +50,16 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
         connection_key = self.config_state.connection_key
 
         if config.supports_connection_pooling:
-            pool = getattr(request.app.state, self.config_state.pool_key)
+            pool = get_state_value(request.app.state, self.config_state.pool_key)
             async with config.provide_connection(pool) as connection:  # type: ignore[union-attr]
-                setattr(request.state, connection_key, connection)
+                set_state_value(request.state, connection_key, connection)
                 try:
                     return await call_next(request)
                 finally:
-                    delattr(request.state, connection_key)
+                    pop_state_value(request.state, connection_key)
         else:
             connection = await config.create_connection()
-            setattr(request.state, connection_key, connection)
+            set_state_value(request.state, connection_key, connection)
             try:
                 return await call_next(request)
             finally:
@@ -97,9 +98,9 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         connection_key = self.config_state.connection_key
 
         if config.supports_connection_pooling:
-            pool = getattr(request.app.state, self.config_state.pool_key)
+            pool = get_state_value(request.app.state, self.config_state.pool_key)
             async with config.provide_connection(pool) as connection:  # type: ignore[union-attr]
-                setattr(request.state, connection_key, connection)
+                set_state_value(request.state, connection_key, connection)
                 try:
                     response = await call_next(request)
 
@@ -113,10 +114,10 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
                 else:
                     return response
                 finally:
-                    delattr(request.state, connection_key)
+                    pop_state_value(request.state, connection_key)
         else:
             connection = await config.create_connection()
-            setattr(request.state, connection_key, connection)
+            set_state_value(request.state, connection_key, connection)
             try:
                 response = await call_next(request)
 

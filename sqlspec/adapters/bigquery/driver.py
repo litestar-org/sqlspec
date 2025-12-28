@@ -43,6 +43,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -210,7 +211,7 @@ def _create_bq_parameters(
     if isinstance(parameters, dict):
         for name, value in parameters.items():
             param_name_for_bq = name.lstrip("@")
-            actual_value = getattr(value, "value", value)
+            actual_value = value.value if has_value_attribute(value) else value
             param_type, array_element_type = _get_bq_param_type(actual_value)
 
             if param_type == "ARRAY" and array_element_type:
@@ -283,7 +284,10 @@ class BigQueryExceptionHandler:
         Args:
             e: Google API exception instance
         """
-        status_code = getattr(e, "code", None)
+        try:
+            status_code = e.code
+        except AttributeError:
+            status_code = None
         error_msg = str(e).lower()
 
         if status_code == HTTP_CONFLICT or "already exists" in error_msg:
@@ -426,7 +430,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if emulator_host:
             return True
 
-        api_base_url = getattr(getattr(connection, "_connection", None), "API_BASE_URL", "")
+        try:
+            inner_connection = connection._connection
+        except AttributeError:
+            inner_connection = None
+        if inner_connection is None:
+            return False
+        try:
+            api_base_url = inner_connection.API_BASE_URL
+        except AttributeError:
+            api_base_url = ""
         if not api_base_url:
             return False
         return "googleapis.com" not in api_base_url
@@ -443,7 +456,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not isinstance(exception, GoogleCloudError):
             return False
 
-        errors = getattr(exception, "errors", None) or []
+        errors = exception.errors if has_errors(exception) and exception.errors is not None else []
         retryable_reasons = {
             "backendError",
             "internalError",
@@ -477,7 +490,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return False
 
         try:
-            value = getattr(source_config, attr)
+            value = source_config.__getattribute__(attr)
             return value is not None and not callable(value)
         except (AttributeError, TypeError):
             return False
@@ -494,7 +507,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 continue
 
             try:
-                value = getattr(source_config, attr)
+                value = source_config.__getattribute__(attr)
                 setattr(target_config, attr, value)
             except (AttributeError, TypeError):
                 continue
@@ -514,9 +527,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return job_config
 
     def _build_load_job_telemetry(self, job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":
-        properties = getattr(job, "_properties", {})
+        try:
+            properties = job._properties
+        except AttributeError:
+            properties = {}
         load_stats = properties.get("statistics", {}).get("load", {})
-        rows_processed = int(load_stats.get("outputRows") or getattr(job, "output_rows", 0) or 0)
+        try:
+            output_rows = job.output_rows
+        except AttributeError:
+            output_rows = 0
+        rows_processed = int(load_stats.get("outputRows") or output_rows or 0)
         bytes_processed = int(load_stats.get("outputBytes") or load_stats.get("inputFileBytes", 0) or 0)
         duration = 0.0
         if job.ended and job.started:

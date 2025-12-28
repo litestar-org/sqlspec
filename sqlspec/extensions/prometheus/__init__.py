@@ -65,6 +65,7 @@ class PrometheusStatementObserver:
 
     def _label_values(self, event: StatementEvent) -> tuple[str, ...]:
         values: list[str] = []
+        payload = event.as_dict()
         for name in self._label_names:
             if name == "driver":
                 values.append(event.driver)
@@ -75,7 +76,8 @@ class PrometheusStatementObserver:
             elif name == "bind_key":
                 values.append(event.bind_key or "default")
             else:
-                values.append(getattr(event, name, ""))
+                value = payload.get(name)
+                values.append("" if value is None else str(value))
         return tuple(values)
 
 

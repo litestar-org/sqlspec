@@ -114,7 +114,8 @@ class SqliteConnectionPool:
 
     def _get_thread_connection(self) -> SqliteConnection:
         """Get or create a connection for the current thread."""
-        if not hasattr(self._thread_local, "connection"):
+        thread_state = self._thread_local.__dict__
+        if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
             self._thread_local.last_used = time.time()
@@ -129,7 +130,7 @@ class SqliteConnectionPool:
             self._thread_local.last_used = time.time()
             return cast("SqliteConnection", self._thread_local.connection)
 
-        idle_time = time.time() - getattr(self._thread_local, "last_used", 0)
+        idle_time = time.time() - thread_state.get("last_used", 0)
         if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
             logger.debug("SQLite connection failed health check after %.1fs idle, recreating", idle_time)
             with contextlib.suppress(Exception):
@@ -142,13 +143,14 @@ class SqliteConnectionPool:
 
     def _close_thread_connection(self) -> None:
         """Close the connection for the current thread."""
-        if hasattr(self._thread_local, "connection"):
+        thread_state = self._thread_local.__dict__
+        if "connection" in thread_state:
             with contextlib.suppress(Exception):
                 self._thread_local.connection.close()
             del self._thread_local.connection
-            if hasattr(self._thread_local, "created_at"):
+            if "created_at" in thread_state:
                 del self._thread_local.created_at
-            if hasattr(self._thread_local, "last_used"):
+            if "last_used" in thread_state:
                 del self._thread_local.last_used
 
     @contextmanager

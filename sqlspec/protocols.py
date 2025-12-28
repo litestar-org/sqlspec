@@ -30,10 +30,13 @@ __all__ = (
     "CursorMetadataProtocol",
     "CursorProtocol",
     "DictProtocol",
+    "HasAddListenerProtocol",
+    "HasArrowStoreProtocol",
     "HasBindKeyProtocol",
     "HasConfigProtocol",
     "HasConnectionConfigProtocol",
     "HasDatabaseUrlAndBindKeyProtocol",
+    "HasErrorsProtocol",
     "HasExpressionAndParametersProtocol",
     "HasExpressionAndSQLProtocol",
     "HasExpressionProtocol",
@@ -42,15 +45,24 @@ __all__ = (
     "HasFilterAttributesProtocol",
     "HasGetDataProtocol",
     "HasMigrationConfigProtocol",
+    "HasNameProtocol",
+    "HasNotifiesProtocol",
     "HasParameterBuilderProtocol",
+    "HasReadArrowProtocol",
+    "HasRowcountProtocol",
     "HasSQLGlotExpressionProtocol",
     "HasSQLMethodProtocol",
+    "HasSqlStateProtocol",
+    "HasSqliteErrorProtocol",
     "HasStatementConfigFactoryProtocol",
     "HasStatementConfigProtocol",
     "HasStatementTypeProtocol",
     "HasToStatementProtocol",
     "HasTracerProviderProtocol",
+    "HasTypeCodeProtocol",
     "HasTypecodeProtocol",
+    "HasTypecodeSizedProtocol",
+    "HasValueProtocol",
     "HasWhereProtocol",
     "MigrationModuleProtocol",
     "NotificationProtocol",
@@ -64,7 +76,9 @@ __all__ = (
     "StatementProtocol",
     "SupportsArrayProtocol",
     "SupportsArrowResults",
+    "SupportsCloseProtocol",
     "SupportsDtypeStrProtocol",
+    "SupportsJsonTypeProtocol",
     "ToSchemaProtocol",
     "WithMethodProtocol",
 )
@@ -74,7 +88,7 @@ __all__ = (
 class ReadableProtocol(Protocol):
     """Protocol for objects that have a read method (e.g., LOBs)."""
 
-    def read(self) -> "bytes | str":
+    def read(self, size: "int | None" = None) -> "bytes | str":
         """Read content from the object."""
         ...
 
@@ -149,6 +163,95 @@ class HasTypecodeProtocol(Protocol):
     """Protocol for array-like objects exposing typecode."""
 
     typecode: Any
+
+
+@runtime_checkable
+class HasTypecodeSizedProtocol(Protocol):
+    """Protocol for array-like objects exposing typecode and length."""
+
+    typecode: Any
+
+    def __len__(self) -> int:
+        """Return the length of the array-like object."""
+        ...
+
+
+@runtime_checkable
+class HasTypeCodeProtocol(Protocol):
+    """Protocol for objects exposing type_code metadata."""
+
+    type_code: Any
+
+
+@runtime_checkable
+class HasRowcountProtocol(Protocol):
+    """Protocol for cursors exposing rowcount metadata."""
+
+    rowcount: int
+
+
+@runtime_checkable
+class HasSqlStateProtocol(Protocol):
+    """Protocol for exceptions exposing sqlstate."""
+
+    sqlstate: "str | None"
+
+
+@runtime_checkable
+class HasSqliteErrorProtocol(Protocol):
+    """Protocol for sqlite errors exposing sqlite error details."""
+
+    sqlite_errorcode: "int | None"
+    sqlite_errorname: "str | None"
+
+
+@runtime_checkable
+class HasValueProtocol(Protocol):
+    """Protocol for wrapper objects exposing a value attribute."""
+
+    value: Any
+
+
+@runtime_checkable
+class HasErrorsProtocol(Protocol):
+    """Protocol for exceptions exposing structured errors."""
+
+    errors: "list[dict[str, Any]] | None"
+
+
+@runtime_checkable
+class HasNameProtocol(Protocol):
+    """Protocol for objects exposing a __name__ attribute."""
+
+    __name__: str
+
+
+@runtime_checkable
+class HasNotifiesProtocol(Protocol):
+    """Protocol for asyncpg-like connections exposing notifications."""
+
+    notifies: Any
+
+
+@runtime_checkable
+class HasAddListenerProtocol(Protocol):
+    """Protocol for asyncpg-like connections exposing add_listener."""
+
+    def add_listener(self, channel: str, callback: Any) -> Any: ...
+
+
+@runtime_checkable
+class SupportsJsonTypeProtocol(Protocol):
+    """Protocol for parameter type modules exposing JSON."""
+
+    JSON: Any
+
+
+@runtime_checkable
+class SupportsCloseProtocol(Protocol):
+    """Protocol for objects exposing close()."""
+
+    def close(self) -> None: ...
 
 
 @runtime_checkable
@@ -390,6 +493,20 @@ class ObjectStoreItemProtocol(Protocol):
 
     path: str
     key: "str | None"
+
+
+@runtime_checkable
+class HasReadArrowProtocol(Protocol):
+    """Protocol for stores exposing native Arrow read support."""
+
+    def read_arrow(self, path: "str | Path", **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class HasArrowStoreProtocol(Protocol):
+    """Protocol for backends exposing a store with Arrow support."""
+
+    store: "HasReadArrowProtocol"
 
 
 @runtime_checkable
@@ -667,6 +784,10 @@ class SQLBuilderProtocol(Protocol):
         """Public access to query parameters."""
         ...
 
+    def get_expression(self) -> "exp.Expression | None":
+        """Return the current SQLGlot expression."""
+        ...
+
     def add_parameter(self, value: Any, name: "str | None" = None) -> tuple[Any, str]:
         """Add a parameter to the builder."""
         ...
@@ -701,10 +822,6 @@ class SQLBuilderProtocol(Protocol):
 
     def _spawn_like_self(self) -> "Self":
         """Create a new builder with matching configuration."""
-        ...
-
-    def get_expression(self) -> "exp.Expression | None":
-        """Return the underlying SQLGlot expression."""
         ...
 
     def set_expression(self, expression: "exp.Expression") -> None:

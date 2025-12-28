@@ -10,18 +10,14 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
+from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._parsing_utils import parse_table_expression
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import (
-    has_attr,
-    has_expression_and_parameters,
-    has_expression_and_sql,
-    has_parameter_builder,
-)
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_and_sql, has_parameter_builder
 
 if TYPE_CHECKING:
     from sqlspec.core import SQL
-    from sqlspec.protocols import SQLBuilderProtocol
+    from sqlspec.protocols import HasParameterBuilderProtocol, SQLBuilderProtocol
 
 __all__ = ("JoinBuilder", "JoinClauseMixin")
 
@@ -54,21 +50,15 @@ def _parse_join_condition(
 
 def _handle_query_builder_table(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expression:
     subquery_expression: exp.Expression
-    parameters: dict[str, Any] | None = None
-    table_parameters = getattr(table, "parameters", None)
-    if isinstance(table_parameters, dict):
-        parameters = table_parameters
+    builder_table = cast("HasParameterBuilderProtocol", table)
+    parameters = builder_table.parameters
 
-    if has_attr(table, "_build_final_expression") and callable(table._build_final_expression):
-        subquery_expression = cast("exp.Expression", table._build_final_expression(copy=True))
+    if isinstance(table, QueryBuilder):
+        subquery_expression = table._build_final_expression(copy=True)
     else:
-        subquery_result = table.build()
-        sql_text = subquery_result.sql if has_attr(subquery_result, "sql") else str(subquery_result)
+        subquery_result = builder_table.build()
+        sql_text = subquery_result.sql if isinstance(subquery_result, SafeQuery) else str(subquery_result)
         subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
-        if parameters is None and has_attr(subquery_result, "parameters"):
-            result_parameters = subquery_result.parameters
-            if isinstance(result_parameters, dict):
-                parameters = result_parameters
 
     if parameters:
         for param_name, param_value in parameters.items():

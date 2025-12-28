@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import re
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, cast
 
 import oracledb
@@ -48,7 +49,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_attr, has_pipeline_capability, is_readable
+from sqlspec.utils.type_guards import has_pipeline_capability, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -115,7 +116,15 @@ def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
     return parts[0], parts[1], parts[2]
 
 
-_ORACLEDB_VERSION: Final[tuple[int, int, int]] = _parse_version_tuple(getattr(oracledb, "__version__", "0.0.0"))
+def _resolve_oracledb_version() -> "tuple[int, int, int]":
+    try:
+        version = oracledb.__version__
+    except AttributeError:
+        version = "0.0.0"
+    return _parse_version_tuple(version)
+
+
+_ORACLEDB_VERSION: Final[tuple[int, int, int]] = _resolve_oracledb_version()
 
 
 class _CompiledStackOperation(NamedTuple):
@@ -230,7 +239,10 @@ class OraclePipelineMixin:
     ) -> "list[StackResult]":
         stack_results: list[StackResult] = []
         for index, (compiled, result) in enumerate(zip(compiled_operations, pipeline_results, strict=False)):
-            error = getattr(result, "error", None)
+            try:
+                error = result.error
+            except AttributeError:
+                error = None
             if error is not None:
                 stack_error = StackExecutionError(
                     index,
@@ -249,16 +261,28 @@ class OraclePipelineMixin:
         return stack_results
 
     def _pipeline_result_to_stack_result(self, operation: _CompiledStackOperation, pipeline_result: Any) -> StackResult:
-        rows = getattr(pipeline_result, "rows", None)
-        columns = getattr(pipeline_result, "columns", None)
+        try:
+            rows = pipeline_result.rows
+        except AttributeError:
+            rows = None
+        try:
+            columns = pipeline_result.columns
+        except AttributeError:
+            columns = None
         data = self._rows_from_pipeline_result(columns, rows) if operation.returns_rows else None
         metadata: dict[str, Any] = {"pipeline_operation": operation.method}
 
-        warning = getattr(pipeline_result, "warning", None)
+        try:
+            warning = pipeline_result.warning
+        except AttributeError:
+            warning = None
         if warning is not None:
             metadata["warning"] = warning
 
-        return_value = getattr(pipeline_result, "return_value", None)
+        try:
+            return_value = pipeline_result.return_value
+        except AttributeError:
+            return_value = None
         if return_value is not None:
             metadata["return_value"] = return_value
 
@@ -269,7 +293,10 @@ class OraclePipelineMixin:
     def _rows_affected_from_pipeline(
         self, operation: _CompiledStackOperation, pipeline_result: Any, data: "list[dict[str, Any]] | None"
     ) -> int:
-        rowcount = getattr(pipeline_result, "rowcount", None)
+        try:
+            rowcount = pipeline_result.rowcount
+        except AttributeError:
+            rowcount = None
         if isinstance(rowcount, int) and rowcount >= 0:
             return rowcount
         if operation.method == "execute_many":
@@ -290,10 +317,16 @@ class OraclePipelineMixin:
 
         driver = self._pipeline_driver()
         if columns:
-            names = [getattr(column, "name", f"column_{index}") for index, column in enumerate(columns)]
+            names = []
+            for index, column in enumerate(columns):
+                try:
+                    name = column.name
+                except AttributeError:
+                    name = f"column_{index}"
+                names.append(name)
         else:
             first = rows[0]
-            names = [f"column_{index}" for index in range(len(first) if has_attr(first, "__len__") else 0)]
+            names = [f"column_{index}" for index in range(len(first) if isinstance(first, Sized) else 0)]
         names = _normalize_column_names(names, driver.driver_features)
 
         normalized_rows: list[dict[str, Any]] = []
@@ -483,7 +516,10 @@ class OracleExceptionHandler:
         if not error_obj:
             self._raise_error(e, None, SQLSpecError, "database error")
 
-        error_code = getattr(error_obj, "code", None)
+        try:
+            error_code = error_obj.code
+        except AttributeError:
+            error_code = None
         if not error_code:
             self._raise_error(e, None, SQLSpecError, "database error")
 

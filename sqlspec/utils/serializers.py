@@ -299,11 +299,15 @@ def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], d
         if exclude_unset:
 
             def _dump(value: Any) -> dict[str, Any]:
-                return {f: val for f in value.__struct_fields__ if (val := getattr(value, f, None)) != UNSET}
+                return {
+                    f: field_value
+                    for f in value.__struct_fields__
+                    if (field_value := value.__getattribute__(f)) != UNSET
+                }
 
             return _dump
 
-        return lambda value: {f: getattr(value, f, None) for f in value.__struct_fields__}
+        return lambda value: {f: value.__getattribute__(f) for f in value.__struct_fields__}
 
     if is_attrs_instance(sample):
 

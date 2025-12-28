@@ -1,5 +1,6 @@
 """Psycopg ADK memory store for Google Agent Development Kit memory storage."""
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from psycopg import errors
@@ -16,6 +17,46 @@ if TYPE_CHECKING:
 logger = get_logger("adapters.psycopg.adk.memory_store")
 
 __all__ = ("PsycopgAsyncADKMemoryStore", "PsycopgSyncADKMemoryStore")
+
+_MemoryInsertParams = tuple[str, str, str, str, str, str | None, datetime, Jsonb, str, Jsonb | None, datetime]
+_MemoryInsertParamsWithOwner = tuple[
+    str, str, str, str, str, str | None, object | None, datetime, Jsonb, str, Jsonb | None, datetime
+]
+
+
+def _build_insert_params(entry: "MemoryRecord") -> _MemoryInsertParams:
+    metadata_json = Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None
+    return (
+        entry["id"],
+        entry["session_id"],
+        entry["app_name"],
+        entry["user_id"],
+        entry["event_id"],
+        entry["author"],
+        entry["timestamp"],
+        Jsonb(entry["content_json"]),
+        entry["content_text"],
+        metadata_json,
+        entry["inserted_at"],
+    )
+
+
+def _build_insert_params_with_owner(entry: "MemoryRecord", owner_id: object | None) -> _MemoryInsertParamsWithOwner:
+    metadata_json = Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None
+    return (
+        entry["id"],
+        entry["session_id"],
+        entry["app_name"],
+        entry["user_id"],
+        entry["event_id"],
+        entry["author"],
+        owner_id,
+        entry["timestamp"],
+        Jsonb(entry["content_json"]),
+        entry["content_text"],
+        metadata_json,
+        entry["inserted_at"],
+    )
 
 
 class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
@@ -77,7 +118,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             await driver.execute_script(await self._get_create_memory_table_sql())
         logger.debug("Created ADK memory table: %s", self._memory_table)
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -113,37 +154,10 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             for entry in entries:
-                params: tuple[Any, ...]
                 if self._owner_id_column_name:
-                    params = (
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry["event_id"],
-                        entry["author"],
-                        owner_id,
-                        entry["timestamp"],
-                        Jsonb(entry["content_json"]),
-                        entry["content_text"],
-                        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-                        entry["inserted_at"],
-                    )
+                    await cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
                 else:
-                    params = (
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry["event_id"],
-                        entry["author"],
-                        entry["timestamp"],
-                        Jsonb(entry["content_json"]),
-                        entry["content_text"],
-                        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-                        entry["inserted_at"],
-                    )
-                await cur.execute(query, params)
+                    await cur.execute(query, _build_insert_params(entry))
                 if cur.rowcount and cur.rowcount > 0:
                     inserted_count += cur.rowcount
 
@@ -183,7 +197,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         LIMIT %s
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
-        params = (query, app_name, user_id, query, limit)
+        params: tuple[str, str, str, str, int] = (query, app_name, user_id, query, limit)
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
@@ -203,7 +217,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
         pattern = f"%{query}%"
-        params = (app_name, user_id, pattern, limit)
+        params: tuple[str, str, str, int] = (app_name, user_id, pattern, limit)
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
@@ -292,7 +306,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             driver.execute_script(self._get_create_memory_table_sql())
         logger.debug("Created ADK memory table: %s", self._memory_table)
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -328,37 +342,10 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             for entry in entries:
-                params: tuple[Any, ...]
                 if self._owner_id_column_name:
-                    params = (
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry["event_id"],
-                        entry["author"],
-                        owner_id,
-                        entry["timestamp"],
-                        Jsonb(entry["content_json"]),
-                        entry["content_text"],
-                        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-                        entry["inserted_at"],
-                    )
+                    cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
                 else:
-                    params = (
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry["event_id"],
-                        entry["author"],
-                        entry["timestamp"],
-                        Jsonb(entry["content_json"]),
-                        entry["content_text"],
-                        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-                        entry["inserted_at"],
-                    )
-                cur.execute(query, params)
+                    cur.execute(query, _build_insert_params(entry))
                 if cur.rowcount and cur.rowcount > 0:
                     inserted_count += cur.rowcount
 
@@ -398,7 +385,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         LIMIT %s
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
-        params = (query, app_name, user_id, query, limit)
+        params: tuple[str, str, str, str, int] = (query, app_name, user_id, query, limit)
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
@@ -418,7 +405,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
         pattern = f"%{query}%"
-        params = (app_name, user_id, pattern, limit)
+        params: tuple[str, str, str, int] = (app_name, user_id, pattern, limit)
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()

@@ -10,8 +10,9 @@ Describes how to persist Google Agent Development Kit (ADK) sessions and events 
 
 - Install with `pip install "sqlspec[asyncpg] google-genai"` (swap the adapter extra for your database).
 - `SQLSpecSessionService` implements `BaseSessionService` and delegates all storage to adapter-specific stores.
+- `SQLSpecMemoryService` implements `BaseMemoryService` and persists searchable memories extracted from sessions.
 - Stores live in `sqlspec.adapters.<adapter>.adk` and expose async (`AsyncpgADKStore`, `AsyncmyADKStore`) or sync (`SqliteADKStore`) implementations.
-- Configuration uses the `ADKConfig` TypedDict: `session_table`, `events_table`, `owner_id_column`, and `in_memory` (Oracle only).
+- Configuration uses the `ADKConfig` TypedDict, including `session_table`, `events_table`, `memory_table`, and `memory_use_fts`.
 - Call `create_tables()` once at application startup; the method is idempotent and safe to run repeatedly.
 - Result records convert through `event_to_record()` / `record_to_session()` helpers, keeping Google ADK types intact.
 
@@ -149,12 +150,43 @@ The Spanner ADK store uses an interleaved events table for efficient queries and
 
 The service automatically normalizes identifiers, timestamps, and event payloads. `append_event()` skips partial events until they complete, mirroring Google ADK semantics.
 
+## Bootstrapping the Memory Service
+
+`SQLSpecMemoryService` persists searchable memories extracted from completed sessions. Memory ingestion is manual by design so you can control when to store long-term memories.
+
+```python
+from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+from sqlspec.extensions.adk.memory import SQLSpecMemoryService
+
+memory_store = AsyncpgADKMemoryStore(config)
+await memory_store.create_tables()
+
+memory_service = SQLSpecMemoryService(memory_store)
+
+# After a session completes, store its memories
+await memory_service.add_session_to_memory(session)
+
+# Search memories
+response = await memory_service.search_memory(
+    app_name=session.app_name,
+    user_id=session.user_id,
+    query="previous discussion about billing",
+)
+```
+
+Enable full-text search when supported by setting `memory_use_fts=True` in the ADK config. When disabled (default), stores fall back to `LIKE`/`ILIKE` searches.
+
 ## Configuration Reference
 
 `ADKConfig` lives in `sqlspec.extensions.adk.config` and documents the extension settings:
 
 - `session_table` *(str)* – Session table name (default `adk_sessions`). Use snake_case ≤63 characters for PostgreSQL compatibility.
 - `events_table` *(str)* – Events table name (default `adk_events`). Keep separate from session table for efficient pruning.
+- `memory_table` *(str)* – Memory table name (default `adk_memory_entries`).
+- `memory_use_fts` *(bool)* – Enable adapter-specific full-text search (default `False`).
+- `memory_max_results` *(int)* – Default search result cap (default `20`).
+- `enable_memory` *(bool)* – Toggle memory service at runtime (default `True`).
+- `include_memory_migration` *(bool)* – Include memory DDL in SQLSpec migrations (default `True`).
 - `owner_id_column` *(str)* – Optional column DDL appended to both tables. SQLSpec parses the column name to populate queries and passes the definition through to DDL. Use it to enforce tenant isolation or link to users.
 - `in_memory` *(bool)* – Oracle-only flag that adds the `INMEMORY` clause when creating tables. Ignored by other adapters.
 

@@ -15,6 +15,7 @@ from uuid import UUID
 from google.cloud.spanner_v1 import JsonObject, param_types
 
 from sqlspec.utils.type_converters import should_json_encode_sequence
+from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -194,10 +195,10 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
             types[key] = param_types.TIMESTAMP
         elif isinstance(value, date):
             types[key] = param_types.DATE
-        elif hasattr(param_types, "JSON") and isinstance(value, (dict, JsonObject)):
+        elif supports_json_type(param_types) and isinstance(value, (dict, JsonObject)):
             types[key] = param_types.JSON
         elif isinstance(value, (list, tuple)):
-            if should_json_encode_sequence(value) and hasattr(param_types, "JSON"):
+            if should_json_encode_sequence(value) and supports_json_type(param_types):
                 types[key] = param_types.JSON
                 continue
             sequence = list(value)

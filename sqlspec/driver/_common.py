@@ -34,6 +34,7 @@ from sqlspec.utils.type_guards import (
     has_dtype_str,
     has_statement_type,
     has_typecode,
+    has_typecode_and_len,
     is_statement_filter,
 )
 
@@ -259,14 +260,10 @@ def make_cache_key_hashable(obj: Any) -> Any:
     if isinstance(obj, set):
         return frozenset(make_cache_key_hashable(item) for item in obj)
 
+    if has_typecode_and_len(obj):
+        return ("array", obj.typecode, len(obj))
     if has_typecode(obj):
-        typecode = obj.typecode
-        try:
-            length = len(obj)
-        except (AttributeError, TypeError):
-            return ("array", typecode)
-        else:
-            return ("array", typecode, length)
+        return ("array", obj.typecode)
 
     if has_array_interface(obj):
         try:

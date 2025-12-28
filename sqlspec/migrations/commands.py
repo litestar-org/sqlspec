@@ -56,7 +56,7 @@ def _with_command_span(
         signature = inspect.signature(func)
 
         def _prepare(self: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, bool, Any]:
-            runtime = getattr(self, "_runtime", None)
+            runtime = self._runtime
             metadata_args = _bind_arguments(signature, args, kwargs)
             dry_run = False
             if dry_run_param is not None:
@@ -82,10 +82,10 @@ def _with_command_span(
             recorded_error: bool,
             dry_run: bool,
         ) -> None:
-            command_error = getattr(self, "_last_command_error", None)
-            setattr(self, "_last_command_error", None)
-            command_metrics = getattr(self, "_last_command_metrics", None)
-            setattr(self, "_last_command_metrics", None)
+            command_error = self._last_command_error
+            self._last_command_error = None
+            command_metrics = self._last_command_metrics
+            self._last_command_metrics = None
             if runtime is None:
                 return
             if command_error is not None and not recorded_error:

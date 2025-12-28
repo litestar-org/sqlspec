@@ -115,15 +115,16 @@ def import_string(dotted_path: str) -> "Any":
                 parent_module = importlib.import_module(parent_module_path)
             except Exception:
                 return obj
-            if not hasattr(parent_module, attr):
+            if attr not in parent_module.__dict__:
                 _raise_import_error(f"Module '{parent_module_path}' has no attribute '{attr}' in '{dotted_path}'")
 
         for attr in attrs:
-            if not hasattr(obj, attr):
+            try:
+                obj = obj.__getattribute__(attr)
+            except AttributeError:
                 _raise_import_error(
                     f"Module '{module.__name__ if module is not None else 'unknown'}' has no attribute '{attr}' in '{dotted_path}'"
                 )
-            obj = getattr(obj, attr)
     except Exception as e:  # pylint: disable=broad-exception-caught
         _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
     return obj

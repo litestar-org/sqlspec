@@ -33,6 +33,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_guards import has_cursor_metadata, has_rowcount, has_sqlstate, has_type_code, supports_json_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,7 +61,7 @@ __all__ = (
 logger = get_logger(__name__)
 
 json_type_value = (
-    ASYNC_MY_FIELD_TYPE.JSON if ASYNC_MY_FIELD_TYPE is not None and hasattr(ASYNC_MY_FIELD_TYPE, "JSON") else None
+    ASYNC_MY_FIELD_TYPE.JSON if ASYNC_MY_FIELD_TYPE is not None and supports_json_type(ASYNC_MY_FIELD_TYPE) else None
 )
 ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 MYSQL_ER_DUP_ENTRY = 1062
@@ -123,10 +124,10 @@ class AsyncmyExceptionHandler:
         error_code = None
         sqlstate = None
 
-        if hasattr(e, "args") and len(e.args) >= 1 and isinstance(e.args[0], int):
+        if len(e.args) >= 1 and isinstance(e.args[0], int):
             error_code = e.args[0]
 
-        sqlstate = getattr(e, "sqlstate", None)
+        sqlstate = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if error_code in {1061, 1091}:
             logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", e)
@@ -289,15 +290,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             List of index positions where JSON values are present.
         """
 
-        description = getattr(cursor, "description", None)
+        if not has_cursor_metadata(cursor):
+            return []
+        description = cursor.description
         if not description or not ASYNCMY_JSON_TYPE_CODES:
             return []
 
         json_indexes: list[int] = []
         for index, column in enumerate(description):
-            type_code = getattr(column, "type_code", None)
-            if type_code is None and isinstance(column, (tuple, list)) and len(column) > 1:
+            if has_type_code(column):
+                type_code = column.type_code
+            elif isinstance(column, (tuple, list)) and len(column) > 1:
                 type_code = column[1]
+            else:
+                type_code = None
             if type_code in ASYNCMY_JSON_TYPE_CODES:
                 json_indexes.append(index)
         return json_indexes
@@ -437,7 +443,12 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             )
 
         affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
-        last_id = getattr(cursor, "lastrowid", None) if cursor.rowcount and cursor.rowcount > 0 else None
+        last_id = None
+        if has_rowcount(cursor) and cursor.rowcount and cursor.rowcount > 0:
+            try:
+                last_id = cursor.lastrowid
+            except AttributeError:
+                last_id = None
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     async def select_to_storage(

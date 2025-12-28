@@ -128,6 +128,8 @@ Extensions
      - Create an ADK session, append events, and fetch the transcript using SQLSpec’s AioSQLite store.
    * - ``extensions/adk/litestar_aiosqlite.py``
      - Wire ``SQLSpecSessionService`` into Litestar and expose a simple ``/sessions`` endpoint.
+   * - ``extensions/adk/runner_memory_aiosqlite.py``
+     - Run an ADK ``Runner`` with SQLSpec-backed session + memory services, then query stored memories.
 
 Shared Utilities
 ----------------
@@ -150,6 +152,7 @@ Shared Utilities
    loaders/sql_files
    extensions/adk/basic_aiosqlite
    extensions/adk/litestar_aiosqlite
+   extensions/adk/runner_memory_aiosqlite
    frameworks/fastapi/aiosqlite_app
    frameworks/fastapi/sqlite_app
    frameworks/starlette/aiosqlite_app

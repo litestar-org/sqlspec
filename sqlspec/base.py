@@ -27,6 +27,7 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
 from sqlspec.typing import ConnectionT
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -42,11 +43,11 @@ logger = get_logger()
 
 
 def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager[Any]]:
-    return hasattr(obj, "__aenter__")
+    return isinstance(obj, AbstractAsyncContextManager)
 
 
 def _is_sync_context_manager(obj: Any) -> TypeGuard[AbstractContextManager[Any]]:
-    return hasattr(obj, "__enter__")
+    return isinstance(obj, AbstractContextManager)
 
 
 class SQLSpec:
@@ -69,7 +70,11 @@ class SQLSpec:
     @staticmethod
     def _get_config_name(obj: Any) -> str:
         """Get display name for configuration object."""
-        return getattr(obj, "__name__", str(obj))
+        if isinstance(obj, str):
+            return obj
+        if has_name(obj):
+            return obj.__name__
+        return type(obj).__name__
 
     def _cleanup_sync_pools(self) -> None:
         """Clean up only synchronous connection pools at exit."""
@@ -145,8 +150,7 @@ class SQLSpec:
         config_id = id(config)
         if config_id in self._configs:
             logger.debug("Configuration for %s already exists. Overwriting.", config.__class__.__name__)
-        if hasattr(config, "attach_observability"):
-            config.attach_observability(self._observability_config)
+        config.attach_observability(self._observability_config)
         self._configs[config_id] = config
         return config
 
@@ -430,7 +434,7 @@ class SQLSpec:
                 try:
                     async with async_session as session:
                         driver = config._prepare_driver(session)  # pyright: ignore
-                        connection = getattr(driver, "connection", None)
+                        connection = driver.connection
                         if connection is not None:
                             runtime.emit_connection_create(connection)
                         runtime.emit_session_start(driver)
@@ -438,7 +442,7 @@ class SQLSpec:
                 finally:
                     if driver is not None:
                         runtime.emit_session_end(driver)
-                        connection = getattr(driver, "connection", None)
+                        connection = driver.connection
                         if connection is not None:
                             runtime.emit_connection_destroy(connection)
 
@@ -452,7 +456,7 @@ class SQLSpec:
             try:
                 with sync_session as session:
                     driver = config._prepare_driver(session)  # pyright: ignore
-                    connection = getattr(driver, "connection", None)
+                    connection = driver.connection
                     if connection is not None:
                         runtime.emit_connection_create(connection)
                     runtime.emit_session_start(driver)
@@ -460,7 +464,7 @@ class SQLSpec:
             finally:
                 if driver is not None:
                     runtime.emit_session_end(driver)
-                    connection = getattr(driver, "connection", None)
+                    connection = driver.connection
                     if connection is not None:
                         runtime.emit_connection_destroy(connection)
 

@@ -37,6 +37,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
+from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -117,7 +118,7 @@ class DuckDBExceptionHandler:
             e: Exception instance
         """
         error_msg = str(e).lower()
-        exc_name = exc_type.__name__ if hasattr(exc_type, "__name__") else str(exc_type)
+        exc_name = exc_type.__name__
 
         if "constraintexception" in exc_name.lower():
             self._handle_constraint_exception(e, error_msg)
@@ -327,7 +328,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     result = cursor.fetchone()
                     row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
                 except Exception:
-                    row_count = max(cursor.rowcount, 0) if hasattr(cursor, "rowcount") else 0
+                    row_count = max(cursor.rowcount, 0) if has_rowcount(cursor) else 0
         else:
             row_count = 0
 
@@ -372,7 +373,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             result = cursor.fetchone()
             row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
         except Exception:
-            row_count = max(cursor.rowcount, 0) if hasattr(cursor, "rowcount") else 0
+            row_count = max(cursor.rowcount, 0) if has_rowcount(cursor) else 0
 
         return self.create_execution_result(cursor, rowcount_override=row_count)
 

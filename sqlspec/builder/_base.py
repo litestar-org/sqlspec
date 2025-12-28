@@ -28,7 +28,7 @@ from sqlspec.core import (
 )
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_expression_and_parameters, has_with_method, is_expression
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
 
 if TYPE_CHECKING:
     from sqlspec.core import SQLResult
@@ -758,7 +758,9 @@ class QueryBuilder(ABC):
             return self.dialect.__name__.lower()
         if isinstance(self.dialect, Dialect):
             return type(self.dialect).__name__.lower()
-        return getattr(self.dialect, "__name__", str(self.dialect)).lower()
+        if has_name(self.dialect):
+            return self.dialect.__name__.lower()
+        return str(self.dialect).lower()
 
     def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
         """Merge parameters from a SQL object into the builder.
@@ -769,7 +771,7 @@ class QueryBuilder(ABC):
         if not has_expression_and_parameters(sql_obj):
             return
 
-        sql_parameters = getattr(sql_obj, "parameters", {})
+        sql_parameters = sql_obj.parameters
         for param_name, param_value in sql_parameters.items():
             unique_name = self._generate_unique_parameter_name(param_name)
             self.add_parameter(param_value, name=unique_name)

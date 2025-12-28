@@ -195,7 +195,10 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
             memory_sql = memory_store._get_create_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
             if inspect.isawaitable(memory_sql):
                 memory_sql = await memory_sql
-            statements.append(memory_sql)
+            if isinstance(memory_sql, list):
+                statements.extend(memory_sql)
+            else:
+                statements.append(memory_sql)
             logger.debug("Including memory table in migration")
 
     return statements

@@ -5,7 +5,7 @@ Extends the BigQuery dialect with Spanner-only DDL features:
 for row-level time-to-live policies (GoogleSQL).
 """
 
-from typing import Any, cast
+from typing import cast
 
 from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
@@ -15,10 +15,10 @@ __all__ = ("Spanner",)
 
 
 _SPANNER_KEYWORDS: dict[str, TokenType] = {}
-interleave_token = getattr(TokenType, "INTERLEAVE", None)
+interleave_token = cast("TokenType | None", TokenType.__dict__.get("INTERLEAVE"))
 if interleave_token is not None:
     _SPANNER_KEYWORDS["INTERLEAVE"] = interleave_token
-ttl_token = getattr(TokenType, "TTL", None)
+ttl_token = cast("TokenType | None", TokenType.__dict__.get("TTL"))
 if ttl_token is not None:
     _SPANNER_KEYWORDS["TTL"] = ttl_token
 
@@ -104,18 +104,18 @@ class Spanner(BigQuery):
 
         def property_sql(self, expression: exp.Property) -> str:
             """Render row deletion policy or TTL."""
-            if getattr(expression.this, "name", "").upper() == _ROW_DELETION_NAME:
-                values = cast("Any", expression.args.get("value"))
-                if values and getattr(values, "expressions", None) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
+            if isinstance(expression.this, exp.Literal) and expression.this.name.upper() == _ROW_DELETION_NAME:
+                values = expression.args.get("value")
+                if isinstance(values, exp.Tuple) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
                     column = self.sql(values.expressions[0])
                     interval_sql = self.sql(values.expressions[1])
                     if not interval_sql.upper().startswith("INTERVAL"):
                         interval_sql = f"INTERVAL {interval_sql}"
                     return f"ROW DELETION POLICY (OLDER_THAN({column}, {interval_sql}))"
 
-            if getattr(expression.this, "name", "").upper() == "TTL":
-                values = cast("Any", expression.args.get("value"))
-                if values and getattr(values, "expressions", None) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
+            if isinstance(expression.this, exp.Literal) and expression.this.name.upper() == "TTL":
+                values = expression.args.get("value")
+                if isinstance(values, exp.Tuple) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
                     interval = self.sql(values.expressions[0])
                     column = self.sql(values.expressions[1])
                     return f"TTL INTERVAL {interval} ON {column}"
