@@ -34,7 +34,7 @@ def create_migration_file(
 ) -> Path:
     """Create a new migration file from template."""
 
-    migration_config = getattr(config, "migration_config", {}) or {}
+    migration_config = cast("dict[str, Any]", config.migration_config) if config is not None else {}
     settings = template_settings or build_template_settings(migration_config)
     author = get_author(migration_config.get("author"), config=config)
     safe_message = _slugify_message(message)

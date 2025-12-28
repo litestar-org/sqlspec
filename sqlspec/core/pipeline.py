@@ -2,11 +2,14 @@
 
 import os
 from collections import OrderedDict
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.compiler import CompiledSQL, SQLProcessor
+
+if TYPE_CHECKING:
+    from sqlspec.core.statement import StatementConfig
 
 DEBUG_ENV_FLAG: Final[str] = "SQLSPEC_DEBUG_PIPELINE_CACHE"
 DEFAULT_PIPELINE_CACHE_SIZE: Final[int] = 1000
@@ -50,9 +53,9 @@ class _PipelineMetrics:
 class _StatementPipeline:
     __slots__ = ("_metrics", "_processor", "dialect", "parameter_style")
 
-    def __init__(self, config: "Any", cache_size: int, record_metrics: bool) -> None:
+    def __init__(self, config: "StatementConfig", cache_size: int, record_metrics: bool) -> None:
         self._processor = SQLProcessor(config, max_cache_size=cache_size)
-        self.dialect = str(config.dialect) if getattr(config, "dialect", None) else "default"
+        self.dialect = str(config.dialect) if config.dialect else "default"
         parameter_style = config.parameter_config.default_parameter_style
         self.parameter_style = parameter_style.value if parameter_style else "unknown"
         self._metrics = _PipelineMetrics() if record_metrics else None
@@ -85,7 +88,7 @@ class StatementPipelineRegistry:
         self._max_pipelines = max_pipelines
         self._pipeline_cache_size = cache_size
 
-    def compile(self, config: "Any", sql: str, parameters: Any, is_many: bool = False) -> "CompiledSQL":
+    def compile(self, config: "StatementConfig", sql: str, parameters: Any, is_many: bool = False) -> "CompiledSQL":
         key = self._fingerprint_config(config)
         pipeline = self._pipelines.get(key)
         record_metrics = _is_truthy(os.getenv(DEBUG_ENV_FLAG))

@@ -29,6 +29,8 @@ import sqlglot
 from sqlglot import exp
 from typing_extensions import TypeVar
 
+from sqlspec.utils.type_guards import has_field_name
+
 if TYPE_CHECKING:
     from sqlglot.expressions import Condition
 
@@ -937,7 +939,7 @@ def canonicalize_filters(filters: "list[StatementFilter]") -> tuple["StatementFi
 
     def sort_key(f: "StatementFilter") -> tuple[str, str]:
         class_name = type(f).__name__
-        field_name = getattr(f, "field_name", "")
-        return (class_name, str(field_name))
+        field_name = str(f.field_name) if has_field_name(f) else ""
+        return (class_name, field_name)
 
     return tuple(sorted(filters, key=sort_key))

@@ -24,7 +24,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        adk_config = cast("dict[str, Any]", getattr(config, "extension_config", {}).get("adk", {}))
+        adk_config = cast("dict[str, Any]", config.extension_config.get("adk", {}))
         self._shard_count: int = int(adk_config.get("shard_count", 0)) if adk_config.get("shard_count") else 0
         self._session_table_options: str | None = adk_config.get("session_table_options")
         self._events_table_options: str | None = adk_config.get("events_table_options")

@@ -77,7 +77,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             extension_config={
                 "adk": {
                     "memory_table": "adk_memory_entries",
-                    "memory_search_strategy": "simple",
+                    "memory_use_fts": False,
                     "memory_max_results": 20,
                 }
             }
@@ -105,7 +105,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         Notes:
             Configuration is read from config.extension_config["adk"]:
             - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_search_strategy: Search strategy (default: "simple")
+            - memory_use_fts: Enable full-text search when supported (default: False)
             - memory_max_results: Max search results (default: 20)
             - owner_id_column: Optional owner FK column DDL (default: None)
             - enable_memory: Whether memory is enabled (default: True)
@@ -131,7 +131,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         fts_table = ""
-        if self._search_strategy == "sqlite_fts5":
+        if self._use_fts:
             fts_table = f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS {self._memory_table}_fts USING fts5(
             content_text,
@@ -189,7 +189,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             FTS5 virtual table must be dropped separately if it exists.
         """
         statements = [f"DROP TABLE IF EXISTS {self._memory_table}"]
-        if self._search_strategy == "sqlite_fts5":
+        if self._use_fts:
             statements.insert(0, f"DROP TABLE IF EXISTS {self._memory_table}_fts")
         return statements
 
@@ -307,10 +307,6 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query.
 
-        Uses the configured search strategy:
-        - simple: LIKE pattern matching
-        - sqlite_fts5: SQLite FTS5 full-text search
-
         Args:
             query: Text query to search for.
             app_name: Application name to filter by.
@@ -329,54 +325,64 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         effective_limit = limit if limit is not None else self._max_results
 
-        if self._search_strategy == "sqlite_fts5":
-            sql = f"""
-            SELECT m.id, m.session_id, m.app_name, m.user_id, m.event_id, m.author,
-                   m.timestamp, m.content_json, m.content_text, m.metadata_json, m.inserted_at
-            FROM {self._memory_table} m
-            JOIN {self._memory_table}_fts fts ON m.rowid = fts.rowid
-            WHERE m.app_name = ?
-              AND m.user_id = ?
-              AND fts.content_text MATCH ?
-            ORDER BY m.timestamp DESC
-            LIMIT ?
-            """
-            params: tuple[Any, ...] = (app_name, user_id, query, effective_limit)
-        else:
-            sql = f"""
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
-            FROM {self._memory_table}
-            WHERE app_name = ?
-              AND user_id = ?
-              AND content_text LIKE ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """
-            pattern = f"%{query}%"
-            params = (app_name, user_id, pattern, effective_limit)
+        if self._use_fts:
+            try:
+                return self._search_entries_fts(query, app_name, user_id, effective_limit)
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.warning("FTS search failed; falling back to simple search: %s", exc)
+        return self._search_entries_simple(query, app_name, user_id, effective_limit)
 
+    def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = f"""
+        SELECT m.id, m.session_id, m.app_name, m.user_id, m.event_id, m.author,
+               m.timestamp, m.content_json, m.content_text, m.metadata_json, m.inserted_at
+        FROM {self._memory_table} m
+        JOIN {self._memory_table}_fts fts ON m.rowid = fts.rowid
+        WHERE m.app_name = ?
+          AND m.user_id = ?
+          AND fts.content_text MATCH ?
+        ORDER BY m.timestamp DESC
+        LIMIT ?
+        """
+        params: tuple[Any, ...] = (app_name, user_id, query, limit)
+        return self._fetch_records(sql, params)
+
+    def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at
+        FROM {self._memory_table}
+        WHERE app_name = ?
+          AND user_id = ?
+          AND content_text LIKE ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """
+        pattern = f"%{query}%"
+        params = (app_name, user_id, pattern, limit)
+        return self._fetch_records(sql, params)
+
+    def _fetch_records(self, sql: str, params: tuple[Any, ...]) -> "list[MemoryRecord]":
         with self._config.provide_connection() as conn:
             self._enable_foreign_keys(conn)
             cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
-
-            return [
-                {
-                    "id": row[0],
-                    "session_id": row[1],
-                    "app_name": row[2],
-                    "user_id": row[3],
-                    "event_id": row[4],
-                    "author": row[5],
-                    "timestamp": _julian_to_datetime(row[6]),
-                    "content_json": from_json(row[7]) if row[7] else {},
-                    "content_text": row[8],
-                    "metadata_json": from_json(row[9]) if row[9] else None,
-                    "inserted_at": _julian_to_datetime(row[10]),
-                }
-                for row in rows
-            ]
+        return [
+            {
+                "id": row[0],
+                "session_id": row[1],
+                "app_name": row[2],
+                "user_id": row[3],
+                "event_id": row[4],
+                "author": row[5],
+                "timestamp": _julian_to_datetime(row[6]),
+                "content_json": from_json(row[7]) if row[7] else {},
+                "content_text": row[8],
+                "metadata_json": from_json(row[9]) if row[9] else None,
+                "inserted_at": _julian_to_datetime(row[10]),
+            }
+            for row in rows
+        ]
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session.

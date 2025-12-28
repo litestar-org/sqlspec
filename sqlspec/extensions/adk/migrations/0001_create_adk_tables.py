@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_string
-from sqlspec.utils.type_guards import has_attr
 
 if TYPE_CHECKING:
     from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
@@ -112,9 +111,6 @@ def _is_memory_enabled(context: "MigrationContext | None") -> bool:
         return False
 
     config = context.config
-    if not has_attr(config, "extension_config"):
-        return False
-
     extension_config = cast("dict[str, dict[str, Any]]", config.extension_config)
     adk_config: dict[str, Any] = extension_config.get("adk", {})
 

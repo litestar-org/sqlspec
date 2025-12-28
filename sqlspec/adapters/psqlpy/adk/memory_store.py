@@ -36,7 +36,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         fts_index = ""
-        if self._search_strategy == "postgres_fts":
+        if self._use_fts:
             fts_index = f"""
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
             ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
@@ -160,58 +160,54 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
         effective_limit = limit if limit is not None else self._max_results
 
-        if self._search_strategy == "postgres_fts":
-            sql = f"""
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at,
-                   ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $1)) as rank
-            FROM {self._memory_table}
-            WHERE app_name = $2
-              AND user_id = $3
-              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $1)
-            ORDER BY rank DESC, timestamp DESC
-            LIMIT $4
-            """
-            params = [query, app_name, user_id, effective_limit]
-        else:
-            sql = f"""
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
-            FROM {self._memory_table}
-            WHERE app_name = $1
-              AND user_id = $2
-              AND content_text ILIKE $3
-            ORDER BY timestamp DESC
-            LIMIT $4
-            """
-            pattern = f"%{query}%"
-            params = [app_name, user_id, pattern, effective_limit]
-
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-                result = await conn.fetch(sql, params)
-                rows: list[dict[str, Any]] = result.result() if result else []
-                return [
-                    {
-                        "id": row["id"],
-                        "session_id": row["session_id"],
-                        "app_name": row["app_name"],
-                        "user_id": row["user_id"],
-                        "event_id": row["event_id"],
-                        "author": row["author"],
-                        "timestamp": row["timestamp"],
-                        "content_json": row["content_json"],
-                        "content_text": row["content_text"],
-                        "metadata_json": row["metadata_json"],
-                        "inserted_at": row["inserted_at"],
-                    }
-                    for row in rows
-                ]
+            if self._use_fts:
+                try:
+                    return await self._search_entries_fts(query, app_name, user_id, effective_limit)
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    logger.warning("FTS search failed; falling back to simple search: %s", exc)
+            return await self._search_entries_simple(query, app_name, user_id, effective_limit)
         except psqlpy.exceptions.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return []
             raise
+
+    async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at,
+               ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $1)) as rank
+        FROM {self._memory_table}
+        WHERE app_name = $2
+          AND user_id = $3
+          AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $1)
+        ORDER BY rank DESC, timestamp DESC
+        LIMIT $4
+        """
+        params = [query, app_name, user_id, limit]
+        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            result = await conn.fetch(sql, params)
+            rows: list[dict[str, Any]] = result.result() if result else []
+        return _rows_to_records(rows)
+
+    async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at
+        FROM {self._memory_table}
+        WHERE app_name = $1
+          AND user_id = $2
+          AND content_text ILIKE $3
+        ORDER BY timestamp DESC
+        LIMIT $4
+        """
+        pattern = f"%{query}%"
+        params = [app_name, user_id, pattern, limit]
+        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            result = await conn.fetch(sql, params)
+            rows: list[dict[str, Any]] = result.result() if result else []
+        return _rows_to_records(rows)
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -282,3 +278,22 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             if command in {"UPDATE", "DELETE"} and match.group(3):
                 return int(match.group(3))
         return -1
+
+
+def _rows_to_records(rows: "list[dict[str, Any]]") -> "list[MemoryRecord]":
+    return [
+        {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "app_name": row["app_name"],
+            "user_id": row["user_id"],
+            "event_id": row["event_id"],
+            "author": row["author"],
+            "timestamp": row["timestamp"],
+            "content_json": row["content_json"],
+            "content_text": row["content_text"],
+            "metadata_json": row["metadata_json"],
+            "inserted_at": row["inserted_at"],
+        }
+        for row in rows
+    ]

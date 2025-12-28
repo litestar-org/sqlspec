@@ -2,11 +2,11 @@
 
 from abc import abstractmethod
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core import SQL, StackResult, Statement, create_arrow_result
+from sqlspec.core import SQL, ProcessedState, StackResult, Statement, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
@@ -71,8 +71,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
         """
         runtime = self.observability
         compiled_sql, execution_parameters = statement.compile()
-        processed_state = statement.get_processed_state()
-        operation = getattr(processed_state, "operation_type", statement.operation_type)
+        processed_state = cast("ProcessedState", statement.get_processed_state())
+        operation = processed_state.operation_type
         query_context = {
             "sql": compiled_sql,
             "parameters": execution_parameters,
@@ -117,7 +117,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
             is_script=statement.is_script,
             rows_affected=result.rows_affected,
             duration_s=duration,
-            storage_backend=(result.metadata or {}).get("storage_backend") if hasattr(result, "metadata") else None,
+            storage_backend=(result.metadata or {}).get("storage_backend"),
             started_at=started,
         )
         return result

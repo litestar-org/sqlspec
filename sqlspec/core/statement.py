@@ -411,8 +411,8 @@ class SQL:
             if self._processed_state is Empty:
                 return False
 
-        profile = getattr(self._processed_state, "operation_profile", None)
-        if profile and profile.returns_rows:
+        profile = self._processed_state.operation_profile
+        if profile.returns_rows:
             return True
 
         op_type = self._processed_state.operation_type
@@ -435,8 +435,8 @@ class SQL:
         if self._processed_state is Empty:
             return False
 
-        profile = getattr(self._processed_state, "operation_profile", None)
-        if profile and profile.modifies_rows:
+        profile = self._processed_state.operation_profile
+        if profile.modifies_rows:
             return True
 
         op_type = self._processed_state.operation_type

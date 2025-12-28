@@ -40,7 +40,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             extension_config={
                 "adk": {
                     "memory_table": "adk_memory_entries",
-                    "memory_search_strategy": "postgres_fts",
+                    "memory_use_fts": True,
                     "memory_max_results": 20,
                 }
             }
@@ -68,7 +68,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         Notes:
             Configuration is read from config.extension_config["adk"]:
             - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_search_strategy: Search strategy (default: "simple")
+            - memory_use_fts: Enable full-text search when supported (default: False)
             - memory_max_results: Max search results (default: 20)
             - owner_id_column: Optional owner FK column DDL (default: None)
             - enable_memory: Whether memory is enabled (default: True)
@@ -95,7 +95,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         fts_index = ""
-        if self._search_strategy == "postgres_fts":
+        if self._use_fts:
             fts_index = f"""
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
             ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
@@ -233,10 +233,6 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query.
 
-        Uses the configured search strategy:
-        - simple: ILIKE pattern matching
-        - postgres_fts: PostgreSQL full-text search with to_tsvector/to_tsquery
-
         Args:
             query: Text query to search for.
             app_name: Application name to filter by.
@@ -255,56 +251,47 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
 
         effective_limit = limit if limit is not None else self._max_results
 
-        if self._search_strategy == "postgres_fts":
-            sql = f"""
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at,
-                   ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $1)) as rank
-            FROM {self._memory_table}
-            WHERE app_name = $2
-              AND user_id = $3
-              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $1)
-            ORDER BY rank DESC, timestamp DESC
-            LIMIT $4
-            """
-        else:
-            sql = f"""
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
-            FROM {self._memory_table}
-            WHERE app_name = $1
-              AND user_id = $2
-              AND content_text ILIKE $3
-            ORDER BY timestamp DESC
-            LIMIT $4
-            """
-
         try:
-            async with self._config.provide_connection() as conn:
-                if self._search_strategy == "postgres_fts":
-                    rows = await conn.fetch(sql, query, app_name, user_id, effective_limit)
-                else:
-                    pattern = f"%{query}%"
-                    rows = await conn.fetch(sql, app_name, user_id, pattern, effective_limit)
-
-                return [
-                    {
-                        "id": row["id"],
-                        "session_id": row["session_id"],
-                        "app_name": row["app_name"],
-                        "user_id": row["user_id"],
-                        "event_id": row["event_id"],
-                        "author": row["author"],
-                        "timestamp": row["timestamp"],
-                        "content_json": row["content_json"],
-                        "content_text": row["content_text"],
-                        "metadata_json": row["metadata_json"],
-                        "inserted_at": row["inserted_at"],
-                    }
-                    for row in rows
-                ]
+            if self._use_fts:
+                try:
+                    return await self._search_entries_fts(query, app_name, user_id, effective_limit)
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    logger.warning("FTS search failed; falling back to simple search: %s", exc)
+            return await self._search_entries_simple(query, app_name, user_id, effective_limit)
         except asyncpg.exceptions.UndefinedTableError:
             return []
+
+    async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at,
+               ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $1)) as rank
+        FROM {self._memory_table}
+        WHERE app_name = $2
+          AND user_id = $3
+          AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $1)
+        ORDER BY rank DESC, timestamp DESC
+        LIMIT $4
+        """
+        async with self._config.provide_connection() as conn:
+            rows = await conn.fetch(sql, query, app_name, user_id, limit)
+        return _rows_to_records(rows)
+
+    async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at
+        FROM {self._memory_table}
+        WHERE app_name = $1
+          AND user_id = $2
+          AND content_text ILIKE $3
+        ORDER BY timestamp DESC
+        LIMIT $4
+        """
+        pattern = f"%{query}%"
+        async with self._config.provide_connection() as conn:
+            rows = await conn.fetch(sql, app_name, user_id, pattern, limit)
+        return _rows_to_records(rows)
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session.
@@ -352,3 +339,22 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                     return int(count_str)
 
         return 0
+
+
+def _rows_to_records(rows: "list[asyncpg.Record]") -> "list[MemoryRecord]":
+    return [
+        {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "app_name": row["app_name"],
+            "user_id": row["user_id"],
+            "event_id": row["event_id"],
+            "author": row["author"],
+            "timestamp": row["timestamp"],
+            "content_json": row["content_json"],
+            "content_text": row["content_text"],
+            "metadata_json": row["metadata_json"],
+            "inserted_at": row["inserted_at"],
+        }
+        for row in rows
+    ]

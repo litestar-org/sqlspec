@@ -19,23 +19,38 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
+    "ArrowTableStatsProtocol",
     "AsyncConnectionProtocol",
     "AsyncCursorProtocol",
+    "AsyncDeleteProtocol",
+    "AsyncReadBytesProtocol",
+    "AsyncWriteBytesProtocol",
     "ConnectionProtocol",
     "ConnectionStateProtocol",
     "CursorMetadataProtocol",
     "CursorProtocol",
     "DictProtocol",
+    "HasBindKeyProtocol",
+    "HasConfigProtocol",
+    "HasConnectionConfigProtocol",
+    "HasDatabaseUrlAndBindKeyProtocol",
     "HasExpressionAndParametersProtocol",
     "HasExpressionAndSQLProtocol",
     "HasExpressionProtocol",
+    "HasExtensionConfigProtocol",
+    "HasFieldNameProtocol",
+    "HasFilterAttributesProtocol",
+    "HasGetDataProtocol",
     "HasMigrationConfigProtocol",
     "HasParameterBuilderProtocol",
     "HasSQLGlotExpressionProtocol",
     "HasSQLMethodProtocol",
     "HasStatementConfigFactoryProtocol",
     "HasStatementConfigProtocol",
+    "HasStatementTypeProtocol",
     "HasToStatementProtocol",
+    "HasTracerProviderProtocol",
+    "HasTypecodeProtocol",
     "HasWhereProtocol",
     "MigrationModuleProtocol",
     "NotificationProtocol",
@@ -45,9 +60,11 @@ __all__ = (
     "QueryResultProtocol",
     "ReadableProtocol",
     "SQLBuilderProtocol",
+    "SpanAttributeProtocol",
     "StatementProtocol",
     "SupportsArrayProtocol",
     "SupportsArrowResults",
+    "SupportsDtypeStrProtocol",
     "ToSchemaProtocol",
     "WithMethodProtocol",
 )
@@ -118,6 +135,70 @@ class ConnectionStateProtocol(Protocol):
     """Protocol for checking connection state."""
 
     def is_in_transaction(self) -> bool: ...
+
+
+@runtime_checkable
+class HasStatementTypeProtocol(Protocol):
+    """Protocol for cursors exposing statement_type metadata."""
+
+    statement_type: "str | None"
+
+
+@runtime_checkable
+class HasTypecodeProtocol(Protocol):
+    """Protocol for array-like objects exposing typecode."""
+
+    typecode: Any
+
+
+@runtime_checkable
+class SupportsDtypeStrProtocol(Protocol):
+    """Protocol for dtype objects exposing string descriptor."""
+
+    str: str
+
+
+@runtime_checkable
+class ArrowTableStatsProtocol(Protocol):
+    """Protocol for Arrow objects exposing row and byte counts."""
+
+    num_rows: int
+    nbytes: int
+
+
+@runtime_checkable
+class SpanAttributeProtocol(Protocol):
+    """Protocol for span objects supporting attribute mutation."""
+
+    def set_attribute(self, key: str, value: Any) -> None: ...
+
+
+@runtime_checkable
+class HasTracerProviderProtocol(Protocol):
+    """Protocol for tracer providers exposing get_tracer."""
+
+    def get_tracer(self, name: str) -> Any: ...
+
+
+@runtime_checkable
+class AsyncReadBytesProtocol(Protocol):
+    """Protocol for async read_bytes support."""
+
+    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes: ...
+
+
+@runtime_checkable
+class AsyncWriteBytesProtocol(Protocol):
+    """Protocol for async write_bytes support."""
+
+    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None: ...
+
+
+@runtime_checkable
+class AsyncDeleteProtocol(Protocol):
+    """Protocol for async delete support."""
+
+    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None: ...
 
 
 @runtime_checkable
@@ -242,6 +323,65 @@ class DictProtocol(Protocol):
     """Protocol for objects with a __dict__ attribute."""
 
     __dict__: dict[str, Any]
+
+
+@runtime_checkable
+class HasConfigProtocol(Protocol):
+    """Protocol for wrapper objects exposing a config attribute."""
+
+    config: Any
+
+
+@runtime_checkable
+class HasConnectionConfigProtocol(Protocol):
+    """Protocol for configs exposing connection_config mapping."""
+
+    connection_config: "Mapping[str, Any]"
+
+
+@runtime_checkable
+class HasBindKeyProtocol(Protocol):
+    """Protocol for configs exposing bind_key."""
+
+    bind_key: "str | None"
+
+
+@runtime_checkable
+class HasDatabaseUrlAndBindKeyProtocol(Protocol):
+    """Protocol for configs exposing database_url and bind_key."""
+
+    database_url: str
+    bind_key: "str | None"
+
+
+@runtime_checkable
+class HasExtensionConfigProtocol(Protocol):
+    """Protocol for configs exposing extension_config mapping."""
+
+    extension_config: "Mapping[str, Any]"
+
+
+@runtime_checkable
+class HasFieldNameProtocol(Protocol):
+    """Protocol for objects exposing field_name attribute."""
+
+    field_name: Any
+
+
+@runtime_checkable
+class HasFilterAttributesProtocol(Protocol):
+    """Protocol for filter-like objects exposing field attributes."""
+
+    field_name: Any
+    operation: Any
+    value: Any
+
+
+@runtime_checkable
+class HasGetDataProtocol(Protocol):
+    """Protocol for results exposing get_data()."""
+
+    def get_data(self) -> Any: ...
 
 
 @runtime_checkable

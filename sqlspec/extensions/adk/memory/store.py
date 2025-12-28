@@ -2,15 +2,15 @@
 
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_attr
 
 if TYPE_CHECKING:
+    from sqlspec.config import ADKConfig, DatabaseConfigProtocol
     from sqlspec.extensions.adk.memory._types import MemoryRecord
 
-ConfigT = TypeVar("ConfigT")
+ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("extensions.adk.memory.store")
 
@@ -19,8 +19,6 @@ __all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 MAX_TABLE_NAME_LENGTH: Final = 63
-
-SearchStrategy = Literal["simple", "postgres_fts", "sqlite_fts5"]
 
 
 def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
@@ -79,7 +77,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
     - Connection management via SQLSpec configs
     - Table name validation
     - Memory entry CRUD operations
-    - Text search with configurable strategies
+    - Text search with optional full-text search support
 
     Subclasses must implement dialect-specific SQL queries and will be created
     in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/memory_store.py).
@@ -90,7 +88,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
     Notes:
         Configuration is read from config.extension_config["adk"]:
         - memory_table: Memory table name (default: "adk_memory_entries")
-        - memory_search_strategy: Search strategy (default: "simple")
+        - memory_use_fts: Enable full-text search when supported (default: False)
         - memory_max_results: Max search results (default: 20)
         - owner_id_column: Optional owner FK column DDL (default: None)
         - enable_memory: Whether memory is enabled (default: True)
@@ -103,7 +101,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         "_memory_table",
         "_owner_id_column_ddl",
         "_owner_id_column_name",
-        "_search_strategy",
+        "_use_fts",
     )
 
     def __init__(self, config: ConfigT) -> None:
@@ -115,7 +113,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         Notes:
             Reads configuration from config.extension_config["adk"]:
             - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_search_strategy: Search strategy (default: "simple")
+            - memory_use_fts: Enable full-text search when supported (default: False)
             - memory_max_results: Max search results (default: 20)
             - owner_id_column: Optional owner FK column DDL (default: None)
             - enable_memory: Whether memory is enabled (default: True)
@@ -124,7 +122,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         store_config = self._get_store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
-        self._search_strategy: SearchStrategy = store_config.get("search_strategy", "simple")
+        self._use_fts: bool = bool(store_config.get("use_fts", False))
         self._max_results: int = store_config.get("max_results", 20)
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
@@ -136,31 +134,27 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         """Extract ADK memory configuration from config.extension_config.
 
         Returns:
-            Dict with memory_table, search_strategy, max_results, and optionally owner_id_column.
+            Dict with memory_table, use_fts, max_results, and optionally owner_id_column.
         """
-        if has_attr(self._config, "extension_config"):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
-            adk_config: dict[str, Any] = extension_config.get("adk", {})
+        extension_config = self._config.extension_config
+        adk_config = cast("ADKConfig", extension_config.get("adk", {}))
+        enable_memory = adk_config.get("enable_memory")
+        memory_table = adk_config.get("memory_table")
+        use_fts = adk_config.get("memory_use_fts")
+        max_results = adk_config.get("memory_max_results")
 
-            result: dict[str, Any] = {
-                "enable_memory": adk_config.get("enable_memory", True),
-                "memory_table": adk_config.get("memory_table", "adk_memory_entries"),
-                "search_strategy": adk_config.get("memory_search_strategy", "simple"),
-                "max_results": adk_config.get("memory_max_results", 20),
-            }
-
-            owner_id = adk_config.get("owner_id_column")
-            if owner_id is not None:
-                result["owner_id_column"] = owner_id
-
-            return result
-
-        return {
-            "enable_memory": True,
-            "memory_table": "adk_memory_entries",
-            "search_strategy": "simple",
-            "max_results": 20,
+        result: dict[str, Any] = {
+            "enable_memory": bool(enable_memory) if enable_memory is not None else True,
+            "memory_table": str(memory_table) if memory_table is not None else "adk_memory_entries",
+            "use_fts": bool(use_fts) if use_fts is not None else False,
+            "max_results": int(max_results) if isinstance(max_results, int) else 20,
         }
+
+        owner_id = adk_config.get("owner_id_column")
+        if owner_id is not None:
+            result["owner_id_column"] = owner_id
+
+        return result
 
     @property
     def config(self) -> ConfigT:
@@ -178,9 +172,9 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         return self._enabled
 
     @property
-    def search_strategy(self) -> SearchStrategy:
-        """Return the configured search strategy."""
-        return self._search_strategy
+    def use_fts(self) -> bool:
+        """Return whether full-text search is enabled."""
+        return self._use_fts
 
     @property
     def max_results(self) -> int:
@@ -301,7 +295,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
     - Connection management via SQLSpec configs
     - Table name validation
     - Memory entry CRUD operations
-    - Text search with configurable strategies
+    - Text search with optional full-text search support
 
     Subclasses must implement dialect-specific SQL queries and will be created
     in each adapter directory (e.g., sqlspec/adapters/sqlite/adk/memory_store.py).
@@ -312,7 +306,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
     Notes:
         Configuration is read from config.extension_config["adk"]:
         - memory_table: Memory table name (default: "adk_memory_entries")
-        - memory_search_strategy: Search strategy (default: "simple")
+        - memory_use_fts: Enable full-text search when supported (default: False)
         - memory_max_results: Max search results (default: 20)
         - owner_id_column: Optional owner FK column DDL (default: None)
         - enable_memory: Whether memory is enabled (default: True)
@@ -325,7 +319,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         "_memory_table",
         "_owner_id_column_ddl",
         "_owner_id_column_name",
-        "_search_strategy",
+        "_use_fts",
     )
 
     def __init__(self, config: ConfigT) -> None:
@@ -337,7 +331,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         Notes:
             Reads configuration from config.extension_config["adk"]:
             - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_search_strategy: Search strategy (default: "simple")
+            - memory_use_fts: Enable full-text search when supported (default: False)
             - memory_max_results: Max search results (default: 20)
             - owner_id_column: Optional owner FK column DDL (default: None)
             - enable_memory: Whether memory is enabled (default: True)
@@ -346,7 +340,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         store_config = self._get_store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
-        self._search_strategy: SearchStrategy = store_config.get("search_strategy", "simple")
+        self._use_fts: bool = bool(store_config.get("use_fts", False))
         self._max_results: int = store_config.get("max_results", 20)
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
@@ -358,31 +352,27 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         """Extract ADK memory configuration from config.extension_config.
 
         Returns:
-            Dict with memory_table, search_strategy, max_results, and optionally owner_id_column.
+            Dict with memory_table, use_fts, max_results, and optionally owner_id_column.
         """
-        if has_attr(self._config, "extension_config"):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
-            adk_config: dict[str, Any] = extension_config.get("adk", {})
+        extension_config = self._config.extension_config
+        adk_config = cast("ADKConfig", extension_config.get("adk", {}))
+        enable_memory = adk_config.get("enable_memory")
+        memory_table = adk_config.get("memory_table")
+        use_fts = adk_config.get("memory_use_fts")
+        max_results = adk_config.get("memory_max_results")
 
-            result: dict[str, Any] = {
-                "enable_memory": adk_config.get("enable_memory", True),
-                "memory_table": adk_config.get("memory_table", "adk_memory_entries"),
-                "search_strategy": adk_config.get("memory_search_strategy", "simple"),
-                "max_results": adk_config.get("memory_max_results", 20),
-            }
-
-            owner_id = adk_config.get("owner_id_column")
-            if owner_id is not None:
-                result["owner_id_column"] = owner_id
-
-            return result
-
-        return {
-            "enable_memory": True,
-            "memory_table": "adk_memory_entries",
-            "search_strategy": "simple",
-            "max_results": 20,
+        result: dict[str, Any] = {
+            "enable_memory": bool(enable_memory) if enable_memory is not None else True,
+            "memory_table": str(memory_table) if memory_table is not None else "adk_memory_entries",
+            "use_fts": bool(use_fts) if use_fts is not None else False,
+            "max_results": int(max_results) if isinstance(max_results, int) else 20,
         }
+
+        owner_id = adk_config.get("owner_id_column")
+        if owner_id is not None:
+            result["owner_id_column"] = owner_id
+
+        return result
 
     @property
     def config(self) -> ConfigT:
@@ -400,9 +390,9 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         return self._enabled
 
     @property
-    def search_strategy(self) -> SearchStrategy:
-        """Return the configured search strategy."""
-        return self._search_strategy
+    def use_fts(self) -> bool:
+        """Return whether full-text search is enabled."""
+        return self._use_fts
 
     @property
     def max_results(self) -> int:

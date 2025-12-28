@@ -34,7 +34,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         fts_index = ""
-        if self._search_strategy == "postgres_fts":
+        if self._use_fts:
             fts_index = f"""
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
             ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
@@ -113,6 +113,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             for entry in entries:
+                params: tuple[Any, ...]
                 if self._owner_id_column_name:
                     params = (
                         entry["id"],
@@ -158,59 +159,55 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
 
         effective_limit = limit if limit is not None else self._max_results
 
-        if self._search_strategy == "postgres_fts":
-            sql = pg_sql.SQL(
-                """
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at,
-                   ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
-            FROM {table}
-            WHERE app_name = %s
-              AND user_id = %s
-              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
-            ORDER BY rank DESC, timestamp DESC
-            LIMIT %s
-            """
-            ).format(table=pg_sql.Identifier(self._memory_table))
-            params = (query, app_name, user_id, query, effective_limit)
-        else:
-            sql = pg_sql.SQL(
-                """
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
-            FROM {table}
-            WHERE app_name = %s
-              AND user_id = %s
-              AND content_text ILIKE %s
-            ORDER BY timestamp DESC
-            LIMIT %s
-            """
-            ).format(table=pg_sql.Identifier(self._memory_table))
-            pattern = f"%{query}%"
-            params = (app_name, user_id, pattern, effective_limit)
-
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
-                await cur.execute(sql, params)
-                rows = await cur.fetchall()
-                return [
-                    {
-                        "id": row["id"],
-                        "session_id": row["session_id"],
-                        "app_name": row["app_name"],
-                        "user_id": row["user_id"],
-                        "event_id": row["event_id"],
-                        "author": row["author"],
-                        "timestamp": row["timestamp"],
-                        "content_json": row["content_json"],
-                        "content_text": row["content_text"],
-                        "metadata_json": row["metadata_json"],
-                        "inserted_at": row["inserted_at"],
-                    }
-                    for row in rows
-                ]
+            if self._use_fts:
+                try:
+                    return await self._search_entries_fts(query, app_name, user_id, effective_limit)
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    logger.warning("FTS search failed; falling back to simple search: %s", exc)
+            return await self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
             return []
+
+    async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = pg_sql.SQL(
+            """
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at,
+               ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
+        FROM {table}
+        WHERE app_name = %s
+          AND user_id = %s
+          AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
+        ORDER BY rank DESC, timestamp DESC
+        LIMIT %s
+        """
+        ).format(table=pg_sql.Identifier(self._memory_table))
+        params = (query, app_name, user_id, query, limit)
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        return _rows_to_records(rows)
+
+    async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = pg_sql.SQL(
+            """
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at
+        FROM {table}
+        WHERE app_name = %s
+          AND user_id = %s
+          AND content_text ILIKE %s
+        ORDER BY timestamp DESC
+        LIMIT %s
+        """
+        ).format(table=pg_sql.Identifier(self._memory_table))
+        pattern = f"%{query}%"
+        params = (app_name, user_id, pattern, limit)
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        return _rows_to_records(rows)
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -252,7 +249,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         fts_index = ""
-        if self._search_strategy == "postgres_fts":
+        if self._use_fts:
             fts_index = f"""
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
             ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
@@ -331,6 +328,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             for entry in entries:
+                params: tuple[Any, ...]
                 if self._owner_id_column_name:
                     params = (
                         entry["id"],
@@ -376,59 +374,55 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         effective_limit = limit if limit is not None else self._max_results
 
-        if self._search_strategy == "postgres_fts":
-            sql = pg_sql.SQL(
-                """
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at,
-                   ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
-            FROM {table}
-            WHERE app_name = %s
-              AND user_id = %s
-              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
-            ORDER BY rank DESC, timestamp DESC
-            LIMIT %s
-            """
-            ).format(table=pg_sql.Identifier(self._memory_table))
-            params = (query, app_name, user_id, query, effective_limit)
-        else:
-            sql = pg_sql.SQL(
-                """
-            SELECT id, session_id, app_name, user_id, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
-            FROM {table}
-            WHERE app_name = %s
-              AND user_id = %s
-              AND content_text ILIKE %s
-            ORDER BY timestamp DESC
-            LIMIT %s
-            """
-            ).format(table=pg_sql.Identifier(self._memory_table))
-            pattern = f"%{query}%"
-            params = (app_name, user_id, pattern, effective_limit)
-
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-                return [
-                    {
-                        "id": row["id"],
-                        "session_id": row["session_id"],
-                        "app_name": row["app_name"],
-                        "user_id": row["user_id"],
-                        "event_id": row["event_id"],
-                        "author": row["author"],
-                        "timestamp": row["timestamp"],
-                        "content_json": row["content_json"],
-                        "content_text": row["content_text"],
-                        "metadata_json": row["metadata_json"],
-                        "inserted_at": row["inserted_at"],
-                    }
-                    for row in rows
-                ]
+            if self._use_fts:
+                try:
+                    return self._search_entries_fts(query, app_name, user_id, effective_limit)
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    logger.warning("FTS search failed; falling back to simple search: %s", exc)
+            return self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
             return []
+
+    def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = pg_sql.SQL(
+            """
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at,
+               ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
+        FROM {table}
+        WHERE app_name = %s
+          AND user_id = %s
+          AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
+        ORDER BY rank DESC, timestamp DESC
+        LIMIT %s
+        """
+        ).format(table=pg_sql.Identifier(self._memory_table))
+        params = (query, app_name, user_id, query, limit)
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return _rows_to_records(rows)
+
+    def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = pg_sql.SQL(
+            """
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at
+        FROM {table}
+        WHERE app_name = %s
+          AND user_id = %s
+          AND content_text ILIKE %s
+        ORDER BY timestamp DESC
+        LIMIT %s
+        """
+        ).format(table=pg_sql.Identifier(self._memory_table))
+        pattern = f"%{query}%"
+        params = (app_name, user_id, pattern, limit)
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return _rows_to_records(rows)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -452,3 +446,22 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(sql)
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+
+def _rows_to_records(rows: "list[Any]") -> "list[MemoryRecord]":
+    return [
+        {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "app_name": row["app_name"],
+            "user_id": row["user_id"],
+            "event_id": row["event_id"],
+            "author": row["author"],
+            "timestamp": row["timestamp"],
+            "content_json": row["content_json"],
+            "content_text": row["content_text"],
+            "metadata_json": row["metadata_json"],
+            "inserted_at": row["inserted_at"],
+        }
+        for row in rows
+    ]

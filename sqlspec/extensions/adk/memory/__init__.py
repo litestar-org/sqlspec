@@ -24,7 +24,7 @@ Example (async):
         extension_config={
             "adk": {
                 "memory_table": "adk_memory_entries",
-                "memory_search_strategy": "postgres_fts",
+                "memory_use_fts": True,
                 "memory_max_results": 50,
             }
         }

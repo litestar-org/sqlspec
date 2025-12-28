@@ -389,7 +389,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 return
             pending_versions = [v for v, _ in pending]
 
-            migration_config = getattr(self.config, "migration_config", {}) or {}
+            migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
             strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
 
             validate_migration_order(pending_versions, applied_versions, strict_ordering)
@@ -833,7 +833,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             await self.tracker.ensure_tracking_table(driver)
 
             if auto_sync:
-                migration_config = getattr(self.config, "migration_config", {}) or {}
+                migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
                 config_auto_sync = migration_config.get("auto_sync", True)
                 if config_auto_sync:
                     await self._synchronize_version_records(driver)
@@ -872,7 +872,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return
             pending_versions = [v for v, _ in pending]
 
-            migration_config = getattr(self.config, "migration_config", {}) or {}
+            migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
             strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
 
             validate_migration_order(pending_versions, applied_versions, strict_ordering)

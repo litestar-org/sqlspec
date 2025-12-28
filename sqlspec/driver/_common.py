@@ -28,7 +28,14 @@ from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.type_guards import has_array_interface, has_cursor_metadata, is_statement_filter
+from sqlspec.utils.type_guards import (
+    has_array_interface,
+    has_cursor_metadata,
+    has_dtype_str,
+    has_statement_type,
+    has_typecode,
+    is_statement_filter,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -252,8 +259,8 @@ def make_cache_key_hashable(obj: Any) -> Any:
     if isinstance(obj, set):
         return frozenset(make_cache_key_hashable(item) for item in obj)
 
-    typecode = getattr(obj, "typecode", None)
-    if typecode is not None:
+    if has_typecode(obj):
+        typecode = obj.typecode
         try:
             length = len(obj)
         except (AttributeError, TypeError):
@@ -263,7 +270,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
 
     if has_array_interface(obj):
         try:
-            dtype_str = getattr(obj.dtype, "str", str(type(obj)))
+            dtype_str = obj.dtype.str if has_dtype_str(obj.dtype) else str(type(obj))
             shape = tuple(int(s) for s in obj.shape)
         except (AttributeError, TypeError):
             try:
@@ -787,7 +794,10 @@ class CommonDriverAttributesMixin:
         if statement.operation_type != "UNKNOWN":
             return False
 
-        statement_type = getattr(cursor, "statement_type", None)
+        if has_statement_type(cursor) and isinstance(cursor.statement_type, str):
+            statement_type = cursor.statement_type
+        else:
+            statement_type = None
         if isinstance(statement_type, str) and statement_type.upper() == "SELECT":
             return True
 

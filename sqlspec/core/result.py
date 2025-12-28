@@ -990,7 +990,7 @@ class StackResult:
         metadata: "dict[str, Any] | None" = None,
     ) -> None:
         self.result: StatementResult | ArrowResult = result if result is not None else EmptyResult()
-        self.rows_affected = rows_affected if rows_affected is not None else _infer_rows_affected(self.result)
+        self.rows_affected = rows_affected if rows_affected is not None else int(self.result.rows_affected)
         self.error = error
         self.warning = warning
         self.metadata = dict(metadata) if metadata else None
@@ -1056,11 +1056,6 @@ class StackResult:
         """Create an error-only stack result."""
 
         return cls(result=EmptyResult(), rows_affected=0, error=error)
-
-
-def _infer_rows_affected(result: "StatementResult | ArrowResult") -> int:
-    rowcount = getattr(result, "rows_affected", None)
-    return int(rowcount) if isinstance(rowcount, int) else 0
 
 
 def create_sql_result(

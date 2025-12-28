@@ -18,6 +18,7 @@ from sqlspec.storage import (
     create_storage_bridge_job,
 )
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -46,6 +47,7 @@ class StorageDriverMixin:
     __slots__ = ()
     storage_pipeline_factory: "type[SyncStoragePipeline | AsyncStoragePipeline] | None" = None
     driver_features: dict[str, Any]
+    is_async: bool
 
     if TYPE_CHECKING:
 
@@ -138,7 +140,7 @@ class StorageDriverMixin:
     def _storage_pipeline(self) -> "SyncStoragePipeline | AsyncStoragePipeline":
         factory = self.storage_pipeline_factory
         if factory is None:
-            if getattr(self, "is_async", False):
+            if self.is_async:
                 return AsyncStoragePipeline()
             return SyncStoragePipeline()
         return factory()
@@ -263,15 +265,19 @@ class StorageDriverMixin:
 
     @staticmethod
     def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> StorageTelemetry:
-        rows = int(getattr(table, "num_rows", 0))
-        bytes_processed = int(getattr(table, "nbytes", 0))
+        if has_arrow_table_stats(table):
+            rows = int(table.num_rows)
+            bytes_processed = int(table.nbytes)
+        else:
+            rows = 0
+            bytes_processed = 0
         return {"rows_processed": rows, "bytes_processed": bytes_processed, "format": format_label}
 
     def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
         ensure_pyarrow()
         import pyarrow as pa
 
-        if hasattr(source, "get_data"):
+        if has_get_data(source):
             table = source.get_data()
             if isinstance(table, pa.Table):
                 return table

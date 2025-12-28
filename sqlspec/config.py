@@ -335,7 +335,7 @@ class ADKConfig(TypedDict):
                     "session_table": "my_sessions",
                     "events_table": "my_events",
                     "memory_table": "my_memories",
-                    "memory_search_strategy": "postgres_fts",
+                    "memory_use_fts": True,
                     "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
                 }
             }
@@ -401,18 +401,19 @@ class ADKConfig(TypedDict):
         "tenant_acme_memories"
     """
 
-    memory_search_strategy: NotRequired[Literal["simple", "postgres_fts", "sqlite_fts5"]]
-    """Search strategy for memory queries. Default: 'simple'.
+    memory_use_fts: NotRequired[bool]
+    """Enable full-text search when supported. Default: False.
 
-    Available strategies:
-        - 'simple': Uses ILIKE/LIKE for text matching (all adapters)
-        - 'postgres_fts': PostgreSQL full-text search with tsvector/GIN index
-        - 'sqlite_fts5': SQLite FTS5 virtual table
+    When True, adapters will use their native FTS capabilities where available:
+    - PostgreSQL: to_tsvector/to_tsquery with GIN index
+    - SQLite: FTS5 virtual table
+    - DuckDB: FTS extension with match_bm25
+    - Oracle: CONTAINS() with CTXSYS.CONTEXT index
+    - BigQuery: SEARCH() function (requires search index)
+    - Spanner: TOKENIZE_FULLTEXT with search index
+    - MySQL: MATCH...AGAINST with FULLTEXT index
 
-    Notes:
-        - 'simple' is adequate for < 10K rows
-        - FTS strategies require adapter support and create additional indexes
-        - Unsupported strategies fall back to 'simple' with a warning
+    When False, adapters use simple LIKE/ILIKE queries (works without indexes).
     """
 
     memory_max_results: NotRequired[int]

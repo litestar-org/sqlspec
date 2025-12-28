@@ -535,7 +535,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
             config: The SQLSpec configuration.
         """
         self.config = config
-        migration_config = getattr(self.config, "migration_config", {}) or {}
+        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
 
         self.version_table = migration_config.get("version_table_name", "ddl_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))
@@ -564,7 +564,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
                 continue
 
             ext_name = ext_config
-            ext_options = getattr(self.config, "extension_config", {}).get(ext_name, {})
+            ext_options = cast("dict[str, Any]", self.config.extension_config).get(ext_name, {})
             configs[ext_name] = ext_options
 
         return configs

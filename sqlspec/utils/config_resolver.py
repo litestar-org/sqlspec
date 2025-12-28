@@ -12,6 +12,12 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.exceptions import ConfigResolverError
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import async_, await_
+from sqlspec.utils.type_guards import (
+    has_config_attribute,
+    has_connection_config,
+    has_database_url_and_bind_key,
+    has_migration_config,
+)
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -139,15 +145,15 @@ def _is_valid_config(config: Any) -> bool:
     if isinstance(config, type):
         return False
 
-    nested_config = getattr(config, "config", None)
-    if nested_config is not None and hasattr(nested_config, "migration_config"):
-        return True
-
-    migration_config = getattr(config, "migration_config", None)
-    if migration_config is not None:
-        if hasattr(config, "connection_config"):
+    if has_config_attribute(config):
+        nested_config = config.config
+        if has_migration_config(nested_config):
             return True
-        if hasattr(config, "database_url") and hasattr(config, "bind_key"):
+
+    if has_migration_config(config) and config.migration_config is not None:
+        if has_connection_config(config):
+            return True
+        if has_database_url_and_bind_key(config):
             return True
 
     return False

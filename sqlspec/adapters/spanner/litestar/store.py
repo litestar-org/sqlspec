@@ -28,7 +28,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
 
     def __init__(self, config: "SpannerSyncConfig") -> None:
         super().__init__(config)
-        litestar_cfg = cast("dict[str, Any]", getattr(config, "extension_config", {}).get("litestar", {}))
+        litestar_cfg = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
         self._shard_count: int = int(litestar_cfg.get("shard_count", 0)) if litestar_cfg.get("shard_count") else 0
         self._table_options: str | None = litestar_cfg.get("table_options")
         self._index_options: str | None = litestar_cfg.get("index_options")

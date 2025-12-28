@@ -21,6 +21,7 @@ from typing_extensions import TypeVar
 
 from sqlspec.core.pipeline import get_statement_pipeline_metrics, reset_statement_pipeline_cache
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_field_name, has_filter_attributes
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -743,7 +744,7 @@ class FiltersView:
         Returns:
             List of filters matching the field name
         """
-        return [f for f in self._filters_ref if hasattr(f, "field_name") and f.field_name == field_name]
+        return [f for f in self._filters_ref if has_field_name(f) and f.field_name == field_name]
 
     def has_field(self, field_name: str) -> bool:
         """Check if any filter exists for a field.
@@ -754,7 +755,7 @@ class FiltersView:
         Returns:
             True if field has filters
         """
-        return any(hasattr(f, "field_name") and f.field_name == field_name for f in self._filters_ref)
+        return any(has_field_name(f) and f.field_name == field_name for f in self._filters_ref)
 
     def to_canonical(self) -> "tuple[Any, ...]":
         """Create canonical representation for cache keys.
@@ -767,7 +768,7 @@ class FiltersView:
         for f in self._filters_ref:
             if isinstance(f, Filter):
                 filter_objects.append(f)
-            elif hasattr(f, "field_name") and hasattr(f, "operation") and hasattr(f, "value"):
+            elif has_filter_attributes(f):
                 filter_objects.append(Filter(f.field_name, f.operation, f.value))
 
         return canonicalize_filters(filter_objects)

@@ -9,9 +9,10 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from sqlspec.config import ADKConfig, DatabaseConfigProtocol
     from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 
-ConfigT = TypeVar("ConfigT")
+ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("extensions.adk.store")
 
@@ -138,20 +139,18 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         Returns:
             Dict with session_table, events_table, and optionally owner_id_column.
         """
-        if hasattr(self._config, "extension_config"):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
-            adk_config: dict[str, Any] = extension_config.get("adk", {})
-            session_table = adk_config.get("session_table")
-            events_table = adk_config.get("events_table")
-            result: dict[str, Any] = {
-                "session_table": session_table if session_table is not None else "adk_sessions",
-                "events_table": events_table if events_table is not None else "adk_events",
-            }
-            owner_id = adk_config.get("owner_id_column")
-            if owner_id is not None:
-                result["owner_id_column"] = owner_id
-            return result
-        return {"session_table": "adk_sessions", "events_table": "adk_events"}
+        extension_config = self._config.extension_config
+        adk_config = cast("ADKConfig", extension_config.get("adk", {}))
+        session_table = adk_config.get("session_table")
+        events_table = adk_config.get("events_table")
+        result: dict[str, Any] = {
+            "session_table": session_table if session_table is not None else "adk_sessions",
+            "events_table": events_table if events_table is not None else "adk_events",
+        }
+        owner_id = adk_config.get("owner_id_column")
+        if owner_id is not None:
+            result["owner_id_column"] = owner_id
+        return result
 
     @property
     def config(self) -> ConfigT:
@@ -359,20 +358,18 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         Returns:
             Dict with session_table, events_table, and optionally owner_id_column.
         """
-        if hasattr(self._config, "extension_config"):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
-            adk_config: dict[str, Any] = extension_config.get("adk", {})
-            session_table = adk_config.get("session_table")
-            events_table = adk_config.get("events_table")
-            result: dict[str, Any] = {
-                "session_table": session_table if session_table is not None else "adk_sessions",
-                "events_table": events_table if events_table is not None else "adk_events",
-            }
-            owner_id = adk_config.get("owner_id_column")
-            if owner_id is not None:
-                result["owner_id_column"] = owner_id
-            return result
-        return {"session_table": "adk_sessions", "events_table": "adk_events"}
+        extension_config = self._config.extension_config
+        adk_config = cast("ADKConfig", extension_config.get("adk", {}))
+        session_table = adk_config.get("session_table")
+        events_table = adk_config.get("events_table")
+        result: dict[str, Any] = {
+            "session_table": session_table if session_table is not None else "adk_sessions",
+            "events_table": events_table if events_table is not None else "adk_events",
+        }
+        owner_id = adk_config.get("owner_id_column")
+        if owner_id is not None:
+            result["owner_id_column"] = owner_id
+        return result
 
     @property
     def config(self) -> ConfigT:
