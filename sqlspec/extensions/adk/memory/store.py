@@ -4,6 +4,8 @@ import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
+from typing_extensions import NotRequired, TypedDict
+
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -19,6 +21,16 @@ __all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 MAX_TABLE_NAME_LENGTH: Final = 63
+
+
+class _ADKMemoryStoreConfig(TypedDict):
+    """Normalized ADK memory store configuration."""
+
+    enable_memory: bool
+    memory_table: str
+    use_fts: bool
+    max_results: int
+    owner_id_column: NotRequired[str]
 
 
 def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
@@ -130,7 +142,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         )
         _validate_table_name(self._memory_table)
 
-    def _get_store_config_from_extension(self) -> "dict[str, Any]":
+    def _get_store_config_from_extension(self) -> "_ADKMemoryStoreConfig":
         """Extract ADK memory configuration from config.extension_config.
 
         Returns:
@@ -143,7 +155,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         use_fts = adk_config.get("memory_use_fts")
         max_results = adk_config.get("memory_max_results")
 
-        result: dict[str, Any] = {
+        result: _ADKMemoryStoreConfig = {
             "enable_memory": bool(enable_memory) if enable_memory is not None else True,
             "memory_table": str(memory_table) if memory_table is not None else "adk_memory_entries",
             "use_fts": bool(use_fts) if use_fts is not None else False,
@@ -348,7 +360,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         )
         _validate_table_name(self._memory_table)
 
-    def _get_store_config_from_extension(self) -> "dict[str, Any]":
+    def _get_store_config_from_extension(self) -> "_ADKMemoryStoreConfig":
         """Extract ADK memory configuration from config.extension_config.
 
         Returns:
@@ -361,7 +373,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         use_fts = adk_config.get("memory_use_fts")
         max_results = adk_config.get("memory_max_results")
 
-        result: dict[str, Any] = {
+        result: _ADKMemoryStoreConfig = {
             "enable_memory": bool(enable_memory) if enable_memory is not None else True,
             "memory_table": str(memory_table) if memory_table is not None else "adk_memory_entries",
             "use_fts": bool(use_fts) if use_fts is not None else False,
