@@ -316,9 +316,14 @@ class FastAPIConfig(StarletteConfig):
 
 
 class ADKConfig(TypedDict):
-    """Configuration options for ADK session store extension.
+    """Configuration options for ADK session and memory store extension.
 
     All fields are optional with sensible defaults. Use in extension_config["adk"]:
+
+    Configuration supports three deployment scenarios:
+    1. SQLSpec manages everything (runtime + migrations)
+    2. SQLSpec runtime only (external migration tools like Alembic/Flyway)
+    3. Selective features (sessions OR memory, not both)
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -329,6 +334,8 @@ class ADKConfig(TypedDict):
                 "adk": {
                     "session_table": "my_sessions",
                     "events_table": "my_events",
+                    "memory_table": "my_memories",
+                    "memory_search_strategy": "postgres_fts",
                     "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
                 }
             }
@@ -337,6 +344,34 @@ class ADKConfig(TypedDict):
     Notes:
         This TypedDict provides type safety for extension config but is not required.
         You can use plain dicts as well.
+    """
+
+    enable_sessions: NotRequired[bool]
+    """Enable session store at runtime. Default: True.
+
+    When False: session service unavailable, session store operations disabled.
+    Independent of migration control - can use externally-managed tables.
+    """
+
+    enable_memory: NotRequired[bool]
+    """Enable memory store at runtime. Default: True.
+
+    When False: memory service unavailable, memory store operations disabled.
+    Independent of migration control - can use externally-managed tables.
+    """
+
+    include_sessions_migration: NotRequired[bool]
+    """Include session tables in SQLSpec migrations. Default: True.
+
+    When False: session migration DDL skipped (use external migration tools).
+    Decoupled from enable_sessions - allows external table management with SQLSpec runtime.
+    """
+
+    include_memory_migration: NotRequired[bool]
+    """Include memory tables in SQLSpec migrations. Default: True.
+
+    When False: memory migration DDL skipped (use external migration tools).
+    Decoupled from enable_memory - allows external table management with SQLSpec runtime.
     """
 
     session_table: NotRequired[str]
@@ -357,13 +392,46 @@ class ADKConfig(TypedDict):
         "tenant_acme_events"
     """
 
+    memory_table: NotRequired[str]
+    """Name of the memory entries table. Default: 'adk_memory_entries'
+
+    Examples:
+        "agent_memories"
+        "my_app_memories"
+        "tenant_acme_memories"
+    """
+
+    memory_search_strategy: NotRequired[Literal["simple", "postgres_fts", "sqlite_fts5"]]
+    """Search strategy for memory queries. Default: 'simple'.
+
+    Available strategies:
+        - 'simple': Uses ILIKE/LIKE for text matching (all adapters)
+        - 'postgres_fts': PostgreSQL full-text search with tsvector/GIN index
+        - 'sqlite_fts5': SQLite FTS5 virtual table
+
+    Notes:
+        - 'simple' is adequate for < 10K rows
+        - FTS strategies require adapter support and create additional indexes
+        - Unsupported strategies fall back to 'simple' with a warning
+    """
+
+    memory_max_results: NotRequired[int]
+    """Maximum number of results for memory search queries. Default: 20.
+
+    Limits the number of memory entries returned by search_memory().
+    Can be overridden per-query via the limit parameter.
+    """
+
     owner_id_column: NotRequired[str]
-    """Optional owner ID column definition to link sessions to a user, tenant, team, or other entity.
+    """Optional owner ID column definition to link sessions/memories to a user, tenant, team, or other entity.
 
     Format: "column_name TYPE [NOT NULL] REFERENCES table(column) [options...]"
 
     The entire definition is passed through to DDL verbatim. We only parse
     the column name (first word) for use in INSERT/SELECT statements.
+
+    This column is added to both session and memory tables for consistent
+    multi-tenant isolation.
 
     Supports:
         - Foreign key constraints: REFERENCES table(column)
@@ -450,6 +518,9 @@ class ADKConfig(TypedDict):
 
     events_table_options: NotRequired[str]
     """Adapter-specific table OPTIONS/clauses for the events table."""
+
+    memory_table_options: NotRequired[str]
+    """Adapter-specific table OPTIONS/clauses for the memory table."""
 
     expires_index_options: NotRequired[str]
     """Adapter-specific options for the expires/index used in ADK stores."""

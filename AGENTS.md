@@ -340,6 +340,9 @@ Prohibited: test coverage tables, file change lists, quality metrics, commit bre
 | Type Handler | `docs/guides/development/implementation-patterns.md#type-handler-pattern` |
 | Framework Extension | `docs/guides/development/implementation-patterns.md#framework-extension-pattern` |
 | EXPLAIN Builder | `docs/guides/development/implementation-patterns.md#explain-builder-pattern` |
+| Dynamic Optional Deps | `docs/guides/development/implementation-patterns.md#dynamic-optional-dependency-pattern` |
+| Eager Compilation | `docs/guides/development/implementation-patterns.md#eager-compilation-pattern` |
+| Protocol Capability | `docs/guides/development/implementation-patterns.md#protocol-capability-property-pattern` |
 | Custom SQLGlot Dialect | `docs/guides/architecture/custom-sqlglot-dialects.md#custom-sqlglot-dialect` |
 | Events Extension | `docs/guides/events/database-event-channels.md#events-architecture` |
 | Binary Data Encoding | `sqlspec/adapters/spanner/_type_handlers.py` |

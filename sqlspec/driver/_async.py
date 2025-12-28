@@ -4,6 +4,8 @@ from abc import abstractmethod
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.core import SQL, StackResult, Statement, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.driver._common import (
@@ -41,6 +43,7 @@ logger = get_logger(_LOGGER_NAME)
 AsyncDriverT = TypeVar("AsyncDriverT", bound="AsyncDriverAdapterBase")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, StorageDriverMixin):
     """Base class for asynchronous database drivers."""
 

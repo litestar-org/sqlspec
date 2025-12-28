@@ -4,6 +4,8 @@ from abc import abstractmethod
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.driver._common import (
@@ -41,6 +43,7 @@ EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 SyncDriverT = TypeVar("SyncDriverT", bound="SyncDriverAdapterBase")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, StorageDriverMixin):
     """Base class for synchronous database drivers."""
 

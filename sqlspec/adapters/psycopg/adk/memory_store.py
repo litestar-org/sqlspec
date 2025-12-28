@@ -1,0 +1,454 @@
+"""Psycopg ADK memory store for Google Agent Development Kit memory storage."""
+
+from typing import TYPE_CHECKING, Any
+
+from psycopg import errors
+from psycopg import sql as pg_sql
+from psycopg.types.json import Jsonb
+
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
+    from sqlspec.extensions.adk.memory._types import MemoryRecord
+
+logger = get_logger("adapters.psycopg.adk.memory_store")
+
+__all__ = ("PsycopgAsyncADKMemoryStore", "PsycopgSyncADKMemoryStore")
+
+
+class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
+    """PostgreSQL ADK memory store using Psycopg3 async driver."""
+
+    __slots__ = ()
+
+    def __init__(self, config: "PsycopgAsyncConfig") -> None:
+        """Initialize Psycopg async memory store."""
+        super().__init__(config)
+
+    async def _get_create_memory_table_sql(self) -> str:
+        """Get PostgreSQL CREATE TABLE SQL for memory entries."""
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_index = ""
+        if self._search_strategy == "postgres_fts":
+            fts_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
+            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMPTZ NOT NULL,
+            content_json JSONB NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSONB,
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_index}
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements."""
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    async def create_tables(self) -> None:
+        """Create the memory table and indexes if they don't exist."""
+        if not self._enabled:
+            logger.debug("Memory store disabled, skipping table creation")
+            return
+
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_memory_table_sql())
+        logger.debug("Created ADK memory table: %s", self._memory_table)
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not entries:
+            return 0
+
+        inserted_count = 0
+        if self._owner_id_column_name:
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (
+                id, session_id, app_name, user_id, event_id, author,
+                {owner_id_col}, timestamp, content_json, content_text,
+                metadata_json, inserted_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (event_id) DO NOTHING
+            """).format(
+                table=pg_sql.Identifier(self._memory_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
+            )
+        else:
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (
+                id, session_id, app_name, user_id, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (event_id) DO NOTHING
+            """).format(table=pg_sql.Identifier(self._memory_table))
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            for entry in entries:
+                if self._owner_id_column_name:
+                    params = (
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry["event_id"],
+                        entry["author"],
+                        owner_id,
+                        entry["timestamp"],
+                        Jsonb(entry["content_json"]),
+                        entry["content_text"],
+                        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+                        entry["inserted_at"],
+                    )
+                else:
+                    params = (
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry["event_id"],
+                        entry["author"],
+                        entry["timestamp"],
+                        Jsonb(entry["content_json"]),
+                        entry["content_text"],
+                        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+                        entry["inserted_at"],
+                    )
+                await cur.execute(query, params)
+                if cur.rowcount and cur.rowcount > 0:
+                    inserted_count += cur.rowcount
+
+        return inserted_count
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        effective_limit = limit if limit is not None else self._max_results
+
+        if self._search_strategy == "postgres_fts":
+            sql = pg_sql.SQL(
+                """
+            SELECT id, session_id, app_name, user_id, event_id, author,
+                   timestamp, content_json, content_text, metadata_json, inserted_at,
+                   ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
+            FROM {table}
+            WHERE app_name = %s
+              AND user_id = %s
+              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
+            ORDER BY rank DESC, timestamp DESC
+            LIMIT %s
+            """
+            ).format(table=pg_sql.Identifier(self._memory_table))
+            params = (query, app_name, user_id, query, effective_limit)
+        else:
+            sql = pg_sql.SQL(
+                """
+            SELECT id, session_id, app_name, user_id, event_id, author,
+                   timestamp, content_json, content_text, metadata_json, inserted_at
+            FROM {table}
+            WHERE app_name = %s
+              AND user_id = %s
+              AND content_text ILIKE %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+            """
+            ).format(table=pg_sql.Identifier(self._memory_table))
+            pattern = f"%{query}%"
+            params = (app_name, user_id, pattern, effective_limit)
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+                await cur.execute(sql, params)
+                rows = await cur.fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "session_id": row["session_id"],
+                        "app_name": row["app_name"],
+                        "user_id": row["user_id"],
+                        "event_id": row["event_id"],
+                        "author": row["author"],
+                        "timestamp": row["timestamp"],
+                        "content_json": row["content_json"],
+                        "content_text": row["content_text"],
+                        "metadata_json": row["metadata_json"],
+                        "inserted_at": row["inserted_at"],
+                    }
+                    for row in rows
+                ]
+        except errors.UndefinedTable:
+            return []
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        sql = pg_sql.SQL("DELETE FROM {table} WHERE session_id = %s").format(
+            table=pg_sql.Identifier(self._memory_table)
+        )
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql, (session_id,))
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        sql = pg_sql.SQL(
+            """
+        DELETE FROM {table}
+        WHERE inserted_at < CURRENT_TIMESTAMP - {interval}::interval
+        """
+        ).format(table=pg_sql.Identifier(self._memory_table), interval=pg_sql.Literal(f"{days} days"))
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql)
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+
+class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
+    """PostgreSQL ADK memory store using Psycopg3 sync driver."""
+
+    __slots__ = ()
+
+    def __init__(self, config: "PsycopgSyncConfig") -> None:
+        """Initialize Psycopg sync memory store."""
+        super().__init__(config)
+
+    def _get_create_memory_table_sql(self) -> str:
+        """Get PostgreSQL CREATE TABLE SQL for memory entries."""
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_index = ""
+        if self._search_strategy == "postgres_fts":
+            fts_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
+            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMPTZ NOT NULL,
+            content_json JSONB NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSONB,
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_index}
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements."""
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    def create_tables(self) -> None:
+        """Create the memory table and indexes if they don't exist."""
+        if not self._enabled:
+            logger.debug("Memory store disabled, skipping table creation")
+            return
+
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._get_create_memory_table_sql())
+        logger.debug("Created ADK memory table: %s", self._memory_table)
+
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "Any | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not entries:
+            return 0
+
+        inserted_count = 0
+        if self._owner_id_column_name:
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (
+                id, session_id, app_name, user_id, event_id, author,
+                {owner_id_col}, timestamp, content_json, content_text,
+                metadata_json, inserted_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (event_id) DO NOTHING
+            """).format(
+                table=pg_sql.Identifier(self._memory_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
+            )
+        else:
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (
+                id, session_id, app_name, user_id, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (event_id) DO NOTHING
+            """).format(table=pg_sql.Identifier(self._memory_table))
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            for entry in entries:
+                if self._owner_id_column_name:
+                    params = (
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry["event_id"],
+                        entry["author"],
+                        owner_id,
+                        entry["timestamp"],
+                        Jsonb(entry["content_json"]),
+                        entry["content_text"],
+                        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+                        entry["inserted_at"],
+                    )
+                else:
+                    params = (
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry["event_id"],
+                        entry["author"],
+                        entry["timestamp"],
+                        Jsonb(entry["content_json"]),
+                        entry["content_text"],
+                        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+                        entry["inserted_at"],
+                    )
+                cur.execute(query, params)
+                if cur.rowcount and cur.rowcount > 0:
+                    inserted_count += cur.rowcount
+
+        return inserted_count
+
+    def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        effective_limit = limit if limit is not None else self._max_results
+
+        if self._search_strategy == "postgres_fts":
+            sql = pg_sql.SQL(
+                """
+            SELECT id, session_id, app_name, user_id, event_id, author,
+                   timestamp, content_json, content_text, metadata_json, inserted_at,
+                   ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
+            FROM {table}
+            WHERE app_name = %s
+              AND user_id = %s
+              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
+            ORDER BY rank DESC, timestamp DESC
+            LIMIT %s
+            """
+            ).format(table=pg_sql.Identifier(self._memory_table))
+            params = (query, app_name, user_id, query, effective_limit)
+        else:
+            sql = pg_sql.SQL(
+                """
+            SELECT id, session_id, app_name, user_id, event_id, author,
+                   timestamp, content_json, content_text, metadata_json, inserted_at
+            FROM {table}
+            WHERE app_name = %s
+              AND user_id = %s
+              AND content_text ILIKE %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+            """
+            ).format(table=pg_sql.Identifier(self._memory_table))
+            pattern = f"%{query}%"
+            params = (app_name, user_id, pattern, effective_limit)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "session_id": row["session_id"],
+                        "app_name": row["app_name"],
+                        "user_id": row["user_id"],
+                        "event_id": row["event_id"],
+                        "author": row["author"],
+                        "timestamp": row["timestamp"],
+                        "content_json": row["content_json"],
+                        "content_text": row["content_text"],
+                        "metadata_json": row["metadata_json"],
+                        "inserted_at": row["inserted_at"],
+                    }
+                    for row in rows
+                ]
+        except errors.UndefinedTable:
+            return []
+
+    def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        sql = pg_sql.SQL("DELETE FROM {table} WHERE session_id = %s").format(
+            table=pg_sql.Identifier(self._memory_table)
+        )
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (session_id,))
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        sql = pg_sql.SQL(
+            """
+        DELETE FROM {table}
+        WHERE inserted_at < CURRENT_TIMESTAMP - {interval}::interval
+        """
+        ).format(table=pg_sql.Identifier(self._memory_table), interval=pg_sql.Literal(f"{days} days"))
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0

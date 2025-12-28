@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from mypy_extensions import trait
+from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageCapabilityError
 from sqlspec.storage import (
@@ -39,7 +39,7 @@ CAPABILITY_HINTS: dict[str, str] = {
 }
 
 
-@trait
+@mypyc_attr(allow_interpreted_subclasses=True)
 class StorageDriverMixin:
     """Mixin providing capability-aware storage bridge helpers."""
 

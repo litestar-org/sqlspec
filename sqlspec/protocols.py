@@ -4,13 +4,12 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
-from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, overload, runtime_checkable
 
 from typing_extensions import Self
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
     from pathlib import Path
 
     from sqlglot import exp
@@ -20,8 +19,12 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
+    "AsyncConnectionProtocol",
+    "AsyncCursorProtocol",
+    "ConnectionProtocol",
     "ConnectionStateProtocol",
     "CursorMetadataProtocol",
+    "CursorProtocol",
     "DictProtocol",
     "HasExpressionAndParametersProtocol",
     "HasExpressionAndSQLProtocol",
@@ -34,7 +37,6 @@ __all__ = (
     "HasStatementConfigProtocol",
     "HasToStatementProtocol",
     "HasWhereProtocol",
-    "IterableParameters",
     "MigrationModuleProtocol",
     "NotificationProtocol",
     "ObjectStoreItemProtocol",
@@ -43,8 +45,7 @@ __all__ = (
     "QueryResultProtocol",
     "ReadableProtocol",
     "SQLBuilderProtocol",
-    "SelectBuilderProtocol",
-    "StackResultProtocol",
+    "StatementProtocol",
     "SupportsArrayProtocol",
     "SupportsArrowResults",
     "ToSchemaProtocol",
@@ -120,16 +121,93 @@ class ConnectionStateProtocol(Protocol):
 
 
 @runtime_checkable
-class IterableParameters(Protocol):
-    """Protocol for parameter sequences."""
+class CursorProtocol(Protocol):
+    """Protocol for DB-API 2.0 cursor operations."""
 
-    def __iter__(self) -> Any:
-        """Iterate over parameters."""
-        ...
+    def execute(self, sql: str, parameters: Any = None) -> Any: ...
 
-    def __len__(self) -> int:
-        """Get number of parameters."""
-        ...
+    def executemany(self, sql: str, parameters: Any) -> Any: ...
+
+    def fetchall(self) -> Any: ...
+
+    def fetchone(self) -> Any: ...
+
+    @property
+    def description(self) -> "Sequence[Any] | None": ...
+
+    @property
+    def rowcount(self) -> int: ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class AsyncCursorProtocol(Protocol):
+    """Protocol for async cursor operations."""
+
+    async def execute(self, sql: str, parameters: Any = None) -> Any: ...
+
+    async def executemany(self, sql: str, parameters: Any) -> Any: ...
+
+    async def fetchall(self) -> Any: ...
+
+    async def fetchone(self) -> Any: ...
+
+    @property
+    def description(self) -> "Sequence[Any] | None": ...
+
+    @property
+    def rowcount(self) -> int: ...
+
+    async def close(self) -> None: ...
+
+
+@runtime_checkable
+class ConnectionProtocol(Protocol):
+    """Protocol for connection lifecycle and transaction state."""
+
+    def cursor(self) -> Any: ...
+
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
+
+    def close(self) -> None: ...
+
+    in_transaction: "bool | None"
+    transaction_status: "str | None"
+
+    def is_in_transaction(self) -> bool: ...
+
+
+@runtime_checkable
+class AsyncConnectionProtocol(Protocol):
+    """Protocol for async connection lifecycle and transaction state."""
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    in_transaction: "bool | None"
+    transaction_status: "str | None"
+
+    async def is_in_transaction(self) -> bool: ...
+
+
+@runtime_checkable
+class StatementProtocol(Protocol):
+    """Protocol for statement attribute access."""
+
+    @property
+    def raw_sql(self) -> "str | None": ...
+
+    @property
+    def sql(self) -> str: ...
+
+    @property
+    def operation_type(self) -> str: ...
 
 
 @runtime_checkable
@@ -512,14 +590,6 @@ class SQLBuilderProtocol(Protocol):
         ...
 
 
-class SelectBuilderProtocol(SQLBuilderProtocol, Protocol):
-    """Protocol for SELECT query builders."""
-
-    def select(self, *columns: "str | exp.Expression") -> Self:
-        """Add SELECT columns to the query."""
-        ...
-
-
 @runtime_checkable
 class SupportsArrowResults(Protocol):
     """Protocol for adapters that support Arrow result format.
@@ -557,29 +627,6 @@ class SupportsArrowResults(Protocol):
             ArrowResult containing Arrow data.
         """
         ...
-
-
-@runtime_checkable
-class StackResultProtocol(Protocol):
-    """Protocol describing stack execution results."""
-
-    result: Any
-    rows_affected: int
-    error: Exception | None
-    warning: Any | None
-    metadata: Mapping[str, Any] | None
-    result_type: str
-
-    @property
-    def rows(self) -> Sequence[Any]: ...
-
-    def is_error(self) -> bool: ...
-
-    def is_sql_result(self) -> bool: ...
-
-    def is_arrow_result(self) -> bool: ...
-
-    def get_result(self) -> Any: ...
 
 
 @runtime_checkable

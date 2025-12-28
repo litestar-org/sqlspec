@@ -168,6 +168,13 @@ include = [
   "sqlspec/loader.py",             # Loader module
   "sqlspec/storage/**/*.py",       # Storage layer
   "sqlspec/observability/**/*.py", # Observability utilities
+  # Driver layer (compiled for execution pipeline)
+  "sqlspec/driver/_common.py",
+  "sqlspec/driver/_async.py",
+  "sqlspec/driver/_sync.py",
+  "sqlspec/driver/mixins/_storage.py",
+  "sqlspec/driver/mixins/_sql_translator.py",
+  "sqlspec/driver/mixins/_result_tools.py",
   # "sqlspec/migrations/**/*.py",    # Migrations module
   # === ADAPTER TYPE CONVERTERS ===
   "sqlspec/adapters/adbc/type_converter.py",     # ADBC type converter

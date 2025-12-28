@@ -8,7 +8,7 @@ from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast
 
-from mypy_extensions import trait
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
@@ -26,6 +26,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
+from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_array_interface, has_cursor_metadata, is_statement_filter
 
@@ -378,17 +379,13 @@ class StackExecutionObserver:
         self.metrics.record_operation_error(error)
 
 
-def describe_stack_statement(statement: Any) -> str:
+def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     """Return a readable representation of a stack statement for diagnostics."""
 
     if isinstance(statement, str):
         return statement
-    raw_sql = getattr(statement, "raw_sql", None)
-    if isinstance(raw_sql, str):
-        return raw_sql
-    sql_attr = getattr(statement, "sql", None)
-    if isinstance(sql_attr, str):
-        return sql_attr
+    if isinstance(statement, StatementProtocol):
+        return statement.raw_sql or statement.sql
     return repr(statement)
 
 
@@ -457,7 +454,7 @@ class VersionInfo:
         return hash(self.version_tuple)
 
 
-@trait
+@mypyc_attr(allow_interpreted_subclasses=True)
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality.
 
@@ -631,7 +628,7 @@ EXEC_SPECIAL_DATA: Final[int] = 2
 DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None)
 
 
-@trait
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
