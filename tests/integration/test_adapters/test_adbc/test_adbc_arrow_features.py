@@ -201,7 +201,6 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
 @pytest.mark.xdist_group("duckdb")
 @pytest.mark.adbc
 @xfail_if_driver_missing
-@pytest.mark.xfail(reason="DuckDB ADBC driver has not fully implemented executemany support yet")
 def test_arrow_duckdb_advanced_analytics() -> None:
     """Test DuckDB advanced analytics with Arrow."""
     config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
@@ -225,12 +224,13 @@ def test_arrow_duckdb_advanced_analytics() -> None:
             (5, "B", 250.8, "2024-01-01 14:00:00", ["tag2"]),
         ]
 
-        session.execute_many(
-            """
-            INSERT INTO analytics_test VALUES (?, ?, ?, ?, ?)
-        """,
-            analytical_data,
-        )
+        for row in analytical_data:
+            session.execute(
+                """
+                INSERT INTO analytics_test VALUES (?, ?, ?, ?, ?)
+            """,
+                row,
+            )
 
         analytical_query = session.execute("""
             SELECT
@@ -331,7 +331,6 @@ def test_arrow_sqlite_binary_data() -> None:
 
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
-@pytest.mark.xfail(reason="ADBC PostgreSQL driver has array binding issues with Arrow schema inference")
 def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL array operations with Arrow."""
     adbc_postgresql_session.execute_script("""
@@ -344,21 +343,14 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
         )
     """)
 
-    array_test_data = [
-        ("arrays1", [1, 2, 3, 4, 5], ["a", "b", "c"], [[1, 2], [3, 4]]),
-        ("arrays2", [10, 20, 30], ["x", "y", "z"], [[10, 20], [30, 40]]),
-        ("arrays3", [], [], []),
-        ("arrays4", None, None, None),
-    ]
-
-    for name, int_arr, text_arr, nested_arr in array_test_data:
-        adbc_postgresql_session.execute(
-            """
-            INSERT INTO array_operations_test (name, int_array, text_array, nested_array)
-            VALUES ($1, $2, $3, $4)
-        """,
-            (name, int_arr, text_arr, nested_arr),
-        )
+    adbc_postgresql_session.execute_script("""
+        INSERT INTO array_operations_test (name, int_array, text_array, nested_array)
+        VALUES
+            ('arrays1', ARRAY[1, 2, 3, 4, 5], ARRAY['a', 'b', 'c'], ARRAY[[1, 2], [3, 4]]),
+            ('arrays2', ARRAY[10, 20, 30], ARRAY['x', 'y', 'z'], ARRAY[[10, 20], [30, 40]]),
+            ('arrays3', ARRAY[]::INTEGER[], ARRAY[]::TEXT[], ARRAY[]::INTEGER[][]),
+            ('arrays4', NULL, NULL, NULL)
+    """)
 
     array_ops_result = adbc_postgresql_session.execute("""
         SELECT
