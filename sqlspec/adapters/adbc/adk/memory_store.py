@@ -358,7 +358,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             try:
                 cursor.execute(sql, (session_id,))
                 if use_returning:
-                    deleted_rows = cursor.fetchall()  # type: ignore[no-untyped-call]
+                    deleted_rows = cursor.fetchall()
                     conn.commit()
                     return len(deleted_rows)
                 conn.commit()
@@ -378,7 +378,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             try:
                 cursor.execute(sql, (cutoff,))
                 if use_returning:
-                    deleted_rows = cursor.fetchall()  # type: ignore[no-untyped-call]
+                    deleted_rows = cursor.fetchall()
                     conn.commit()
                     return len(deleted_rows)
                 conn.commit()
