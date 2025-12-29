@@ -47,6 +47,7 @@ class BaseTypeConverter:
 
         Returns:
             Type name if detected, None otherwise.
+
         """
         if not isinstance(value, str):  # pyright: ignore
             return None
@@ -68,6 +69,7 @@ class BaseTypeConverter:
 
         Returns:
             Converted value in appropriate Python type.
+
         """
         converter = _TYPE_CONVERTERS.get(detected_type)
         if converter:
@@ -85,6 +87,7 @@ class BaseTypeConverter:
 
         Returns:
             Converted value if special type detected, original value otherwise.
+
         """
         if not isinstance(value, str):
             return value
@@ -111,6 +114,7 @@ def convert_uuid(value: str) -> UUID:
 
     Returns:
         UUID object.
+
     """
     return UUID(value)
 
@@ -123,6 +127,7 @@ def convert_iso_datetime(value: str) -> datetime:
 
     Returns:
         datetime object.
+
     """
     # Handle various ISO formats with timezone
     if value.endswith("Z"):
@@ -143,6 +148,7 @@ def convert_iso_date(value: str) -> date:
 
     Returns:
         date object.
+
     """
     return date.fromisoformat(value)
 
@@ -155,6 +161,7 @@ def convert_iso_time(value: str) -> time:
 
     Returns:
         time object.
+
     """
     return time.fromisoformat(value)
 
@@ -167,6 +174,7 @@ def convert_json(value: str) -> Any:
 
     Returns:
         Decoded Python object.
+
     """
     return decode_json(value)
 
@@ -179,6 +187,7 @@ def convert_decimal(value: str) -> Decimal:
 
     Returns:
         Decimal object.
+
     """
     return Decimal(value)
 
@@ -201,6 +210,7 @@ def format_datetime_rfc3339(dt: datetime) -> str:
 
     Returns:
         RFC 3339 formatted datetime string.
+
     """
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -215,11 +225,16 @@ def parse_datetime_rfc3339(dt_str: str) -> datetime:
 
     Returns:
         datetime object.
+
     """
     # Handle Z suffix
     if dt_str.endswith("Z"):
         dt_str = dt_str[:-1] + "+00:00"
     return datetime.fromisoformat(dt_str)
+
+
+BASE_TYPE_CONVERTER_SLOTS: Final[tuple[str, ...]] = ()
+BaseTypeConverter.__slots__ = BASE_TYPE_CONVERTER_SLOTS
 
 
 __all__ = (

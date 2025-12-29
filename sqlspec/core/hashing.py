@@ -4,7 +4,6 @@ Provides hashing functions for SQL statements, expressions, parameters,
 filters, and AST sub-expressions.
 """
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
@@ -14,6 +13,8 @@ from sqlspec.protocols import DictProtocol
 from sqlspec.utils.type_guards import is_expression, is_typed_parameter
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.core.filters import StatementFilter
     from sqlspec.core.statement import SQL
 

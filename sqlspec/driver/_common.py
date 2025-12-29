@@ -252,6 +252,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
         (1, 2, 3)
         >>> make_cache_key_hashable({"a": 1, "b": 2})
         (('a', 1), ('b', 2))
+
     """
     if isinstance(obj, (list, tuple)):
         return tuple(make_cache_key_hashable(item) for item in obj)
@@ -283,7 +284,6 @@ def make_cache_key_hashable(obj: Any) -> Any:
 
 def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
     """Return SHA256 fingerprints for statements contained in the stack."""
-
     hashes: list[str] = []
     for operation in stack.operations:
         summary = describe_stack_statement(operation.statement)
@@ -379,13 +379,11 @@ class StackExecutionObserver:
 
     def record_operation_error(self, error: Exception) -> None:
         """Record an operation error when continue-on-error is enabled."""
-
         self.metrics.record_operation_error(error)
 
 
 def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     """Return a readable representation of a stack statement for diagnostics."""
-
     if isinstance(statement, str):
         return statement
     if isinstance(statement, StatementProtocol):
@@ -395,7 +393,6 @@ def describe_stack_statement(statement: "StatementProtocol | str") -> str:
 
 def handle_single_row_error(error: ValueError) -> "NoReturn":
     """Normalize single-row selection errors to SQLSpec exceptions."""
-
     message = str(error)
     if message.startswith("No result found"):
         msg = "No rows found"
@@ -413,6 +410,7 @@ class VersionInfo:
             major: Major version number
             minor: Minor version number
             patch: Patch version number
+
         """
         self.major = major
         self.minor = minor
@@ -482,6 +480,7 @@ class DataDictionaryMixin:
         Returns:
             Tuple of (was_cached, version_info). If was_cached is False,
             the caller should fetch the version and call cache_version().
+
         """
         if driver_id in self._version_fetch_attempted:
             return True, self._version_cache.get(driver_id)
@@ -493,6 +492,7 @@ class DataDictionaryMixin:
         Args:
             driver_id: The id() of the driver instance.
             version: The version info to cache (can be None if detection failed).
+
         """
         self._version_fetch_attempted.add(driver_id)
         if version is not None:
@@ -506,6 +506,7 @@ class DataDictionaryMixin:
 
         Returns:
             VersionInfo instance or None if parsing fails
+
         """
         patterns = [r"(\d+)\.(\d+)\.(\d+)", r"(\d+)\.(\d+)", r"(\d+)"]
 
@@ -530,6 +531,7 @@ class DataDictionaryMixin:
 
         Returns:
             Version information or None if detection fails
+
         """
         for query in queries:
             with suppress(Exception):
@@ -554,6 +556,7 @@ class DataDictionaryMixin:
 
         Returns:
             Dictionary mapping type categories to generic SQL types
+
         """
         return {
             "json": "TEXT",
@@ -569,6 +572,7 @@ class DataDictionaryMixin:
 
         Returns:
             List of commonly supported feature names
+
         """
         return ["supports_transactions", "supports_prepared_statements"]
 
@@ -584,6 +588,7 @@ class DataDictionaryMixin:
 
         Raises:
             CycleError: If a dependency cycle is detected.
+
         """
         sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
         for table in tables:
@@ -655,6 +660,7 @@ class CommonDriverAttributesMixin:
             statement_config: Statement configuration for the driver
             driver_features: Driver-specific features like extensions, secrets, and connection callbacks
             observability: Optional runtime handling lifecycle hooks, observers, and spans
+
         """
         self.connection = connection
         self.statement_config = statement_config
@@ -663,13 +669,11 @@ class CommonDriverAttributesMixin:
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Attach or replace the observability runtime."""
-
         self._observability = runtime
 
     @property
     def observability(self) -> "ObservabilityRuntime":
         """Return the observability runtime, creating a disabled instance when absent."""
-
         if self._observability is None:
             self._observability = ObservabilityRuntime(config_name=type(self).__name__)
         return self._observability
@@ -677,7 +681,6 @@ class CommonDriverAttributesMixin:
     @property
     def stack_native_disabled(self) -> bool:
         """Return True when native stack execution is disabled for this driver."""
-
         return bool(self.driver_features.get("stack_native_disabled", False))
 
     def create_execution_result(
@@ -714,6 +717,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             ExecutionResult configured for the specified operation type
+
         """
         return ExecutionResult(
             cursor_result=cursor_result,
@@ -739,6 +743,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             SQLResult with complete execution data
+
         """
         if execution_result.is_script_result:
             return SQLResult(
@@ -784,8 +789,8 @@ class CommonDriverAttributesMixin:
         Returns:
             True when cursor metadata indicates a row-returning operation despite an
             unknown operation type; otherwise False.
-        """
 
+        """
         if statement.operation_type != "UNKNOWN":
             return False
 
@@ -820,6 +825,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Prepared SQL statement
+
         """
         kwargs = kwargs or {}
         filters, data_parameters = self._split_parameters(parameters)
@@ -921,6 +927,7 @@ class CommonDriverAttributesMixin:
 
         Raises:
             NotImplementedError: Always - subclasses must override.
+
         """
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
@@ -940,6 +947,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             A list of individual SQL statements
+
         """
         return [
             sql_script.strip()
@@ -969,6 +977,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Parameters with TypedParameter objects unwrapped to primitive values
+
         """
         if parameters is None and statement_config.parameter_config.needs_static_script_compilation:
             return None
@@ -991,6 +1000,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Coerced value with TypedParameter unwrapped
+
         """
         unwrapped_value = value.value if isinstance(value, TypedParameter) else value
         if statement_config.parameter_config.type_coercion_map:
@@ -1011,6 +1021,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Processed parameter set with individual values coerced but structure preserved
+
         """
         if not parameters:
             return []
@@ -1033,6 +1044,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Processed parameter set with TypedParameter objects unwrapped and type coercion applied
+
         """
         if not parameters:
             return []
@@ -1085,6 +1097,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Tuple of (compiled_sql, parameters)
+
         """
         cache_config = get_cache_config()
         cache_key = None
@@ -1189,6 +1202,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             The dominant parameter style, or None if no parameters
+
         """
         if not parameters:
             return None
@@ -1223,6 +1237,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             The match filter instance or None
+
         """
         for filter_ in filters:
             if isinstance(filter_, filter_type):

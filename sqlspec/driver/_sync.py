@@ -57,6 +57,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             Data dictionary instance for metadata queries
+
         """
 
     def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
@@ -68,6 +69,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             The result of the SQL execution
+
         """
         runtime = self.observability
         compiled_sql, execution_parameters = statement.compile()
@@ -136,6 +138,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             ContextManager that can be used in with statements
+
         """
 
     @abstractmethod
@@ -164,6 +167,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         Returns:
             SQLResult if the special operation was handled and completed,
             None if standard execution should proceed
+
         """
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -178,6 +182,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             ExecutionResult with script execution data including statement counts
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
@@ -196,7 +201,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack sequentially using the adapter's primitives."""
-
         if not isinstance(stack, StatementStack):
             msg = "execute_stack expects a StatementStack instance"
             raise TypeError(msg)
@@ -261,7 +265,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
     def _rollback_after_stack_error(self) -> None:
         """Attempt to rollback after a stack operation error to clear connection state."""
-
         try:
             self.rollback()
         except Exception as rollback_error:  # pragma: no cover - driver-specific cleanup
@@ -269,7 +272,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
     def _commit_after_stack_operation(self) -> None:
         """Attempt to commit after a successful stack operation when not batching."""
-
         try:
             self.commit()
         except Exception as commit_error:  # pragma: no cover - driver-specific cleanup
@@ -287,6 +289,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             ExecutionResult with execution data for the many operation
+
         """
 
     @abstractmethod
@@ -301,6 +304,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             ExecutionResult with execution data
+
         """
 
     def execute(
@@ -439,6 +443,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_one(): Primary method with identical behavior
+
         """
         return self.select_one(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -524,6 +529,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_one_or_none(): Primary method with identical behavior
+
         """
         return self.select_one_or_none(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -602,6 +608,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select(): Primary method with identical behavior
+
         """
         return self.select(statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs)
 
@@ -651,6 +658,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
             >>> result = driver.select_to_arrow(
             ...     "SELECT * FROM users", native_only=True
             ... )
+
         """
         ensure_pyarrow()
 
@@ -703,6 +711,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_to_arrow(): Primary method with identical behavior and full documentation
+
         """
         return self.select_to_arrow(
             statement,
@@ -752,6 +761,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_value(): Primary method with identical behavior
+
         """
         return self.select_value(statement, *parameters, statement_config=statement_config, **kwargs)
 
@@ -791,6 +801,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_value_or_none(): Primary method with identical behavior
+
         """
         return self.select_value_or_none(statement, *parameters, statement_config=statement_config, **kwargs)
 
@@ -841,6 +852,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
             A tuple containing:
             - List of data rows (transformed by schema_type if provided)
             - Total count of rows matching the query (ignoring LIMIT/OFFSET)
+
         """
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
@@ -891,6 +903,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_with_total(): Primary method with identical behavior and full documentation
+
         """
         return self.select_with_total(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -933,6 +946,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             Version information or None if detection fails
+
         """
 
     @abstractmethod
@@ -945,6 +959,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             True if feature is supported, False otherwise
+
         """
 
     @abstractmethod
@@ -957,6 +972,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             Database-specific type name
+
         """
 
     def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
@@ -968,6 +984,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of table names
+
         """
         _ = driver, schema
         return []
@@ -984,6 +1001,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of column metadata dictionaries
+
         """
         _ = driver, table, schema
         return []
@@ -1000,6 +1018,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of index metadata dictionaries
+
         """
         _ = driver, table, schema
         return []
@@ -1016,6 +1035,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of foreign key metadata
+
         """
         _ = driver, table, schema
         return []
@@ -1025,5 +1045,6 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of feature names this data dictionary supports
+
         """
         return self.get_default_features()

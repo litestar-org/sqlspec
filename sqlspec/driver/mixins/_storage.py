@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -29,7 +29,13 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityRuntime
     from sqlspec.typing import ArrowTable, StatementParameters
 
+
 __all__ = ("StorageDriverMixin",)
+
+
+class _ObservabilityHost(Protocol):
+    @property
+    def observability(self) -> "ObservabilityRuntime": ...
 
 
 CAPABILITY_HINTS: dict[str, str] = {
@@ -48,11 +54,6 @@ class StorageDriverMixin:
     storage_pipeline_factory: "type[SyncStoragePipeline | AsyncStoragePipeline] | None" = None
     driver_features: dict[str, Any]
     is_async: bool
-
-    if TYPE_CHECKING:
-
-        @property
-        def observability(self) -> "ObservabilityRuntime": ...
 
     def storage_capabilities(self) -> StorageCapabilities:
         """Return cached storage capabilities for the active driver."""
@@ -188,7 +189,7 @@ class StorageDriverMixin:
         storage_options: "dict[str, Any] | None" = None,
         pipeline: "SyncStoragePipeline | None" = None,
     ) -> StorageTelemetry:
-        runtime = self.observability
+        runtime = cast("_ObservabilityHost", self).observability
         span = runtime.start_storage_span(
             "write", destination=self._stringify_storage_target(destination), format_label=format_hint
         )
@@ -212,7 +213,7 @@ class StorageDriverMixin:
         storage_options: "dict[str, Any] | None" = None,
         pipeline: "AsyncStoragePipeline | None" = None,
     ) -> StorageTelemetry:
-        runtime = self.observability
+        runtime = cast("_ObservabilityHost", self).observability
         span = runtime.start_storage_span(
             "write", destination=self._stringify_storage_target(destination), format_label=format_hint
         )
@@ -230,7 +231,7 @@ class StorageDriverMixin:
     def _read_arrow_from_storage_sync(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
-        runtime = self.observability
+        runtime = cast("_ObservabilityHost", self).observability
         span = runtime.start_storage_span(
             "read", destination=self._stringify_storage_target(source), format_label=file_format
         )
@@ -247,7 +248,7 @@ class StorageDriverMixin:
     async def _read_arrow_from_storage_async(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
-        runtime = self.observability
+        runtime = cast("_ObservabilityHost", self).observability
         span = runtime.start_storage_span(
             "read", destination=self._stringify_storage_target(source), format_label=file_format
         )

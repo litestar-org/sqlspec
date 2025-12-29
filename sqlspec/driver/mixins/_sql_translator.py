@@ -37,7 +37,6 @@ class SQLTranslatorMixin:
 
 
         """
-
         parsed_expression: exp.Expression | None = None
 
         if statement is not None and isinstance(statement, SQL):
@@ -92,6 +91,7 @@ class SQLTranslatorMixin:
 
         Raises:
             SQLConversionError: Always raised
+
         """
         msg = "Statement could not be parsed"
         raise SQLConversionError(msg)
@@ -104,6 +104,7 @@ class SQLTranslatorMixin:
 
         Raises:
             SQLConversionError: Always raised
+
         """
         error_msg = f"Failed to parse SQL statement: {e!s}"
         raise SQLConversionError(error_msg) from e
@@ -117,6 +118,7 @@ class SQLTranslatorMixin:
 
         Raises:
             SQLConversionError: Always raised
+
         """
         error_msg = f"Failed to convert SQL expression to {dialect}: {e!s}"
         raise SQLConversionError(error_msg) from e
