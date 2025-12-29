@@ -6,7 +6,9 @@ understand type narrowing, replacing defensive hasattr() and duck typing pattern
 
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
-from dataclasses import Field, fields
+from dataclasses import Field
+from dataclasses import fields as dataclasses_fields
+from dataclasses import is_dataclass as dataclasses_is_dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
@@ -495,12 +497,7 @@ def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
     """
     if isinstance(obj, type):
         return False
-    try:
-        _: list[str] = type(obj).__dataclass_fields__  # pyright: ignore
-    except AttributeError:
-        return False
-    else:
-        return True
+    return dataclasses_is_dataclass(obj)
 
 
 def is_dataclass(obj: Any) -> "TypeGuard[DataclassProtocol]":
@@ -512,14 +509,7 @@ def is_dataclass(obj: Any) -> "TypeGuard[DataclassProtocol]":
     Returns:
         bool
     """
-    if isinstance(obj, type):
-        try:
-            _ = obj.__dataclass_fields__  # type: ignore[attr-defined]
-        except AttributeError:
-            return False
-        else:
-            return True
-    return is_dataclass_instance(obj)
+    return dataclasses_is_dataclass(obj)
 
 
 def is_dataclass_with_field(obj: Any, field_name: str) -> "TypeGuard[DataclassProtocol]":
@@ -534,8 +524,7 @@ def is_dataclass_with_field(obj: Any, field_name: str) -> "TypeGuard[DataclassPr
     """
     if not is_dataclass(obj):
         return False
-    fields_map = obj.__dataclass_fields__ if isinstance(obj, type) else type(obj).__dataclass_fields__
-    return field_name in fields_map
+    return any(field.name == field_name for field in dataclasses_fields(obj))
 
 
 def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[DataclassProtocol]":
@@ -550,8 +539,7 @@ def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[Dataclas
     """
     if not is_dataclass(obj):
         return False
-    fields_map = obj.__dataclass_fields__ if isinstance(obj, type) else type(obj).__dataclass_fields__
-    return field_name not in fields_map
+    return all(field.name != field_name for field in dataclasses_fields(obj))
 
 
 def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModelStub]":
@@ -979,7 +967,7 @@ def extract_dataclass_fields(
         msg = f"Fields {common} are both included and excluded."
         raise ValueError(msg)
 
-    dataclass_fields: list[Field[Any]] = list(fields(obj))
+    dataclass_fields: list[Field[Any]] = list(dataclasses_fields(obj))
     if exclude_none:
         dataclass_fields = [field for field in dataclass_fields if object.__getattribute__(obj, field.name) is not None]
     if exclude_empty:

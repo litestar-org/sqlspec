@@ -8,6 +8,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
+from sqlspec.core import pipeline
 from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
@@ -18,7 +19,6 @@ from sqlspec.core.parameters import (
     ParameterStyleConfig,
     ParameterValidator,
 )
-from sqlspec.core.pipeline import compile_with_shared_pipeline
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -43,6 +43,7 @@ logger = get_logger("sqlspec.core.statement")
 
 RETURNS_ROWS_OPERATIONS: Final = {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA"}
 MODIFYING_OPERATIONS: Final = {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"}
+
 
 SQL_CONFIG_SLOTS: Final = (
     "pre_process_steps",
@@ -459,7 +460,7 @@ class SQL:
                 raw_sql = self._raw_sql
                 params = self._named_parameters or self._positional_parameters
                 is_many = self._is_many
-                compiled_result = compile_with_shared_pipeline(config, raw_sql, params, is_many=is_many)
+                compiled_result = pipeline.compile_with_shared_pipeline(config, raw_sql, params, is_many=is_many)
 
                 self._processed_state = ProcessedState(
                     compiled_sql=compiled_result.compiled_sql,

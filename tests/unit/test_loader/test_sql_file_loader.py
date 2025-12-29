@@ -11,7 +11,7 @@ Tests for SQLFileLoader core functionality including:
 
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
+from typing import Any
 
 import pytest
 
@@ -25,6 +25,7 @@ from sqlspec.loader import (
     _normalize_dialect,
     _normalize_query_name,
 )
+from sqlspec.storage.registry import StorageRegistry
 
 pytestmark = pytest.mark.xdist_group("loader")
 
@@ -54,7 +55,7 @@ def test_named_statement_slots() -> None:
     stmt = NamedStatement("test", "SELECT 1")
 
     assert hasattr(stmt.__class__, "__slots__")
-    assert stmt.__slots__ == ("dialect", "name", "sql", "start_line")
+    assert stmt.__class__.__slots__ == ("dialect", "name", "sql", "start_line")
 
     with pytest.raises(AttributeError):
         stmt.arbitrary_attr = "value"  # pyright: ignore[reportAttributeAccessIssue]
@@ -113,7 +114,7 @@ def test_cached_sqlfile_slots() -> None:
     cached_file = CachedSQLFile(sql_file, {})
 
     assert hasattr(cached_file.__class__, "__slots__")
-    assert cached_file.__slots__ == ("parsed_statements", "sql_file", "statement_names")
+    assert cached_file.__class__.__slots__ == ("parsed_statements", "sql_file", "statement_names")
 
 
 def test_default_initialization() -> None:
@@ -135,9 +136,9 @@ def test_custom_encoding() -> None:
 
 def test_custom_storage_registry() -> None:
     """Test SQLFileLoader with custom storage registry."""
-    mock_registry = Mock()
-    loader = SQLFileLoader(storage_registry=mock_registry)
-    assert loader.storage_registry == mock_registry
+    registry = StorageRegistry()
+    loader = SQLFileLoader(storage_registry=registry)
+    assert loader.storage_registry == registry
 
 
 def test_parse_simple_named_statements() -> None:
@@ -686,9 +687,11 @@ def test_file_read_error_handling() -> None:
     """Test handling of file read errors."""
     loader = SQLFileLoader()
 
-    mock_registry = Mock()
-    mock_registry.get.side_effect = KeyError("Backend not found")
-    loader.storage_registry = mock_registry
+    class MissingBackendRegistry(StorageRegistry):
+        def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> Any:
+            raise KeyError("Backend not found")
+
+    loader.storage_registry = MissingBackendRegistry()
 
     with pytest.raises(SQLFileNotFoundError):
         loader._read_file_content("/nonexistent/file.sql")
@@ -698,9 +701,8 @@ def test_checksum_calculation_error() -> None:
     """Test handling of checksum calculation errors."""
     loader = SQLFileLoader()
 
-    with patch("sqlspec.loader.SQLFileLoader._read_file_content", side_effect=Exception("Read error")):
-        with pytest.raises(SQLFileParseError):
-            loader._calculate_file_checksum("/test/file.sql")
+    with pytest.raises(SQLFileParseError):
+        loader._calculate_file_checksum("/test/file.sql")
 
 
 @pytest.mark.parametrize(

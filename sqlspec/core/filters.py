@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
 
@@ -64,6 +65,7 @@ T = TypeVar("T")
 FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class StatementFilter(ABC):
     """Abstract base class for filters that can be appended to a statement."""
 

@@ -1484,7 +1484,7 @@ def test_explain_builder_has_slots():
     """Test Explain uses __slots__ for memory efficiency."""
     explain = Explain("SELECT 1")
 
-    assert hasattr(explain, "__slots__")
+    assert hasattr(type(explain), "__slots__")
 
 
 def test_normalize_dialect_name_with_dialect_object():

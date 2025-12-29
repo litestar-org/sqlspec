@@ -9,13 +9,14 @@ Tests various SQL file loading patterns including:
 """
 
 from pathlib import Path
-from unittest.mock import Mock
+from typing import Any
 
 import pytest
 
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import SQLFileLoader
+from sqlspec.storage.registry import StorageRegistry
 
 pytestmark = pytest.mark.xdist_group("loader")
 
@@ -365,9 +366,11 @@ def test_invalid_uri_handling() -> None:
     """Test handling of invalid URIs."""
     loader = SQLFileLoader()
 
-    mock_registry = Mock()
-    mock_registry.get.side_effect = KeyError("Unsupported URI scheme")
-    loader.storage_registry = mock_registry
+    class UnsupportedRegistry(StorageRegistry):
+        def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> Any:
+            raise KeyError("Unsupported URI scheme")
+
+    loader.storage_registry = UnsupportedRegistry()
 
     with pytest.raises(SQLFileNotFoundError):
         loader.load_sql("unsupported://example.com/file.sql")

@@ -4,6 +4,7 @@ Provides hashing functions for SQL statements, expressions, parameters,
 filters, and AST sub-expressions.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
@@ -148,7 +149,7 @@ def _hash_filter_value(value: Any) -> int:
         return hash(repr(value))
 
 
-def hash_filters(filters: list["StatementFilter"] | None = None) -> int:
+def hash_filters(filters: "Sequence[StatementFilter] | None" = None) -> int:
     """Generate hash for statement filters.
 
     Args:

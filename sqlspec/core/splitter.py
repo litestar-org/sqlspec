@@ -415,7 +415,7 @@ class PostgreSQLDialectConfig(DialectConfig):
     @property
     def block_starters(self) -> set[str]:
         if self._block_starters is None:
-            self._block_starters = {"BEGIN", "DECLARE", "CASE", "DO"}
+            self._block_starters = {"DECLARE", "CASE", "DO"}
         return self._block_starters
 
     @property

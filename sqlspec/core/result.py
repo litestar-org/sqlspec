@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 __all__ = ("ArrowResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
+_EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -959,10 +960,9 @@ class EmptyResult(StatementResult):
     """Sentinel result used when a stack operation has no driver result."""
 
     __slots__ = ()
-    _EMPTY_STATEMENT = SQL("-- empty stack result --")
 
     def __init__(self) -> None:
-        super().__init__(statement=self._EMPTY_STATEMENT, data=[], rows_affected=0)
+        super().__init__(statement=_EMPTY_RESULT_STATEMENT, data=[], rows_affected=0)
 
     def __iter__(self) -> Iterator[Any]:
         return iter(())

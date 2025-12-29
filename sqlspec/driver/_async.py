@@ -57,6 +57,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         Returns:
             Data dictionary instance for metadata queries
+
         """
 
     async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
@@ -68,6 +69,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         Returns:
             The result of the SQL execution
+
         """
         runtime = self.observability
         compiled_sql, execution_parameters = statement.compile()
@@ -136,6 +138,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         Returns:
             AsyncContextManager that can be used in async with statements
+
         """
 
     @abstractmethod
@@ -164,6 +167,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
         Returns:
             SQLResult if the special operation was handled and completed,
             None if standard execution should proceed
+
         """
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -178,6 +182,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         Returns:
             ExecutionResult with script execution data including statement counts
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
@@ -198,7 +203,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
         """Execute a StatementStack sequentially using the adapter's primitives."""
-
         if not isinstance(stack, StatementStack):
             msg = "execute_stack expects a StatementStack instance"
             raise TypeError(msg)
@@ -263,7 +267,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
     async def _rollback_after_stack_error_async(self) -> None:
         """Attempt to rollback after a stack operation error (async)."""
-
         try:
             await self.rollback()
         except Exception as rollback_error:  # pragma: no cover - driver-specific cleanup
@@ -271,7 +274,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
     async def _commit_after_stack_operation_async(self) -> None:
         """Attempt to commit after a successful stack operation when not batching (async)."""
-
         try:
             await self.commit()
         except Exception as commit_error:  # pragma: no cover - driver-specific cleanup
@@ -289,6 +291,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         Returns:
             ExecutionResult with execution data for the many operation
+
         """
 
     @abstractmethod
@@ -303,6 +306,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         Returns:
             ExecutionResult with execution data
+
         """
 
     async def execute(
@@ -441,6 +445,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         See Also:
             select_one(): Primary method with identical behavior
+
         """
         return await self.select_one(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -526,6 +531,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         See Also:
             select_one_or_none(): Primary method with identical behavior
+
         """
         return await self.select_one_or_none(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -604,6 +610,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         See Also:
             select(): Primary method with identical behavior
+
         """
         return await self.select(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -655,6 +662,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
             >>> result = await driver.select_to_arrow(
             ...     "SELECT * FROM users", native_only=True
             ... )
+
         """
         ensure_pyarrow()
 
@@ -705,6 +713,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         See Also:
             select_to_arrow(): Primary method with identical behavior and full documentation
+
         """
         return await self.select_to_arrow(
             statement,
@@ -754,6 +763,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         See Also:
             select_value(): Primary method with identical behavior
+
         """
         return await self.select_value(statement, *parameters, statement_config=statement_config, **kwargs)
 
@@ -793,6 +803,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         See Also:
             select_value_or_none(): Primary method with identical behavior
+
         """
         return await self.select_value_or_none(statement, *parameters, statement_config=statement_config, **kwargs)
 
@@ -843,6 +854,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
             A tuple containing:
             - List of data rows (transformed by schema_type if provided)
             - Total count of rows matching the query (ignoring LIMIT/OFFSET)
+
         """
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
@@ -893,6 +905,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         See Also:
             select_with_total(): Primary method with identical behavior and full documentation
+
         """
         return await self.select_with_total(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -922,6 +935,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
         raise ValueError(msg)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncDataDictionaryBase(DataDictionaryMixin):
     """Base class for asynchronous data dictionary implementations."""
 
@@ -934,6 +948,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             Version information or None if detection fails
+
         """
 
     @abstractmethod
@@ -946,6 +961,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             True if feature is supported, False otherwise
+
         """
 
     @abstractmethod
@@ -958,6 +974,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             Database-specific type name
+
         """
 
     async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
@@ -969,6 +986,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of table names
+
         """
         _ = driver, schema
         return []
@@ -985,6 +1003,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of column metadata dictionaries
+
         """
         _ = driver, table, schema
         return []
@@ -1001,6 +1020,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of index metadata dictionaries
+
         """
         _ = driver, table, schema
         return []
@@ -1017,6 +1037,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of foreign key metadata
+
         """
         _ = driver, table, schema
         return []
@@ -1026,5 +1047,6 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of feature names this data dictionary supports
+
         """
         return self.get_default_features()

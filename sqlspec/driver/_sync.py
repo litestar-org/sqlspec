@@ -920,6 +920,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         raise ValueError(msg)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SyncDataDictionaryBase(DataDictionaryMixin):
     """Base class for synchronous data dictionary implementations."""
 

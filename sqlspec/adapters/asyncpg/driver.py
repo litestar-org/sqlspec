@@ -109,9 +109,9 @@ class AsyncpgExceptionHandler:
         return None
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if exc_type is None:
+        if exc_val is None:
             return
-        if issubclass(exc_type, asyncpg.PostgresError):
+        if isinstance(exc_val, asyncpg.PostgresError):
             self._map_postgres_exception(exc_val)
 
     def _map_postgres_exception(self, e: Any) -> None:

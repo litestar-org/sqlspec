@@ -20,9 +20,15 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+import sqlspec.loader as loader_module
 from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
 
-pytestmark = pytest.mark.xdist_group("loader")
+LOADER_COMPILED = loader_module.__file__.endswith((".so", ".pyd"))
+
+pytestmark = [
+    pytest.mark.xdist_group("loader"),
+    pytest.mark.skipif(LOADER_COMPILED, reason="cache integration unit tests rely on patching in interpreted mode"),
+]
 
 
 @patch("sqlspec.loader.get_cache_config")
@@ -285,7 +291,9 @@ def test_checksum_calculation_error_handling() -> None:
     loader = SQLFileLoader()
 
     with patch("sqlspec.loader.SQLFileLoader._read_file_content", side_effect=Exception("Read error")):
-        result = loader._is_file_unchanged("/nonexistent/file.sql", Mock())
+        sql_file = SQLFile("SELECT 1", "/nonexistent/file.sql")
+        cached_file = CachedSQLFile(sql_file, {})
+        result = loader._is_file_unchanged("/nonexistent/file.sql", cached_file)
 
         assert not result
 
