@@ -12,7 +12,6 @@ from rich.table import Table
 
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.exceptions import ConfigResolverError
-from sqlspec.migrations.commands import create_migration_commands
 from sqlspec.utils.config_discovery import discover_config_from_pyproject
 from sqlspec.utils.config_resolver import resolve_config_sync
 from sqlspec.utils.module_loader import import_string
@@ -394,6 +393,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         bind_key: str | None, verbose: bool, include: "tuple[str, ...]", exclude: "tuple[str, ...]"
     ) -> None:
         """Show current database revision."""
+        from sqlspec.migrations.commands import create_migration_commands
+
         ctx = _ensure_click_context()
 
         def _show_for_config(config: Any) -> None:
@@ -468,6 +469,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         dry_run: bool,
     ) -> None:
         """Downgrade the database to the latest revision."""
+
+        from sqlspec.migrations.commands import create_migration_commands
+
         ctx = _ensure_click_context()
 
         def _downgrade_for_config(config: Any) -> None:
@@ -563,8 +567,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         no_auto_sync: bool,
     ) -> None:
         """Upgrade the database to the latest revision."""
-        ctx = _ensure_click_context()
+        from sqlspec.migrations.commands import create_migration_commands
 
+        ctx = _ensure_click_context()
         # Report execution mode when specified
         if execution_mode != "auto":
             console.print(f"[dim]Execution mode: {execution_mode}[/]")
@@ -649,7 +654,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @bind_key_option
     def stamp(bind_key: str | None, revision: str) -> None:  # pyright: ignore[reportUnusedFunction]
         """Stamp the revision table with the given revision."""
+        from sqlspec.migrations.commands import create_migration_commands
+
         ctx = _ensure_click_context()
+
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
         migration_commands = create_migration_commands(config=sqlspec_config)
 
@@ -670,6 +678,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         bind_key: str | None, directory: str | None, package: bool, no_prompt: bool
     ) -> None:
         """Initialize the database migrations."""
+        from sqlspec.migrations.commands import create_migration_commands
+
         ctx = _ensure_click_context()
 
         console.rule("[yellow]Initializing database migrations.", align="left")
@@ -730,6 +740,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         bind_key: str | None, message: str | None, file_format: str | None, no_prompt: bool
     ) -> None:
         """Create a new database revision."""
+        from sqlspec.migrations.commands import create_migration_commands
+
         ctx = _ensure_click_context()
 
         console.rule("[yellow]Creating new migration revision[/]", align="left")
@@ -763,6 +775,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         bind_key: str | None, dry_run: bool, yes: bool, no_database: bool
     ) -> None:
         """Convert timestamp migrations to sequential format."""
+        from sqlspec.migrations.commands import create_migration_commands
+
         ctx = _ensure_click_context()
 
         console.rule("[yellow]Migration Fix Command[/]", align="left")

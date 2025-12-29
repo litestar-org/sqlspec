@@ -9,7 +9,7 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
-from sqlspec.observability import NullObservabilityRuntime
+from sqlspec.observability import ObservabilityRuntime
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -190,7 +190,7 @@ def test_event_channel_resolve_adapter_name_non_sqlspec_module(tmp_path) -> None
 
         def get_observability_runtime(self) -> Any:
 
-            return NullObservabilityRuntime()
+            return ObservabilityRuntime()
 
     CustomConfig.__module__ = "myapp.database.config"
     result = _resolve_adapter_name(CustomConfig())

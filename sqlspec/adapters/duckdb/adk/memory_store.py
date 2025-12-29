@@ -215,6 +215,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                      {self._owner_id_column_name}, timestamp, content_json,
                      content_text, metadata_json, inserted_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING 1
                     """
                     params: tuple[Any, ...] = (
                         entry["id"],
@@ -236,6 +237,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                     (id, session_id, app_name, user_id, event_id, author,
                      timestamp, content_json, content_text, metadata_json, inserted_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING 1
                     """
                     params = (
                         entry["id"],
@@ -252,8 +254,9 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                     )
 
                 try:
-                    conn.execute(sql, params)
-                    inserted_count += 1
+                    result = conn.execute(sql, params).fetchone()
+                    if result is not None:
+                        inserted_count += 1
                 except Exception as e:
                     if "duplicate" in str(e).lower() or "unique" in str(e).lower():
                         continue

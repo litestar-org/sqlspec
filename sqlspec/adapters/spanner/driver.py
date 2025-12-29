@@ -203,7 +203,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        if isinstance(cursor, Transaction):
+        if self._supports_write(cursor):
             writer = cast("_SpannerWriteProtocol", cursor)
             row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map)
             return self.create_execution_result(cursor, rowcount_override=row_count)
@@ -214,7 +214,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _execute_script(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        is_transaction = isinstance(cursor, Transaction)
+        is_transaction = self._supports_write(cursor)
         reader = cast("_SpannerReadProtocol", cursor)
 
         count = 0
@@ -224,7 +224,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             if not is_select and not is_transaction:
                 msg = "Cannot execute DML in a read-only Snapshot context."
                 raise SQLConversionError(msg)
-            if not is_select and isinstance(cursor, Transaction):
+            if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
                 writer.execute_update(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
             else:
@@ -238,7 +238,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
-        if not isinstance(cursor, Transaction):
+        if not self._supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
 
@@ -260,6 +260,36 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         total_rows = sum(row_counts) if row_counts else 0
 
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
+
+    def _supports_write(self, cursor: Any) -> bool:
+        """Check whether the cursor supports DML execution.
+
+        Args:
+            cursor: Connection or transaction object to inspect.
+
+        Returns:
+            True if DML execution is available, False otherwise.
+        """
+        try:
+            _ = cursor.execute_update
+        except AttributeError:
+            return False
+        return True
+
+    def _supports_batch_update(self, cursor: Any) -> bool:
+        """Check whether the cursor supports batch updates.
+
+        Args:
+            cursor: Connection or transaction object to inspect.
+
+        Returns:
+            True if batch updates are available, False otherwise.
+        """
+        try:
+            _ = cursor.batch_update
+        except AttributeError:
+            return False
+        return True
 
     def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
         """Infer Spanner param_types from Python values."""

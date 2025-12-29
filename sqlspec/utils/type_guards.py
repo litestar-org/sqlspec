@@ -14,7 +14,6 @@ from sqlglot import exp
 from typing_extensions import is_typeddict
 
 from sqlspec._typing import Empty
-from sqlspec.core.parameters._types import TypedParameter
 from sqlspec.protocols import (
     ArrowTableStatsProtocol,
     AsyncDeleteProtocol,
@@ -88,6 +87,7 @@ if TYPE_CHECKING:
     from sqlspec._typing import AttrsInstanceStub, BaseModelStub, DTODataStub, StructStub
     from sqlspec.builder import Select
     from sqlspec.core import LimitOffsetFilter, StatementFilter
+    from sqlspec.core.parameters import TypedParameter
     from sqlspec.typing import SupportedSchemaModel
 
 __all__ = (
@@ -1280,6 +1280,8 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[TypedParameter]":
     Returns:
         True if the object is a TypedParameter, False otherwise
     """
+    from sqlspec.core.parameters._types import TypedParameter
+
     return isinstance(obj, TypedParameter)
 
 

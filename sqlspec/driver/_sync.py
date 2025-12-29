@@ -71,8 +71,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         """
         runtime = self.observability
         compiled_sql, execution_parameters = statement.compile()
-        processed_state = cast("ProcessedState", statement.get_processed_state())
-        operation = processed_state.operation_type
+        _ = cast("ProcessedState", statement.get_processed_state())
+        operation = statement.operation_type
         query_context = {
             "sql": compiled_sql,
             "parameters": execution_parameters,

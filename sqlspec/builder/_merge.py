@@ -24,7 +24,6 @@ from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
-from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_expression_and_sql
 
@@ -372,7 +371,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 source_expr = exp.Subquery(this=paren_expr.this, alias=exp.to_identifier(alias))
             else:
                 source_expr = paren_expr
-        elif isinstance(source, SQLBuilderProtocol):
+        elif isinstance(source, QueryBuilder):
             for param_name, param_value in source.parameters.items():
                 self.add_parameter(param_value, name=param_name)
             subquery_expression_source = source.get_expression()

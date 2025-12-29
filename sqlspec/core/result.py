@@ -989,7 +989,15 @@ class StackResult:
         metadata: "dict[str, Any] | None" = None,
     ) -> None:
         self.result: StatementResult | ArrowResult = result if result is not None else EmptyResult()
-        self.rows_affected = rows_affected if rows_affected is not None else int(self.result.rows_affected)
+        if rows_affected is not None:
+            self.rows_affected = rows_affected
+        else:
+            try:
+                result_rows = object.__getattribute__(self.result, "rows_affected")
+            except AttributeError:
+                self.rows_affected = 0
+            else:
+                self.rows_affected = int(result_rows)
         self.error = error
         self.warning = warning
         self.metadata = dict(metadata) if metadata else None

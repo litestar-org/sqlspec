@@ -4,7 +4,6 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
     from sqlspec.extensions.starlette._state import SQLSpecConfigState
-    from sqlspec.protocols import DictProtocol
 
 __all__ = (
     "get_connection_from_request",
@@ -20,14 +19,21 @@ _MISSING = object()
 
 def _get_state_dict(state: Any) -> dict[str, Any]:
     """Return the underlying state dictionary."""
-    return cast("DictProtocol", state).__dict__
+    try:
+        return cast("dict[str, Any]", object.__getattribute__(state, "_state"))
+    except AttributeError:
+        return cast("dict[str, Any]", state.__dict__)
 
 
 def get_state_value(state: Any, key: str, default: Any = _MISSING) -> Any:
     """Get a value from a Starlette state object."""
     data = _get_state_dict(state)
     if default is _MISSING:
-        return data[key]
+        try:
+            return data[key]
+        except KeyError as exc:
+            msg = f"'{state.__class__.__name__}' object has no attribute '{key}'"
+            raise AttributeError(msg) from exc
     return data.get(key, default)
 
 

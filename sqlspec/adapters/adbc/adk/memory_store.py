@@ -210,25 +210,47 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return 0
 
         inserted_count = 0
+        use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
+
         if self._owner_id_column_name:
+            if use_returning:
+                sql = f"""
+                INSERT INTO {self._memory_table} (
+                    id, session_id, app_name, user_id, event_id, author,
+                    {self._owner_id_column_name}, timestamp, content_json, content_text,
+                    metadata_json, inserted_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
+                """
+            else:
+                sql = f"""
+                INSERT INTO {self._memory_table} (
+                    id, session_id, app_name, user_id, event_id, author,
+                    {self._owner_id_column_name}, timestamp, content_json, content_text,
+                    metadata_json, inserted_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """
+        elif use_returning:
             sql = f"""
-            INSERT INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
-                {self._owner_id_column_name}, timestamp, content_json, content_text,
-                metadata_json, inserted_at
-            ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
-            """
+                INSERT INTO {self._memory_table} (
+                    id, session_id, app_name, user_id, event_id, author,
+                    timestamp, content_json, content_text, metadata_json, inserted_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
+                """
         else:
             sql = f"""
-            INSERT INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
-                timestamp, content_json, content_text, metadata_json, inserted_at
-            ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
-            """
+                INSERT INTO {self._memory_table} (
+                    id, session_id, app_name, user_id, event_id, author,
+                    timestamp, content_json, content_text, metadata_json, inserted_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -266,13 +288,19 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                             metadata_json,
                             self._encode_timestamp(entry["inserted_at"]),
                         )
-                    try:
+                    if use_returning:
                         cursor.execute(sql, params)
-                        inserted_count += 1
-                    except Exception as exc:
-                        if "unique" in str(exc).lower():
-                            continue
-                        raise
+                        if cursor.fetchone():
+                            inserted_count += 1
+                    else:
+                        try:
+                            cursor.execute(sql, params)
+                            inserted_count += 1
+                        except Exception as exc:
+                            exc_str = str(exc).lower()
+                            if "unique" in exc_str or "constraint" in exc_str or "duplicate" in exc_str:
+                                continue
+                            raise
                 conn.commit()
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
@@ -320,11 +348,19 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return self._rows_to_records(rows)
 
     def delete_entries_by_session(self, session_id: str) -> int:
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
+        use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
+        if use_returning:
+            sql = f"DELETE FROM {self._memory_table} WHERE session_id = ? RETURNING 1"
+        else:
+            sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, (session_id,))
+                if use_returning:
+                    deleted_rows = cursor.fetchall()  # type: ignore[no-untyped-call]
+                    conn.commit()
+                    return len(deleted_rows)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
@@ -332,11 +368,19 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
     def delete_entries_older_than(self, days: int) -> int:
         cutoff = self._encode_timestamp(datetime.now(timezone.utc) - timedelta(days=days))
-        sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ?"
+        use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
+        if use_returning:
+            sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ? RETURNING 1"
+        else:
+            sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ?"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, (cutoff,))
+                if use_returning:
+                    deleted_rows = cursor.fetchall()  # type: ignore[no-untyped-call]
+                    conn.commit()
+                    return len(deleted_rows)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
