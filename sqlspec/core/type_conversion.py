@@ -233,10 +233,6 @@ def parse_datetime_rfc3339(dt_str: str) -> datetime:
     return datetime.fromisoformat(dt_str)
 
 
-BASE_TYPE_CONVERTER_SLOTS: Final[tuple[str, ...]] = ()
-BaseTypeConverter.__slots__ = BASE_TYPE_CONVERTER_SLOTS
-
-
 __all__ = (
     "BaseTypeConverter",
     "convert_decimal",
