@@ -180,6 +180,7 @@ def test_reset_cache_stats_clears_statistics() -> None:
     assert multi_stats.total_operations == 0
 
 
+@requires_interpreted
 def test_log_cache_stats_logs_to_configured_logger() -> None:
     """Test that log_cache_stats outputs to the logging system."""
     with patch("sqlspec.core.cache.get_logger") as mock_get_logger:

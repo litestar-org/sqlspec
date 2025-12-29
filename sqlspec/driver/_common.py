@@ -645,8 +645,8 @@ EXEC_SPECIAL_DATA: Final[int] = 2
 DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None)
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
@@ -789,8 +789,6 @@ class CommonDriverAttributesMixin:
         Returns:
             Converted data in the specified schema type, or original data if schema_type is None.
 
-        Raises:
-            SQLSpecError: If schema_type is not a supported type.
 
         """
         return _to_schema_impl(data, schema_type=schema_type)

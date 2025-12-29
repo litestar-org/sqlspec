@@ -2,7 +2,7 @@
 
 import datetime
 from contextlib import AsyncExitStack, ExitStack
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import psycopg
 from psycopg import sql as psycopg_sql
@@ -17,7 +17,6 @@ from sqlspec.core import (
     SQLResult,
     StackOperation,
     StackResult,
-    Statement,
     StatementConfig,
     StatementStack,
     build_statement_config_from_profile,
@@ -52,26 +51,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
-    from sqlspec.builder import QueryBuilder
+    from sqlspec.adapters.psycopg._types import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-
-    class _PipelineDriver(Protocol):
-        statement_config: StatementConfig
-
-        def prepare_statement(
-            self,
-            statement: "SQL | Statement | QueryBuilder",
-            parameters: Any,
-            *,
-            statement_config: StatementConfig,
-            kwargs: dict[str, Any],
-        ) -> SQL: ...
-
-        def _get_compiled_sql(self, statement: SQL, statement_config: StatementConfig) -> tuple[str, Any]: ...
 
 
 __all__ = (
@@ -139,7 +124,7 @@ class PsycopgPipelineMixin:
 
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
         statement_config = kwargs.pop("statement_config", None)
-        driver = cast("_PipelineDriver", self)
+        driver = cast("PsycopgPipelineDriver", self)
         config = statement_config or driver.statement_config
 
         sql_statement = driver.prepare_statement(

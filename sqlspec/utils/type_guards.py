@@ -721,7 +721,7 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
 
     from msgspec import structs
 
-    fields = structs.fields(cast("Any", schema_type))
+    fields: tuple[Any, ...] = structs.fields(cast("Any", schema_type))
     if not fields:
         return None
 

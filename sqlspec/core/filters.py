@@ -929,6 +929,13 @@ def create_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter",
     return tuple(filters)
 
 
+def _filter_sort_key(f: "StatementFilter") -> tuple[str, str]:
+    """Sort key for canonicalizing filters by type and field_name."""
+    class_name = type(f).__name__
+    field_name = str(f.field_name) if has_field_name(f) else ""
+    return (class_name, field_name)
+
+
 def canonicalize_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter", ...]:
     """Sort filters by type and field_name for consistent hashing.
 
@@ -938,10 +945,4 @@ def canonicalize_filters(filters: "list[StatementFilter]") -> tuple["StatementFi
     Returns:
         Canonically sorted tuple of filters
     """
-
-    def sort_key(f: "StatementFilter") -> tuple[str, str]:
-        class_name = type(f).__name__
-        field_name = str(f.field_name) if has_field_name(f) else ""
-        return (class_name, field_name)
-
-    return tuple(sorted(filters, key=sort_key))
+    return tuple(sorted(filters, key=_filter_sort_key))
