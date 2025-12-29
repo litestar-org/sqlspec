@@ -400,6 +400,7 @@ def handle_single_row_error(error: ValueError) -> "NoReturn":
     raise error
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class VersionInfo:
     """Database version information."""
 

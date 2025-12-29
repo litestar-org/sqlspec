@@ -935,7 +935,7 @@ def has_dict_attribute(obj: Any) -> "TypeGuard[DictProtocol]":
     Returns:
         bool
     """
-    return isinstance(obj, DictProtocol)
+    return hasattr(obj, "__dict__")
 
 
 def extract_dataclass_fields(

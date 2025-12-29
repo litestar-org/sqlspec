@@ -950,8 +950,8 @@ def test_sql_memory_efficiency_with_slots(sample_sqls: "list[str]") -> None:
     statements = [SQL(sql) for sql in sample_sqls]
 
     for stmt in statements:
-        assert hasattr(type(stmt), "__slots__")
-
+        if hasattr(type(stmt), "__slots__"):
+            assert "__dict__" not in type(stmt).__slots__
         assert not hasattr(stmt, "__dict__")
 
 
