@@ -40,13 +40,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import SyncDataDictionaryBase
-    from sqlspec.storage import (
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
     "SpannerDataDictionary",
@@ -348,7 +342,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """Execute query and stream Arrow results to storage."""
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )

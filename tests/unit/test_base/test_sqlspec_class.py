@@ -36,8 +36,7 @@ def _is_compiled() -> bool:
 
 
 requires_interpreted = pytest.mark.skipif(
-    _is_compiled(),
-    reason="Test uses @patch which doesn't work with mypyc-compiled modules",
+    _is_compiled(), reason="Test uses @patch which doesn't work with mypyc-compiled modules"
 )
 
 pytestmark = pytest.mark.xdist_group("base")

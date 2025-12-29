@@ -739,16 +739,17 @@ def process_query(sql: str) -> SQLResult:
 ### Adapter Pattern
 
 ```python
-# ✅ DO: Inherit from typed mixins
-from sqlspec.driver.mixins import SyncStorageMixin
+# ✅ DO: Inherit from base driver classes
+from sqlspec.driver import SyncDriverAdapterBase
 
-class SQLiteDriver(SyncStorageMixin["sqlite3.Connection", "sqlite3.Row"]):
-    def _execute(self, statement: SQL, connection: "sqlite3.Connection") -> SQLResult:
-        cursor = connection.execute(statement.sql)
+class SQLiteDriver(SyncDriverAdapterBase):
+    def _execute_statement(self, cursor: Any, statement: SQL) -> ExecutionResult:
+        cursor.execute(statement.sql)
         # Use cast for type safety without conversion
-        return SQLResult(
-            data=cast("list[dict[str, Any]]", cursor.fetchall()),
-            statement=statement
+        return self.create_execution_result(
+            cursor_result=cursor,
+            selected_data=cast("list[dict[str, Any]]", cursor.fetchall()),
+            is_select_result=True,
         )
 ```
 

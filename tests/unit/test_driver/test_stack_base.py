@@ -19,8 +19,7 @@ def _is_compiled() -> bool:
 
 
 requires_interpreted = pytest.mark.skipif(
-    _is_compiled(),
-    reason="Test uses mock driver that inherits from compiled base (mypyc conflict)",
+    _is_compiled(), reason="Test uses mock driver that inherits from compiled base (mypyc conflict)"
 )
 
 

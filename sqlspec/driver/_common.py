@@ -6,7 +6,7 @@ import logging
 import re
 from contextlib import suppress
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast, overload
 
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
@@ -25,10 +25,12 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
+from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
+from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime
 from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.type_guards import (
     has_array_interface,
     has_cursor_metadata,
@@ -44,7 +46,8 @@ if TYPE_CHECKING:
 
     from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.core.stack import StatementStack
-    from sqlspec.typing import StatementParameters
+    from sqlspec.storage import AsyncStoragePipeline, StorageCapabilities, SyncStoragePipeline
+    from sqlspec.typing import SchemaT, StatementParameters
 
 
 __all__ = (
@@ -110,7 +113,8 @@ class ForeignKeyMetadata:
         return (
             f"ForeignKeyMetadata(table_name={self.table_name!r}, column_name={self.column_name!r}, "
             f"referenced_table={self.referenced_table!r}, referenced_column={self.referenced_column!r}, "
-            f"constraint_name={self.constraint_name!r}, schema={self.schema!r}, referenced_schema={self.referenced_schema!r})"
+            f"constraint_name={self.constraint_name!r}, schema={self.schema!r}, "
+            f"referenced_schema={self.referenced_schema!r})"
         )
 
     def __eq__(self, other: object) -> bool:
@@ -466,6 +470,8 @@ class DataDictionaryMixin:
     feature flags or optimal types.
     """
 
+    __slots__ = ("_version_cache", "_version_fetch_attempted")
+
     _version_cache: "dict[int, VersionInfo | None]"
     _version_fetch_attempted: "set[int]"
 
@@ -695,6 +701,99 @@ class CommonDriverAttributesMixin:
     def stack_native_disabled(self) -> bool:
         """Return True when native stack execution is disabled for this driver."""
         return bool(self.driver_features.get("stack_native_disabled", False))
+
+    storage_pipeline_factory: "ClassVar[type[SyncStoragePipeline | AsyncStoragePipeline] | None]" = None
+
+    def storage_capabilities(self) -> "StorageCapabilities":
+        """Return cached storage capabilities for the active driver.
+
+        Returns:
+            StorageCapabilities dict with capability flags.
+
+        Raises:
+            StorageCapabilityError: If storage capabilities are not configured.
+
+        """
+        capabilities = self.driver_features.get("storage_capabilities")
+        if capabilities is None:
+            msg = "Storage capabilities are not configured for this driver."
+            raise StorageCapabilityError(msg, capability="storage_capabilities")
+        return cast("StorageCapabilities", dict(capabilities))
+
+    def _require_capability(self, capability_flag: str) -> None:
+        """Check that a storage capability is enabled.
+
+        Args:
+            capability_flag: The capability flag to check.
+
+        Raises:
+            StorageCapabilityError: If the capability is not available.
+
+        """
+        capabilities = self.storage_capabilities()
+        if capabilities.get(capability_flag, False):
+            return
+        human_label = CAPABILITY_HINTS.get(capability_flag, capability_flag)
+        remediation = "Check adapter supports this capability or stage artifacts via storage pipeline."
+        msg = f"{human_label} is not available for this adapter"
+        raise StorageCapabilityError(msg, capability=capability_flag, remediation=remediation)
+
+    def _raise_storage_not_implemented(self, capability: str) -> None:
+        """Raise NotImplementedError for storage operations.
+
+        Args:
+            capability: The capability that is not implemented.
+
+        Raises:
+            StorageCapabilityError: Always raised.
+
+        """
+        msg = f"{capability} is not implemented for this driver"
+        remediation = "Override storage methods on the adapter to enable this capability."
+        raise StorageCapabilityError(msg, capability=capability, remediation=remediation)
+
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
+
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
+        """Convert data to a specified schema type.
+
+        Supports transformation to various schema types including:
+        - TypedDict
+        - dataclasses
+        - msgspec Structs
+        - Pydantic models
+        - attrs classes
+
+        Args:
+            data: Input data to convert (dict, list of dicts, or other).
+            schema_type: Target schema type for conversion. If None, returns data unchanged.
+
+        Returns:
+            Converted data in the specified schema type, or original data if schema_type is None.
+
+        Raises:
+            SQLSpecError: If schema_type is not a supported type.
+
+        """
+        return _to_schema_impl(data, schema_type=schema_type)
 
     def create_execution_result(
         self,

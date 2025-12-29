@@ -29,8 +29,7 @@ def is_compiled() -> bool:
 # These tests create interpreted subclasses of compiled base classes,
 # which causes garbage collection conflicts during pytest error reporting.
 requires_interpreted = pytest.mark.skipif(
-    is_compiled(),
-    reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)",
+    is_compiled(), reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)"
 )
 
 

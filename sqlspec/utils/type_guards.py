@@ -477,9 +477,9 @@ def has_with_method(obj: Any) -> "TypeGuard[WithMethodProtocol]":
 
 
 def can_convert_to_schema(obj: Any) -> "TypeGuard[ToSchemaProtocol]":
-    """Check if an object has the ToSchemaMixin capabilities.
+    """Check if an object has to_schema capabilities.
 
-    This provides better DX than isinstance checks for driver mixins.
+    This provides better DX than isinstance checks for driver classes.
 
     Args:
         obj: The object to check (typically a driver instance)

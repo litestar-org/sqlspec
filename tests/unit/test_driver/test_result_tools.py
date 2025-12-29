@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false
-"""Tests for sqlspec.driver.mixins._result_tools module.
+"""Tests for to_schema functionality from CommonDriverAttributesMixin.
 
 Tests numpy array handling, msgspec deserialization, and type conversion functionality.
 Uses function-based pytest approach as per AGENTS.md requirements.
@@ -12,7 +12,7 @@ import msgspec
 import pytest
 from typing_extensions import TypedDict
 
-from sqlspec.driver.mixins._result_tools import ToSchemaMixin
+from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.schema import (
     _DEFAULT_TYPE_DECODERS,
@@ -190,10 +190,10 @@ def test_default_msgspec_deserializer_with_regular_values() -> None:
     assert result == test_list
 
 
-# Test ToSchemaMixin integration
+# Test CommonDriverAttributesMixin integration
 @pytest.mark.skipif(not NUMPY_INSTALLED, reason="numpy not installed")
 def test_to_schema_mixin_with_numpy_array_single_record() -> None:
-    """Test ToSchemaMixin.to_schema with numpy array in single record."""
+    """Test CommonDriverAttributesMixin.to_schema with numpy array in single record."""
     import numpy as np
 
     # Create test data with numpy array
@@ -210,7 +210,7 @@ def test_to_schema_mixin_with_numpy_array_single_record() -> None:
     assert isinstance(embedding_result, list)
 
     # Now test the full conversion
-    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleMsgspecStruct)
+    result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleMsgspecStruct)
 
     assert isinstance(result, SampleMsgspecStruct)
     assert result.name == "test_embedding"
@@ -221,7 +221,7 @@ def test_to_schema_mixin_with_numpy_array_single_record() -> None:
 
 @pytest.mark.skipif(not NUMPY_INSTALLED, reason="numpy not installed")
 def test_to_schema_mixin_with_numpy_array_multiple_records() -> None:
-    """Test ToSchemaMixin.to_schema with numpy arrays in multiple records."""
+    """Test CommonDriverAttributesMixin.to_schema with numpy arrays in multiple records."""
     import numpy as np
 
     # Create test data with multiple records containing numpy arrays
@@ -231,7 +231,7 @@ def test_to_schema_mixin_with_numpy_array_multiple_records() -> None:
     ]
 
     # Convert to schema
-    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleMsgspecStruct)
+    result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleMsgspecStruct)
 
     assert isinstance(result, list)
     assert len(result) == 2
@@ -253,13 +253,13 @@ def test_to_schema_mixin_with_numpy_array_multiple_records() -> None:
 
 @pytest.mark.skipif(not NUMPY_INSTALLED, reason="numpy not installed")
 def test_to_schema_mixin_with_different_numpy_dtypes() -> None:
-    """Test ToSchemaMixin with different numpy array dtypes."""
+    """Test CommonDriverAttributesMixin with different numpy array dtypes."""
     import numpy as np
 
     # Test int32 array
     int_data = {"name": "int_test", "values": np.array([1, 2, 3], dtype=np.int32)}
 
-    result = ToSchemaMixin.to_schema(int_data, schema_type=SampleMsgspecStructWithIntList)
+    result = CommonDriverAttributesMixin.to_schema(int_data, schema_type=SampleMsgspecStructWithIntList)
     assert isinstance(result, SampleMsgspecStructWithIntList)
     assert result.values == [1, 2, 3]
     assert isinstance(result.values, list)
@@ -267,7 +267,7 @@ def test_to_schema_mixin_with_different_numpy_dtypes() -> None:
     # Test float64 array
     float_data = {"name": "float_test", "embedding": np.array([1.1, 2.2, 3.3], dtype=np.float64)}
 
-    result = ToSchemaMixin.to_schema(float_data, schema_type=SampleMsgspecStruct)
+    result = CommonDriverAttributesMixin.to_schema(float_data, schema_type=SampleMsgspecStruct)
     assert isinstance(result, SampleMsgspecStruct)
     assert result.embedding == [1.1, 2.2, 3.3]
     assert isinstance(result.embedding, list)
@@ -282,7 +282,7 @@ def test_to_schema_mixin_with_regular_lists() -> None:
         "metadata": {"type": "manual"},
     }
 
-    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleMsgspecStruct)
+    result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleMsgspecStruct)
 
     assert isinstance(result, SampleMsgspecStruct)
     assert result.name == "regular_list"
@@ -295,28 +295,28 @@ def test_to_schema_mixin_without_schema_type() -> None:
     """Test that data is returned unchanged when no schema_type is provided."""
     test_data = {"name": "test", "values": [1, 2, 3]}
 
-    result = ToSchemaMixin.to_schema(test_data)
+    result = CommonDriverAttributesMixin.to_schema(test_data)
     assert result == test_data
 
 
 def test_to_schema_mixin_with_typeddict_single_record() -> None:
-    """Test ToSchemaMixin.to_schema with TypedDict for single record."""
+    """Test CommonDriverAttributesMixin.to_schema with TypedDict for single record."""
     test_data = {"name": "test_user", "age": 30, "optional_field": "value"}
 
-    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleTypedDict)
+    result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleTypedDict)
 
     assert result == test_data
     assert isinstance(result, dict)
 
 
 def test_to_schema_mixin_with_typeddict_multiple_records() -> None:
-    """Test ToSchemaMixin.to_schema with TypedDict for multiple records."""
+    """Test CommonDriverAttributesMixin.to_schema with TypedDict for multiple records."""
     test_data = [
         {"name": "user1", "age": 25, "optional_field": "value1"},
         {"name": "user2", "age": 30, "optional_field": "value2"},
     ]
 
-    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleTypedDict)
+    result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleTypedDict)
 
     assert isinstance(result, list)
     assert len(result) == 2
@@ -326,14 +326,14 @@ def test_to_schema_mixin_with_typeddict_multiple_records() -> None:
 
 
 def test_to_schema_mixin_with_typeddict_mixed_data() -> None:
-    """Test ToSchemaMixin.to_schema with TypedDict filters non-dict items."""
+    """Test CommonDriverAttributesMixin.to_schema with TypedDict filters non-dict items."""
     test_data = [
         {"name": "user1", "age": 25, "optional_field": "value1"},
         "not_a_dict",  # This should be filtered out
         {"name": "user2", "age": 30, "optional_field": "value2"},
     ]
 
-    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleTypedDict)
+    result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleTypedDict)
 
     assert isinstance(result, list)
     assert len(result) == 2  # Only dict items should be included
@@ -342,10 +342,10 @@ def test_to_schema_mixin_with_typeddict_mixed_data() -> None:
 
 
 def test_to_schema_mixin_with_typeddict_non_dict_data() -> None:
-    """Test ToSchemaMixin.to_schema with TypedDict returns non-dict data unchanged."""
+    """Test CommonDriverAttributesMixin.to_schema with TypedDict returns non-dict data unchanged."""
     test_data = "not_a_dict"
 
-    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleTypedDict)
+    result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleTypedDict)
 
     assert result == test_data
 

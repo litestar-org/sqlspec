@@ -28,8 +28,7 @@ def _is_compiled() -> bool:
 
 
 requires_interpreted = pytest.mark.skipif(
-    _is_compiled(),
-    reason="Test uses Mock with compiled classes (mypyc descriptors don't work with mocks)",
+    _is_compiled(), reason="Test uses Mock with compiled classes (mypyc descriptors don't work with mocks)"
 )
 
 pytestmark = pytest.mark.xdist_group("driver")

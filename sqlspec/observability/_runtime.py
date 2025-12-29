@@ -33,6 +33,9 @@ class ObservabilityRuntime:
         "span_manager",
     )
 
+    # Allow test injection with fake span managers (mypyc strict typing workaround)
+    span_manager: "Any"
+
     def __init__(
         self, config: ObservabilityConfig | None = None, *, bind_key: str | None = None, config_name: str | None = None
     ) -> None:

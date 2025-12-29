@@ -17,8 +17,18 @@ from sqlspec.driver._common import (
     describe_stack_statement,
     handle_single_row_error,
 )
-from sqlspec.driver.mixins import SQLTranslatorMixin, StorageDriverMixin
+from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
+from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
+from sqlspec.driver._storage_helpers import (
+    arrow_table_to_rows,
+    attach_partition_telemetry,
+    build_ingest_telemetry,
+    coerce_arrow_table,
+    create_storage_job,
+    stringify_storage_target,
+)
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
+from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -27,10 +37,12 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from contextlib import AbstractAsyncContextManager
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
     from sqlspec.driver._common import ForeignKeyMetadata
-    from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, ArrowTable, SchemaT, StatementParameters
 
 
 __all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase", "AsyncDriverT")
@@ -44,8 +56,15 @@ AsyncDriverT = TypeVar("AsyncDriverT", bound="AsyncDriverAdapterBase")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, StorageDriverMixin):
-    """Base class for asynchronous database drivers."""
+class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
+    """Base class for asynchronous database drivers.
+
+    This class includes flattened storage and SQL translation methods that were
+    previously in StorageDriverMixin and SQLTranslatorMixin. The flattening
+    eliminates cross-trait attribute access that caused mypyc segmentation faults.
+    """
+
+    dialect: "DialectType | None" = None
 
     @property
     def is_async(self) -> bool:
@@ -940,6 +959,298 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
 
         msg = f"Unsupported stack operation method: {operation.method}"
         raise ValueError(msg)
+
+    def convert_to_dialect(
+        self, statement: "Statement", to_dialect: "DialectType | None" = None, pretty: bool = DEFAULT_PRETTY
+    ) -> str:
+        """Convert a statement to a target SQL dialect.
+
+        Args:
+            statement: SQL statement to convert.
+            to_dialect: Target dialect (defaults to current dialect).
+            pretty: Whether to format the output SQL.
+
+        Returns:
+            SQL string in target dialect.
+
+        """
+        return _convert_to_dialect_impl(statement, self.dialect, to_dialect, pretty)
+
+    def _storage_pipeline(self) -> "AsyncStoragePipeline":
+        """Get or create an async storage pipeline.
+
+        Returns:
+            AsyncStoragePipeline instance.
+
+        """
+        factory = self.storage_pipeline_factory
+        if factory is None:
+            return AsyncStoragePipeline()
+        return cast("AsyncStoragePipeline", factory())
+
+    async def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Stream a SELECT statement directly into storage.
+
+        Args:
+            statement: SQL statement to execute.
+            destination: Storage destination path.
+            parameters: Query parameters.
+            statement_config: Optional statement configuration.
+            partitioner: Optional partitioner configuration.
+            format_hint: Optional format hint for storage.
+            telemetry: Optional telemetry dict to merge.
+
+        Returns:
+            StorageBridgeJob with execution telemetry.
+
+        Raises:
+            StorageCapabilityError: If not implemented.
+
+        """
+        self._raise_storage_not_implemented("select_to_storage")
+        raise NotImplementedError
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into the target table.
+
+        Args:
+            table: Target table name.
+            source: Arrow data source.
+            partitioner: Optional partitioner configuration.
+            overwrite: Whether to overwrite existing data.
+
+        Returns:
+            StorageBridgeJob with execution telemetry.
+
+        Raises:
+            StorageCapabilityError: If not implemented.
+
+        """
+        self._raise_storage_not_implemented("load_from_arrow")
+        raise NotImplementedError
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load artifacts from storage into the target table.
+
+        Args:
+            table: Target table name.
+            source: Storage source path.
+            file_format: File format of source.
+            partitioner: Optional partitioner configuration.
+            overwrite: Whether to overwrite existing data.
+
+        Returns:
+            StorageBridgeJob with execution telemetry.
+
+        Raises:
+            StorageCapabilityError: If not implemented.
+
+        """
+        self._raise_storage_not_implemented("load_from_storage")
+        raise NotImplementedError
+
+    def stage_artifact(self, request: "dict[str, Any]") -> "dict[str, Any]":
+        """Provision staging metadata for adapters that require remote URIs.
+
+        Args:
+            request: Staging request configuration.
+
+        Returns:
+            Staging metadata dict.
+
+        Raises:
+            StorageCapabilityError: If not implemented.
+
+        """
+        self._raise_storage_not_implemented("stage_artifact")
+        raise NotImplementedError
+
+    def flush_staging_artifacts(self, artifacts: "list[dict[str, Any]]", *, error: Exception | None = None) -> None:
+        """Clean up staged artifacts after a job completes.
+
+        Args:
+            artifacts: List of staging artifacts to clean up.
+            error: Optional error that triggered cleanup.
+
+        """
+        if artifacts:
+            self._raise_storage_not_implemented("flush_staging_artifacts")
+
+    def get_storage_job(self, job_id: str) -> "StorageBridgeJob | None":
+        """Fetch a previously created job handle.
+
+        Args:
+            job_id: Job identifier.
+
+        Returns:
+            StorageBridgeJob if found, None otherwise.
+
+        """
+        return None
+
+    async def _write_result_to_storage_async(
+        self,
+        result: "ArrowResult",
+        destination: "StorageDestination",
+        *,
+        format_hint: "StorageFormat | None" = None,
+        storage_options: "dict[str, Any] | None" = None,
+        pipeline: "AsyncStoragePipeline | None" = None,
+    ) -> "StorageTelemetry":
+        """Write Arrow result to storage with telemetry.
+
+        Args:
+            result: Arrow result to write.
+            destination: Storage destination.
+            format_hint: Optional format hint.
+            storage_options: Optional storage options.
+            pipeline: Optional storage pipeline.
+
+        Returns:
+            StorageTelemetry with write metrics.
+
+        """
+        runtime = self.observability
+        span = runtime.start_storage_span(
+            "write", destination=stringify_storage_target(destination), format_label=format_hint
+        )
+        try:
+            telemetry = await result.write_to_storage_async(
+                destination, format_hint=format_hint, storage_options=storage_options, pipeline=pipeline
+            )
+        except Exception as exc:
+            runtime.end_storage_span(span, error=exc)
+            raise
+        telemetry = runtime.annotate_storage_telemetry(telemetry)
+        runtime.end_storage_span(span, telemetry=telemetry)
+        return telemetry
+
+    async def _read_arrow_from_storage_async(
+        self,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "tuple[ArrowTable, StorageTelemetry]":
+        """Read Arrow table from storage with telemetry.
+
+        Args:
+            source: Storage source path.
+            file_format: File format to read.
+            storage_options: Optional storage options.
+
+        Returns:
+            Tuple of (ArrowTable, StorageTelemetry).
+
+        """
+        runtime = self.observability
+        span = runtime.start_storage_span(
+            "read", destination=stringify_storage_target(source), format_label=file_format
+        )
+        pipeline = self._storage_pipeline()
+        try:
+            table, telemetry = await pipeline.read_arrow_async(
+                source, file_format=file_format, storage_options=storage_options
+            )
+        except Exception as exc:
+            runtime.end_storage_span(span, error=exc)
+            raise
+        telemetry = runtime.annotate_storage_telemetry(telemetry)
+        runtime.end_storage_span(span, telemetry=telemetry)
+        return table, telemetry
+
+    def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
+        """Coerce various sources to a PyArrow Table.
+
+        Args:
+            source: ArrowResult, PyArrow Table, RecordBatch, or iterable of dicts.
+
+        Returns:
+            PyArrow Table.
+
+        """
+        return coerce_arrow_table(source)
+
+    @staticmethod
+    def _arrow_table_to_rows(
+        table: "ArrowTable", columns: "list[str] | None" = None
+    ) -> "tuple[list[str], list[tuple[Any, ...]]]":
+        """Convert Arrow table to column names and row tuples.
+
+        Args:
+            table: Arrow table to convert.
+            columns: Optional list of columns to extract.
+
+        Returns:
+            Tuple of (column_names, list of row tuples).
+
+        """
+        return arrow_table_to_rows(table, columns)
+
+    @staticmethod
+    def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
+        """Build telemetry dict from Arrow table statistics.
+
+        Args:
+            table: Arrow table to extract statistics from.
+            format_label: Format label for telemetry.
+
+        Returns:
+            StorageTelemetry dict with row/byte counts.
+
+        """
+        return build_ingest_telemetry(table, format_label=format_label)
+
+    def _attach_partition_telemetry(self, telemetry: "StorageTelemetry", partitioner: "dict[str, Any] | None") -> None:
+        """Attach partitioner info to telemetry dict.
+
+        Args:
+            telemetry: Telemetry dict to update.
+            partitioner: Partitioner configuration or None.
+
+        """
+        attach_partition_telemetry(telemetry, partitioner)
+
+    def _create_storage_job(
+        self, produced: "StorageTelemetry", provided: "StorageTelemetry | None" = None, *, status: str = "completed"
+    ) -> "StorageBridgeJob":
+        """Create a StorageBridgeJob from telemetry data.
+
+        Args:
+            produced: Telemetry from the production side of the operation.
+            provided: Optional telemetry from the source side.
+            status: Job status string.
+
+        Returns:
+            StorageBridgeJob instance.
+
+        """
+        return create_storage_job(produced, provided, status=status)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

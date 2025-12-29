@@ -39,8 +39,7 @@ def _is_compiled() -> bool:
 
 
 requires_interpreted = pytest.mark.skipif(
-    _is_compiled(),
-    reason="Test checks __slots__ attribute which is not accessible on mypyc-compiled classes",
+    _is_compiled(), reason="Test checks __slots__ attribute which is not accessible on mypyc-compiled classes"
 )
 
 pytestmark = pytest.mark.xdist_group("loader")
