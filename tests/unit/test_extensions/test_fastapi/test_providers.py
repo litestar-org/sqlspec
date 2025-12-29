@@ -3,6 +3,8 @@
 import datetime
 from uuid import UUID, uuid4
 
+import pytest
+
 from sqlspec.core import (
     BeforeAfterFilter,
     InCollectionFilter,
@@ -329,10 +331,8 @@ def test_provide_filters_search_without_value_excluded() -> None:
 
 
 def test_provide_filters_order_by_without_field_excluded() -> None:
-    """Test that order by filters without field names are excluded."""
-    config: FilterConfig = {"sort_field": "created_at"}
-    provider = provide_filters(config)
-
-    # OrderByFilter with None field_name should be excluded
-    filters = provider(order_by_filter=OrderByFilter(field_name=None, sort_order="desc"))  # type: ignore[arg-type]
-    assert filters == []
+    """Test that order by filters without field names raise TypeError (mypyc enforces types)."""
+    # With mypyc compilation, passing None for a str parameter raises TypeError
+    # at construction time rather than being handled gracefully
+    with pytest.raises(TypeError):
+        OrderByFilter(field_name=None, sort_order="desc")  # type: ignore[arg-type]

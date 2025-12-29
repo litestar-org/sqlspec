@@ -2,7 +2,7 @@
 
 from typing import Final, NoReturn
 
-from mypy_extensions import mypyc_attr
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp, parse_one
 from sqlglot.dialects.dialect import DialectType
 
@@ -16,6 +16,7 @@ _DEFAULT_PRETTY: Final[bool] = True
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class SQLTranslatorMixin:
     """Mixin for drivers supporting SQL translation."""
 

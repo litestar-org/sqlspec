@@ -2,7 +2,7 @@
 
 from abc import abstractmethod
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
 from mypy_extensions import mypyc_attr
 
@@ -46,8 +46,6 @@ AsyncDriverT = TypeVar("AsyncDriverT", bound="AsyncDriverAdapterBase")
 @mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, StorageDriverMixin):
     """Base class for asynchronous database drivers."""
-
-    __slots__: "ClassVar[tuple[str, ...]]" = ()
 
     @property
     def is_async(self) -> bool:

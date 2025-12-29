@@ -24,6 +24,22 @@ import pytest
 from sqlspec.base import SQLSpec
 from sqlspec.core import CacheConfig
 
+
+def _is_compiled() -> bool:
+    """Check if core modules are mypyc-compiled."""
+    try:
+        from sqlspec.core import cache
+
+        return hasattr(cache, "__file__") and (cache.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+requires_interpreted = pytest.mark.skipif(
+    _is_compiled(),
+    reason="Test uses @patch which doesn't work with mypyc-compiled modules",
+)
+
 pytestmark = pytest.mark.xdist_group("base")
 
 
@@ -181,6 +197,7 @@ def test_log_cache_stats_logs_to_configured_logger() -> None:
         assert "Cache Statistics" in call_args[0][0]
 
 
+@requires_interpreted
 @patch("sqlspec.core.cache.get_cache")
 @patch("sqlspec.core.cache.get_default_cache")
 def test_update_cache_config_clears_all_caches(mock_get_default_cache: MagicMock, mock_get_cache: MagicMock) -> None:
@@ -440,6 +457,7 @@ def test_cache_configuration_affects_cache_clearing() -> None:
             SQLSpec.update_cache_config(original_config)
 
 
+@requires_interpreted
 @patch("sqlspec.core.cache.get_logger")
 def test_cache_configuration_logging_integration(mock_get_logger: MagicMock) -> None:
     """Test that cache configuration changes are logged properly."""

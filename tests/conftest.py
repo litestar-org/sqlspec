@@ -10,6 +10,30 @@ from minio import Minio
 if TYPE_CHECKING:
     from pytest_databases.docker.minio import MinioService
 
+
+def is_compiled() -> bool:
+    """Detect if sqlspec driver modules are mypyc-compiled.
+
+    Returns:
+        True when the driver modules have been compiled with mypyc.
+    """
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+# Marker for tests that segfault when running with mypyc-compiled code.
+# These tests create interpreted subclasses of compiled base classes,
+# which causes garbage collection conflicts during pytest error reporting.
+requires_interpreted = pytest.mark.skipif(
+    is_compiled(),
+    reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)",
+)
+
+
 pytest_plugins = [
     "pytest_databases.docker.postgres",
     "pytest_databases.docker.oracle",

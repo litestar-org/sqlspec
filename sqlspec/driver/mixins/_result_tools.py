@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any, overload
 
-from mypy_extensions import mypyc_attr
+from mypy_extensions import mypyc_attr, trait
 
 from sqlspec.utils.schema import to_schema
 
@@ -13,6 +13,7 @@ __all__ = ("ToSchemaMixin",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class ToSchemaMixin:
     """Mixin providing data transformation methods for various schema types."""
 

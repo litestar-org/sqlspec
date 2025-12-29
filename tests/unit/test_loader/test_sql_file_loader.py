@@ -27,6 +27,22 @@ from sqlspec.loader import (
 )
 from sqlspec.storage.registry import StorageRegistry
 
+
+def _is_compiled() -> bool:
+    """Check if loader modules are mypyc-compiled."""
+    try:
+        from sqlspec import loader
+
+        return hasattr(loader, "__file__") and (loader.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+requires_interpreted = pytest.mark.skipif(
+    _is_compiled(),
+    reason="Test checks __slots__ attribute which is not accessible on mypyc-compiled classes",
+)
+
 pytestmark = pytest.mark.xdist_group("loader")
 
 
@@ -50,6 +66,7 @@ def test_named_statement_no_dialect() -> None:
     assert stmt.start_line == 0
 
 
+@requires_interpreted
 def test_named_statement_slots() -> None:
     """Test that NamedStatement uses __slots__."""
     stmt = NamedStatement("test", "SELECT 1")
@@ -108,6 +125,7 @@ def test_cached_sqlfile_creation() -> None:
     assert cached_file.statement_names == ("query1", "query2")
 
 
+@requires_interpreted
 def test_cached_sqlfile_slots() -> None:
     """Test that CachedSQLFile uses __slots__."""
     sql_file = SQLFile("SELECT 1", "test.sql")

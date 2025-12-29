@@ -2,7 +2,7 @@
 
 from abc import abstractmethod
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
 from mypy_extensions import mypyc_attr
 
@@ -46,8 +46,6 @@ SyncDriverT = TypeVar("SyncDriverT", bound="SyncDriverAdapterBase")
 @mypyc_attr(allow_interpreted_subclasses=True)
 class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, StorageDriverMixin):
     """Base class for synchronous database drivers."""
-
-    __slots__: "ClassVar[tuple[str, ...]]" = ()
 
     @property
     @abstractmethod

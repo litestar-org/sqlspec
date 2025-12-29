@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 
-from mypy_extensions import mypyc_attr
+from mypy_extensions import mypyc_attr, trait
 
 from sqlspec.exceptions import StorageCapabilityError
 from sqlspec.storage import (
@@ -47,10 +47,11 @@ CAPABILITY_HINTS: dict[str, str] = {
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class StorageDriverMixin:
     """Mixin providing capability-aware storage bridge helpers."""
 
-    __slots__: "ClassVar[tuple[str, ...]]" = ()
+    __slots__ = ()
     storage_pipeline_factory: "ClassVar[type[SyncStoragePipeline | AsyncStoragePipeline] | None]" = None
     driver_features: dict[str, Any]
 

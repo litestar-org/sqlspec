@@ -16,6 +16,22 @@ import pytest
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
 
+
+def _is_compiled() -> bool:
+    """Check if driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+requires_interpreted = pytest.mark.skipif(
+    _is_compiled(),
+    reason="Test uses Mock with compiled classes (mypyc descriptors don't work with mocks)",
+)
+
 pytestmark = pytest.mark.xdist_group("driver")
 
 
@@ -225,6 +241,7 @@ def test_async_fetch_with_total_signature_matches_select_with_total() -> None:
 # Test delegation behavior using mocks
 
 
+@requires_interpreted
 def test_sync_fetch_delegates_to_select() -> None:
     """Test that fetch() delegates to select() with identical arguments."""
     # Create mock driver with mocked select method
@@ -243,6 +260,7 @@ def test_sync_fetch_delegates_to_select() -> None:
     assert result == [{"id": 1}]
 
 
+@requires_interpreted
 def test_sync_fetch_one_delegates_to_select_one() -> None:
     """Test that fetch_one() delegates to select_one() with identical arguments."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)
@@ -258,6 +276,7 @@ def test_sync_fetch_one_delegates_to_select_one() -> None:
     assert result == {"id": 1}
 
 
+@requires_interpreted
 def test_sync_fetch_one_or_none_delegates_to_select_one_or_none() -> None:
     """Test that fetch_one_or_none() delegates to select_one_or_none() with identical arguments."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)
@@ -273,6 +292,7 @@ def test_sync_fetch_one_or_none_delegates_to_select_one_or_none() -> None:
     assert result is None
 
 
+@requires_interpreted
 def test_sync_fetch_value_delegates_to_select_value() -> None:
     """Test that fetch_value() delegates to select_value() with identical arguments."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)
@@ -284,6 +304,7 @@ def test_sync_fetch_value_delegates_to_select_value() -> None:
     assert result == 42
 
 
+@requires_interpreted
 def test_sync_fetch_value_or_none_delegates_to_select_value_or_none() -> None:
     """Test that fetch_value_or_none() delegates to select_value_or_none() with identical arguments."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)
@@ -297,6 +318,7 @@ def test_sync_fetch_value_or_none_delegates_to_select_value_or_none() -> None:
     assert result is None
 
 
+@requires_interpreted
 def test_sync_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
     """Test that fetch_to_arrow() delegates to select_to_arrow() with identical arguments."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)
@@ -324,6 +346,7 @@ def test_sync_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
     assert result == mock_arrow_result
 
 
+@requires_interpreted
 def test_sync_fetch_with_total_delegates_to_select_with_total() -> None:
     """Test that fetch_with_total() delegates to select_with_total() with identical arguments."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)
@@ -339,6 +362,7 @@ def test_sync_fetch_with_total_delegates_to_select_with_total() -> None:
     assert result == ([{"id": 1}, {"id": 2}], 100)
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_fetch_delegates_to_select() -> None:
     """Test that async fetch() delegates to async select() with identical arguments."""
@@ -355,6 +379,7 @@ async def test_async_fetch_delegates_to_select() -> None:
     assert result == [{"id": 1}]
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_fetch_one_delegates_to_select_one() -> None:
     """Test that async fetch_one() delegates to async select_one() with identical arguments."""
@@ -371,6 +396,7 @@ async def test_async_fetch_one_delegates_to_select_one() -> None:
     assert result == {"id": 1}
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_fetch_one_or_none_delegates_to_select_one_or_none() -> None:
     """Test that async fetch_one_or_none() delegates to async select_one_or_none() with identical arguments."""
@@ -387,6 +413,7 @@ async def test_async_fetch_one_or_none_delegates_to_select_one_or_none() -> None
     assert result is None
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_fetch_value_delegates_to_select_value() -> None:
     """Test that async fetch_value() delegates to async select_value() with identical arguments."""
@@ -399,6 +426,7 @@ async def test_async_fetch_value_delegates_to_select_value() -> None:
     assert result == 42
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_fetch_value_or_none_delegates_to_select_value_or_none() -> None:
     """Test that async fetch_value_or_none() delegates to async select_value_or_none() with identical arguments."""
@@ -413,6 +441,7 @@ async def test_async_fetch_value_or_none_delegates_to_select_value_or_none() -> 
     assert result is None
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
     """Test that async fetch_to_arrow() delegates to async select_to_arrow() with identical arguments."""
@@ -441,6 +470,7 @@ async def test_async_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
     assert result == mock_arrow_result
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_fetch_with_total_delegates_to_select_with_total() -> None:
     """Test that async fetch_with_total() delegates to async select_with_total() with identical arguments."""
@@ -460,6 +490,7 @@ async def test_async_fetch_with_total_delegates_to_select_with_total() -> None:
 # Test that fetch methods preserve schema_type argument handling
 
 
+@requires_interpreted
 def test_sync_fetch_with_schema_type_argument() -> None:
     """Test that fetch() correctly passes schema_type to select()."""
 
@@ -482,6 +513,7 @@ def test_sync_fetch_with_schema_type_argument() -> None:
     assert result == expected_result
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_fetch_one_with_schema_type_argument() -> None:
     """Test that async fetch_one() correctly passes schema_type to select_one()."""

@@ -238,15 +238,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Handle database exceptions with PostgreSQL error codes."""
         return AsyncpgExceptionHandler()
 
-    async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
-        """Execute statement and ensure asyncpg errors map to SQLSpec exceptions."""
-        try:
-            return await super().dispatch_statement_execution(statement=statement, connection=connection)
-        except Exception as exc:
-            if has_sqlstate(exc):
-                AsyncpgExceptionHandler()._map_postgres_exception(exc)
-            raise
-
     async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult | None":
         """Handle PostgreSQL COPY operations and other special cases.
 

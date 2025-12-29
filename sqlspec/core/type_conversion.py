@@ -8,8 +8,10 @@ import re
 from collections.abc import Callable
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
-from typing import Any, ClassVar, Final
+from typing import Any, Final
 from uuid import UUID
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec._serialization import decode_json
 
@@ -29,6 +31,7 @@ SPECIAL_TYPE_REGEX: Final[re.Pattern[str]] = re.compile(
 )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class BaseTypeConverter:
     """Universal type detection and conversion for all adapters.
 
@@ -37,7 +40,7 @@ class BaseTypeConverter:
     behavior. Users can extend this class for custom type conversion needs.
     """
 
-    __slots__: "ClassVar[tuple[str, ...]]" = ()
+    __slots__ = ()
 
     def detect_type(self, value: str) -> str | None:
         """Detect special types from string values.

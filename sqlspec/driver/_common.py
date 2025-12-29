@@ -6,9 +6,9 @@ import logging
 import re
 from contextlib import suppress
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast
 
-from mypy_extensions import mypyc_attr
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
@@ -458,6 +458,7 @@ class VersionInfo:
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality.
 
@@ -639,10 +640,11 @@ DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__: "ClassVar[tuple[str, ...]]" = ("_observability", "connection", "driver_features", "statement_config")
+    __slots__ = ("_observability", "connection", "driver_features", "statement_config")
     connection: "Any"
     statement_config: "StatementConfig"
     driver_features: "dict[str, Any]"

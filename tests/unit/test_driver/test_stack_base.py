@@ -8,6 +8,23 @@ from sqlspec import StatementStack
 from sqlspec.exceptions import StackExecutionError
 
 
+def _is_compiled() -> bool:
+    """Check if driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+requires_interpreted = pytest.mark.skipif(
+    _is_compiled(),
+    reason="Test uses mock driver that inherits from compiled base (mypyc conflict)",
+)
+
+
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_execute_stack_fail_fast_rolls_back(mock_async_driver) -> None:
     original_execute = mock_async_driver.execute
@@ -28,6 +45,7 @@ async def test_async_execute_stack_fail_fast_rolls_back(mock_async_driver) -> No
     assert mock_async_driver.connection.in_transaction is False
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_execute_stack_continue_on_error(mock_async_driver) -> None:
     original_execute = mock_async_driver.execute
@@ -49,6 +67,7 @@ async def test_async_execute_stack_continue_on_error(mock_async_driver) -> None:
     assert mock_async_driver.connection.in_transaction is False
 
 
+@requires_interpreted
 @pytest.mark.asyncio
 async def test_async_execute_stack_execute_arrow(mock_async_driver) -> None:
     sentinel = object()
@@ -66,6 +85,7 @@ async def test_async_execute_stack_execute_arrow(mock_async_driver) -> None:
     assert results[0].result is sentinel
 
 
+@requires_interpreted
 def test_sync_execute_stack_fail_fast_rolls_back(mock_sync_driver) -> None:
     original_execute = mock_sync_driver.execute
 
@@ -85,6 +105,7 @@ def test_sync_execute_stack_fail_fast_rolls_back(mock_sync_driver) -> None:
     assert mock_sync_driver.connection.in_transaction is False
 
 
+@requires_interpreted
 def test_sync_execute_stack_continue_on_error(mock_sync_driver) -> None:
     original_execute = mock_sync_driver.execute
 
@@ -105,6 +126,7 @@ def test_sync_execute_stack_continue_on_error(mock_sync_driver) -> None:
     assert mock_sync_driver.connection.in_transaction is False
 
 
+@requires_interpreted
 def test_sync_execute_stack_execute_arrow(mock_sync_driver) -> None:
     sentinel = object()
 

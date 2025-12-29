@@ -228,15 +228,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Handle AIOSQLite-specific exceptions."""
         return AiosqliteExceptionHandler()
 
-    async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
-        """Execute statement and reset transaction state on error."""
-        try:
-            return await super().dispatch_statement_execution(statement=statement, connection=connection)
-        except Exception:
-            with contextlib.suppress(Exception):
-                await self.rollback()
-            raise
-
     async def _try_special_handling(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "SQLResult | None":
         """Hook for AIOSQLite-specific special operations.
 
