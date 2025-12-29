@@ -658,8 +658,9 @@ def test_memory_efficiency_with_slots() -> None:
         "parameter_style",
         "supports_many",
     }
-    if hasattr(type(result), "__slots__"):
-        assert set(type(result).__slots__) == expected_slots
+    slots = getattr(type(result), "__slots__", None)
+    if slots is not None:
+        assert set(slots) == expected_slots
 
 
 def test_processor_memory_efficiency_with_slots() -> None:
@@ -670,8 +671,9 @@ def test_processor_memory_efficiency_with_slots() -> None:
     assert not hasattr(processor, "__dict__")
 
     expected_slots = {"_cache", "_cache_hits", "_cache_misses", "_config", "_max_cache_size", "_parameter_processor"}
-    if hasattr(type(processor), "__slots__"):
-        assert set(type(processor).__slots__) == expected_slots
+    slots = getattr(type(processor), "__slots__", None)
+    if slots is not None:
+        assert set(slots) == expected_slots
 
 
 @pytest.mark.performance

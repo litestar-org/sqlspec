@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from sqlglot import exp
 
 from sqlspec.core.parameters import TypedParameter
-from sqlspec.utils.type_guards import has_dict_attribute, is_expression, is_typed_parameter
+from sqlspec.utils.type_guards import is_expression, is_typed_parameter
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -165,8 +165,9 @@ def hash_filters(filters: "Sequence[StatementFilter] | None" = None) -> int:
     for f in filters:
         components: list[Any] = [f.__class__.__name__]
 
-        if has_dict_attribute(f):
-            for key, value in sorted(f.__dict__.items()):
+        dict_attr = getattr(f, "__dict__", None)
+        if isinstance(dict_attr, dict):
+            for key, value in sorted(dict_attr.items()):
                 components.append((key, _hash_filter_value(value)))
 
         filter_components.append(tuple(components))

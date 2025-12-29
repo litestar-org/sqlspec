@@ -6,7 +6,7 @@ import logging
 import re
 from contextlib import suppress
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
@@ -642,7 +642,7 @@ DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("_observability", "connection", "driver_features", "statement_config")
+    __slots__: "ClassVar[tuple[str, ...]]" = ("_observability", "connection", "driver_features", "statement_config")
     connection: "Any"
     statement_config: "StatementConfig"
     driver_features: "dict[str, Any]"
@@ -678,6 +678,16 @@ class CommonDriverAttributesMixin:
         if self._observability is None:
             self._observability = ObservabilityRuntime(config_name=type(self).__name__)
         return self._observability
+
+    @property
+    def is_async(self) -> bool:
+        """Return whether the driver executes asynchronously.
+
+        Returns:
+            False for sync drivers.
+
+        """
+        return False
 
     @property
     def stack_native_disabled(self) -> bool:

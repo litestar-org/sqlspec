@@ -8,7 +8,7 @@ import re
 from collections.abc import Callable
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 from uuid import UUID
 
 from sqlspec._serialization import decode_json
@@ -37,7 +37,7 @@ class BaseTypeConverter:
     behavior. Users can extend this class for custom type conversion needs.
     """
 
-    __slots__ = ()
+    __slots__: "ClassVar[tuple[str, ...]]" = ()
 
     def detect_type(self, value: str) -> str | None:
         """Detect special types from string values.

@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -50,10 +50,19 @@ CAPABILITY_HINTS: dict[str, str] = {
 class StorageDriverMixin:
     """Mixin providing capability-aware storage bridge helpers."""
 
-    __slots__ = ()
-    storage_pipeline_factory: "type[SyncStoragePipeline | AsyncStoragePipeline] | None" = None
+    __slots__: "ClassVar[tuple[str, ...]]" = ()
+    storage_pipeline_factory: "ClassVar[type[SyncStoragePipeline | AsyncStoragePipeline] | None]" = None
     driver_features: dict[str, Any]
-    is_async: bool
+
+    @property
+    def is_async(self) -> bool:
+        """Return whether the driver executes asynchronously.
+
+        Returns:
+            True when the driver is async.
+
+        """
+        raise NotImplementedError
 
     def storage_capabilities(self) -> StorageCapabilities:
         """Return cached storage capabilities for the active driver."""

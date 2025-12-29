@@ -322,7 +322,11 @@ def has_type_code(obj: Any) -> "TypeGuard[HasTypeCodeProtocol]":
 
 def has_sqlstate(obj: Any) -> "TypeGuard[HasSqlStateProtocol]":
     """Check if an exception exposes sqlstate."""
-    return isinstance(obj, HasSqlStateProtocol)
+    try:
+        _ = obj.sqlstate
+    except Exception:
+        return False
+    return True
 
 
 def has_sqlite_error(obj: Any) -> "TypeGuard[HasSqliteErrorProtocol]":
