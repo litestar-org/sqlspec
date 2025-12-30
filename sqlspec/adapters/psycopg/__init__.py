@@ -1,4 +1,4 @@
-from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.config import (
     PsycopgAsyncConfig,
     PsycopgConnectionParams,

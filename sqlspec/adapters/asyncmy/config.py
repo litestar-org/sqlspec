@@ -9,7 +9,7 @@ from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy._types import AsyncmyConnection
+from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
 from sqlspec.adapters.asyncmy.driver import (
     AsyncmyCursor,
     AsyncmyDriver,

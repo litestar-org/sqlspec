@@ -8,7 +8,7 @@ from google.cloud.spanner_v1 import Client
 from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.spanner._types import SpannerConnection
+from sqlspec.adapters.spanner._typing import SpannerConnection
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver, spanner_statement_config
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError

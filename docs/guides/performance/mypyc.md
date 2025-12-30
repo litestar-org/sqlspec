@@ -531,7 +531,7 @@ exclude = [
     "sqlspec/typing.py",                 # Type aliases
     "sqlspec/_typing.py",                # Type aliases
     "sqlspec/adapters/*/config.py",      # Configuration classes
-    "sqlspec/adapters/*/_types.py",      # Types classes Often not found during mypy checks
+    "sqlspec/adapters/*/_typing.py",     # Type classes often not found during mypy checks
     "sqlspec/config.py",                 # Main config
     "sqlspec/**/__init__.py",            # Init files (usually just imports)
 ]

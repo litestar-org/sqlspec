@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
     from adbc_driver_manager.dbapi import Cursor
 
-    from sqlspec.adapters.adbc._types import AdbcConnection
+    from sqlspec.adapters.adbc._typing import AdbcConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult

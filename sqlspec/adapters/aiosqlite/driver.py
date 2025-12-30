@@ -38,7 +38,7 @@ from sqlspec.utils.type_guards import has_sqlite_error
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
-    from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+    from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase

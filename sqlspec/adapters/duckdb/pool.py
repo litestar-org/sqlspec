@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import duckdb
 
-from sqlspec.adapters.duckdb._types import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -59,7 +59,6 @@ class DuckDBConnectionPool:
         extension_flags: "dict[str, Any] | None" = None,
         secrets: "list[dict[str, Any]] | None" = None,
         on_connection_create: "Callable[[DuckDBConnection], None] | None" = None,
-        **kwargs: Any,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -71,7 +70,6 @@ class DuckDBConnectionPool:
             extension_flags: Connection-level SET statements applied after creation
             secrets: List of secrets to create
             on_connection_create: Callback executed when connection is created
-            **kwargs: Additional parameters ignored for compatibility
         """
         self._connection_config = connection_config
         self._recycle = pool_recycle_seconds

@@ -920,7 +920,7 @@ class CommonDriverAttributesMixin:
         statement: "Statement | QueryBuilder",
         parameters: "tuple[StatementParameters | StatementFilter, ...]" = (),
         *,
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | None" = None,
         kwargs: "dict[str, Any] | None" = None,
     ) -> "SQL":
         """Build SQL statement from various input types.
@@ -930,13 +930,15 @@ class CommonDriverAttributesMixin:
         Args:
             statement: SQL statement or QueryBuilder to prepare
             parameters: Parameters for the SQL statement
-            statement_config: Statement configuration
+            statement_config: Optional statement configuration override.
             kwargs: Additional keyword arguments
 
         Returns:
             Prepared SQL statement
 
         """
+        if statement_config is None:
+            statement_config = self.statement_config
         kwargs = kwargs or {}
         filters, data_parameters = self._split_parameters(parameters)
 

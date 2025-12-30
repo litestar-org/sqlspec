@@ -35,7 +35,7 @@ from sqlspec.utils.type_guards import has_sqlite_error
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
-    from sqlspec.adapters.sqlite._types import SqliteConnection
+    from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase

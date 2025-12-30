@@ -8,7 +8,7 @@ import oracledb
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers
-from sqlspec.adapters.oracledb._types import (
+from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
     OracleSyncConnection,

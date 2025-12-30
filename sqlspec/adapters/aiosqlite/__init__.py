@@ -1,4 +1,4 @@
-from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqliteConnectionParams, AiosqlitePoolParams
 from sqlspec.adapters.aiosqlite.driver import (
     AiosqliteCursor,

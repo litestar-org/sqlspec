@@ -155,14 +155,12 @@ exclude = [
   "sqlspec/_typing.py",                    # Type aliases
   "sqlspec/config.py",                     # Main config
   "sqlspec/adapters/**/config.py",         # Adapter configurations
-  "sqlspec/adapters/**/_types.py",         # Type definitions (mypyc incompatible)
+  "sqlspec/adapters/**/_typing.py",        # Type definitions (mypyc incompatible)
   "sqlspec/extensions/**",                 # All extensions
   "sqlspec/**/__init__.py",                # Init files (usually just imports)
   "sqlspec/protocols.py",                  # Protocol definitions
   "sqlspec/builder/**/*.py",               # Builder (not performance critical)
   "sqlspec/migrations/commands.py",        # Migration command CLI (dynamic imports)
-  "sqlspec/adapters/spanner/dialect/*.py", # Spanner dialect (uses dynamic attributes)
-
 ]
 include = [
   "sqlspec/core/**/*.py",          # Core module

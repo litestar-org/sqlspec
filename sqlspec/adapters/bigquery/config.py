@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.bigquery._types import BigQueryConnection
+from sqlspec.adapters.bigquery._typing import BigQueryConnection
 from sqlspec.adapters.bigquery.driver import (
     BigQueryCursor,
     BigQueryDriver,

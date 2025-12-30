@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("oracledb")
 
 from sqlspec import StatementStack
-from sqlspec.adapters.oracledb._types import OracleAsyncConnection
+from sqlspec.adapters.oracledb._typing import OracleAsyncConnection
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, oracledb_statement_config
 from sqlspec.driver._common import StackExecutionObserver
 

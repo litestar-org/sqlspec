@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite._types import SqliteConnection
+from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:

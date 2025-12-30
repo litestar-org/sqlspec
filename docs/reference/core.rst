@@ -377,7 +377,7 @@ Filters can be composed and chained:
 Type Conversions
 ================
 
-.. currentmodule:: sqlspec.core.type_conversion
+.. currentmodule:: sqlspec.core.type_converter
 
 .. autoclass:: BaseTypeConverter
    :members:

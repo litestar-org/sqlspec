@@ -44,8 +44,8 @@ class OraclePipelineDriver(Protocol):
         statement: "str | Statement | QueryBuilder",
         parameters: "tuple[Any, ...] | dict[str, Any] | None",
         *,
-        statement_config: "StatementConfig",
-        kwargs: "dict[str, Any]",
+        statement_config: "StatementConfig | None" = None,
+        kwargs: "dict[str, Any] | None" = None,
     ) -> "SQL": ...
 
     def _get_compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...

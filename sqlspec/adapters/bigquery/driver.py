@@ -18,7 +18,7 @@ from google.cloud.bigquery import ArrayQueryParameter, LoadJobConfig, QueryJob, 
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
-from sqlspec.adapters.bigquery._types import BigQueryConnection
+from sqlspec.adapters.bigquery._typing import BigQueryConnection
 from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
@@ -384,7 +384,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         features = driver_features or {}
 
         enable_uuid_conversion = features.get("enable_uuid_conversion", True)
-        self.type_converter = BigQueryOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
+        self._type_converter = BigQueryOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
 
         if statement_config is None:
             cache_config = get_cache_config()

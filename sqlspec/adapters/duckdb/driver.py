@@ -44,7 +44,7 @@ from sqlspec.utils.type_guards import has_rowcount
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
-    from sqlspec.adapters.duckdb._types import DuckDBConnection
+    from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult

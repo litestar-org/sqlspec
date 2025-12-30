@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.adapters.spanner._types import SpannerConnection
+    from sqlspec.adapters.spanner._typing import SpannerConnection
     from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import SyncDataDictionaryBase
@@ -138,6 +138,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
     dialect: "DialectType" = "spanner"
+    __slots__ = ("_data_dictionary", "_type_converter")
 
     def __init__(
         self,
@@ -152,7 +153,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
 
         json_deserializer = features.get("json_deserializer")
-        self.type_converter = SpannerOutputConverter(
+        self._type_converter = SpannerOutputConverter(
             enable_uuid_conversion=features.get("enable_uuid_conversion", True),
             json_deserializer=cast("Callable[[str], Any]", json_deserializer or from_json),
         )
@@ -193,7 +194,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             for row in rows:
                 item: dict[str, Any] = {}
                 for index, column in enumerate(column_names):
-                    item[column] = self.type_converter.convert_if_detected(row[index])
+                    item[column] = self._type_converter.convert_if_detected(row[index])
                 data.append(item)
 
             return self.create_execution_result(

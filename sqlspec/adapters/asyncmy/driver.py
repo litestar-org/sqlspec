@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
-    from sqlspec.adapters.asyncmy._types import AsyncmyConnection
+    from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
     from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase

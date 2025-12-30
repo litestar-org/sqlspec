@@ -65,7 +65,7 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 2. **Adapters (`sqlspec/adapters/`)**: Database-specific implementations. Each adapter consists of:
    - `config.py`: Configuration classes specific to the database
    - `driver.py`: Driver implementation (sync/async) that executes queries
-   - `_types.py`: Type definitions specific to the adapter or other uncompilable mypyc objects
+   - `_typing.py`: Type definitions specific to the adapter or other uncompilable mypyc objects
    - Supported adapters: `adbc`, `aiosqlite`, `asyncmy`, `asyncpg`, `bigquery`, `duckdb`, `oracledb`, `psqlpy`, `psycopg`, `sqlite`
 
 3. **Driver System (`sqlspec/driver/`)**: Base classes and mixins for all database drivers:

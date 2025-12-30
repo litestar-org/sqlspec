@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.duckdb._types import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.adapters.duckdb.driver import (
     DuckDBCursor,
     DuckDBDriver,
@@ -95,6 +95,7 @@ class DuckDBPoolParams(DuckDBConnectionParams):
     pool_max_size: NotRequired[int]
     pool_timeout: NotRequired[float]
     pool_recycle_seconds: NotRequired[int]
+    health_check_interval: NotRequired[float]
 
 
 class DuckDBExtensionConfig(TypedDict):
@@ -294,11 +295,16 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
+        excluded_keys = {
+            "pool_min_size",
+            "pool_max_size",
+            "pool_timeout",
+            "pool_recycle_seconds",
+            "health_check_interval",
+            "extra",
+        }
         return {
-            k: v
-            for k, v in self.connection_config.items()
-            if v is not None
-            and k not in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
+            k: v for k, v in self.connection_config.items() if v is not None and k not in excluded_keys
         }
 
     def _create_pool(self) -> DuckDBConnectionPool:
@@ -312,12 +318,20 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
         extension_flags_dict = dict(extension_flags) if extension_flags else None
 
+        pool_recycle_seconds = self.connection_config.get("pool_recycle_seconds")
+        health_check_interval = self.connection_config.get("health_check_interval")
+        pool_kwargs: dict[str, Any] = {}
+        if pool_recycle_seconds is not None:
+            pool_kwargs["pool_recycle_seconds"] = pool_recycle_seconds
+        if health_check_interval is not None:
+            pool_kwargs["health_check_interval"] = health_check_interval
+
         return DuckDBConnectionPool(
             connection_config=connection_config,
             extensions=extensions_dicts,
             extension_flags=extension_flags_dict,
             secrets=secrets_dicts,
-            **self.connection_config,
+            **pool_kwargs,
         )
 
     def _close_pool(self) -> None:

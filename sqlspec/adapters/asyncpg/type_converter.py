@@ -17,7 +17,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlspec.adapters.asyncpg._types import AsyncpgConnection
+    from sqlspec.adapters.asyncpg._typing import AsyncpgConnection
 
 __all__ = ("register_json_codecs", "register_pgvector_support")
 
