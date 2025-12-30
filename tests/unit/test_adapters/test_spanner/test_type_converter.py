@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlspec.adapters.spanner._type_converter import SpannerOutputConverter
+from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
 
 
 def test_uuid_conversion() -> None:

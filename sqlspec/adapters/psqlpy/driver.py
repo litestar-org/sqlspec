@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Any, Final
 import psqlpy.exceptions
 from psqlpy.extra_types import JSONB
 
-from sqlspec.adapters.psqlpy._type_converter import PostgreSQLOutputConverter
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
+from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,

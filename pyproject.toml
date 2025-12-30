@@ -148,19 +148,20 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc", "hatch-cython"]
 enable-by-default = false
 exclude = [
-  "tests/**",                       # Test files
-  "sqlspec/__main__.py",            # Entry point (can't run directly when compiled)
-  "sqlspec/cli.py",                 # CLI module (not performance critical)
-  "sqlspec/typing.py",              # Type aliases
-  "sqlspec/_typing.py",             # Type aliases
-  "sqlspec/config.py",              # Main config
-  "sqlspec/adapters/**/config.py",  # Adapter configurations
-  "sqlspec/adapters/**/_types.py",  # Type definitions (mypyc incompatible)
-  "sqlspec/extensions/**",          # All extensions
-  "sqlspec/**/__init__.py",         # Init files (usually just imports)
-  "sqlspec/protocols.py",           # Protocol definitions
-  "sqlspec/builder/**/*.py",        # Builder (not performance critical)
-  "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
+  "tests/**",                              # Test files
+  "sqlspec/__main__.py",                   # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                        # CLI module (not performance critical)
+  "sqlspec/typing.py",                     # Type aliases
+  "sqlspec/_typing.py",                    # Type aliases
+  "sqlspec/config.py",                     # Main config
+  "sqlspec/adapters/**/config.py",         # Adapter configurations
+  "sqlspec/adapters/**/_types.py",         # Type definitions (mypyc incompatible)
+  "sqlspec/extensions/**",                 # All extensions
+  "sqlspec/**/__init__.py",                # Init files (usually just imports)
+  "sqlspec/protocols.py",                  # Protocol definitions
+  "sqlspec/builder/**/*.py",               # Builder (not performance critical)
+  "sqlspec/migrations/commands.py",        # Migration command CLI (dynamic imports)
+  "sqlspec/adapters/spanner/dialect/*.py", # Spanner dialect (uses dynamic attributes)
 
 ]
 include = [
@@ -172,9 +173,7 @@ include = [
   "sqlspec/driver/**/*.py",
   # "sqlspec/migrations/**/*.py",    # Migrations module
   # === ADAPTER MODULES ===
-  "sqlspec/adapters/*/_type_converter.py", # Type converters (input/output)
-  "sqlspec/adapters/*/data_dictionary.py",
-  "sqlspec/adapters/*/driver.py",
+  "sqlspec/adapters/**/*.py", # All adapters
 
   # === UTILITY MODULES ===
   "sqlspec/utils/text.py",                # Text utilities

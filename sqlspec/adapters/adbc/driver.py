@@ -9,8 +9,8 @@ import datetime
 import decimal
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from sqlspec.adapters.adbc._type_converter import ADBCOutputConverter
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
+from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,

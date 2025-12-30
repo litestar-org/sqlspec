@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import duckdb
 
-from sqlspec.adapters.duckdb._type_converter import DuckDBOutputConverter
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
+from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,

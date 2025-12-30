@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite._type_converter import register_type_handlers
 from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, sqlite_statement_config
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
+from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json

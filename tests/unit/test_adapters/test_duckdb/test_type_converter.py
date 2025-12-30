@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlspec.adapters.duckdb._type_converter import DuckDBOutputConverter
+from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 
 
 def test_uuid_conversion_enabled_by_default() -> None:

@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, cast
 import oracledb
 from oracledb import AsyncCursor, Cursor
 
-from sqlspec.adapters.oracledb._type_converter import OracleOutputConverter
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
+from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,

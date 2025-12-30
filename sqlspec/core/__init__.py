@@ -90,12 +90,6 @@ Example Usage:
 """
 
 from sqlspec.core import filters
-from sqlspec.core._type_converter import (
-    DEFAULT_CACHE_SIZE,
-    DEFAULT_SPECIAL_CHARS,
-    BaseInputConverter,
-    CachedOutputConverter,
-)
 from sqlspec.core.cache import (
     CacheConfig,
     CachedStatement,
@@ -199,8 +193,12 @@ from sqlspec.core.statement import (
     get_default_config,
     get_default_parameter_config,
 )
-from sqlspec.core.type_conversion import (
+from sqlspec.core.type_converter import (
+    DEFAULT_CACHE_SIZE,
+    DEFAULT_SPECIAL_CHARS,
+    BaseInputConverter,
     BaseTypeConverter,
+    CachedOutputConverter,
     convert_decimal,
     convert_iso_date,
     convert_iso_datetime,

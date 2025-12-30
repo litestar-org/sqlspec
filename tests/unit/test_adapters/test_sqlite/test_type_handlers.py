@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 def test_json_adapter_dict_default_serializer() -> None:
     """Test JSON adapter with dict using default json.dumps."""
-    from sqlspec.adapters.sqlite._type_converter import json_adapter
+    from sqlspec.adapters.sqlite.type_converter import json_adapter
 
     data = {"key": "value", "count": 42}
     result = json_adapter(data)
@@ -17,7 +17,7 @@ def test_json_adapter_dict_default_serializer() -> None:
 
 def test_json_adapter_list_default_serializer() -> None:
     """Test JSON adapter with list using default json.dumps."""
-    from sqlspec.adapters.sqlite._type_converter import json_adapter
+    from sqlspec.adapters.sqlite.type_converter import json_adapter
 
     data = [1, 2, 3, "four"]
     result = json_adapter(data)
@@ -28,7 +28,7 @@ def test_json_adapter_list_default_serializer() -> None:
 
 def test_register_type_handlers_default() -> None:
     """Test register_type_handlers registers adapters and converters."""
-    from sqlspec.adapters.sqlite._type_converter import register_type_handlers
+    from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 
     with patch("sqlite3.register_adapter") as mock_adapter, patch("sqlite3.register_converter") as mock_converter:
         register_type_handlers()
@@ -39,6 +39,6 @@ def test_register_type_handlers_default() -> None:
 
 def test_unregister_type_handlers_is_noop() -> None:
     """Test unregister_type_handlers executes without error."""
-    from sqlspec.adapters.sqlite._type_converter import unregister_type_handlers
+    from sqlspec.adapters.sqlite.type_converter import unregister_type_handlers
 
     unregister_type_handlers()

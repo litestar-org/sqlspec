@@ -5,7 +5,7 @@ import array
 import pytest
 
 from sqlspec._typing import NUMPY_INSTALLED
-from sqlspec.adapters.oracledb._type_converter import OracleOutputConverter
+from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 
 pytestmark = pytest.mark.skipif(not NUMPY_INSTALLED, reason="NumPy not installed")
 
@@ -165,9 +165,9 @@ def test_convert_vector_to_numpy_round_trip() -> None:
 
 def test_converter_methods_with_numpy_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test converter methods gracefully handle NumPy not installed."""
-    import sqlspec.adapters.oracledb._type_converter
+    import sqlspec.adapters.oracledb.type_converter
 
-    monkeypatch.setattr(sqlspec.adapters.oracledb._type_converter, "NUMPY_INSTALLED", False)
+    monkeypatch.setattr(sqlspec.adapters.oracledb.type_converter, "NUMPY_INSTALLED", False)
 
     converter = OracleOutputConverter()
     oracle_array = array.array("f", [1.0, 2.0, 3.0])

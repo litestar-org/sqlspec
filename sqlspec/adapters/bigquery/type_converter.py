@@ -7,8 +7,7 @@ for the native BigQuery driver and parameter creation.
 from typing import Any, Final
 from uuid import UUID
 
-from sqlspec.core._type_converter import CachedOutputConverter
-from sqlspec.core.type_conversion import convert_uuid
+from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 
 __all__ = ("BIGQUERY_SPECIAL_CHARS", "BQ_TYPE_MAP", "BigQueryOutputConverter")
 

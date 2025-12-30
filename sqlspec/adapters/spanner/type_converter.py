@@ -23,8 +23,7 @@ from uuid import UUID
 
 from google.cloud.spanner_v1 import JsonObject, param_types
 
-from sqlspec.core._type_converter import CachedOutputConverter
-from sqlspec.core.type_conversion import convert_uuid
+from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence

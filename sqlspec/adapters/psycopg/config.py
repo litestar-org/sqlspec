@@ -8,7 +8,6 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psycopg._type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
@@ -20,6 +19,7 @@ from sqlspec.adapters.psycopg.driver import (
     build_psycopg_statement_config,
     psycopg_statement_config,
 )
+from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.typing import PGVECTOR_INSTALLED

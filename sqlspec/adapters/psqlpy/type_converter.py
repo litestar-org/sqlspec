@@ -15,7 +15,7 @@ Input conversion handles:
 import re
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.core._type_converter import CachedOutputConverter
+from sqlspec.core.type_converter import CachedOutputConverter
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.logging import get_logger
 

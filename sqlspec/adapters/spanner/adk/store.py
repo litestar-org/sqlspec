@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from google.cloud.spanner_v1 import param_types
 
-from sqlspec.adapters.spanner._type_converter import bytes_to_spanner, spanner_to_bytes
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
+from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json

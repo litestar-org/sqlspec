@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from typing import Any, Final
 
-from sqlspec.core._type_converter import CachedOutputConverter
+from sqlspec.core.type_converter import CachedOutputConverter
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.type_guards import is_readable

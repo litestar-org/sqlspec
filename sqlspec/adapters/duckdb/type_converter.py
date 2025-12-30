@@ -8,8 +8,7 @@ from datetime import datetime
 from typing import Any, Final
 from uuid import UUID
 
-from sqlspec.core._type_converter import CachedOutputConverter
-from sqlspec.core.type_conversion import convert_uuid, format_datetime_rfc3339
+from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid, format_datetime_rfc3339
 
 __all__ = ("DUCKDB_SPECIAL_CHARS", "DuckDBOutputConverter")
 

@@ -7,7 +7,7 @@ MySQL, BigQuery, Snowflake).
 
 from typing import Any, Final
 
-from sqlspec.core._type_converter import CachedOutputConverter
+from sqlspec.core.type_converter import CachedOutputConverter
 from sqlspec.utils.serializers import to_json
 
 __all__ = ("ADBC_SPECIAL_CHARS", "ADBCOutputConverter", "get_adbc_type_converter")
