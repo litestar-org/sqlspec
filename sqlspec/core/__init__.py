@@ -193,8 +193,12 @@ from sqlspec.core.statement import (
     get_default_config,
     get_default_parameter_config,
 )
-from sqlspec.core.type_conversion import (
+from sqlspec.core.type_converter import (
+    DEFAULT_CACHE_SIZE,
+    DEFAULT_SPECIAL_CHARS,
+    BaseInputConverter,
     BaseTypeConverter,
+    CachedOutputConverter,
     convert_decimal,
     convert_iso_date,
     convert_iso_datetime,
@@ -207,17 +211,21 @@ from sqlspec.core.type_conversion import (
 from sqlspec.exceptions import StackExecutionError
 
 __all__ = (
+    "DEFAULT_CACHE_SIZE",
+    "DEFAULT_SPECIAL_CHARS",
     "DRIVER_PARAMETER_PROFILES",
     "EXECUTE_MANY_MIN_ROWS",
     "PARAMETER_REGEX",
     "SQL",
     "AnyCollectionFilter",
     "ArrowResult",
+    "BaseInputConverter",
     "BaseTypeConverter",
     "BeforeAfterFilter",
     "CacheConfig",
     "CacheKey",
     "CacheStats",
+    "CachedOutputConverter",
     "CachedStatement",
     "CompiledSQL",
     "DriverParameterProfile",

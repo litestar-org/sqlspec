@@ -56,8 +56,54 @@ SQLSpecSessionService
       :doc:`/examples/extensions/adk/litestar_aiosqlite`
          Web framework integration using Litestar
 
-Base Store Classes
-==================
+Memory Service
+==============
+
+SQLSpecMemoryService
+--------------------
+
+.. autoclass:: sqlspec.extensions.adk.memory.SQLSpecMemoryService
+   :show-inheritance:
+
+   SQLSpec-backed implementation of Google ADK's ``BaseMemoryService``.
+
+   This service persists memories extracted from completed sessions and exposes
+   search capabilities via adapter-specific stores.
+
+   **Attributes:**
+
+   .. attribute:: store
+      :no-index:
+
+      The database store implementation (e.g., ``AsyncpgADKMemoryStore``).
+
+   **Example:**
+
+   .. code-block:: python
+
+      from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+      from sqlspec.extensions.adk.memory import SQLSpecMemoryService
+
+      store = AsyncpgADKMemoryStore(config)
+      await store.create_tables()
+      memory_service = SQLSpecMemoryService(store)
+
+   .. seealso::
+
+      :doc:`/examples/extensions/adk/runner_memory_aiosqlite`
+         ADK Runner example with SQLSpec-backed memory service
+
+SQLSpecSyncMemoryService
+------------------------
+
+.. autoclass:: sqlspec.extensions.adk.memory.SQLSpecSyncMemoryService
+   :show-inheritance:
+
+   Sync memory service for sync adapters (SQLite/DuckDB). This class does not
+   inherit from ADK's async ``BaseMemoryService`` but mirrors the async API.
+
+Session Store Base Classes
+==========================
 
 BaseAsyncADKStore
 ------------
@@ -170,6 +216,35 @@ BaseSyncADKStore
       store = SqliteADKStore(config)
       store.create_tables()
 
+Memory Store Base Classes
+=========================
+
+BaseAsyncADKMemoryStore
+-----------------------
+
+.. autoclass:: sqlspec.extensions.adk.memory.BaseAsyncADKMemoryStore
+   :show-inheritance:
+
+   Abstract base class for async SQLSpec-backed ADK memory stores.
+
+   **Abstract Methods:**
+
+   - :meth:`create_tables`
+   - :meth:`insert_memory_entries`
+   - :meth:`search_entries`
+   - :meth:`delete_entries_by_session`
+   - :meth:`delete_entries_older_than`
+   - :meth:`_get_create_memory_table_sql`
+   - :meth:`_get_drop_memory_table_sql`
+
+BaseSyncADKMemoryStore
+----------------------
+
+.. autoclass:: sqlspec.extensions.adk.memory.BaseSyncADKMemoryStore
+   :show-inheritance:
+
+   Abstract base class for sync SQLSpec-backed ADK memory stores.
+
 Type Definitions
 ================
 
@@ -217,6 +292,13 @@ SessionRecord
    .. code-block:: python
 
       from datetime import datetime, timezone
+
+MemoryRecord
+------------
+
+.. autoclass:: sqlspec.extensions.adk.memory._types.MemoryRecord
+
+   TypedDict representing a memory database record.
 
       record: SessionRecord = {
           "id": "550e8400-e29b-41d4-a716-446655440000",

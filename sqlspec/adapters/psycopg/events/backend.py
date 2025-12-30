@@ -3,7 +3,7 @@
 
 import contextlib
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import SQL
 from sqlspec.exceptions import ImproperConfigurationError
@@ -364,8 +364,6 @@ def create_event_backend(
     | None
 ):
     """Factory used by EventChannel to create the native psycopg backend."""
-    from typing import cast
-
     is_async = config.is_async
     match (backend_name, is_async):
         case ("listen_notify", False):

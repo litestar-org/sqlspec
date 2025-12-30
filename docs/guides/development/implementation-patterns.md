@@ -64,6 +64,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol):
 ```
 
 **Key Principles:**
+
 - Protocol defines interface with union return type (`Awaitable[T] | T`)
 - Sync base classes implement without `async def` or `await`
 - Async base classes implement with `async def` and `await`
@@ -119,15 +120,18 @@ class AdapterConfig(AsyncDatabaseConfig):
 ### Default Value Guidelines
 
 **Default to `True` when:**
+
 - Dependency is in stdlib (uuid, json)
 - Feature improves Python type handling
 - No performance cost when unused
 - Feature is backward-compatible
 
 **Default to auto-detected when:**
+
 - Feature requires optional dependency (NumPy, pgvector)
 
 **Default to `False` when:**
+
 - Feature has performance implications
 - Feature changes database behavior in non-obvious ways
 - Feature is experimental
@@ -628,7 +632,278 @@ def _resolve_statement_sql(
 ```
 
 **Key principles:**
+
 - Use frozenset for dialect groupings (hashable, immutable)
 - Normalize dialect names to lowercase for consistent matching
 - Preserve parameters from underlying statements
 - Use type guards instead of `isinstance()` for protocol checks
+
+<a id="dynamic-optional-dependency-pattern"></a>
+
+## Dynamic Optional Dependency Detection
+
+SQLSpec uses a runtime detection pattern for optional dependencies that works correctly with mypyc compilation. This pattern prevents constant-folding of availability checks at compile time.
+
+### The Problem
+
+Module-level boolean constants like `PACKAGE_INSTALLED = module_available("package")` get frozen during mypyc compilation. If the optional package is missing during compilation but installed later, compiled code still sees `False` forever.
+
+### The Solution
+
+Use `dependency_flag()` from `sqlspec.utils.dependencies`:
+
+```python
+from sqlspec.utils.dependencies import dependency_flag, module_available
+
+# CORRECT - Lazy evaluation via OptionalDependencyFlag
+FSSPEC_INSTALLED = dependency_flag("fsspec")
+OBSTORE_INSTALLED = dependency_flag("obstore")
+
+# These evaluate at runtime, not compile time
+if FSSPEC_INSTALLED:
+    # This code path remains available even in compiled modules
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+```
+
+### The API
+
+```python
+from sqlspec.utils.dependencies import (
+    dependency_flag,        # Returns OptionalDependencyFlag (bool-like)
+    module_available,       # Returns bool, cached per session
+    reset_dependency_cache, # Clear cache for testing
+)
+
+# OptionalDependencyFlag is boolean-like
+flag = dependency_flag("numpy")
+if flag:  # Evaluates module_available("numpy") at runtime
+    import numpy as np
+```
+
+### Using in ensure_* Functions
+
+```python
+from sqlspec.utils.dependencies import module_available
+from sqlspec.exceptions import MissingDependencyError
+
+def _require_dependency(
+    module_name: str, *, package_name: str | None = None, install_package: str | None = None
+) -> None:
+    """Raise MissingDependencyError when an optional dependency is absent."""
+    if module_available(module_name):
+        return
+
+    package = package_name or module_name
+    install = install_package or package
+    raise MissingDependencyError(package=package, install_package=install)
+
+def ensure_numpy() -> None:
+    """Ensure NumPy is available for array operations."""
+    _require_dependency("numpy")
+```
+
+### Testing Dynamic Detection
+
+Use `reset_dependency_cache()` when tests manipulate `sys.path`:
+
+```python
+import sys
+from pathlib import Path
+from sqlspec.utils import dependencies
+
+def test_dependency_detection_after_install(tmp_path, monkeypatch):
+    """Ensure detection reflects runtime environment changes."""
+    module_name = "my_test_package"
+
+    # Initially not available
+    dependencies.reset_dependency_cache(module_name)
+    assert dependencies.module_available(module_name) is False
+
+    # Create package
+    pkg_path = tmp_path / module_name
+    pkg_path.mkdir()
+    (pkg_path / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    # Now available after cache reset
+    dependencies.reset_dependency_cache(module_name)
+    assert dependencies.module_available(module_name) is True
+```
+
+**Key principles:**
+
+- Never use module-level boolean constants for optional dependencies in mypyc-compiled code
+- Use `dependency_flag()` for boolean-like guards that evaluate at runtime
+- Use `module_available()` inside functions for on-demand checks
+- Call `reset_dependency_cache()` in tests that modify `sys.path`
+- See `docs/guides/performance/mypyc.md` for the full anti-pattern documentation
+
+<a id="eager-compilation-pattern"></a>
+
+## Eager Compilation Pattern
+
+When returning SQL objects that will be used with downstream operations requiring a parsed expression (like pagination with `select_with_total()`), compile the SQL eagerly to ensure predictable fail-fast behavior.
+
+### The Problem
+
+Lazy compilation can cause confusing errors when SQL objects are passed to methods that require a parsed expression:
+
+```python
+# Lazy pattern - errors surface late at usage time
+sql = SQL(raw_sql, dialect=dialect)
+return sql  # expression is None until compile() called
+
+# Later, in select_with_total():
+# "Cannot create COUNT query from empty SQL expression"
+```
+
+### The Solution
+
+Compile SQL immediately after construction and before returning:
+
+```python
+def get_sql(self, name: str) -> "SQL":
+    """Get a SQL object by statement name.
+
+    Returns:
+        SQL object ready for execution (pre-compiled).
+
+    Raises:
+        SQLFileNotFoundError: If statement name not found.
+        SQLFileParseError: If SQL cannot be compiled.
+    """
+    # ... lookup logic ...
+
+    sql = SQL(parsed_statement.sql, dialect=sqlglot_dialect)
+    try:
+        sql.compile()
+    except Exception as exc:
+        raise SQLFileParseError(name=name, path="<statement>", original_error=exc) from exc
+    return sql
+```
+
+### Benefits
+
+1. **Fail-fast**: Invalid SQL errors surface immediately at load time, not at query time
+2. **Predictable**: All returned SQL objects have `expression` populated
+3. **Compatible**: Works seamlessly with `select_with_total()`, pagination, and other AST-dependent features
+4. **Cached**: The `compile()` result is cached in the SQL object, so subsequent calls are free
+
+### When to Use
+
+Use eager compilation when:
+
+- Returning SQL objects from loaders or factories
+- Building SQL objects that will be used with pagination
+- Creating SQL objects that may be passed to methods requiring `expression`
+
+**Key principle:** If downstream code might need `sql.expression`, compile eagerly at construction time rather than lazily at usage time.
+
+<a id="protocol-capability-property-pattern"></a>
+
+## Protocol Capability Property Pattern
+
+When adding optional functionality to a protocol that may not be supported by all implementations, use a capability property to enable runtime capability checking.
+
+### The Problem
+
+Not all implementations of a protocol support every operation. Calling unsupported methods should raise `NotImplementedError`, but callers need a way to check capability before calling.
+
+### The Solution
+
+Add a `supports_X` property to the protocol with a default implementation returning `False`. Implementations that support the feature override to return `True`.
+
+```python
+@runtime_checkable
+class ObjectStoreProtocol(Protocol):
+    """Protocol for object storage operations."""
+
+    @property
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing.
+
+        Returns:
+            True if the backend supports generating signed URLs, False otherwise.
+        """
+        return False
+
+    @overload
+    def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+
+    @overload
+    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+
+    def sign_sync(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) for object(s).
+
+        Raises:
+            NotImplementedError: If the backend does not support URL signing.
+        """
+        msg = "URL signing not supported by this backend"
+        raise NotImplementedError(msg)
+```
+
+### Implementation Pattern
+
+```python
+class ObStoreBackend:
+    """Backend with signing support for cloud protocols."""
+
+    @property
+    def supports_signing(self) -> bool:
+        """Only S3, GCS, and Azure support signing."""
+        signable_protocols = {"s3", "gs", "gcs", "az", "azure"}
+        return self.protocol in signable_protocols
+
+    def sign_sync(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        if not self.supports_signing:
+            msg = f"URL signing is not supported for protocol '{self.protocol}'."
+            raise NotImplementedError(msg)
+        # Actual implementation...
+
+
+class LocalStore:
+    """Backend without signing support."""
+
+    @property
+    def supports_signing(self) -> bool:
+        """Local storage never supports signing."""
+        return False
+
+    def sign_sync(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        msg = "Local file storage does not support URL signing."
+        raise NotImplementedError(msg)
+```
+
+### Usage Pattern
+
+```python
+def get_signed_url_if_supported(backend: ObjectStoreProtocol, path: str) -> str | None:
+    """Get signed URL if backend supports it, otherwise return None."""
+    if backend.supports_signing:
+        return backend.sign_sync(path)
+    return None
+```
+
+### Benefits
+
+1. **Type-safe**: No `hasattr()` checks needed - property is always present
+2. **Explicit**: Capability is documented in the protocol
+3. **Testable**: Property can be mocked in tests
+4. **Extensible**: New implementations just override the property
+
+### When to Use
+
+Use this pattern when:
+
+- Adding optional functionality to an existing protocol
+- Some implementations can support a feature, others cannot
+- Callers need to check capability before calling
+
+**Reference implementation:** `sqlspec/protocols.py` (`ObjectStoreProtocol.supports_signing`)

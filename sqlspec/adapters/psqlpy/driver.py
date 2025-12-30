@@ -10,13 +10,13 @@ import inspect
 import io
 import re
 import uuid
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import psqlpy.exceptions
 from psqlpy.extra_types import JSONB
 
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
-from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
+from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -51,17 +51,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
-    from sqlspec.adapters.psqlpy._types import PsqlpyConnection
+    from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
     from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
     "PsqlpyCursor",
@@ -73,7 +67,7 @@ __all__ = (
 
 logger = get_logger("adapters.psqlpy")
 
-_type_converter = PostgreSQLTypeConverter()
+_type_converter = PostgreSQLOutputConverter()
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
@@ -514,7 +508,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_result_to_storage_async(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )

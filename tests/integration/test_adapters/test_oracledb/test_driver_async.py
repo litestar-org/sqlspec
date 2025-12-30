@@ -5,8 +5,10 @@ from typing import Any, Literal
 import msgspec
 import pytest
 
+from sqlspec import sql
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver
 from sqlspec.core import SQLResult
+from sqlspec.exceptions import SQLSpecError
 
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.asyncio(loop_scope="function")]
 
@@ -294,7 +296,6 @@ async def test_async_delete_operation(oracle_async_session: OracleAsyncDriver) -
 
 async def test_oracle_for_update_locking(oracle_async_session: OracleAsyncDriver) -> None:
     """Test FOR UPDATE row locking with Oracle."""
-    from sqlspec import sql
 
     # Setup test table
     await oracle_async_session.execute_script(
@@ -336,7 +337,6 @@ async def test_oracle_for_update_locking(oracle_async_session: OracleAsyncDriver
 
 async def test_oracle_for_update_nowait(oracle_async_session: OracleAsyncDriver) -> None:
     """Test FOR UPDATE NOWAIT with Oracle."""
-    from sqlspec import sql
 
     # Setup test table
     await oracle_async_session.execute_script(
@@ -377,8 +377,6 @@ async def test_oracle_for_update_nowait(oracle_async_session: OracleAsyncDriver)
 
 async def test_oracle_for_share_locking_unsupported(oracle_async_session: OracleAsyncDriver) -> None:
     """Test that FOR SHARE is not supported in Oracle and raises expected error."""
-    from sqlspec import sql
-    from sqlspec.exceptions import SQLSpecError
 
     # Setup test table
     await oracle_async_session.execute_script(

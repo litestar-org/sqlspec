@@ -8,13 +8,9 @@ Spanner requires:
 - PRIMARY KEY declared inline in CREATE TABLE
 """
 
-from typing import TYPE_CHECKING
-
+from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.extensions.events._store import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.spanner.config import SpannerSyncConfig  # noqa: F401
 
 __all__ = ("SpannerSyncEventQueueStore",)
 
@@ -145,8 +141,6 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
         Raises:
             google.api_core.exceptions.AlreadyExists: If table or index exists.
         """
-        from sqlspec.adapters.spanner.config import SpannerSyncConfig
-
         config = self._config
         if not isinstance(config, SpannerSyncConfig):
             msg = "create_table requires SpannerSyncConfig"
@@ -166,8 +160,6 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
         Raises:
             google.api_core.exceptions.NotFound: If table or index does not exist.
         """
-        from sqlspec.adapters.spanner.config import SpannerSyncConfig
-
         config = self._config
         if not isinstance(config, SpannerSyncConfig):
             msg = "drop_table requires SpannerSyncConfig"

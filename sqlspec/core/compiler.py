@@ -19,6 +19,7 @@ from sqlglot.errors import ParseError
 import sqlspec.exceptions
 from sqlspec.core.parameters import ParameterProcessor, ParameterProfile, validate_parameter_alignment
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import get_value_attribute
 
 if TYPE_CHECKING:
     import logging
@@ -518,7 +519,7 @@ class SQLProcessor:
                 if position is not None:
                     # Extract cast type
                     if isinstance(node.to, exp.DataType):
-                        cast_type = node.to.this.value if hasattr(node.to.this, "value") else str(node.to.this)
+                        cast_type = str(get_value_attribute(node.to.this))
                     else:
                         cast_type = str(node.to)
                     cast_positions[position] = cast_type.upper()

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_extension_config
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -81,8 +82,8 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
             Accepts ``session_table: True`` for default name or a string for custom name.
         """
         default_name = "litestar_session"
-        if hasattr(self._config, "extension_config"):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
+        if has_extension_config(self._config):
+            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
             litestar_config: dict[str, Any] = extension_config.get("litestar", {})
             session_table = litestar_config.get("session_table", default_name)
             if session_table is True:

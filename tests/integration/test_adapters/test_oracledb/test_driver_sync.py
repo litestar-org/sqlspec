@@ -5,8 +5,10 @@ from typing import Any, Literal
 import msgspec
 import pytest
 
+from sqlspec import sql
 from sqlspec.adapters.oracledb import OracleSyncConfig, OracleSyncDriver
 from sqlspec.core import SQLResult
+from sqlspec.exceptions import SQLSpecError
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
@@ -288,7 +290,6 @@ def test_sync_delete_operation(oracle_sync_session: OracleSyncDriver) -> None:
 
 def test_oracle_sync_for_update_locking(oracle_sync_session: OracleSyncDriver) -> None:
     """Test FOR UPDATE row locking with Oracle (sync)."""
-    from sqlspec import sql
 
     # Setup test table
     oracle_sync_session.execute_script(
@@ -330,7 +331,6 @@ def test_oracle_sync_for_update_locking(oracle_sync_session: OracleSyncDriver) -
 
 def test_oracle_sync_for_update_nowait(oracle_sync_session: OracleSyncDriver) -> None:
     """Test FOR UPDATE NOWAIT with Oracle (sync)."""
-    from sqlspec import sql
 
     # Setup test table
     oracle_sync_session.execute_script(
@@ -371,8 +371,6 @@ def test_oracle_sync_for_update_nowait(oracle_sync_session: OracleSyncDriver) ->
 
 def test_oracle_sync_for_share_locking_unsupported(oracle_sync_session: OracleSyncDriver) -> None:
     """Test that FOR SHARE is not supported in Oracle and raises expected error (sync)."""
-    from sqlspec import sql
-    from sqlspec.exceptions import SQLSpecError
 
     # Setup test table
     oracle_sync_session.execute_script(

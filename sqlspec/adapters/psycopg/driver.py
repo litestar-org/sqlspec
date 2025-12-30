@@ -1,14 +1,14 @@
 """PostgreSQL psycopg driver implementation."""
 
 import datetime
-import io
 from contextlib import AsyncExitStack, ExitStack
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import psycopg
 from psycopg import sql as psycopg_sql
 
-from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -17,7 +17,6 @@ from sqlspec.core import (
     SQLResult,
     StackOperation,
     StackResult,
-    Statement,
     StatementConfig,
     StatementStack,
     build_statement_config_from_profile,
@@ -46,38 +45,18 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
+from sqlspec.utils.type_guards import has_sqlstate, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
-    from sqlspec.builder import QueryBuilder
+    from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
-
-    class _PipelineDriver(Protocol):
-        statement_config: StatementConfig
-
-        def prepare_statement(
-            self,
-            statement: "SQL | Statement | QueryBuilder",
-            parameters: Any,
-            *,
-            statement_config: StatementConfig,
-            kwargs: dict[str, Any],
-        ) -> SQL: ...
-
-        def _get_compiled_sql(self, statement: SQL, statement_config: StatementConfig) -> tuple[str, Any]: ...
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 
 __all__ = (
@@ -96,9 +75,9 @@ logger = get_logger("adapters.psycopg")
 
 def _psycopg_pipeline_supported() -> bool:
     """Return True when libpq pipeline support is available."""
-
-    capabilities = getattr(psycopg, "capabilities", None)
-    if capabilities is None:
+    try:
+        capabilities = psycopg.capabilities
+    except AttributeError:
         return False
     try:
         return bool(capabilities.has_pipeline())
@@ -145,7 +124,7 @@ class PsycopgPipelineMixin:
 
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
         statement_config = kwargs.pop("statement_config", None)
-        driver = cast("_PipelineDriver", self)
+        driver = cast("PsycopgPipelineDriver", self)
         config = statement_config or driver.statement_config
 
         sql_statement = driver.prepare_statement(
@@ -238,7 +217,7 @@ class PsycopgSyncExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
             self._raise_generic_error(e, None)
@@ -351,9 +330,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         try:
-            if hasattr(self.connection, "autocommit") and not self.connection.autocommit:
-                pass
-            else:
+            if self.connection.autocommit:
                 self.connection.autocommit = False
         except Exception as e:
             msg = f"Failed to begin transaction: {e}"
@@ -382,12 +359,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def _handle_transaction_error_cleanup(self) -> None:
         """Handle transaction cleanup after database errors."""
         try:
-            if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
-                status = self.connection.info.transaction_status
-
-                if status == TRANSACTION_STATUS_INERROR:
-                    logger.debug("Connection in aborted transaction state, performing rollback")
-                    self.connection.rollback()
+            status = self.connection.info.transaction_status
+            if status == TRANSACTION_STATUS_INERROR:
+                logger.debug("Connection in aborted transaction state, performing rollback")
+                self.connection.rollback()
         except Exception as cleanup_error:
             logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
@@ -428,16 +403,16 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         if is_copy_from_operation(operation_type):
             if isinstance(copy_data, (str, bytes)):
-                data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
-            elif hasattr(copy_data, "read"):
-                data_file = copy_data
+                data_to_write = copy_data
+            elif is_readable(copy_data):
+                data_to_write = copy_data.read()
             else:
-                data_file = io.StringIO(str(copy_data))
+                data_to_write = str(copy_data)
+
+            if isinstance(data_to_write, str):
+                data_to_write = data_to_write.encode()
 
             with cursor.copy(sql) as copy_ctx:
-                data_to_write = data_file.read() if hasattr(data_file, "read") else str(copy_data)  # pyright: ignore
-                if isinstance(data_to_write, str):
-                    data_to_write = data_to_write.encode()
                 copy_ctx.write(data_to_write)
 
             rows_affected = max(cursor.rowcount, 0)
@@ -656,7 +631,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
@@ -714,8 +689,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.psycopg.data_dictionary import PostgresSyncDataDictionary
-
             self._data_dictionary = PostgresSyncDataDictionary()
         return self._data_dictionary
 
@@ -775,7 +748,7 @@ class PsycopgAsyncExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
             self._raise_generic_error(e, None)
@@ -889,7 +862,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         try:
-            autocommit_flag = getattr(self.connection, "autocommit", None)
+            try:
+                autocommit_flag = self.connection.autocommit
+            except AttributeError:
+                autocommit_flag = None
             if isinstance(autocommit_flag, bool) and not autocommit_flag:
                 return
             await self.connection.set_autocommit(False)
@@ -920,12 +896,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def _handle_transaction_error_cleanup_async(self) -> None:
         """Handle async transaction cleanup after database errors."""
         try:
-            if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
-                status = self.connection.info.transaction_status
-
-                if status == TRANSACTION_STATUS_INERROR:
-                    logger.debug("Connection in aborted transaction state, performing async rollback")
-                    await self.connection.rollback()
+            status = self.connection.info.transaction_status
+            if status == TRANSACTION_STATUS_INERROR:
+                logger.debug("Connection in aborted transaction state, performing async rollback")
+                await self.connection.rollback()
         except Exception as cleanup_error:
             logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
@@ -967,16 +941,16 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         if is_copy_from_operation(operation_type) and "FROM STDIN" in sql_upper:
             if isinstance(copy_data, (str, bytes)):
-                data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
-            elif hasattr(copy_data, "read"):
-                data_file = copy_data
+                data_to_write = copy_data
+            elif is_readable(copy_data):
+                data_to_write = copy_data.read()
             else:
-                data_file = io.StringIO(str(copy_data))
+                data_to_write = str(copy_data)
+
+            if isinstance(data_to_write, str):
+                data_to_write = data_to_write.encode()
 
             async with cursor.copy(sql) as copy_ctx:
-                data_to_write = data_file.read() if hasattr(data_file, "read") else str(copy_data)  # pyright: ignore
-                if isinstance(data_to_write, str):
-                    data_to_write = data_to_write.encode()
                 await copy_ctx.write(data_to_write)
 
             rows_affected = max(cursor.rowcount, 0)
@@ -1197,7 +1171,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_result_to_storage_async(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
@@ -1257,8 +1231,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary
-
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
 

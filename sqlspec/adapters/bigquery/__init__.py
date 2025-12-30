@@ -1,4 +1,4 @@
-from sqlspec.adapters.bigquery._types import BigQueryConnection
+from sqlspec.adapters.bigquery._typing import BigQueryConnection
 from sqlspec.adapters.bigquery.config import BigQueryConfig, BigQueryConnectionParams
 from sqlspec.adapters.bigquery.driver import (
     BigQueryCursor,

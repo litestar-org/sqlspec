@@ -7,7 +7,7 @@ SQLSpec provides StructuredFormatter for JSON-formatted logs if desired.
 
 import logging
 from logging import LogRecord
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec._serialization import encode_json
 from sqlspec.utils.correlation import CorrelationContext
@@ -76,16 +76,18 @@ class StructuredFormatter(logging.Formatter):
             "line": record.lineno,
         }
 
-        correlation_id = getattr(record, "correlation_id", None) or get_correlation_id()
+        record_dict = record.__dict__
+        correlation_id = cast("str | None", record_dict.get("correlation_id")) or get_correlation_id()
         if correlation_id:
             log_entry["correlation_id"] = correlation_id
 
-        if hasattr(record, "extra_fields"):
-            log_entry.update(record.extra_fields)  # pyright: ignore
+        extra_fields = record_dict.get("extra_fields")
+        if isinstance(extra_fields, dict):
+            log_entry.update(extra_fields)
 
         extras = {
             key: value
-            for key, value in record.__dict__.items()
+            for key, value in record_dict.items()
             if key not in _BASE_RECORD_KEYS and key not in {"extra_fields", "correlation_id"}
         }
         if extras:

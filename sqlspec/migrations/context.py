@@ -5,9 +5,11 @@ import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from sqlglot.dialects.dialect import Dialect
+
 from sqlspec.protocols import HasStatementConfigProtocol
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_attr, has_statement_config_factory
+from sqlspec.utils.type_guards import has_statement_config_factory
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -15,6 +17,18 @@ if TYPE_CHECKING:
 logger = get_logger("migrations.context")
 
 __all__ = ("MigrationContext",)
+
+
+def _normalize_dialect_name(dialect: Any | None) -> "str | None":
+    if dialect is None:
+        return None
+    if isinstance(dialect, str):
+        return dialect
+    if isinstance(dialect, type):
+        return dialect.__name__
+    if isinstance(dialect, Dialect):
+        return dialect.__class__.__name__
+    return None
 
 
 @dataclass
@@ -57,17 +71,17 @@ class MigrationContext:
         Returns:
             Migration context with dialect information.
         """
-        dialect = None
+        dialect: Any | None = None
         try:
             if isinstance(config, HasStatementConfigProtocol) and config.statement_config:
-                dialect = getattr(config.statement_config, "dialect", None)
+                dialect = config.statement_config.dialect
             elif has_statement_config_factory(config):
                 stmt_config = config._create_statement_config()  # pyright: ignore[reportPrivateUsage]
-                dialect = getattr(stmt_config, "dialect", None)
+                dialect = stmt_config.dialect
         except Exception:
             logger.debug("Unable to extract dialect from config")
 
-        return cls(dialect=dialect, config=config)
+        return cls(dialect=_normalize_dialect_name(dialect), config=config)
 
     @property
     def is_async_execution(self) -> bool:
@@ -92,10 +106,6 @@ class MigrationContext:
         """
         if self.driver is None:
             return False
-
-        if not has_attr(self.driver, "execute_script"):
-            return False
-
         execute_method = self.driver.execute_script
         return inspect.iscoroutinefunction(execute_method)
 

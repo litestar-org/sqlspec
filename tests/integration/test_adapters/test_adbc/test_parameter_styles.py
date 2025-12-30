@@ -14,6 +14,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLResult
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
+from sqlspec.core import replace_null_parameters_with_literals
 from sqlspec.exceptions import SQLSpecError
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
@@ -580,8 +581,6 @@ def test_adbc_ast_transformer_validation_fixed(adbc_postgresql_session: AdbcDriv
     This test verifies that the AST transformer now correctly rejects parameter count mismatches.
     """
     from sqlglot import parse_one
-
-    from sqlspec.core import replace_null_parameters_with_literals
 
     # Create a test case with parameter count mismatch
     original_sql = "INSERT INTO bug_test (id, col1) VALUES ($1, $2)"

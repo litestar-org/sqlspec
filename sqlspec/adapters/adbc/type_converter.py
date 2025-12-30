@@ -5,77 +5,76 @@ type conversion for different database backends (PostgreSQL, SQLite, DuckDB,
 MySQL, BigQuery, Snowflake).
 """
 
-from functools import lru_cache
 from typing import Any, Final
 
-from sqlspec.core import BaseTypeConverter
+from sqlspec.core.type_converter import CachedOutputConverter
 from sqlspec.utils.serializers import to_json
+
+__all__ = ("ADBC_SPECIAL_CHARS", "ADBCOutputConverter", "get_adbc_type_converter")
 
 ADBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
 
+# Native type support by dialect
+_NATIVE_SUPPORT: Final[dict[str, list[str]]] = {
+    "postgres": ["uuid", "json", "interval", "pg_array"],
+    "postgresql": ["uuid", "json", "interval", "pg_array"],
+    "duckdb": ["uuid", "json"],
+    "bigquery": ["json"],
+    "sqlite": [],
+    "mysql": ["json"],
+    "snowflake": ["json"],
+}
 
-class ADBCTypeConverter(BaseTypeConverter):
-    """ADBC-specific type converter with dialect awareness.
 
-    Extends the base BaseTypeConverter with ADBC multi-backend functionality
+class ADBCOutputConverter(CachedOutputConverter):
+    """ADBC-specific output conversion with dialect awareness.
+
+    Extends CachedOutputConverter with ADBC multi-backend functionality
     including dialect-specific type handling for different database systems.
-    Includes per-instance LRU cache for improved performance.
     """
 
-    __slots__ = ("_convert_cache", "dialect")
+    __slots__ = ("dialect",)
 
     def __init__(self, dialect: str, cache_size: int = 5000) -> None:
-        """Initialize with dialect-specific configuration and conversion cache.
+        """Initialize with dialect-specific configuration.
 
         Args:
             dialect: Target database dialect (postgres, sqlite, duckdb, etc.)
             cache_size: Maximum number of string values to cache (default: 5000)
         """
-        super().__init__()
+        super().__init__(special_chars=ADBC_SPECIAL_CHARS, cache_size=cache_size)
         self.dialect = dialect.lower()
 
-        @lru_cache(maxsize=cache_size)
-        def _cached_convert(value: str) -> Any:
-            if not value or not any(c in value for c in ADBC_SPECIAL_CHARS):
-                return value
-            detected_type = self.detect_type(value)
-            if detected_type:
-                try:
-                    if self.dialect in {"postgres", "postgresql"}:
-                        if detected_type in {"uuid", "interval"}:
-                            return self.convert_value(value, detected_type)
-                    elif self.dialect == "duckdb":
-                        if detected_type == "uuid":
-                            return self.convert_value(value, detected_type)
-                    elif self.dialect == "sqlite":
-                        if detected_type == "uuid":
-                            return str(value)
-                    elif self.dialect == "bigquery":
-                        if detected_type == "uuid":
-                            return self.convert_value(value, detected_type)
-                    elif self.dialect in {"mysql", "snowflake"} and detected_type in {"uuid", "json"}:
-                        return self.convert_value(value, detected_type)
-                    return self.convert_value(value, detected_type)
-                except Exception:
-                    return value
-            return value
-
-        self._convert_cache = _cached_convert
-
-    def convert_if_detected(self, value: Any) -> Any:
-        """Convert value with dialect-specific handling (cached).
+    def _convert_detected(self, value: str, detected_type: str) -> Any:
+        """Convert value with dialect-specific handling.
 
         Args:
-            value: Value to potentially convert.
+            value: String value to convert.
+            detected_type: Detected type name.
 
         Returns:
-            Converted value if special type detected, original value otherwise.
+            Converted value according to dialect requirements.
         """
-        if not isinstance(value, str):
+        try:
+            if self.dialect in {"postgres", "postgresql"}:
+                if detected_type in {"uuid", "interval"}:
+                    return self.convert_value(value, detected_type)
+            elif self.dialect == "duckdb":
+                if detected_type == "uuid":
+                    return self.convert_value(value, detected_type)
+            elif self.dialect == "sqlite":
+                if detected_type == "uuid":
+                    return str(value)
+            elif self.dialect == "bigquery":
+                if detected_type == "uuid":
+                    return self.convert_value(value, detected_type)
+            elif self.dialect in {"mysql", "snowflake"} and detected_type in {"uuid", "json"}:
+                return self.convert_value(value, detected_type)
+            return self.convert_value(value, detected_type)
+        except Exception:
             return value
-        return self._convert_cache(value)
 
-    def convert_dict(self, value: dict[str, Any]) -> Any:
+    def convert_dict(self, value: "dict[str, Any]") -> Any:
         """Convert dictionary values with dialect-specific handling.
 
         Args:
@@ -97,16 +96,7 @@ class ADBCTypeConverter(BaseTypeConverter):
         Returns:
             True if dialect supports native handling, False otherwise.
         """
-        native_support: dict[str, list[str]] = {
-            "postgres": ["uuid", "json", "interval", "pg_array"],
-            "postgresql": ["uuid", "json", "interval", "pg_array"],
-            "duckdb": ["uuid", "json"],
-            "bigquery": ["json"],
-            "sqlite": [],
-            "mysql": ["json"],
-            "snowflake": ["json"],
-        }
-        return type_name in native_support.get(self.dialect, [])
+        return type_name in _NATIVE_SUPPORT.get(self.dialect, [])
 
     def get_dialect_specific_converter(self, value: Any, target_type: str) -> Any:
         """Apply dialect-specific conversion logic.
@@ -134,10 +124,10 @@ class ADBCTypeConverter(BaseTypeConverter):
                 return str(self.convert_value(value, target_type))
             if target_type == "json":
                 return self.convert_value(value, target_type)
-        return self.convert_value(value, target_type) if hasattr(self, "convert_value") else value
+        return self.convert_value(value, target_type)
 
 
-def get_adbc_type_converter(dialect: str, cache_size: int = 5000) -> ADBCTypeConverter:
+def get_adbc_type_converter(dialect: str, cache_size: int = 5000) -> ADBCOutputConverter:
     """Factory function to create dialect-specific ADBC type converter.
 
     Args:
@@ -145,9 +135,6 @@ def get_adbc_type_converter(dialect: str, cache_size: int = 5000) -> ADBCTypeCon
         cache_size: Maximum number of string values to cache (default: 5000)
 
     Returns:
-        Configured ADBCTypeConverter instance.
+        Configured ADBCOutputConverter instance.
     """
-    return ADBCTypeConverter(dialect, cache_size)
-
-
-__all__ = ("ADBC_SPECIAL_CHARS", "ADBCTypeConverter", "get_adbc_type_converter")
+    return ADBCOutputConverter(dialect, cache_size)

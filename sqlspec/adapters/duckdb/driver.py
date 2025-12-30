@@ -4,19 +4,20 @@ import contextlib
 import typing
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 from uuid import uuid4
 
 import duckdb
 
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
-from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
+from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
     ParameterStyle,
     StatementConfig,
     build_statement_config_from_profile,
+    create_arrow_result,
     get_cache_config,
     register_driver_profile,
 )
@@ -35,24 +36,20 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
+from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
-    from sqlspec.adapters.duckdb._types import DuckDBConnection
+    from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
-    from sqlspec.storage import (
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = (
@@ -68,7 +65,7 @@ logger = get_logger("adapters.duckdb")
 _TIME_TO_ISO = build_time_iso_converter()
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
-_type_converter = DuckDBTypeConverter()
+_type_converter = DuckDBOutputConverter()
 
 
 class DuckDBCursor:
@@ -117,7 +114,7 @@ class DuckDBExceptionHandler:
             e: Exception instance
         """
         error_msg = str(e).lower()
-        exc_name = exc_type.__name__ if hasattr(exc_type, "__name__") else str(exc_type)
+        exc_name = exc_type.__name__
 
         if "constraintexception" in exc_name.lower():
             self._handle_constraint_exception(e, error_msg)
@@ -229,7 +226,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
             enable_uuid_conversion = driver_features.get("enable_uuid_conversion", True)
             if not enable_uuid_conversion:
-                type_converter = DuckDBTypeConverter(enable_uuid_conversion=enable_uuid_conversion)
+                type_converter = DuckDBOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
                 type_coercion_map = dict(param_config.type_coercion_map)
                 type_coercion_map[str] = type_converter.convert_if_detected
                 param_config = param_config.replace(type_coercion_map=type_coercion_map)
@@ -327,7 +324,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     result = cursor.fetchone()
                     row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
                 except Exception:
-                    row_count = max(cursor.rowcount, 0) if hasattr(cursor, "rowcount") else 0
+                    row_count = max(cursor.rowcount, 0) if has_rowcount(cursor) else 0
         else:
             row_count = 0
 
@@ -372,7 +369,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             result = cursor.fetchone()
             row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
         except Exception:
-            row_count = max(cursor.rowcount, 0) if hasattr(cursor, "rowcount") else 0
+            row_count = max(cursor.rowcount, 0) if has_rowcount(cursor) else 0
 
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
@@ -456,13 +453,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
             ... )
             >>> df = result.to_pandas()  # Fast zero-copy conversion
         """
-        from sqlspec.utils.module_loader import ensure_pyarrow
-
         ensure_pyarrow()
 
         import pyarrow as pa
-
-        from sqlspec.core import create_arrow_result
 
         # Prepare statement
         config = statement_config or self.statement_config
@@ -515,7 +508,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         _ = kwargs
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )

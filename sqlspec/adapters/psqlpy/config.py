@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psqlpy._types import PsqlpyConnection
+from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
 from sqlspec.adapters.psqlpy.driver import (
     PsqlpyCursor,
     PsqlpyDriver,

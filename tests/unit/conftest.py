@@ -13,7 +13,15 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig, TypedParameter, UnifiedCache
+from sqlspec.core import (
+    SQL,
+    ParameterStyle,
+    ParameterStyleConfig,
+    StatementConfig,
+    TypedParameter,
+    UnifiedCache,
+    get_default_cache,
+)
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
@@ -186,8 +194,6 @@ def cache_config_disabled() -> dict[str, Any]:
 @pytest.fixture
 def mock_unified_cache() -> UnifiedCache:
     """Mock unified cache for testing cache behavior."""
-
-    from sqlspec.core import get_default_cache
 
     return get_default_cache()
 

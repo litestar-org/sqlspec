@@ -60,7 +60,11 @@ class MigrationGap:
         if name == "_initialized":
             object.__setattr__(self, name, value)
             return
-        if getattr(self, "_initialized", False):
+        try:
+            initialized = self._initialized
+        except AttributeError:
+            initialized = False
+        if initialized:
             msg = "MigrationGap is immutable"
             raise AttributeError(msg)
         object.__setattr__(self, name, value)

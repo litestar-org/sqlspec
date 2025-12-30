@@ -6,9 +6,9 @@ import logging
 import re
 from contextlib import suppress
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast, overload
 
-from mypy_extensions import trait
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
@@ -25,17 +25,29 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
+from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
+from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, StorageCapabilityError
+from sqlspec.observability import ObservabilityRuntime
+from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.type_guards import has_array_interface, has_cursor_metadata, is_statement_filter
+from sqlspec.utils.schema import to_schema as _to_schema_impl
+from sqlspec.utils.type_guards import (
+    has_array_interface,
+    has_cursor_metadata,
+    has_dtype_str,
+    has_statement_type,
+    has_typecode,
+    has_typecode_and_len,
+    is_statement_filter,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.core.stack import StatementStack
-    from sqlspec.observability import ObservabilityRuntime
-    from sqlspec.typing import StatementParameters
+    from sqlspec.storage import AsyncStoragePipeline, StorageCapabilities, SyncStoragePipeline
+    from sqlspec.typing import SchemaT, StatementParameters
 
 
 __all__ = (
@@ -101,7 +113,8 @@ class ForeignKeyMetadata:
         return (
             f"ForeignKeyMetadata(table_name={self.table_name!r}, column_name={self.column_name!r}, "
             f"referenced_table={self.referenced_table!r}, referenced_column={self.referenced_column!r}, "
-            f"constraint_name={self.constraint_name!r}, schema={self.schema!r}, referenced_schema={self.referenced_schema!r})"
+            f"constraint_name={self.constraint_name!r}, schema={self.schema!r}, "
+            f"referenced_schema={self.referenced_schema!r})"
         )
 
     def __eq__(self, other: object) -> bool:
@@ -243,6 +256,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
         (1, 2, 3)
         >>> make_cache_key_hashable({"a": 1, "b": 2})
         (('a', 1), ('b', 2))
+
     """
     if isinstance(obj, (list, tuple)):
         return tuple(make_cache_key_hashable(item) for item in obj)
@@ -251,18 +265,14 @@ def make_cache_key_hashable(obj: Any) -> Any:
     if isinstance(obj, set):
         return frozenset(make_cache_key_hashable(item) for item in obj)
 
-    typecode = getattr(obj, "typecode", None)
-    if typecode is not None:
-        try:
-            length = len(obj)
-        except (AttributeError, TypeError):
-            return ("array", typecode)
-        else:
-            return ("array", typecode, length)
+    if has_typecode_and_len(obj):
+        return ("array", obj.typecode, len(obj))
+    if has_typecode(obj):
+        return ("array", obj.typecode)
 
     if has_array_interface(obj):
         try:
-            dtype_str = getattr(obj.dtype, "str", str(type(obj)))
+            dtype_str = obj.dtype.str if has_dtype_str(obj.dtype) else str(type(obj))
             shape = tuple(int(s) for s in obj.shape)
         except (AttributeError, TypeError):
             try:
@@ -278,7 +288,6 @@ def make_cache_key_hashable(obj: Any) -> Any:
 
 def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
     """Return SHA256 fingerprints for statements contained in the stack."""
-
     hashes: list[str] = []
     for operation in stack.operations:
         summary = describe_stack_statement(operation.statement)
@@ -374,27 +383,20 @@ class StackExecutionObserver:
 
     def record_operation_error(self, error: Exception) -> None:
         """Record an operation error when continue-on-error is enabled."""
-
         self.metrics.record_operation_error(error)
 
 
-def describe_stack_statement(statement: Any) -> str:
+def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     """Return a readable representation of a stack statement for diagnostics."""
-
     if isinstance(statement, str):
         return statement
-    raw_sql = getattr(statement, "raw_sql", None)
-    if isinstance(raw_sql, str):
-        return raw_sql
-    sql_attr = getattr(statement, "sql", None)
-    if isinstance(sql_attr, str):
-        return sql_attr
+    if isinstance(statement, StatementProtocol):
+        return statement.raw_sql or statement.sql
     return repr(statement)
 
 
 def handle_single_row_error(error: ValueError) -> "NoReturn":
     """Normalize single-row selection errors to SQLSpec exceptions."""
-
     message = str(error)
     if message.startswith("No result found"):
         msg = "No rows found"
@@ -402,6 +404,7 @@ def handle_single_row_error(error: ValueError) -> "NoReturn":
     raise error
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class VersionInfo:
     """Database version information."""
 
@@ -412,6 +415,7 @@ class VersionInfo:
             major: Major version number
             minor: Minor version number
             patch: Patch version number
+
         """
         self.major = major
         self.minor = minor
@@ -457,6 +461,7 @@ class VersionInfo:
         return hash(self.version_tuple)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality.
@@ -464,6 +469,8 @@ class DataDictionaryMixin:
     Includes version caching to avoid repeated database queries when checking
     feature flags or optimal types.
     """
+
+    __slots__ = ("_version_cache", "_version_fetch_attempted")
 
     _version_cache: "dict[int, VersionInfo | None]"
     _version_fetch_attempted: "set[int]"
@@ -481,6 +488,7 @@ class DataDictionaryMixin:
         Returns:
             Tuple of (was_cached, version_info). If was_cached is False,
             the caller should fetch the version and call cache_version().
+
         """
         if driver_id in self._version_fetch_attempted:
             return True, self._version_cache.get(driver_id)
@@ -492,6 +500,7 @@ class DataDictionaryMixin:
         Args:
             driver_id: The id() of the driver instance.
             version: The version info to cache (can be None if detection failed).
+
         """
         self._version_fetch_attempted.add(driver_id)
         if version is not None:
@@ -505,6 +514,7 @@ class DataDictionaryMixin:
 
         Returns:
             VersionInfo instance or None if parsing fails
+
         """
         patterns = [r"(\d+)\.(\d+)\.(\d+)", r"(\d+)\.(\d+)", r"(\d+)"]
 
@@ -529,6 +539,7 @@ class DataDictionaryMixin:
 
         Returns:
             Version information or None if detection fails
+
         """
         for query in queries:
             with suppress(Exception):
@@ -553,6 +564,7 @@ class DataDictionaryMixin:
 
         Returns:
             Dictionary mapping type categories to generic SQL types
+
         """
         return {
             "json": "TEXT",
@@ -568,6 +580,7 @@ class DataDictionaryMixin:
 
         Returns:
             List of commonly supported feature names
+
         """
         return ["supports_transactions", "supports_prepared_statements"]
 
@@ -583,6 +596,7 @@ class DataDictionaryMixin:
 
         Raises:
             CycleError: If a dependency cycle is detected.
+
         """
         sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
         for table in tables:
@@ -632,6 +646,7 @@ DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None
 
 
 @trait
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
@@ -654,6 +669,7 @@ class CommonDriverAttributesMixin:
             statement_config: Statement configuration for the driver
             driver_features: Driver-specific features like extensions, secrets, and connection callbacks
             observability: Optional runtime handling lifecycle hooks, observers, and spans
+
         """
         self.connection = connection
         self.statement_config = statement_config
@@ -662,24 +678,120 @@ class CommonDriverAttributesMixin:
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Attach or replace the observability runtime."""
-
         self._observability = runtime
 
     @property
     def observability(self) -> "ObservabilityRuntime":
         """Return the observability runtime, creating a disabled instance when absent."""
-
         if self._observability is None:
-            from sqlspec.observability import ObservabilityRuntime
-
             self._observability = ObservabilityRuntime(config_name=type(self).__name__)
         return self._observability
 
     @property
+    def is_async(self) -> bool:
+        """Return whether the driver executes asynchronously.
+
+        Returns:
+            False for sync drivers.
+
+        """
+        return False
+
+    @property
     def stack_native_disabled(self) -> bool:
         """Return True when native stack execution is disabled for this driver."""
-
         return bool(self.driver_features.get("stack_native_disabled", False))
+
+    storage_pipeline_factory: "ClassVar[type[SyncStoragePipeline | AsyncStoragePipeline] | None]" = None
+
+    def storage_capabilities(self) -> "StorageCapabilities":
+        """Return cached storage capabilities for the active driver.
+
+        Returns:
+            StorageCapabilities dict with capability flags.
+
+        Raises:
+            StorageCapabilityError: If storage capabilities are not configured.
+
+        """
+        capabilities = self.driver_features.get("storage_capabilities")
+        if capabilities is None:
+            msg = "Storage capabilities are not configured for this driver."
+            raise StorageCapabilityError(msg, capability="storage_capabilities")
+        return cast("StorageCapabilities", dict(capabilities))
+
+    def _require_capability(self, capability_flag: str) -> None:
+        """Check that a storage capability is enabled.
+
+        Args:
+            capability_flag: The capability flag to check.
+
+        Raises:
+            StorageCapabilityError: If the capability is not available.
+
+        """
+        capabilities = self.storage_capabilities()
+        if capabilities.get(capability_flag, False):
+            return
+        human_label = CAPABILITY_HINTS.get(capability_flag, capability_flag)
+        remediation = "Check adapter supports this capability or stage artifacts via storage pipeline."
+        msg = f"{human_label} is not available for this adapter"
+        raise StorageCapabilityError(msg, capability=capability_flag, remediation=remediation)
+
+    def _raise_storage_not_implemented(self, capability: str) -> None:
+        """Raise NotImplementedError for storage operations.
+
+        Args:
+            capability: The capability that is not implemented.
+
+        Raises:
+            StorageCapabilityError: Always raised.
+
+        """
+        msg = f"{capability} is not implemented for this driver"
+        remediation = "Override storage methods on the adapter to enable this capability."
+        raise StorageCapabilityError(msg, capability=capability, remediation=remediation)
+
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
+
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
+        """Convert data to a specified schema type.
+
+        Supports transformation to various schema types including:
+        - TypedDict
+        - dataclasses
+        - msgspec Structs
+        - Pydantic models
+        - attrs classes
+
+        Args:
+            data: Input data to convert (dict, list of dicts, or other).
+            schema_type: Target schema type for conversion. If None, returns data unchanged.
+
+        Returns:
+            Converted data in the specified schema type, or original data if schema_type is None.
+
+
+        """
+        return _to_schema_impl(data, schema_type=schema_type)
 
     def create_execution_result(
         self,
@@ -715,6 +827,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             ExecutionResult configured for the specified operation type
+
         """
         return ExecutionResult(
             cursor_result=cursor_result,
@@ -740,6 +853,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             SQLResult with complete execution data
+
         """
         if execution_result.is_script_result:
             return SQLResult(
@@ -785,12 +899,15 @@ class CommonDriverAttributesMixin:
         Returns:
             True when cursor metadata indicates a row-returning operation despite an
             unknown operation type; otherwise False.
-        """
 
+        """
         if statement.operation_type != "UNKNOWN":
             return False
 
-        statement_type = getattr(cursor, "statement_type", None)
+        if has_statement_type(cursor) and isinstance(cursor.statement_type, str):
+            statement_type = cursor.statement_type
+        else:
+            statement_type = None
         if isinstance(statement_type, str) and statement_type.upper() == "SELECT":
             return True
 
@@ -803,7 +920,7 @@ class CommonDriverAttributesMixin:
         statement: "Statement | QueryBuilder",
         parameters: "tuple[StatementParameters | StatementFilter, ...]" = (),
         *,
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | None" = None,
         kwargs: "dict[str, Any] | None" = None,
     ) -> "SQL":
         """Build SQL statement from various input types.
@@ -813,12 +930,15 @@ class CommonDriverAttributesMixin:
         Args:
             statement: SQL statement or QueryBuilder to prepare
             parameters: Parameters for the SQL statement
-            statement_config: Statement configuration
+            statement_config: Optional statement configuration override.
             kwargs: Additional keyword arguments
 
         Returns:
             Prepared SQL statement
+
         """
+        if statement_config is None:
+            statement_config = self.statement_config
         kwargs = kwargs or {}
         filters, data_parameters = self._split_parameters(parameters)
 
@@ -919,6 +1039,7 @@ class CommonDriverAttributesMixin:
 
         Raises:
             NotImplementedError: Always - subclasses must override.
+
         """
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
@@ -938,6 +1059,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             A list of individual SQL statements
+
         """
         return [
             sql_script.strip()
@@ -967,6 +1089,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Parameters with TypedParameter objects unwrapped to primitive values
+
         """
         if parameters is None and statement_config.parameter_config.needs_static_script_compilation:
             return None
@@ -989,6 +1112,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Coerced value with TypedParameter unwrapped
+
         """
         unwrapped_value = value.value if isinstance(value, TypedParameter) else value
         if statement_config.parameter_config.type_coercion_map:
@@ -1009,6 +1133,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Processed parameter set with individual values coerced but structure preserved
+
         """
         if not parameters:
             return []
@@ -1031,6 +1156,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Processed parameter set with TypedParameter objects unwrapped and type coercion applied
+
         """
         if not parameters:
             return []
@@ -1083,6 +1209,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Tuple of (compiled_sql, parameters)
+
         """
         cache_config = get_cache_config()
         cache_key = None
@@ -1187,6 +1314,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             The dominant parameter style, or None if no parameters
+
         """
         if not parameters:
             return None
@@ -1221,6 +1349,7 @@ class CommonDriverAttributesMixin:
 
         Returns:
             The match filter instance or None
+
         """
         for filter_ in filters:
             if isinstance(filter_, filter_type):

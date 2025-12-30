@@ -86,7 +86,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             return self._dialect
 
         with self._config.provide_session() as driver:
-            dialect_value = getattr(driver, "dialect", None)
+            dialect_value = driver.dialect
             self._dialect = str(dialect_value) if dialect_value else "postgres"
 
         assert self._dialect is not None

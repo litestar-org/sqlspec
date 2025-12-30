@@ -65,7 +65,7 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 2. **Adapters (`sqlspec/adapters/`)**: Database-specific implementations. Each adapter consists of:
    - `config.py`: Configuration classes specific to the database
    - `driver.py`: Driver implementation (sync/async) that executes queries
-   - `_types.py`: Type definitions specific to the adapter or other uncompilable mypyc objects
+   - `_typing.py`: Type definitions specific to the adapter or other uncompilable mypyc objects
    - Supported adapters: `adbc`, `aiosqlite`, `asyncmy`, `asyncpg`, `bigquery`, `duckdb`, `oracledb`, `psqlpy`, `psycopg`, `sqlite`
 
 3. **Driver System (`sqlspec/driver/`)**: Base classes and mixins for all database drivers:
@@ -154,6 +154,15 @@ class MyAdapterDriver(SyncDriverBase):
 - **Testing Expectations**
     - Add integration tests under `tests/integration/test_adapters/<adapter>/test_driver.py::test_*statement_stack*` that cover native path, sequential fallback, and continue-on-error.
     - Guard base behavior (empty stacks, large stacks, transaction boundaries) via `tests/integration/test_stack_edge_cases.py`.
+
+### ADK Memory Store Pattern
+
+- `SQLSpecMemoryService` delegates storage to adapter-backed memory stores (`BaseAsyncADKMemoryStore` / `BaseSyncADKMemoryStore`).
+- All ADK settings live in `extension_config["adk"]`; memory flags are `enable_memory`, `include_memory_migration`, `memory_table`, `memory_use_fts`, and `memory_max_results`.
+- Search strategy is driver-determined: `memory_use_fts=True` enables adapter FTS when available, otherwise fall back to `LIKE`/`ILIKE` with warning on failure.
+- Deduplication is keyed by `event_id` with idempotent inserts (ignore duplicates, return inserted count).
+- Multi-tenancy uses the shared `owner_id_column` DDL; stores parse the column name to bind filter parameters.
+- TTL cleanup is explicit via store helpers or CLI (`delete_entries_older_than`, `sqlspec adk memory cleanup`).
 
 ### Driver Parameter Profile Registry
 
@@ -340,6 +349,9 @@ Prohibited: test coverage tables, file change lists, quality metrics, commit bre
 | Type Handler | `docs/guides/development/implementation-patterns.md#type-handler-pattern` |
 | Framework Extension | `docs/guides/development/implementation-patterns.md#framework-extension-pattern` |
 | EXPLAIN Builder | `docs/guides/development/implementation-patterns.md#explain-builder-pattern` |
+| Dynamic Optional Deps | `docs/guides/development/implementation-patterns.md#dynamic-optional-dependency-pattern` |
+| Eager Compilation | `docs/guides/development/implementation-patterns.md#eager-compilation-pattern` |
+| Protocol Capability | `docs/guides/development/implementation-patterns.md#protocol-capability-property-pattern` |
 | Custom SQLGlot Dialect | `docs/guides/architecture/custom-sqlglot-dialects.md#custom-sqlglot-dialect` |
 | Events Extension | `docs/guides/events/database-event-channels.md#events-architecture` |
 | Binary Data Encoding | `sqlspec/adapters/spanner/_type_handlers.py` |

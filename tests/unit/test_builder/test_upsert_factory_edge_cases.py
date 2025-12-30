@@ -76,8 +76,6 @@ def test_upsert_returns_new_instance_each_time() -> None:
 
 def test_upsert_merge_supports_all_when_clauses() -> None:
     """Test sql.upsert() MERGE builder supports all WHEN clause types."""
-    from sqlspec.builder._merge import Merge
-
     builder = sql.upsert("products", dialect="postgres")
     assert isinstance(builder, Merge)
 
@@ -98,8 +96,6 @@ def test_upsert_merge_supports_all_when_clauses() -> None:
 
 def test_upsert_insert_supports_on_conflict() -> None:
     """Test sql.upsert() INSERT builder supports ON CONFLICT."""
-    from sqlspec.builder._insert import Insert
-
     builder = sql.upsert("products", dialect="sqlite")
     assert isinstance(builder, Insert)
 
@@ -113,8 +109,6 @@ def test_upsert_insert_supports_on_conflict() -> None:
 
 def test_upsert_insert_supports_on_duplicate_key() -> None:
     """Test sql.upsert() INSERT builder supports MySQL ON DUPLICATE KEY."""
-    from sqlspec.builder._insert import Insert
-
     builder = sql.upsert("products", dialect="mysql")
     assert isinstance(builder, Insert)
 

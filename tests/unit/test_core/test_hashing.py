@@ -6,18 +6,16 @@ Covers all hashing functions with edge cases, performance considerations, and ci
 """
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 from sqlglot import exp, parse_one
 
-from sqlspec.core import StatementFilter
-from sqlspec.core.hashing import _hash_value
-
-if TYPE_CHECKING:
-    from sqlspec.core import SQL
 from sqlspec.core import (
+    SQL,
+    StatementFilter,
+    TypedParameter,
     hash_expression,
     hash_expression_node,
     hash_filters,
@@ -25,6 +23,7 @@ from sqlspec.core import (
     hash_parameters,
     hash_sql_statement,
 )
+from sqlspec.core.hashing import _hash_value
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -171,7 +170,6 @@ def test_hash_parameters_mixed() -> None:
 
 def test_hash_parameters_with_typed_parameters() -> None:
     """Test hash_parameters with TypedParameter objects."""
-    from sqlspec.core import TypedParameter
 
     typed_param = TypedParameter("test_value", str, "test_semantic")
     params = [typed_param, "regular_param"]
@@ -248,12 +246,20 @@ def test_hash_filters_with_filters() -> None:
 def test_hash_filters_no_dict_attribute() -> None:
     """Test hash_filters with filters that don't have __dict__."""
 
-    filter_obj = Mock()
-    filter_obj.__class__.__name__ = "SimpleFilter"
-    del filter_obj.__dict__
+    class SimpleFilter(StatementFilter):
+        __slots__ = ()
 
-    filters = [filter_obj]
-    result = hash_filters(filters)  # type: ignore[arg-type]
+        def apply(self, query: str) -> str:
+            return query
+
+        def append_to_statement(self, statement: "SQL") -> "SQL":
+            return statement
+
+        def get_cache_key(self) -> tuple[Any, ...]:
+            return ("simple_filter",)
+
+    filters = [SimpleFilter()]
+    result = hash_filters(filters)
     assert isinstance(result, int)
 
 
@@ -282,16 +288,7 @@ def test_hash_filters_unhashable_attributes() -> None:
 def test_hash_sql_statement_basic() -> None:
     """Test hash_sql_statement with basic SQL statement."""
 
-    statement = Mock()
-    statement.statement_expression = parse_one("SELECT 1")
-    statement.raw_sql = "SELECT 1"
-    statement.positional_parameters = []
-    statement.named_parameters = {}
-    statement.original_parameters = None
-    statement.filters = []
-    statement.dialect = "sqlite"
-    statement.is_many = False
-    statement.is_script = False
+    statement = SQL("SELECT 1")
 
     result = hash_sql_statement(statement)
     assert isinstance(result, str)
@@ -300,16 +297,7 @@ def test_hash_sql_statement_basic() -> None:
 
 def test_hash_sql_statement_with_parameters() -> None:
     """Test hash_sql_statement with parameters."""
-    statement = Mock()
-    statement.statement_expression = parse_one("SELECT * FROM users WHERE id = ?")
-    statement.raw_sql = "SELECT * FROM users WHERE id = ?"
-    statement.positional_parameters = [123]
-    statement.named_parameters = {"user_id": 123}
-    statement.original_parameters = [123]
-    statement.filters = []
-    statement.dialect = "sqlite"
-    statement.is_many = False
-    statement.is_script = False
+    statement = SQL("SELECT * FROM users WHERE id = ?", 123)
 
     result = hash_sql_statement(statement)
     assert isinstance(result, str)
@@ -318,16 +306,7 @@ def test_hash_sql_statement_with_parameters() -> None:
 
 def test_hash_sql_statement_raw_sql_fallback() -> None:
     """Test hash_sql_statement falls back to raw SQL when expression not available."""
-    statement = Mock()
-    statement.statement_expression = "SELECT 1"
-    statement.raw_sql = "SELECT 1"
-    statement.positional_parameters = []
-    statement.named_parameters = {}
-    statement.original_parameters = None
-    statement.filters = []
-    statement.dialect = "sqlite"
-    statement.is_many = False
-    statement.is_script = False
+    statement = SQL("SELECT 1")
 
     with pytest.MonkeyPatch().context() as m:
         m.setattr("sqlspec.utils.type_guards.is_expression", lambda x: False)
@@ -520,20 +499,8 @@ def test_hash_with_special_sql_constructs() -> None:
 
 def test_error_handling() -> None:
     """Test error handling in hash functions."""
-
-    malformed_statement = Mock()
-    malformed_statement.positional_parameters = []
-    malformed_statement.named_parameters = {}
-    malformed_statement.original_parameters = None
-    malformed_statement.filters = []
-    malformed_statement.dialect = "sqlite"
-    malformed_statement.is_many = False
-    malformed_statement.is_script = False
-
-    try:
-        hash_sql_statement(malformed_statement)
-    except AttributeError:
-        pass
+    with pytest.raises((AttributeError, TypeError)):
+        hash_sql_statement(object())  # type: ignore[arg-type]
 
 
 def test_memory_efficiency() -> None:
@@ -556,7 +523,6 @@ def test_hash_expression_node_dialects(dialect: str) -> None:
 
 def test_hash_parameters_edge_cases() -> None:
     """Test hash_parameters with various edge cases."""
-    from sqlspec.core import TypedParameter
 
     typed_param_with_list = TypedParameter([1, 2, 3], list, "list_param")
     typed_param_with_dict = TypedParameter({"key": "value"}, dict, "dict_param")

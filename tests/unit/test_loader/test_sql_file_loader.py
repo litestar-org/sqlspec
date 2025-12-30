@@ -11,13 +11,36 @@ Tests for SQLFileLoader core functionality including:
 
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
+from typing import Any
 
 import pytest
 
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
-from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
+from sqlspec.loader import (
+    CachedSQLFile,
+    NamedStatement,
+    SQLFile,
+    SQLFileLoader,
+    _normalize_dialect,
+    _normalize_query_name,
+)
+from sqlspec.storage.registry import StorageRegistry
+
+
+def _is_compiled() -> bool:
+    """Check if loader modules are mypyc-compiled."""
+    try:
+        from sqlspec import loader
+
+        return hasattr(loader, "__file__") and (loader.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+requires_interpreted = pytest.mark.skipif(
+    _is_compiled(), reason="Test checks __slots__ attribute which is not accessible on mypyc-compiled classes"
+)
 
 pytestmark = pytest.mark.xdist_group("loader")
 
@@ -42,12 +65,13 @@ def test_named_statement_no_dialect() -> None:
     assert stmt.start_line == 0
 
 
+@requires_interpreted
 def test_named_statement_slots() -> None:
     """Test that NamedStatement uses __slots__."""
     stmt = NamedStatement("test", "SELECT 1")
 
     assert hasattr(stmt.__class__, "__slots__")
-    assert stmt.__slots__ == ("dialect", "name", "sql", "start_line")
+    assert stmt.__class__.__slots__ == ("dialect", "name", "sql", "start_line")
 
     with pytest.raises(AttributeError):
         stmt.arbitrary_attr = "value"  # pyright: ignore[reportAttributeAccessIssue]
@@ -100,13 +124,14 @@ def test_cached_sqlfile_creation() -> None:
     assert cached_file.statement_names == ("query1", "query2")
 
 
+@requires_interpreted
 def test_cached_sqlfile_slots() -> None:
     """Test that CachedSQLFile uses __slots__."""
     sql_file = SQLFile("SELECT 1", "test.sql")
     cached_file = CachedSQLFile(sql_file, {})
 
     assert hasattr(cached_file.__class__, "__slots__")
-    assert cached_file.__slots__ == ("parsed_statements", "sql_file", "statement_names")
+    assert cached_file.__class__.__slots__ == ("parsed_statements", "sql_file", "statement_names")
 
 
 def test_default_initialization() -> None:
@@ -128,9 +153,9 @@ def test_custom_encoding() -> None:
 
 def test_custom_storage_registry() -> None:
     """Test SQLFileLoader with custom storage registry."""
-    mock_registry = Mock()
-    loader = SQLFileLoader(storage_registry=mock_registry)
-    assert loader.storage_registry == mock_registry
+    registry = StorageRegistry()
+    loader = SQLFileLoader(storage_registry=registry)
+    assert loader.storage_registry == registry
 
 
 def test_parse_simple_named_statements() -> None:
@@ -641,15 +666,12 @@ def test_dialect_normalization() -> None:
     ]
 
     for input_dialect, expected in test_cases:
-        from sqlspec.loader import _normalize_dialect
-
         result = _normalize_dialect(input_dialect)
         assert result == expected, f"Failed for {input_dialect}: got {result}, expected {expected}"
 
 
 def test_query_name_normalization_edge_cases() -> None:
     """Test edge cases in query name normalization."""
-    from sqlspec.loader import _normalize_query_name
 
     test_cases = [
         ("simple", "simple"),
@@ -682,9 +704,11 @@ def test_file_read_error_handling() -> None:
     """Test handling of file read errors."""
     loader = SQLFileLoader()
 
-    mock_registry = Mock()
-    mock_registry.get.side_effect = KeyError("Backend not found")
-    loader.storage_registry = mock_registry
+    class MissingBackendRegistry(StorageRegistry):
+        def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> Any:
+            raise KeyError("Backend not found")
+
+    loader.storage_registry = MissingBackendRegistry()
 
     with pytest.raises(SQLFileNotFoundError):
         loader._read_file_content("/nonexistent/file.sql")
@@ -694,9 +718,8 @@ def test_checksum_calculation_error() -> None:
     """Test handling of checksum calculation errors."""
     loader = SQLFileLoader()
 
-    with patch("sqlspec.loader.SQLFileLoader._read_file_content", side_effect=Exception("Read error")):
-        with pytest.raises(SQLFileParseError):
-            loader._calculate_file_checksum("/test/file.sql")
+    with pytest.raises(SQLFileParseError):
+        loader._calculate_file_checksum("/test/file.sql")
 
 
 @pytest.mark.parametrize(
@@ -715,7 +738,6 @@ def test_checksum_calculation_error() -> None:
 )
 def test_dialect_aliases_parametrized(dialect: str, expected: str) -> None:
     """Parameterized test for dialect aliases."""
-    from sqlspec.loader import _normalize_dialect
 
     result = _normalize_dialect(dialect)
     assert result == expected
@@ -734,7 +756,6 @@ def test_dialect_aliases_parametrized(dialect: str, expected: str) -> None:
 )
 def test_query_name_normalization_parametrized(name: str, expected: str) -> None:
     """Parameterized test for query name normalization."""
-    from sqlspec.loader import _normalize_query_name
 
     result = _normalize_query_name(name)
     assert result == expected
@@ -748,7 +769,6 @@ def fixture_parsing_path() -> Path:
 
 def test_parse_postgres_database_details_fixture(fixture_parsing_path: Path) -> None:
     """Test parsing complex PostgreSQL database details fixture."""
-    from sqlspec.loader import NamedStatement, SQLFileLoader
 
     fixture_file = fixture_parsing_path / "postgres" / "collection-database_details.sql"
 
@@ -774,7 +794,6 @@ def test_parse_postgres_database_details_fixture(fixture_parsing_path: Path) -> 
 
 def test_parse_mysql_data_types_fixture(fixture_parsing_path: Path) -> None:
     """Test parsing MySQL data types fixture."""
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_parsing_path / "mysql" / "collection-data_types.sql"
 
@@ -793,7 +812,6 @@ def test_parse_mysql_data_types_fixture(fixture_parsing_path: Path) -> None:
 
 def test_parse_init_fixture(fixture_parsing_path: Path) -> None:
     """Test parsing the init.sql fixture with multiple small queries."""
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_parsing_path / "init.sql"
 
@@ -815,8 +833,6 @@ def test_parse_init_fixture(fixture_parsing_path: Path) -> None:
 
 def test_parse_oracle_ddl_fixture(fixture_parsing_path: Path) -> None:
     """Test parsing Oracle DDL fixture for complex SQL structures."""
-    from sqlspec.exceptions import SQLFileParseError
-    from sqlspec.loader import NamedStatement, SQLFileLoader
 
     fixture_file = fixture_parsing_path / "oracle.ddl.sql"
 
@@ -839,7 +855,6 @@ def test_parse_oracle_ddl_fixture(fixture_parsing_path: Path) -> None:
 
 def test_large_fixture_parsing_performance(fixture_parsing_path: Path) -> None:
     """Test parsing performance with large fixture files."""
-    from sqlspec.loader import SQLFileLoader
 
     large_fixtures = [
         "postgres/collection-database_details.sql",
@@ -867,7 +882,6 @@ def test_large_fixture_parsing_performance(fixture_parsing_path: Path) -> None:
 
 def test_fixture_parameter_style_detection(fixture_parsing_path: Path) -> None:
     """Test parameter style detection in fixture files."""
-    from sqlspec.loader import SQLFileLoader
 
     test_cases = [
         ("postgres/collection-database_details.sql", ":PKEY"),
@@ -896,7 +910,6 @@ def test_fixture_parameter_style_detection(fixture_parsing_path: Path) -> None:
 
 def test_complex_cte_parsing_from_fixtures(fixture_parsing_path: Path) -> None:
     """Test parsing complex CTE queries from fixtures."""
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_parsing_path / "postgres" / "collection-database_details.sql"
 
@@ -915,8 +928,6 @@ def test_complex_cte_parsing_from_fixtures(fixture_parsing_path: Path) -> None:
 
 def test_multi_dialect_fixture_parsing(fixture_parsing_path: Path) -> None:
     """Test parsing fixtures from multiple database dialects."""
-    from sqlspec.exceptions import SQLFileParseError
-    from sqlspec.loader import NamedStatement, SQLFileLoader
 
     dialect_fixtures = [
         ("postgres", "collection-extensions.sql"),
@@ -961,8 +972,6 @@ def fixture_integration_path() -> Path:
 
 def test_load_and_execute_fixture_queries(fixture_integration_path: Path) -> None:
     """Test loading and creating SQL objects from fixture queries."""
-    from sqlspec.core import SQL
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "init.sql"
 
@@ -980,7 +989,6 @@ def test_load_and_execute_fixture_queries(fixture_integration_path: Path) -> Non
 
 def test_fixture_query_metadata_preservation(fixture_integration_path: Path) -> None:
     """Test that fixture query metadata is preserved."""
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "postgres" / "collection-database_details.sql"
 
@@ -999,8 +1007,6 @@ def test_fixture_query_metadata_preservation(fixture_integration_path: Path) -> 
 
 def test_fixture_parameter_extraction(fixture_integration_path: Path) -> None:
     """Test parameter extraction from fixture queries."""
-    from sqlspec.core import SQL
-    from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "postgres" / "collection-database_details.sql"
 

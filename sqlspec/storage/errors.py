@@ -40,8 +40,7 @@ def _is_missing_error(error: Exception) -> bool:
     if isinstance(error, FileNotFoundError):
         return True
 
-    number = getattr(error, "errno", None)
-    if number in {errno.ENOENT, errno.ENOTDIR}:
+    if isinstance(error, OSError) and error.errno in {errno.ENOENT, errno.ENOTDIR}:
         return True
 
     name = error.__class__.__name__

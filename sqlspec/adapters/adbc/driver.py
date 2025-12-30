@@ -10,7 +10,7 @@ import decimal
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.adapters.adbc.type_converter import ADBCTypeConverter
+from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -40,24 +40,19 @@ from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from adbc_driver_manager.dbapi import Cursor
 
-    from sqlspec.adapters.adbc._types import AdbcConnection
+    from sqlspec.adapters.adbc._typing import AdbcConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
-    from sqlspec.storage import (
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "get_adbc_statement_config")
@@ -141,7 +136,7 @@ class AdbcExceptionHandler:
         Args:
             e: ADBC exception instance
         """
-        sqlstate = getattr(e, "sqlstate", None)
+        sqlstate = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if sqlstate:
             self._map_sqlstate_exception(e, sqlstate)
@@ -395,7 +390,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                     else:
                         result.append(param)
                 elif isinstance(param, dict):
-                    result.append(ADBCTypeConverter(self.dialect).convert_dict(param))  # type: ignore[arg-type]
+                    result.append(ADBCOutputConverter(self.dialect).convert_dict(param))  # type: ignore[arg-type]
                 else:
                     if statement_config.parameter_config.type_coercion_map:
                         for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
@@ -716,7 +711,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         _ = kwargs
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )

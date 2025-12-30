@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 from sqlspec.adapters.aiosqlite.driver import (
     AiosqliteCursor,
     AiosqliteDriver,
@@ -18,7 +18,7 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolClosedError,
     AiosqlitePoolConnection,
 )
-from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
+from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.logging import get_logger

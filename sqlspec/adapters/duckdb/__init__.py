@@ -1,6 +1,6 @@
 """DuckDB adapter for SQLSpec."""
 
-from sqlspec.adapters.duckdb._types import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.adapters.duckdb.config import (
     DuckDBConfig,
     DuckDBConnectionParams,

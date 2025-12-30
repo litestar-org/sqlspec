@@ -3,7 +3,8 @@
 import pytest
 
 from sqlspec import sql
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.builder._merge import Merge
+from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 
 pytestmark = pytest.mark.xdist_group("builder")
 
@@ -562,7 +563,6 @@ def test_merge_using_empty_list_raises_error() -> None:
 
 def test_merge_mysql_dialect_raises_error() -> None:
     """Test MERGE with MySQL dialect raises DialectNotSupportedError."""
-    from sqlspec.exceptions import DialectNotSupportedError
 
     query = (
         sql
@@ -579,7 +579,6 @@ def test_merge_mysql_dialect_raises_error() -> None:
 
 def test_merge_sqlite_dialect_raises_error() -> None:
     """Test MERGE with SQLite dialect raises DialectNotSupportedError."""
-    from sqlspec.exceptions import DialectNotSupportedError
 
     query = (
         sql
@@ -596,7 +595,6 @@ def test_merge_sqlite_dialect_raises_error() -> None:
 
 def test_merge_duckdb_dialect_raises_error() -> None:
     """Test MERGE with DuckDB dialect raises DialectNotSupportedError."""
-    from sqlspec.exceptions import DialectNotSupportedError
 
     query = (
         sql
@@ -613,7 +611,6 @@ def test_merge_duckdb_dialect_raises_error() -> None:
 
 def test_merge_mysql_error_suggests_alternative() -> None:
     """Test MySQL error message includes INSERT ON DUPLICATE KEY suggestion."""
-    from sqlspec.exceptions import DialectNotSupportedError
 
     query = sql.merge(dialect="mysql").into("products").using({"id": 1}, alias="src").on("t.id = src.id")
 
@@ -623,7 +620,6 @@ def test_merge_mysql_error_suggests_alternative() -> None:
 
 def test_merge_sqlite_error_suggests_alternative() -> None:
     """Test SQLite error message includes INSERT ON CONFLICT suggestion."""
-    from sqlspec.exceptions import DialectNotSupportedError
 
     query = sql.merge(dialect="sqlite").into("products").using({"id": 1}, alias="src").on("t.id = src.id")
 
@@ -678,7 +674,6 @@ def test_merge_no_dialect_allowed() -> None:
 
 def test_merge_property_shorthand() -> None:
     """Test sql.merge_ property returns new Merge builder."""
-    from sqlspec.builder._merge import Merge
 
     query = (
         sql.merge_
@@ -698,7 +693,6 @@ def test_merge_property_shorthand() -> None:
 
 def test_merge_property_creates_new_instance() -> None:
     """Test sql.merge_ property returns new instance each time."""
-    from sqlspec.builder._merge import Merge
 
     builder1 = sql.merge_
     builder2 = sql.merge_

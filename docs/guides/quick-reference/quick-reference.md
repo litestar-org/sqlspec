@@ -144,11 +144,9 @@ class SQLTransformContext:
 
 | Base Class | Purpose | Key Methods |
 |------------|---------|-------------|
-| SyncDriverAdapterBase | Synchronous execution | `execute()`, `_dispatch_execution()`, `_perform_execute()` |
-| AsyncDriverAdapterBase | Asynchronous execution | `execute()`, `_dispatch_execution()`, `_perform_execute()` |
-| CommonDriverAttributesMixin | Shared utilities | `prepare_statement()`, `prepare_driver_parameters()` |
-| SQLTranslatorMixin | Dialect translation | `transpile_sql()` |
-| ToSchemaMixin | Result conversion | `to_schema()` |
+| SyncDriverAdapterBase | Synchronous execution | `execute()`, `dispatch_statement_execution()`, `convert_to_dialect()`, storage methods |
+| AsyncDriverAdapterBase | Asynchronous execution | `execute()`, `dispatch_statement_execution()`, `convert_to_dialect()`, storage methods |
+| CommonDriverAttributesMixin | Shared utilities | `prepare_statement()`, `prepare_driver_parameters()`, `to_schema()`, `storage_capabilities()` |
 
 ## Driver Implementation Pattern
 

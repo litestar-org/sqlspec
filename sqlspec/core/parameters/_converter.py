@@ -215,11 +215,10 @@ class ParameterConverter:
         if isinstance(original_parameters, Mapping):
             return tuple(param_values)
 
-        if hasattr(original_parameters, "__class__") and callable(original_parameters.__class__):
-            try:
-                return original_parameters.__class__(param_values)
-            except (TypeError, ValueError):
-                return tuple(param_values)
+        try:
+            return original_parameters.__class__(param_values)
+        except (TypeError, ValueError, AttributeError):
+            return tuple(param_values)
 
         return param_values
 

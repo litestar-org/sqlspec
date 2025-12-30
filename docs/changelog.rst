@@ -10,6 +10,21 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+ADK Memory Store
+----------------
+
+- Added ``SQLSpecMemoryService`` and ``SQLSpecSyncMemoryService`` for SQLSpec-backed ADK memory storage.
+- Implemented adapter-specific memory stores with optional full-text search (`memory_use_fts`) and simple fallback search.
+- Extended ADK migrations to include memory tables with configurable ``include_memory_migration`` toggles.
+- Added CLI commands for memory cleanup and verification (`sqlspec adk memory cleanup/verify`).
+
+Driver Layer Compilation
+------------------------
+
+- Compiled driver base classes and mixins with mypyc to reduce dispatch overhead in the execution pipeline.
+- Replaced dynamic ``getattr`` patterns with protocol-driven access for mypyc compatibility.
+- Added driver protocols and updated mypyc build configuration to include driver modules.
+
 Database Event Channels
 -----------------------
 

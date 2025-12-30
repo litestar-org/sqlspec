@@ -2,19 +2,18 @@
 
 import asyncio
 import time
-import uuid
-from contextlib import asynccontextmanager, suppress
+from contextlib import suppress
+from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
-    from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+    from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 
 __all__ = (
     "AiosqliteConnectTimeoutError",
@@ -45,7 +44,7 @@ class AiosqlitePoolConnection:
         Args:
             connection: The raw aiosqlite connection
         """
-        self.id = uuid.uuid4().hex
+        self.id = uuid4().hex
         self.connection = connection
         self.idle_since: float | None = None
         self._closed = False
@@ -129,6 +128,37 @@ class AiosqlitePoolConnection:
             logger.debug("Error closing connection %s", self.id)
         finally:
             self._closed = True
+
+
+class AiosqlitePoolConnectionContext:
+    """Async context manager for pooled aiosqlite connections."""
+
+    __slots__ = ("_connection", "_pool")
+
+    def __init__(self, pool: "AiosqliteConnectionPool") -> None:
+        """Initialize the context manager.
+
+        Args:
+            pool: Connection pool instance.
+        """
+        self._pool = pool
+        self._connection: AiosqlitePoolConnection | None = None
+
+    async def __aenter__(self) -> "AiosqliteConnection":
+        self._connection = await self._pool.acquire()
+        return self._connection.connection
+
+    async def __aexit__(
+        self,
+        exc_type: "type[BaseException] | None",
+        exc_val: "BaseException | None",
+        exc_tb: "TracebackType | None",
+    ) -> "bool | None":
+        if self._connection is None:
+            return False
+        await self._pool.release(self._connection)
+        self._connection = None
+        return False
 
 
 class AiosqliteConnectionPool:
@@ -481,19 +511,9 @@ class AiosqliteConnectionPool:
             connection.mark_unhealthy()
             await self._retire_connection(connection)
 
-    @asynccontextmanager
-    async def get_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
-        """Get a connection with automatic release.
-
-        Yields:
-            Raw aiosqlite connection
-
-        """
-        connection = await self.acquire()
-        try:
-            yield connection.connection
-        finally:
-            await self.release(connection)
+    def get_connection(self) -> "AiosqlitePoolConnectionContext":
+        """Get a connection with automatic release."""
+        return AiosqlitePoolConnectionContext(self)
 
     async def close(self) -> None:
         """Close the connection pool."""

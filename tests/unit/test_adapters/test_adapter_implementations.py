@@ -13,6 +13,7 @@ from sqlspec.exceptions import SQLSpecError
 
 pytestmark = pytest.mark.xdist_group("unit")
 
+
 __all__ = ()
 
 
@@ -239,8 +240,6 @@ def test_sqlite_driver_exception_handling() -> None:
     """Test SQLite driver exception handling."""
     connection = sqlite3.connect(":memory:")
 
-    from sqlspec.core import ParameterStyleConfig
-
     simple_config = StatementConfig(
         dialect="sqlite",
         enable_caching=False,
@@ -270,8 +269,6 @@ def test_sqlite_driver_exception_handling() -> None:
 def test_sqlite_driver_cursor_management() -> None:
     """Test SQLite driver cursor management."""
     connection = sqlite3.connect(":memory:")
-
-    from sqlspec.core import ParameterStyleConfig
 
     simple_config = StatementConfig(
         dialect="sqlite",
@@ -306,10 +303,13 @@ def test_adapter_script_execution_counts(statement_config_for_adapter: Statement
 
     assert statement_as_script.is_script is True
 
-    from sqlspec.driver._common import CommonDriverAttributesMixin
-
-    mixin = CommonDriverAttributesMixin(None, config)
-    split_statements = mixin.split_script_statements(script, config, strip_trailing_semicolon=True)
+    connection = sqlite3.connect(":memory:")
+    sqlite_config = StatementConfig(
+        enable_caching=False, parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+    )
+    driver = SqliteDriver(connection, sqlite_config)
+    split_statements = driver.split_script_statements(script, sqlite_config, strip_trailing_semicolon=True)
+    connection.close()
 
     non_empty_statements = [stmt for stmt in split_statements if stmt.strip()]
     assert len(non_empty_statements) == script_statements
@@ -350,78 +350,82 @@ def test_adapter_parameter_handling(
 
 def test_execution_result_creation() -> None:
     """Test ExecutionResult creation and properties."""
-    from sqlspec.core import ParameterStyleConfig
-    from sqlspec.driver._common import CommonDriverAttributesMixin
-
+    connection = sqlite3.connect(":memory:")
     config = StatementConfig(
         enable_caching=False, parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
     )
-    mixin = CommonDriverAttributesMixin(None, config)
+    driver = SqliteDriver(connection, config)
 
-    select_result = mixin.create_execution_result(
-        cursor_result="mock_cursor",
-        selected_data=[{"id": 1}, {"id": 2}],
-        column_names=["id"],
-        data_row_count=2,
-        is_select_result=True,
-    )
+    try:
+        select_result = driver.create_execution_result(
+            cursor_result="mock_cursor",
+            selected_data=[{"id": 1}, {"id": 2}],
+            column_names=["id"],
+            data_row_count=2,
+            is_select_result=True,
+        )
 
-    assert isinstance(select_result, ExecutionResult)
-    assert select_result.is_select_result is True
-    assert select_result.selected_data == [{"id": 1}, {"id": 2}]
-    assert select_result.column_names == ["id"]
-    assert select_result.data_row_count == 2
+        assert isinstance(select_result, ExecutionResult)
+        assert select_result.is_select_result is True
+        assert select_result.selected_data == [{"id": 1}, {"id": 2}]
+        assert select_result.column_names == ["id"]
+        assert select_result.data_row_count == 2
 
-    insert_result = mixin.create_execution_result(cursor_result="mock_cursor", rowcount_override=1)
+        insert_result = driver.create_execution_result(cursor_result="mock_cursor", rowcount_override=1)
 
-    assert insert_result.is_select_result is False
-    assert insert_result.rowcount_override == 1
+        assert insert_result.is_select_result is False
+        assert insert_result.rowcount_override == 1
 
-    script_result = mixin.create_execution_result(
-        cursor_result="mock_cursor", statement_count=3, successful_statements=3, is_script_result=True
-    )
+        script_result = driver.create_execution_result(
+            cursor_result="mock_cursor", statement_count=3, successful_statements=3, is_script_result=True
+        )
 
-    assert script_result.is_script_result is True
-    assert script_result.statement_count == 3
-    assert script_result.successful_statements == 3
+        assert script_result.is_script_result is True
+        assert script_result.statement_count == 3
+        assert script_result.successful_statements == 3
 
-    many_result = mixin.create_execution_result(cursor_result="mock_cursor", rowcount_override=5, is_many_result=True)
+        many_result = driver.create_execution_result(
+            cursor_result="mock_cursor", rowcount_override=5, is_many_result=True
+        )
 
-    assert many_result.is_many_result is True
-    assert many_result.rowcount_override == 5
+        assert many_result.is_many_result is True
+        assert many_result.rowcount_override == 5
+    finally:
+        connection.close()
 
 
 def test_sql_result_building() -> None:
     """Test SQLResult building from ExecutionResult."""
-    from sqlspec.core import ParameterStyleConfig
-    from sqlspec.driver._common import CommonDriverAttributesMixin
-
+    connection = sqlite3.connect(":memory:")
     config = StatementConfig(
         enable_caching=False, parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
     )
-    mixin = CommonDriverAttributesMixin(None, config)
+    driver = SqliteDriver(connection, config)
 
-    statement = SQL("SELECT * FROM users", statement_config=config)
-    execution_result = mixin.create_execution_result(
-        cursor_result="mock",
-        selected_data=[{"id": 1, "name": "test"}],
-        column_names=["id", "name"],
-        data_row_count=1,
-        is_select_result=True,
-    )
+    try:
+        statement = SQL("SELECT * FROM users", statement_config=config)
+        execution_result = driver.create_execution_result(
+            cursor_result="mock",
+            selected_data=[{"id": 1, "name": "test"}],
+            column_names=["id", "name"],
+            data_row_count=1,
+            is_select_result=True,
+        )
 
-    sql_result = mixin.build_statement_result(statement, execution_result)
-    assert isinstance(sql_result, SQLResult)
-    assert sql_result.operation_type == "SELECT"
-    assert sql_result.get_data() == [{"id": 1, "name": "test"}]
-    assert sql_result.column_names == ["id", "name"]
+        sql_result = driver.build_statement_result(statement, execution_result)
+        assert isinstance(sql_result, SQLResult)
+        assert sql_result.operation_type == "SELECT"
+        assert sql_result.get_data() == [{"id": 1, "name": "test"}]
+        assert sql_result.column_names == ["id", "name"]
 
-    script_statement = SQL("INSERT INTO users VALUES (1, 'test');", statement_config=config, is_script=True)
-    script_execution_result = mixin.create_execution_result(
-        cursor_result="mock", statement_count=1, successful_statements=1, is_script_result=True
-    )
+        script_statement = SQL("INSERT INTO users VALUES (1, 'test');", statement_config=config, is_script=True)
+        script_execution_result = driver.create_execution_result(
+            cursor_result="mock", statement_count=1, successful_statements=1, is_script_result=True
+        )
 
-    script_sql_result = mixin.build_statement_result(script_statement, script_execution_result)
-    assert script_sql_result.operation_type == "SCRIPT"
-    assert script_sql_result.total_statements == 1
-    assert script_sql_result.successful_statements == 1
+        script_sql_result = driver.build_statement_result(script_statement, script_execution_result)
+        assert script_sql_result.operation_type == "SCRIPT"
+        assert script_sql_result.total_statements == 1
+        assert script_sql_result.successful_statements == 1
+    finally:
+        connection.close()

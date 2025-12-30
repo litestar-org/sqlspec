@@ -18,8 +18,9 @@ from google.cloud.bigquery import ArrayQueryParameter, LoadJobConfig, QueryJob, 
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
-from sqlspec.adapters.bigquery._types import BigQueryConnection
-from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
+from sqlspec.adapters.bigquery._typing import BigQueryConnection
+from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
+from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -34,6 +35,7 @@ from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
+    MissingDependencyError,
     NotFoundError,
     OperationalError,
     SQLParsingError,
@@ -42,7 +44,9 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -210,7 +214,7 @@ def _create_bq_parameters(
     if isinstance(parameters, dict):
         for name, value in parameters.items():
             param_name_for_bq = name.lstrip("@")
-            actual_value = getattr(value, "value", value)
+            actual_value = value.value if has_value_attribute(value) else value
             param_type, array_element_type = _get_bq_param_type(actual_value)
 
             if param_type == "ARRAY" and array_element_type:
@@ -283,7 +287,10 @@ class BigQueryExceptionHandler:
         Args:
             e: Google API exception instance
         """
-        status_code = getattr(e, "code", None)
+        try:
+            status_code = e.code
+        except AttributeError:
+            status_code = None
         error_msg = str(e).lower()
 
         if status_code == HTTP_CONFLICT or "already exists" in error_msg:
@@ -377,7 +384,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         features = driver_features or {}
 
         enable_uuid_conversion = features.get("enable_uuid_conversion", True)
-        self._type_converter = BigQueryTypeConverter(enable_uuid_conversion=enable_uuid_conversion)
+        self._type_converter = BigQueryOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
 
         if statement_config is None:
             cache_config = get_cache_config()
@@ -426,7 +433,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if emulator_host:
             return True
 
-        api_base_url = getattr(getattr(connection, "_connection", None), "API_BASE_URL", "")
+        try:
+            inner_connection = cast("Any", connection)._connection
+        except AttributeError:
+            inner_connection = None
+        if inner_connection is None:
+            return False
+        try:
+            api_base_url = inner_connection.API_BASE_URL
+        except AttributeError:
+            api_base_url = ""
         if not api_base_url:
             return False
         return "googleapis.com" not in api_base_url
@@ -443,7 +459,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not isinstance(exception, GoogleCloudError):
             return False
 
-        errors = getattr(exception, "errors", None) or []
+        errors = exception.errors if has_errors(exception) and exception.errors is not None else []
         retryable_reasons = {
             "backendError",
             "internalError",
@@ -477,7 +493,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return False
 
         try:
-            value = getattr(source_config, attr)
+            value = source_config.__getattribute__(attr)
             return value is not None and not callable(value)
         except (AttributeError, TypeError):
             return False
@@ -494,7 +510,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 continue
 
             try:
-                value = getattr(source_config, attr)
+                value = source_config.__getattribute__(attr)
                 setattr(target_config, attr, value)
             except (AttributeError, TypeError):
                 continue
@@ -514,9 +530,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return job_config
 
     def _build_load_job_telemetry(self, job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":
-        properties = getattr(job, "_properties", {})
+        try:
+            properties = cast("Any", job)._properties
+        except AttributeError:
+            properties = {}
         load_stats = properties.get("statistics", {}).get("load", {})
-        rows_processed = int(load_stats.get("outputRows") or getattr(job, "output_rows", 0) or 0)
+        rows_processed = int(load_stats.get("outputRows") or 0)
         bytes_processed = int(load_stats.get("outputBytes") or load_stats.get("inputFileBytes", 0) or 0)
         duration = 0.0
         if job.ended and job.started:
@@ -824,8 +843,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
-
             self._data_dictionary = BigQuerySyncDataDictionary()
         return self._data_dictionary
 
@@ -893,15 +910,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ...     "SELECT * FROM dataset.users", native_only=True
             ... )
         """
-        from sqlspec.utils.module_loader import ensure_pyarrow
-
         ensure_pyarrow()
 
         # Check Storage API availability
         if not self._storage_api_available():
             if native_only:
-                from sqlspec.exceptions import MissingDependencyError
-
                 msg = (
                     "BigQuery native Arrow requires Storage API.\n"
                     "1. Install: pip install google-cloud-bigquery-storage\n"
@@ -973,7 +986,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
@@ -993,8 +1006,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         self._require_capability("parquet_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-        from sqlspec.utils.module_loader import ensure_pyarrow
-
         ensure_pyarrow()
 
         import pyarrow.parquet as pq

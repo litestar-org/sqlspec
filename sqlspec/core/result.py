@@ -25,6 +25,7 @@ from sqlspec.storage import (
     StorageTelemetry,
     SyncStoragePipeline,
 )
+from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.schema import to_schema
 
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 __all__ = ("ArrowResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
+_EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -609,8 +611,6 @@ class SQLResult(StatementResult):
             msg = "No data available"
             raise ValueError(msg)
 
-        from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
-
         return convert_dict_to_arrow(self.data, return_format="table")
 
     def to_pandas(self) -> "PandasDataFrame":
@@ -960,10 +960,9 @@ class EmptyResult(StatementResult):
     """Sentinel result used when a stack operation has no driver result."""
 
     __slots__ = ()
-    _EMPTY_STATEMENT = SQL("-- empty stack result --")
 
     def __init__(self) -> None:
-        super().__init__(statement=self._EMPTY_STATEMENT, data=[], rows_affected=0)
+        super().__init__(statement=_EMPTY_RESULT_STATEMENT, data=[], rows_affected=0)
 
     def __iter__(self) -> Iterator[Any]:
         return iter(())
@@ -990,7 +989,15 @@ class StackResult:
         metadata: "dict[str, Any] | None" = None,
     ) -> None:
         self.result: StatementResult | ArrowResult = result if result is not None else EmptyResult()
-        self.rows_affected = rows_affected if rows_affected is not None else _infer_rows_affected(self.result)
+        if rows_affected is not None:
+            self.rows_affected = rows_affected
+        else:
+            try:
+                result_rows = object.__getattribute__(self.result, "rows_affected")
+            except AttributeError:
+                self.rows_affected = 0
+            else:
+                self.rows_affected = int(result_rows)
         self.error = error
         self.warning = warning
         self.metadata = dict(metadata) if metadata else None
@@ -1056,11 +1063,6 @@ class StackResult:
         """Create an error-only stack result."""
 
         return cls(result=EmptyResult(), rows_affected=0, error=error)
-
-
-def _infer_rows_affected(result: "StatementResult | ArrowResult") -> int:
-    rowcount = getattr(result, "rows_affected", None)
-    return int(rowcount) if isinstance(rowcount, int) else 0
 
 
 def create_sql_result(

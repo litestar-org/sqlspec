@@ -6,6 +6,7 @@ for adapter implementations that need to support both sync and async patterns.
 """
 
 import asyncio
+import concurrent.futures
 import functools
 import inspect
 import os
@@ -14,6 +15,8 @@ from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from typing_extensions import ParamSpec
+
+from sqlspec.utils.portal import get_global_portal
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
@@ -117,8 +120,6 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
 
         if loop is not None:
             if loop.is_running():
-                import concurrent.futures
-
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(asyncio.run, partial_f())
                     return future.result()
@@ -158,8 +159,6 @@ def await_(
             if raise_sync_error:
                 msg = "Cannot run async function"
                 raise RuntimeError(msg) from None
-            from sqlspec.utils.portal import get_global_portal
-
             portal = get_global_portal()
             typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
             return portal.call(typed_partial)
@@ -178,8 +177,6 @@ def await_(
             if raise_sync_error:
                 msg = "Cannot run async function"
                 raise RuntimeError(msg)
-            from sqlspec.utils.portal import get_global_portal
-
             portal = get_global_portal()
             typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
             return portal.call(typed_partial)

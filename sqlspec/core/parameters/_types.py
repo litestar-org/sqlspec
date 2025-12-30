@@ -1,6 +1,6 @@
 """Core parameter data structures and utilities."""
 
-from collections.abc import Callable, Collection, Generator, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Iterable, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum
@@ -420,7 +420,7 @@ def is_iterable_parameters(obj: Any) -> bool:
     """Return True when the object behaves like an iterable parameter payload."""
 
     return isinstance(obj, (list, tuple, set)) or (
-        hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, Mapping))
+        isinstance(obj, Iterable) and not isinstance(obj, (str, bytes, Mapping))
     )
 
 

@@ -4,8 +4,9 @@ import contextlib
 import sqlite3
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
 from sqlspec.core import (
     ArrowResult,
     DriverParameterProfile,
@@ -29,21 +30,16 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
+from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
-    from sqlspec.adapters.sqlite._types import SqliteConnection
+    from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
-    from sqlspec.storage import (
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
 
@@ -125,8 +121,12 @@ class SqliteExceptionHandler:
         Raises:
             Specific SQLSpec exception based on error code
         """
-        error_code = getattr(e, "sqlite_errorcode", None)
-        error_name = getattr(e, "sqlite_errorname", None)
+        if has_sqlite_error(e):
+            error_code = e.sqlite_errorcode
+            error_name = e.sqlite_errorname
+        else:
+            error_code = None
+            error_name = None
         error_msg = str(e).lower()
 
         if "locked" in error_msg:
@@ -364,7 +364,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
@@ -470,8 +470,6 @@ class SqliteDriver(SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
-
             self._data_dictionary = SqliteSyncDataDictionary()
         return self._data_dictionary
 

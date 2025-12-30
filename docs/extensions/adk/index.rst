@@ -25,17 +25,18 @@ Google ADK Extension
    migrations
    schema
 
-Session and event storage for the Google Agent Development Kit (ADK) using SQLSpec database adapters.
+Session, event, and memory storage for the Google Agent Development Kit (ADK) using SQLSpec database adapters.
 
 Overview
 ========
 
-The SQLSpec ADK extension provides persistent storage for `Google Agent Development Kit <https://github.com/google/genai>`_ sessions and events, enabling stateful AI agent applications with database-backed conversation history.
+The SQLSpec ADK extension provides persistent storage for `Google Agent Development Kit <https://github.com/google/genai>`_ sessions, events, and long-term memory entries, enabling stateful AI agent applications with database-backed conversation history and recall.
 
 This extension implements ADK's ``BaseSessionService`` protocol, allowing AI agents to store and retrieve:
 
 - **Session State**: Persistent conversation context and application state
 - **Event History**: Complete record of user/assistant interactions
+- **Long-term Memory**: Searchable memory entries extracted from completed sessions
 - **Multi-User Support**: Isolated sessions per application and user
 - **Type-Safe Storage**: Full type safety with TypedDicts and validated records
 
@@ -149,25 +150,30 @@ The extension follows a layered architecture:
    └──────────┬──────────┘
               │
    ┌──────────▼──────────┐
-   │ SQLSpecSessionService│  ← Implements BaseSessionService
+   ┌─────────────────────┐
+   │     ADK Runner       │
    └──────────┬──────────┘
               │
-   ┌──────────▼──────────┐
-   │ Store Implementation│  ← AsyncpgADKStore, SqliteADKStore, etc.
-   └──────────┬──────────┘
-              │
-   ┌──────────▼──────────┐
-   │  SQLSpec Config     │  ← AsyncpgConfig, SqliteConfig, etc.
-   └──────────┬──────────┘
-              │
-   ┌──────────▼──────────┐
-   │    Database         │
-   └─────────────────────┘
+   ┌──────────▼──────────┐        ┌────────────────────┐
+   │ SQLSpecSessionService│        │ SQLSpecMemoryService│
+   └──────────┬──────────┘        └──────────┬─────────┘
+              │                             │
+   ┌──────────▼──────────┐        ┌─────────▼─────────┐
+   │ Session Store       │        │ Memory Store      │
+   └──────────┬──────────┘        └─────────┬─────────┘
+              │                             │
+   ┌──────────▼──────────┐        ┌─────────▼─────────┐
+   │  SQLSpec Config     │        │  SQLSpec Config   │
+   └──────────┬──────────┘        └─────────┬─────────┘
+              │                             │
+   ┌──────────▼──────────┐        ┌─────────▼─────────┐
+   │    Database         │        │    Database       │
+   └─────────────────────┘        └───────────────────┘
 
 **Layers:**
 
-1. **Service Layer** (``SQLSpecSessionService``): Implements ADK's ``BaseSessionService`` protocol
-2. **Store Layer** (``BaseAsyncADKStore``): Abstract database operations for each adapter
+1. **Service Layer** (``SQLSpecSessionService`` / ``SQLSpecMemoryService``): Implements ADK service protocols
+2. **Store Layer** (``BaseAsyncADKStore`` / ``BaseAsyncADKMemoryStore``): Abstract database operations per adapter
 3. **Config Layer** (SQLSpec): Connection pooling and resource management
 4. **Database Layer**: Physical storage with database-specific optimizations
 
@@ -178,6 +184,7 @@ New curated examples live in the :doc:`examples catalog </examples/index>`:
 
 * :doc:`/examples/extensions/adk/basic_aiosqlite` – create a session, append two events, and read the transcript using AioSQLite storage.
 * :doc:`/examples/extensions/adk/litestar_aiosqlite` – initialize ``SQLSpecSessionService`` inside a Litestar app and expose a ``/sessions`` route.
+* :doc:`/examples/extensions/adk/runner_memory_aiosqlite` – run an ADK ``Runner`` with SQLSpec-backed memory and search stored memories.
 
 Use Cases
 =========

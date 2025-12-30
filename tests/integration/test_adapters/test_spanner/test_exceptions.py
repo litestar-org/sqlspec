@@ -10,6 +10,7 @@ import pytest
 
 from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.exceptions import NotFoundError, SQLConversionError, SQLParsingError, UniqueViolationError
+from sqlspec.exceptions import NotFoundError as SQLSpecNotFoundError
 
 pytestmark = pytest.mark.spanner
 
@@ -87,7 +88,6 @@ def test_execute_many_in_read_only_session(spanner_config: SpannerSyncConfig, te
 
 def test_select_one_no_results(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
     """Test that select_one with no results raises appropriate error."""
-    from sqlspec.exceptions import NotFoundError as SQLSpecNotFoundError
 
     with spanner_config.provide_session() as session:
         with pytest.raises(SQLSpecNotFoundError):

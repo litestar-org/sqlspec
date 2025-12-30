@@ -6,8 +6,10 @@ from unittest.mock import Mock
 
 import pytest
 
+import sqlspec.utils.config_resolver
 from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.runner import SyncMigrationRunner, create_migration_runner
+from sqlspec.migrations.loaders import PythonFileLoader
+from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, create_migration_runner
 from sqlspec.utils.config_resolver import resolve_config_async
 from sqlspec.utils.sync_tools import run_
 
@@ -39,7 +41,6 @@ def test_sync_callable_config_resolution() -> None:
 
     async def _test() -> None:
         # Mock the import_string to return our function
-        import sqlspec.utils.config_resolver
 
         original_import = sqlspec.utils.config_resolver.import_string
 
@@ -66,7 +67,6 @@ def test_async_callable_config_resolution() -> None:
 
     async def _test() -> None:
         # Mock the import_string to return our async function
-        import sqlspec.utils.config_resolver
 
         original_import = sqlspec.utils.config_resolver.import_string
 
@@ -101,7 +101,6 @@ def test_sync_migration_runner_instantiation(tmp_path: Path) -> None:
 
 def test_async_migration_runner_instantiation(tmp_path: Path) -> None:
     """Test async migration runner instantiation."""
-    from sqlspec.migrations.runner import AsyncMigrationRunner
 
     migration_dir = tmp_path / "migrations"
     migration_dir.mkdir()
@@ -154,7 +153,6 @@ async def down(context):
     migration_file.write_text(migration_content)
 
     # Test loading the migration
-    from sqlspec.migrations.loaders import PythonFileLoader
 
     context = MigrationContext(dialect="postgres")
     loader = PythonFileLoader(migration_dir, tmp_path, context)
@@ -249,8 +247,6 @@ def down(context):
     return ["DROP TABLE test;"]
 """)
 
-    from sqlspec.migrations.loaders import PythonFileLoader
-
     context = MigrationContext(dialect="postgres")
     loader = PythonFileLoader(migration_dir, tmp_path, context)
 
@@ -279,7 +275,6 @@ def test_config_resolver_with_list_configs() -> None:
 
     async def _test() -> None:
         # Mock the import_string to return our function
-        import sqlspec.utils.config_resolver
 
         original_import = sqlspec.utils.config_resolver.import_string
 

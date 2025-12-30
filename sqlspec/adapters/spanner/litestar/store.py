@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from google.cloud.spanner_v1 import param_types
 
-from sqlspec.adapters.spanner._type_handlers import bytes_to_spanner, spanner_to_bytes
+from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
@@ -28,7 +28,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
 
     def __init__(self, config: "SpannerSyncConfig") -> None:
         super().__init__(config)
-        litestar_cfg = cast("dict[str, Any]", getattr(config, "extension_config", {}).get("litestar", {}))
+        litestar_cfg = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
         self._shard_count: int = int(litestar_cfg.get("shard_count", 0)) if litestar_cfg.get("shard_count") else 0
         self._table_options: str | None = litestar_cfg.get("table_options")
         self._index_options: str | None = litestar_cfg.get("index_options")

@@ -1139,7 +1139,7 @@ Driver classes provide:
 
 **Type Mappings**
 
-Each adapter includes database-specific type mappings in ``_types.py``:
+Each adapter includes database-specific type mappings in ``_typing.py``:
 
 - Python to database type conversions
 - Database to Python type conversions

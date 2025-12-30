@@ -10,8 +10,7 @@ from asyncpg.connection import ConnectionMeta
 from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncpg._type_handlers import register_json_codecs, register_pgvector_support
-from sqlspec.adapters.asyncpg._types import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
+from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
 from sqlspec.adapters.asyncpg.driver import (
     AsyncpgCursor,
     AsyncpgDriver,
@@ -19,6 +18,7 @@ from sqlspec.adapters.asyncpg.driver import (
     asyncpg_statement_config,
     build_asyncpg_statement_config,
 )
+from sqlspec.adapters.asyncpg.type_converter import register_json_codecs, register_pgvector_support
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._hints import EventRuntimeHints

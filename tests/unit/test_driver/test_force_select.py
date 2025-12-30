@@ -1,19 +1,11 @@
 """Tests for the _should_force_select safety net."""
 
+import sqlite3
 from typing import Any, cast
 
 from sqlspec import SQL, ProcessedState
-from sqlspec.adapters.bigquery import bigquery_statement_config
-from sqlspec.driver import CommonDriverAttributesMixin
-
-
-class _DummyDriver(CommonDriverAttributesMixin):
-    """Minimal driver to expose _should_force_select for testing."""
-
-    __slots__ = ()
-
-    def __init__(self) -> None:
-        super().__init__(connection=None, statement_config=bigquery_statement_config)
+from sqlspec.adapters.sqlite.driver import SqliteDriver
+from sqlspec.core import get_default_config
 
 
 class _CursorWithStatementType:
@@ -48,33 +40,53 @@ def _make_select_statement(sql_text: str = "select 1") -> "SQL":
     return stmt
 
 
-def test_force_select_uses_statement_type_select() -> None:
-    driver = _DummyDriver()
-    stmt = _make_unknown_statement()
-    cursor = _CursorWithStatementType("SELECT")
+def _get_test_driver() -> tuple[SqliteDriver, Any]:
+    """Create a test driver with SQLite in-memory connection."""
+    connection = sqlite3.connect(":memory:")
+    statement_config = get_default_config()
+    driver = SqliteDriver(connection, statement_config)
+    return driver, connection
 
-    assert cast("Any", driver)._should_force_select(stmt, cursor) is True
+
+def test_force_select_uses_statement_type_select() -> None:
+    driver, connection = _get_test_driver()
+    try:
+        stmt = _make_unknown_statement()
+        cursor = _CursorWithStatementType("SELECT")
+
+        assert cast("Any", driver)._should_force_select(stmt, cursor) is True
+    finally:
+        connection.close()
 
 
 def test_force_select_uses_description_when_unknown() -> None:
-    driver = _DummyDriver()
-    stmt = _make_unknown_statement()
-    cursor = _CursorWithDescription(True)
+    driver, connection = _get_test_driver()
+    try:
+        stmt = _make_unknown_statement()
+        cursor = _CursorWithDescription(True)
 
-    assert cast("Any", driver)._should_force_select(stmt, cursor) is True
+        assert cast("Any", driver)._should_force_select(stmt, cursor) is True
+    finally:
+        connection.close()
 
 
 def test_force_select_false_when_no_metadata() -> None:
-    driver = _DummyDriver()
-    stmt = _make_unknown_statement()
-    cursor = _CursorWithDescription(False)
+    driver, connection = _get_test_driver()
+    try:
+        stmt = _make_unknown_statement()
+        cursor = _CursorWithDescription(False)
 
-    assert cast("Any", driver)._should_force_select(stmt, cursor) is False
+        assert cast("Any", driver)._should_force_select(stmt, cursor) is False
+    finally:
+        connection.close()
 
 
 def test_force_select_ignored_when_operation_known() -> None:
-    driver = _DummyDriver()
-    stmt = _make_select_statement()
-    cursor = _CursorWithDescription(True)
+    driver, connection = _get_test_driver()
+    try:
+        stmt = _make_select_statement()
+        cursor = _CursorWithDescription(True)
 
-    assert cast("Any", driver)._should_force_select(stmt, cursor) is False
+        assert cast("Any", driver)._should_force_select(stmt, cursor) is False
+    finally:
+        connection.close()

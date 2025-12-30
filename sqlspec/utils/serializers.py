@@ -299,11 +299,15 @@ def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], d
         if exclude_unset:
 
             def _dump(value: Any) -> dict[str, Any]:
-                return {f: val for f in value.__struct_fields__ if (val := getattr(value, f, None)) != UNSET}
+                return {
+                    f: field_value
+                    for f in value.__struct_fields__
+                    if (field_value := value.__getattribute__(f)) != UNSET
+                }
 
             return _dump
 
-        return lambda value: {f: getattr(value, f, None) for f in value.__struct_fields__}
+        return lambda value: {f: value.__getattribute__(f) for f in value.__struct_fields__}
 
     if is_attrs_instance(sample):
 
@@ -376,21 +380,21 @@ def get_serializer_metrics() -> dict[str, int]:
         return metrics
 
 
-def schema_dump(data: Any, *, exclude_unset: bool = True) -> dict[str, Any]:
-    """Dump a schema model or dict to a plain dictionary.
+def schema_dump(data: Any, *, exclude_unset: bool = True) -> Any:
+    """Dump a schema model or dict to a plain representation.
 
     Args:
         data: Schema model instance or dictionary to dump.
         exclude_unset: Whether to exclude unset fields (for models that support it).
 
     Returns:
-        A plain dictionary representation of the schema model.
+        A plain representation of the schema model or value.
     """
     if is_dict(data):
         return data
 
     if isinstance(data, _PRIMITIVE_TYPES) or data is None:
-        return cast("dict[str, Any]", data)
+        return data
 
     serializer = get_collection_serializer(data, exclude_unset=exclude_unset)
     return serializer.dump_one(data)

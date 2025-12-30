@@ -3,10 +3,12 @@
 import datetime
 import re
 from collections import OrderedDict
+from io import BytesIO
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 
 import asyncpg
 
+from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -38,21 +40,16 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
-    from sqlspec.adapters.asyncpg._types import AsyncpgConnection, AsyncpgPreparedStatement
+    from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPreparedStatement
     from sqlspec.core import SQL, ArrowResult, ParameterStyleConfig, SQLResult, StatementConfig
     from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
     "AsyncpgCursor",
@@ -106,9 +103,9 @@ class AsyncpgExceptionHandler:
         return None
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if exc_type is None:
+        if exc_val is None:
             return
-        if issubclass(exc_type, asyncpg.PostgresError):
+        if has_sqlstate(exc_val):
             self._map_postgres_exception(exc_val)
 
     def _map_postgres_exception(self, e: Any) -> None:
@@ -120,7 +117,7 @@ class AsyncpgExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
             self._raise_generic_error(e, None)
@@ -261,7 +258,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             statement: SQL statement with COPY operation
         """
 
-        metadata: dict[str, Any] = getattr(statement, "metadata", {})
+        execution_args = statement.statement_config.execution_args
+        metadata: dict[str, Any] = dict(execution_args) if execution_args else {}
         sql_text = statement.sql
         sql_upper = sql_text.upper()
         copy_data = metadata.get("postgres_copy_data")
@@ -277,8 +275,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 data_str = str(copy_data[0]) if len(copy_data) == 1 else "\n".join(str(value) for value in copy_data)
             else:
                 data_str = str(copy_data)
-
-            from io import BytesIO
 
             data_io = BytesIO(data_str.encode("utf-8"))
             await cursor.copy_from_query(sql_text, output=data_io)
@@ -504,7 +500,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_result_to_storage_async(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
@@ -621,8 +617,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
-
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
 

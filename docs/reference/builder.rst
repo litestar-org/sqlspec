@@ -52,6 +52,7 @@ Builder Factory
    - ``update(table)`` - Create UPDATE query
    - ``delete(table)`` - Create DELETE query
    - ``merge(dialect=None)`` - Create MERGE query (PostgreSQL 15+, Oracle, BigQuery)
+   - ``explain(statement)`` - Create EXPLAIN query for execution plan analysis
 
 SELECT Queries
 ==============

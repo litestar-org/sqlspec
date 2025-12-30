@@ -7,7 +7,13 @@ from sqlspec.base import SQLSpec
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.flask._state import FlaskConfigState
-from sqlspec.extensions.flask._utils import get_or_create_session
+from sqlspec.extensions.flask._utils import (
+    get_context_value,
+    get_or_create_session,
+    has_context_value,
+    pop_context_value,
+    set_context_value,
+)
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.portal import PortalProvider
 
@@ -202,13 +208,13 @@ class SQLSpecPlugin:
                 else:
                     connection = conn_ctx.__enter__()  # type: ignore[union-attr]
 
-                setattr(g, f"{config_state.connection_key}_ctx", conn_ctx)
+                set_context_value(g, f"{config_state.connection_key}_ctx", conn_ctx)
             elif config_state.is_async:
                 connection = self._portal.portal.call(config_state.config.create_connection)  # type: ignore[union-attr,arg-type]
             else:
                 connection = config_state.config.create_connection()
 
-            setattr(g, config_state.connection_key, connection)
+            set_context_value(g, config_state.connection_key, connection)
 
     def _after_request_handler(self, response: "Response") -> "Response":
         """Handle transaction after request based on response status.
@@ -229,7 +235,7 @@ class SQLSpecPlugin:
                 continue
 
             cache_key = f"sqlspec_session_cache_{config_state.session_key}"
-            session = getattr(g, cache_key, None)
+            session = get_context_value(g, cache_key, None)
 
             if session is None:
                 continue
@@ -255,9 +261,9 @@ class SQLSpecPlugin:
             if config_state.disable_di:
                 continue
 
-            connection = getattr(g, config_state.connection_key, None)
+            connection = get_context_value(g, config_state.connection_key, None)
             ctx_key = f"{config_state.connection_key}_ctx"
-            conn_ctx = getattr(g, ctx_key, None)
+            conn_ctx = get_context_value(g, ctx_key, None)
 
             if connection is not None:
                 try:
@@ -273,14 +279,14 @@ class SQLSpecPlugin:
                 except Exception:
                     logger.exception("Error closing connection")
 
-                if hasattr(g, config_state.connection_key):
-                    delattr(g, config_state.connection_key)
-                if hasattr(g, ctx_key):
-                    delattr(g, ctx_key)
+                if has_context_value(g, config_state.connection_key):
+                    pop_context_value(g, config_state.connection_key)
+                if has_context_value(g, ctx_key):
+                    pop_context_value(g, ctx_key)
 
             cache_key = f"sqlspec_session_cache_{config_state.session_key}"
-            if hasattr(g, cache_key):
-                delattr(g, cache_key)
+            if has_context_value(g, cache_key):
+                pop_context_value(g, cache_key)
 
     def get_session(self, key: "str | None" = None) -> Any:
         """Get or create database session for current request.
@@ -310,7 +316,7 @@ class SQLSpecPlugin:
 
         config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
 
-        return getattr(g, config_state.connection_key)
+        return get_context_value(g, config_state.connection_key)
 
     def _get_config_state_by_key(self, key: str) -> FlaskConfigState:
         """Get config state by session key.

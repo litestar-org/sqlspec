@@ -14,6 +14,7 @@ from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.typing import AiosqlAsyncProtocol, AiosqlParamType, AiosqlSQLOperationType, AiosqlSyncProtocol
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_aiosql
+from sqlspec.utils.type_guards import has_name
 
 logger = get_logger("extensions.aiosql")
 
@@ -65,12 +66,13 @@ def _normalize_dialect(dialect: "str | Any | None") -> str:
 
     if isinstance(dialect, str):
         dialect_str = dialect.lower()
-    elif hasattr(dialect, "__name__"):
-        dialect_str = str(dialect.__name__).lower()
-    elif hasattr(dialect, "name"):
-        dialect_str = str(dialect.name).lower()
+    elif isinstance(dialect, type):
+        dialect_str = dialect.__name__.lower()
     else:
-        dialect_str = str(dialect).lower()
+        try:
+            dialect_str = str(dialect.name).lower()
+        except AttributeError:
+            dialect_str = dialect.__name__.lower() if has_name(dialect) else str(dialect).lower()
 
     dialect_mapping = {
         "postgresql": "postgres",
@@ -122,7 +124,7 @@ class _AiosqlAdapterBase(Generic[DriverT]):
             sql,
             parameters,
             config=StatementConfig(enable_validation=False),
-            dialect=_normalize_dialect(getattr(self.driver, "dialect", "sqlite")),
+            dialect=_normalize_dialect(self.driver.dialect or "sqlite"),
         )
 
 
@@ -200,7 +202,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase[SyncDriverAdapterBase], AiosqlSyncPro
 
         result = self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
 
-        if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
+        if isinstance(result, SQLResult) and result.data:
             row = result.data[0]
             return tuple(row.values()) if isinstance(row, dict) else row
         return None
@@ -223,8 +225,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase[SyncDriverAdapterBase], AiosqlSyncPro
 
         if isinstance(row, dict):
             return next(iter(row.values())) if row else None
-        if hasattr(row, "__getitem__"):
-            return row[0] if len(row) > 0 else None
+        if isinstance(row, (list, tuple)):
+            return row[0] if row else None
         return row
 
     @contextmanager
@@ -260,7 +262,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase[SyncDriverAdapterBase], AiosqlSyncPro
         """
         result = self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
 
-        return result.rows_affected if hasattr(result, "rows_affected") else 0
+        return result.rows_affected if isinstance(result, SQLResult) else 0
 
     def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: "AiosqlParamType") -> int:
         """Execute INSERT/UPDATE/DELETE with many parameter sets.
@@ -276,7 +278,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase[SyncDriverAdapterBase], AiosqlSyncPro
         """
         result = self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
 
-        return result.rows_affected if hasattr(result, "rows_affected") else 0
+        return result.rows_affected if isinstance(result, SQLResult) else 0
 
     def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "AiosqlParamType") -> Any | None:
         """Execute INSERT with RETURNING and return result.
@@ -377,7 +379,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
 
         result = await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
 
-        if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
+        if isinstance(result, SQLResult) and result.data:
             row = result.data[0]
             return tuple(row.values()) if isinstance(row, dict) else row
         return None
@@ -400,8 +402,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
 
         if isinstance(row, dict):
             return next(iter(row.values())) if row else None
-        if hasattr(row, "__getitem__"):
-            return row[0] if len(row) > 0 else None
+        if isinstance(row, (list, tuple)):
+            return row[0] if row else None
         return row
 
     def select_cursor(

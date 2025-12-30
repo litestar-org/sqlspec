@@ -1,7 +1,5 @@
 """Unit tests for Google Cloud SQL and AlloyDB connector integration in AsyncPG."""
 
-# pyright: reportPrivateUsage=false
-
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +7,8 @@ import pytest
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+
+# pyright: reportPrivateUsage=false
 
 
 @pytest.fixture(autouse=True)

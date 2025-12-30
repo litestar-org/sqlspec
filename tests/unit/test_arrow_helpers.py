@@ -5,14 +5,15 @@ from typing import Any
 
 import pytest
 
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import PYARROW_INSTALLED
+from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 
 
 def test_convert_empty_data_to_table() -> None:
     """Test converting empty data to Arrow Table."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     result = convert_dict_to_arrow([], return_format="table")
 
@@ -22,7 +23,6 @@ def test_convert_empty_data_to_table() -> None:
 
 def test_convert_empty_data_to_batch() -> None:
     """Test converting empty data to RecordBatch."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     result = convert_dict_to_arrow([], return_format="batch")
 
@@ -32,7 +32,6 @@ def test_convert_empty_data_to_batch() -> None:
 
 def test_convert_single_row_to_table() -> None:
     """Test converting single row to Arrow Table."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     data = [{"id": 1, "name": "Alice", "age": 30}]
     result = convert_dict_to_arrow(data, return_format="table")
@@ -44,7 +43,6 @@ def test_convert_single_row_to_table() -> None:
 
 def test_convert_multiple_rows_to_table() -> None:
     """Test converting multiple rows to Arrow Table."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     data = [
         {"id": 1, "name": "Alice", "age": 30},
@@ -60,7 +58,6 @@ def test_convert_multiple_rows_to_table() -> None:
 
 def test_convert_to_record_batch() -> None:
     """Test converting data to RecordBatch."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     data = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
     result = convert_dict_to_arrow(data, return_format="batch")
@@ -71,7 +68,6 @@ def test_convert_to_record_batch() -> None:
 
 def test_convert_with_null_values() -> None:
     """Test converting data with NULL/None values."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     data = [
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
@@ -91,7 +87,6 @@ def test_convert_with_null_values() -> None:
 
 def test_convert_with_various_types() -> None:
     """Test converting data with various Python types."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     data = [{"int_col": 42, "float_col": math.pi, "str_col": "hello", "bool_col": True, "none_col": None}]
     result = convert_dict_to_arrow(data, return_format="table")
@@ -110,7 +105,6 @@ def test_convert_with_various_types() -> None:
 
 def test_convert_preserves_column_order() -> None:
     """Test that column order is preserved during conversion."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     data = [{"z_col": 1, "a_col": 2, "m_col": 3}]
     result = convert_dict_to_arrow(data, return_format="table")
@@ -121,13 +115,9 @@ def test_convert_preserves_column_order() -> None:
 
 def test_convert_without_pyarrow_raises_import_error() -> None:
     """Test that MissingDependencyError is raised when pyarrow is not available."""
-    from sqlspec.exceptions import MissingDependencyError
-    from sqlspec.typing import PYARROW_INSTALLED
 
     if PYARROW_INSTALLED:
         pytest.skip("pyarrow is installed")
-
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
         convert_dict_to_arrow([{"id": 1}])
@@ -135,7 +125,6 @@ def test_convert_without_pyarrow_raises_import_error() -> None:
 
 def test_convert_with_missing_keys_in_some_rows() -> None:
     """Test converting data where some rows are missing keys."""
-    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     # First row has all keys, subsequent rows may be missing some
     data: list[dict[str, Any]] = [

@@ -55,6 +55,8 @@ Setting Up Migrations
            "adk": {
                "session_table": "adk_sessions",
                "events_table": "adk_events",
+               "memory_table": "adk_memory_entries",
+               "memory_use_fts": True,
                "owner_id_column": "account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
            }
        },
@@ -75,6 +77,13 @@ Setting Up Migrations
    **Owner ID Column Support**: The migration system automatically includes the
    ``owner_id_column`` configuration when creating tables. The column is added to
    the sessions table DDL if specified in ``extension_config["adk"]["owner_id_column"]``.
+
+.. note::
+
+   **Memory Tables**: ``ext_adk_0001`` also creates the memory table when
+   ``enable_memory`` (default) or ``include_memory_migration`` is set to ``True``.
+   Set ``include_memory_migration=False`` to skip memory DDL while keeping the
+   runtime memory service enabled.
 
 **2. Initialize Migration Directory:**
 

@@ -1,6 +1,7 @@
 """AsyncMy ADK store for Google Agent Development Kit session/event storage."""
 
 import json
+import re
 from typing import TYPE_CHECKING, Any, Final
 
 import asyncmy
@@ -92,8 +93,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             Input: "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
             Output: ("tenant_id BIGINT NOT NULL", "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE")
         """
-        import re
-
         references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
 
         if not references_match:

@@ -1,19 +1,15 @@
-"""BigQuery-specific type conversion with UUID support.
+"""BigQuery-specific type conversion with native UUID support.
 
 Provides specialized type handling for BigQuery, including UUID support
-for the native BigQuery driver.
+for the native BigQuery driver and parameter creation.
 """
 
-from functools import lru_cache
 from typing import Any, Final
 from uuid import UUID
 
-from sqlspec.core import BaseTypeConverter, convert_uuid
+from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 
-try:
-    from google.cloud.bigquery import ScalarQueryParameter
-except ImportError:
-    ScalarQueryParameter = None  # type: ignore[assignment,misc]
+__all__ = ("BIGQUERY_SPECIAL_CHARS", "BQ_TYPE_MAP", "BigQueryOutputConverter")
 
 BQ_TYPE_MAP: Final[dict[str, str]] = {
     "str": "STRING",
@@ -34,54 +30,41 @@ BQ_TYPE_MAP: Final[dict[str, str]] = {
 BIGQUERY_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
 
 
-class BigQueryTypeConverter(BaseTypeConverter):
-    """BigQuery-specific type conversion with UUID support.
+class BigQueryOutputConverter(CachedOutputConverter):
+    """BigQuery-specific output conversion with native UUID support.
 
-    Extends the base TypeDetector with BigQuery-specific functionality
-    including UUID parameter handling for the native BigQuery driver.
-    Includes per-instance LRU cache for improved performance.
+    Extends CachedOutputConverter with BigQuery-specific functionality
+    including UUID handling and parameter creation for the native BigQuery driver.
     """
 
-    __slots__ = ("_convert_cache", "_enable_uuid_conversion")
+    __slots__ = ("_enable_uuid_conversion",)
 
-    def __init__(self, cache_size: int = 5000, *, enable_uuid_conversion: bool = True) -> None:
-        """Initialize converter with per-instance conversion cache.
+    def __init__(self, cache_size: int = 5000, enable_uuid_conversion: bool = True) -> None:
+        """Initialize converter with BigQuery-specific options.
 
         Args:
             cache_size: Maximum number of string values to cache (default: 5000)
-            enable_uuid_conversion: Whether to enable automatic UUID conversion (default: True)
+            enable_uuid_conversion: Enable automatic UUID string conversion (default: True)
         """
-        super().__init__()
+        super().__init__(special_chars=BIGQUERY_SPECIAL_CHARS, cache_size=cache_size)
         self._enable_uuid_conversion = enable_uuid_conversion
 
-        @lru_cache(maxsize=cache_size)
-        def _cached_convert(value: str) -> Any:
-            if not value or not any(c in value for c in BIGQUERY_SPECIAL_CHARS):
-                return value
-            detected_type = self.detect_type(value)
-            if detected_type:
-                try:
-                    return self.convert_value(value, detected_type)
-                except Exception:
-                    return value
-            return value
-
-        self._convert_cache = _cached_convert
-
-    def convert_if_detected(self, value: Any) -> Any:
-        """Convert string if special type detected (cached).
+    def _convert_detected(self, value: str, detected_type: str) -> Any:
+        """Convert value with BigQuery-specific handling.
 
         Args:
-            value: Value to potentially convert
+            value: String value to convert.
+            detected_type: Detected type name.
 
         Returns:
-            Converted value or original value
+            Converted value, respecting UUID conversion setting.
         """
-        if not isinstance(value, str):
+        try:
+            return self.convert_value(value, detected_type)
+        except Exception:
             return value
-        return self._convert_cache(value)
 
-    def create_parameter(self, name: str, value: Any) -> Any | None:
+    def create_parameter(self, name: str, value: Any) -> "Any | None":
         """Create BigQuery parameter with proper type mapping.
 
         Args:
@@ -91,7 +74,9 @@ class BigQueryTypeConverter(BaseTypeConverter):
         Returns:
             ScalarQueryParameter for native BigQuery driver, None if not available.
         """
-        if ScalarQueryParameter is None:
+        try:
+            from google.cloud.bigquery import ScalarQueryParameter
+        except ImportError:
             return None
 
         if self._enable_uuid_conversion:
@@ -118,8 +103,5 @@ class BigQueryTypeConverter(BaseTypeConverter):
             Converted value appropriate for the column type.
         """
         if column_type == "STRING" and isinstance(value, str):
-            return self.convert_if_detected(value)
+            return self.convert(value)
         return value
-
-
-__all__ = ("BIGQUERY_SPECIAL_CHARS", "BQ_TYPE_MAP", "BigQueryTypeConverter")

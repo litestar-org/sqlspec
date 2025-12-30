@@ -107,8 +107,14 @@ def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
     Args:
         connection: Oracle connection (sync or async).
     """
-    existing_input = getattr(connection, "inputtypehandler", None)
-    existing_output = getattr(connection, "outputtypehandler", None)
+    try:
+        existing_input = connection.inputtypehandler
+    except AttributeError:
+        existing_input = None
+    try:
+        existing_output = connection.outputtypehandler
+    except AttributeError:
+        existing_output = None
 
     def combined_input_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
         result = _input_type_handler(cursor, value, arraysize)

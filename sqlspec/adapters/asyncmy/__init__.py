@@ -1,4 +1,4 @@
-from sqlspec.adapters.asyncmy._types import AsyncmyConnection
+from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
 from sqlspec.adapters.asyncmy.config import (
     AsyncmyConfig,
     AsyncmyConnectionParams,

@@ -9,6 +9,8 @@ from typing import Any, Final, cast
 
 from sqlglot import exp, maybe_parse
 
+from sqlspec.builder._column import Column
+from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.core import ParameterStyle, ParameterValidator
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
@@ -256,8 +258,6 @@ def extract_expression(value: Any) -> exp.Expression:
     Returns:
         Raw SQLGlot expression.
     """
-    from sqlspec.builder._column import Column
-    from sqlspec.builder._expression_wrappers import ExpressionWrapper
     from sqlspec.builder._select import Case
 
     if isinstance(value, str):

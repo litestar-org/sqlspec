@@ -16,8 +16,10 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations import runner as runner_module
 from sqlspec.migrations.base import BaseMigrationRunner
+from sqlspec.migrations.loaders import SQLFileLoader as MigrationSQLFileLoader
 from sqlspec.migrations.runner import SyncMigrationRunner
 
 pytestmark = pytest.mark.xdist_group("migrations")
@@ -634,8 +636,6 @@ def test_sql_loader_caches_files(tmp_path: Path) -> None:
     """
     import asyncio
 
-    from sqlspec.migrations.loaders import SQLFileLoader
-
     migration_file = tmp_path / "0001_test_migration.sql"
     migration_content = """
 -- name: migrate-0001-up
@@ -646,7 +646,7 @@ DROP TABLE test;
 """
     migration_file.write_text(migration_content)
 
-    sql_loader = SQLFileLoader()
+    sql_loader = MigrationSQLFileLoader()
 
     async def test_operations() -> None:
         sql_loader.validate_migration_file(migration_file)
@@ -673,8 +673,6 @@ def test_no_duplicate_loading_during_migration_execution(tmp_path: Path) -> None
     """
     import asyncio
 
-    from sqlspec.migrations.loaders import SQLFileLoader
-
     migration_file = tmp_path / "0001_create_users.sql"
     migration_content = """
 -- name: migrate-0001-up
@@ -688,7 +686,7 @@ DROP TABLE users;
 """
     migration_file.write_text(migration_content)
 
-    sql_loader = SQLFileLoader()
+    sql_loader = MigrationSQLFileLoader()
 
     async def test_migration_workflow() -> None:
         sql_loader.validate_migration_file(migration_file)
@@ -718,7 +716,6 @@ def test_sql_file_loader_counter_accuracy_single_file(tmp_path: Path) -> None:
     properly caches files. First call should load and parse the file,
     second call should return immediately from cache without reparsing.
     """
-    from sqlspec.loader import SQLFileLoader
 
     test_file = tmp_path / "test_queries.sql"
     test_content = """
@@ -733,7 +730,7 @@ DELETE FROM users WHERE id = :id;
 """
     test_file.write_text(test_content)
 
-    loader = SQLFileLoader()
+    loader = CoreSQLFileLoader()
 
     loader.load_sql(test_file)
     path_str = str(test_file)
@@ -755,7 +752,6 @@ def test_sql_file_loader_counter_accuracy_directory(tmp_path: Path) -> None:
     Verifies that _load_directory() properly caches files and doesn't
     reload them on subsequent calls.
     """
-    from sqlspec.loader import SQLFileLoader
 
     file1 = tmp_path / "queries1.sql"
     file1.write_text("""
@@ -769,7 +765,7 @@ SELECT 1;
 SELECT 2;
 """)
 
-    loader = SQLFileLoader()
+    loader = CoreSQLFileLoader()
 
     loader.load_sql(tmp_path)
     assert len(loader._files) == 2, "First load should add 2 files to cache"
@@ -796,8 +792,6 @@ def test_migration_workflow_single_load_design(tmp_path: Path) -> None:
     """
     import asyncio
 
-    from sqlspec.migrations.loaders import SQLFileLoader
-
     migration_file = tmp_path / "0001_test.sql"
     migration_content = """
 -- name: migrate-0001-up
@@ -808,7 +802,7 @@ DROP TABLE test_table;
 """
     migration_file.write_text(migration_content)
 
-    sql_loader = SQLFileLoader()
+    sql_loader = MigrationSQLFileLoader()
 
     async def test_workflow() -> None:
         sql_loader.validate_migration_file(migration_file)
@@ -846,9 +840,6 @@ def test_migration_loader_does_not_reload_on_get_sql_calls(tmp_path: Path) -> No
     """
     import asyncio
 
-    from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
-    from sqlspec.migrations.loaders import SQLFileLoader
-
     migration_file = tmp_path / "0001_schema.sql"
     migration_content = """
 -- name: migrate-0001-up
@@ -859,7 +850,7 @@ DROP TABLE products;
 """
     migration_file.write_text(migration_content)
 
-    sql_loader = SQLFileLoader()
+    sql_loader = MigrationSQLFileLoader()
 
     call_counts = {"load_sql": 0}
     original_load_sql = CoreSQLFileLoader.load_sql

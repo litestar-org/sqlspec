@@ -3,14 +3,15 @@
 import contextlib
 import logging
 import re
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, cast
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
 
-from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
+from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
-from sqlspec.adapters.oracledb.type_converter import OracleTypeConverter
+from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -48,41 +49,19 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_attr, has_pipeline_capability, is_readable
+from sqlspec.utils.type_guards import has_pipeline_capability, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
-    from typing import Protocol
 
+    from sqlspec.adapters.oracledb._typing import OraclePipelineDriver
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.core.stack import StackOperation
     from sqlspec.driver import ExecutionResult
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
-
-    class _PipelineDriver(Protocol):
-        statement_config: StatementConfig
-        driver_features: "dict[str, Any]"
-
-        def prepare_statement(
-            self,
-            statement: "str | Statement | QueryBuilder",
-            parameters: "tuple[Any, ...] | dict[str, Any] | None",
-            *,
-            statement_config: StatementConfig,
-            kwargs: "dict[str, Any]",
-        ) -> SQL: ...
-
-        def _get_compiled_sql(self, statement: SQL, statement_config: StatementConfig) -> "tuple[str, Any]": ...
 
 
 logger = get_logger(__name__)
@@ -90,7 +69,7 @@ logger = get_logger(__name__)
 # Oracle-specific constants
 LARGE_STRING_THRESHOLD = 4000  # Threshold for large string parameters to avoid ORA-01704
 
-_type_converter = OracleTypeConverter()
+_type_converter = OracleOutputConverter()
 
 IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 
@@ -115,7 +94,15 @@ def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
     return parts[0], parts[1], parts[2]
 
 
-_ORACLEDB_VERSION: Final[tuple[int, int, int]] = _parse_version_tuple(getattr(oracledb, "__version__", "0.0.0"))
+def _resolve_oracledb_version() -> "tuple[int, int, int]":
+    try:
+        version = oracledb.__version__
+    except AttributeError:
+        version = "0.0.0"
+    return _parse_version_tuple(version)
+
+
+_ORACLEDB_VERSION: Final[tuple[int, int, int]] = _resolve_oracledb_version()
 
 
 class _CompiledStackOperation(NamedTuple):
@@ -132,8 +119,8 @@ class OraclePipelineMixin:
 
     __slots__ = ()
 
-    def _pipeline_driver(self) -> "_PipelineDriver":
-        return cast("_PipelineDriver", self)
+    def _pipeline_driver(self) -> "OraclePipelineDriver":
+        return cast("OraclePipelineDriver", self)
 
     def _stack_native_blocker(self, stack: "StatementStack") -> "str | None":
         for operation in stack.operations:
@@ -230,7 +217,10 @@ class OraclePipelineMixin:
     ) -> "list[StackResult]":
         stack_results: list[StackResult] = []
         for index, (compiled, result) in enumerate(zip(compiled_operations, pipeline_results, strict=False)):
-            error = getattr(result, "error", None)
+            try:
+                error = result.error
+            except AttributeError:
+                error = None
             if error is not None:
                 stack_error = StackExecutionError(
                     index,
@@ -249,16 +239,28 @@ class OraclePipelineMixin:
         return stack_results
 
     def _pipeline_result_to_stack_result(self, operation: _CompiledStackOperation, pipeline_result: Any) -> StackResult:
-        rows = getattr(pipeline_result, "rows", None)
-        columns = getattr(pipeline_result, "columns", None)
+        try:
+            rows = pipeline_result.rows
+        except AttributeError:
+            rows = None
+        try:
+            columns = pipeline_result.columns
+        except AttributeError:
+            columns = None
         data = self._rows_from_pipeline_result(columns, rows) if operation.returns_rows else None
         metadata: dict[str, Any] = {"pipeline_operation": operation.method}
 
-        warning = getattr(pipeline_result, "warning", None)
+        try:
+            warning = pipeline_result.warning
+        except AttributeError:
+            warning = None
         if warning is not None:
             metadata["warning"] = warning
 
-        return_value = getattr(pipeline_result, "return_value", None)
+        try:
+            return_value = pipeline_result.return_value
+        except AttributeError:
+            return_value = None
         if return_value is not None:
             metadata["return_value"] = return_value
 
@@ -269,7 +271,10 @@ class OraclePipelineMixin:
     def _rows_affected_from_pipeline(
         self, operation: _CompiledStackOperation, pipeline_result: Any, data: "list[dict[str, Any]] | None"
     ) -> int:
-        rowcount = getattr(pipeline_result, "rowcount", None)
+        try:
+            rowcount = pipeline_result.rowcount
+        except AttributeError:
+            rowcount = None
         if isinstance(rowcount, int) and rowcount >= 0:
             return rowcount
         if operation.method == "execute_many":
@@ -290,10 +295,16 @@ class OraclePipelineMixin:
 
         driver = self._pipeline_driver()
         if columns:
-            names = [getattr(column, "name", f"column_{index}") for index, column in enumerate(columns)]
+            names = []
+            for index, column in enumerate(columns):
+                try:
+                    name = column.name
+                except AttributeError:
+                    name = f"column_{index}"
+                names.append(name)
         else:
             first = rows[0]
-            names = [f"column_{index}" for index in range(len(first) if has_attr(first, "__len__") else 0)]
+            names = [f"column_{index}" for index in range(len(first) if isinstance(first, Sized) else 0)]
         names = _normalize_column_names(names, driver.driver_features)
 
         normalized_rows: list[dict[str, Any]] = []
@@ -347,6 +358,7 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
 
     Returns:
         List of coerced values with LOBs read to strings/bytes.
+
     """
     coerced_values: list[Any] = []
     for value in row:
@@ -375,6 +387,7 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
 
     Returns:
         List of coerced values with LOBs read to strings/bytes.
+
     """
     coerced_values: list[Any] = []
     for value in row:
@@ -434,7 +447,7 @@ class OracleSyncCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
             self.cursor.close()
 
@@ -478,12 +491,16 @@ class OracleExceptionHandler:
 
         Raises:
             SQLSpecError: Mapped exception based on Oracle error code.
+
         """
         error_obj = e.args[0] if e.args else None
         if not error_obj:
             self._raise_error(e, None, SQLSpecError, "database error")
 
-        error_code = getattr(error_obj, "code", None)
+        try:
+            error_code = error_obj.code
+        except AttributeError:
+            error_code = None
         if not error_code:
             self._raise_error(e, None, SQLSpecError, "database error")
 
@@ -513,6 +530,7 @@ class OracleExceptionHandler:
 
         Raises:
             SQLSpecError: The mapped exception.
+
         """
         msg = f"Oracle {description} [ORA-{code:05d}]: {e}" if code else f"Oracle {description}: {e}"
         raise error_class(msg) from e
@@ -593,6 +611,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Context manager for cursor operations
+
         """
         return OracleSyncCursor(connection)
 
@@ -612,6 +631,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             None - always proceeds with standard execution for Oracle
+
         """
         _ = (cursor, statement)  # Mark as intentionally unused
         return None
@@ -627,6 +647,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Execution result containing statement count and success information
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -644,7 +665,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack using Oracle's pipeline when available."""
-
         if not isinstance(stack, StatementStack) or not stack:
             return super().execute_stack(stack, continue_on_error=continue_on_error)
 
@@ -671,6 +691,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Raises:
             ValueError: If no parameters are provided
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -732,6 +753,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Execution result containing data for SELECT statements or row count for others
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -775,10 +797,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Execute a query and stream Arrow-formatted output to storage (sync)."""
-
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
@@ -834,7 +855,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into Oracle using batched executemany calls."""
-
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
@@ -859,7 +879,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts into Oracle."""
-
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
@@ -876,6 +895,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Raises:
             SQLSpecError: If rollback fails
+
         """
         try:
             self.connection.rollback()
@@ -888,6 +908,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Raises:
             SQLSpecError: If commit fails
+
         """
         try:
             self.connection.commit()
@@ -932,6 +953,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             ... )
             >>> df = result.to_pandas()
             >>> print(df.head())
+
         """
         # Check pyarrow is available
         ensure_pyarrow()
@@ -989,6 +1011,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Data dictionary instance for metadata queries
+
         """
         if self._data_dictionary is None:
             self._data_dictionary = OracleSyncDataDictionary()
@@ -1043,6 +1066,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Context manager for cursor operations
+
         """
         return OracleAsyncCursor(connection)
 
@@ -1062,6 +1086,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             None - always proceeds with standard execution for Oracle
+
         """
         _ = (cursor, statement)  # Mark as intentionally unused
         return None
@@ -1077,6 +1102,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Execution result containing statement count and success information
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -1096,7 +1122,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
         """Execute a StatementStack using Oracle's pipeline when available."""
-
         if not isinstance(stack, StatementStack) or not stack:
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
 
@@ -1123,6 +1148,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Raises:
             ValueError: If no parameters are provided
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -1220,6 +1246,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Execution result containing data for SELECT statements or row count for others
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -1268,10 +1295,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Execute a query and write Arrow-compatible output to storage (async)."""
-
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_result_to_storage_async(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
@@ -1288,7 +1314,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
         """Asynchronously load Arrow data into Oracle."""
-
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
@@ -1313,7 +1338,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Asynchronously load staged artifacts into Oracle."""
-
         arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
@@ -1332,6 +1356,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Raises:
             SQLSpecError: If rollback fails
+
         """
         try:
             await self.connection.rollback()
@@ -1344,6 +1369,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Raises:
             SQLSpecError: If commit fails
+
         """
         try:
             await self.connection.commit()
@@ -1388,6 +1414,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             ... )
             >>> df = result.to_pandas()
             >>> print(df.head())
+
         """
         # Check pyarrow is available
         ensure_pyarrow()
@@ -1445,6 +1472,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Data dictionary instance for metadata queries
+
         """
         if self._data_dictionary is None:
             self._data_dictionary = OracleAsyncDataDictionary()
@@ -1462,7 +1490,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
 def _build_oracledb_profile() -> DriverParameterProfile:
     """Create the OracleDB driver parameter profile."""
-
     return DriverParameterProfile(
         name="OracleDB",
         default_style=ParameterStyle.POSITIONAL_COLON,

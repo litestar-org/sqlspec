@@ -36,6 +36,7 @@ setup.py
 tmp/
 *.log
 .tmp
+.tmp_mypyc
 TODO*
 .env
 tools/*.json

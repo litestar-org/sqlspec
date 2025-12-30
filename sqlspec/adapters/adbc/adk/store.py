@@ -1,5 +1,6 @@
 """ADBC ADK store for Google Agent Development Kit session/event storage."""
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
@@ -747,8 +748,6 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
         timestamp = kwargs.get("timestamp")
         if timestamp is None:
-            from datetime import datetime, timezone
-
             timestamp = datetime.now(timezone.utc)
 
         with self._config.provide_connection() as conn:

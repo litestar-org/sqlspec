@@ -2,12 +2,14 @@
 
 import asyncio
 import contextlib
+import random
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
+from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteAsyncDataDictionary
 from sqlspec.core import (
     ArrowResult,
     DriverParameterProfile,
@@ -31,21 +33,16 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
+from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
-    from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+    from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "aiosqlite_statement_config")
 
@@ -98,7 +95,7 @@ class AiosqliteExceptionHandler:
         if issubclass(exc_type, aiosqlite.Error):
             self._map_sqlite_exception(exc_val)
 
-    def _map_sqlite_exception(self, e: Any) -> None:
+    def _map_sqlite_exception(self, e: BaseException) -> None:
         """Map SQLite exception to SQLSpec exception.
 
         Args:
@@ -107,13 +104,18 @@ class AiosqliteExceptionHandler:
         Raises:
             Specific SQLSpec exception based on error code
         """
-        error_code = getattr(e, "sqlite_errorcode", None)
-        error_name = getattr(e, "sqlite_errorname", None)
-        error_msg = str(e).lower()
+        exc: BaseException = e
+        if has_sqlite_error(e):
+            error_code = e.sqlite_errorcode
+            error_name = e.sqlite_errorname
+        else:
+            error_code = None
+            error_name = None
+        error_msg = str(exc).lower()
 
         if "locked" in error_msg:
-            msg = f"AIOSQLite database locked: {e}. Consider enabling WAL mode or reducing concurrency."
-            raise SQLSpecError(msg) from e
+            msg = f"AIOSQLite database locked: {exc}. Consider enabling WAL mode or reducing concurrency."
+            raise SQLSpecError(msg) from exc
 
         if not error_code:
             if "unique constraint" in error_msg:
@@ -297,7 +299,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_result_to_storage_async(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
@@ -353,8 +355,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             if not self.connection.in_transaction:
                 await self.connection.execute("BEGIN IMMEDIATE")
         except aiosqlite.Error as e:
-            import random
-
             max_retries = 3
             for attempt in range(max_retries):
                 delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
@@ -406,8 +406,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteAsyncDataDictionary
-
             self._data_dictionary = AiosqliteAsyncDataDictionary()
         return self._data_dictionary
 

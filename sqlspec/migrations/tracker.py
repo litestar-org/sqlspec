@@ -236,8 +236,6 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 logger.debug("Migration tracking table schema is up-to-date")
                 return
 
-            from rich.console import Console
-
             console = Console()
             console.print(
                 f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"

@@ -8,7 +8,7 @@ from typing import Literal
 import pytest
 from pytest_databases.docker.bigquery import BigQueryService
 
-from sqlspec import SQLResult, StatementStack
+from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.bigquery import BigQueryDriver
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -418,7 +418,6 @@ def test_bigquery_for_update_generates_sql_but_unsupported(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
     """Test that FOR UPDATE is stripped by sqlglot for BigQuery since it's not supported."""
-    from sqlspec import sql
 
     # BigQuery doesn't support FOR UPDATE - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_update()
@@ -435,7 +434,6 @@ def test_bigquery_for_share_generates_sql_but_unsupported(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
     """Test that FOR SHARE is stripped by sqlglot for BigQuery since it's not supported."""
-    from sqlspec import sql
 
     # BigQuery doesn't support FOR SHARE - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_share()
@@ -452,7 +450,6 @@ def test_bigquery_for_update_skip_locked_generates_sql_but_unsupported(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
     """Test that FOR UPDATE SKIP LOCKED is stripped by sqlglot for BigQuery since it's not supported."""
-    from sqlspec import sql
 
     # BigQuery doesn't support FOR UPDATE SKIP LOCKED - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_update(skip_locked=True)

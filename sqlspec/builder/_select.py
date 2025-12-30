@@ -28,7 +28,6 @@ from sqlspec.builder._parsing_utils import (
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
-    has_attr,
     has_expression_and_sql,
     has_parameter_builder,
     has_sqlglot_expression,
@@ -133,14 +132,16 @@ class SubqueryBuilder:
             subquery_expr = subquery
         elif has_parameter_builder(subquery):
             built_query = subquery.build()
-            sql_text = built_query.sql if has_attr(built_query, "sql") else str(built_query)
-            parsed_expr: exp.Expression | None = exp.maybe_parse(sql_text, dialect=getattr(subquery, "dialect", None))
+            sql_text = built_query.sql if isinstance(built_query, SafeQuery) else str(built_query)
+            dialect = subquery.dialect if isinstance(subquery, QueryBuilder) else None
+            parsed_expr: exp.Expression | None = exp.maybe_parse(sql_text, dialect=dialect)
             if parsed_expr is None:
                 msg = f"Could not parse subquery SQL: {sql_text}"
                 raise SQLBuilderError(msg)
             subquery_expr = parsed_expr
         else:
-            parsed_expr = exp.maybe_parse(str(subquery), dialect=getattr(subquery, "dialect", None))
+            dialect = subquery.dialect if isinstance(subquery, (QueryBuilder, SafeQuery)) else None
+            parsed_expr = exp.maybe_parse(str(subquery), dialect=dialect)
             if parsed_expr is None:
                 msg = f"Could not convert subquery to expression: {subquery}"
                 raise SQLBuilderError(msg)
@@ -507,7 +508,7 @@ class WhereClauseMixin:
         if isinstance(values, exp.Expression):
             return exp.EQ(this=column_expr, expression=exp.Any(this=values))
         if has_sqlglot_expression(values):
-            raw_expr = getattr(values, "sqlglot_expression", None)
+            raw_expr = values.sqlglot_expression
             if isinstance(raw_expr, exp.Expression):
                 return exp.EQ(this=column_expr, expression=exp.Any(this=raw_expr))
             parsed_expr: exp.Expression | None = exp.maybe_parse(str(values), dialect=builder.dialect)
@@ -515,10 +516,10 @@ class WhereClauseMixin:
                 return exp.EQ(this=column_expr, expression=exp.Any(this=parsed_expr))
         if has_expression_and_sql(values):
             self._merge_sql_object_parameters(values)
-            expression_attr = getattr(values, "expression", None)
+            expression_attr = values.expression
             if isinstance(expression_attr, exp.Expression):
                 return exp.EQ(this=column_expr, expression=exp.Any(this=expression_attr))
-            sql_text = getattr(values, "sql", "")
+            sql_text = values.sql
             parsed_expr = exp.maybe_parse(sql_text, dialect=builder.dialect)
             if parsed_expr is not None:
                 return exp.EQ(this=column_expr, expression=exp.Any(this=parsed_expr))
@@ -551,7 +552,7 @@ class WhereClauseMixin:
         if isinstance(values, exp.Expression):
             return exp.NEQ(this=column_expr, expression=exp.Any(this=values))
         if has_sqlglot_expression(values):
-            raw_expr = getattr(values, "sqlglot_expression", None)
+            raw_expr = values.sqlglot_expression
             if isinstance(raw_expr, exp.Expression):
                 return exp.NEQ(this=column_expr, expression=exp.Any(this=raw_expr))
             parsed_expr: exp.Expression | None = exp.maybe_parse(str(values), dialect=builder.dialect)
@@ -559,10 +560,10 @@ class WhereClauseMixin:
                 return exp.NEQ(this=column_expr, expression=exp.Any(this=parsed_expr))
         if has_expression_and_sql(values):
             self._merge_sql_object_parameters(values)
-            expression_attr = getattr(values, "expression", None)
+            expression_attr = values.expression
             if isinstance(expression_attr, exp.Expression):
                 return exp.NEQ(this=column_expr, expression=exp.Any(this=expression_attr))
-            sql_text = getattr(values, "sql", "")
+            sql_text = values.sql
             parsed_expr = exp.maybe_parse(sql_text, dialect=builder.dialect)
             if parsed_expr is not None:
                 return exp.NEQ(this=column_expr, expression=exp.Any(this=parsed_expr))
@@ -616,10 +617,10 @@ class WhereClauseMixin:
 
         if has_expression_and_sql(subquery):
             self._merge_sql_object_parameters(subquery)
-            expression_attr = getattr(subquery, "expression", None)
+            expression_attr = subquery.expression
             if isinstance(expression_attr, exp.Expression):
                 return expression_attr
-            sql_text = getattr(subquery, "sql", "")
+            sql_text = subquery.sql
             parsed_from_sql: exp.Expression | None = exp.maybe_parse(sql_text, dialect=builder.dialect)
             if parsed_from_sql is None:
                 msg = f"Could not parse subquery SQL: {sql_text}"
@@ -748,22 +749,22 @@ class WhereClauseMixin:
             return self._process_tuple_condition(condition)
         if has_parameter_builder(condition):
             column_expr_obj = cast("ColumnExpression", condition)
-            expression_attr = cast("exp.Expression | None", getattr(column_expr_obj, "_expression", None))
+            expression_attr = cast("exp.Expression | None", column_expr_obj._expression)
             if expression_attr is None:
                 msg = "Column expression is missing underlying sqlglot expression."
                 raise SQLBuilderError(msg)
             return expression_attr
         if has_sqlglot_expression(condition):
-            raw_expr = getattr(condition, "sqlglot_expression", None)
+            raw_expr = condition.sqlglot_expression
             if isinstance(raw_expr, exp.Expression):
                 return builder._parameterize_expression(raw_expr)
             return parse_condition_expression(str(condition))
         if has_expression_and_sql(condition):
-            expression_attr = getattr(condition, "expression", None)
+            expression_attr = condition.expression
             if isinstance(expression_attr, exp.Expression):
                 self._merge_sql_object_parameters(condition)
                 return expression_attr
-            sql_text = getattr(condition, "sql", "")
+            sql_text = condition.sql
             self._merge_sql_object_parameters(condition)
             return parse_condition_expression(sql_text)
 
@@ -1282,11 +1283,11 @@ class SetOperationMixin:
     def _combine_with_other(self, other: Any, *, operator: str, distinct: bool) -> Self:
         builder = cast("QueryBuilder", self)
 
-        if not has_attr(other, "_build_final_expression") or not has_attr(other, "parameters"):
+        if not isinstance(other, QueryBuilder):
             msg = "Set operations require another SQLSpec query builder."
             raise SQLBuilderError(msg)
 
-        other_builder = cast("QueryBuilder", other)
+        other_builder = other
         left_expr = builder._build_final_expression(copy=True)
         right_expr = other_builder._build_final_expression(copy=True)
 

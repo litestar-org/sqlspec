@@ -1,12 +1,17 @@
 """Spanner driver implementation."""
 
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from google.api_core import exceptions as api_exceptions
+from google.cloud.spanner_v1.transaction import Transaction
 
-from sqlspec.adapters.spanner._type_handlers import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
-from sqlspec.adapters.spanner.type_converter import SpannerTypeConverter
+from sqlspec.adapters.spanner.type_converter import (
+    SpannerOutputConverter,
+    coerce_params_for_spanner,
+    infer_spanner_param_types,
+)
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -27,7 +32,6 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json
-from sqlspec.utils.type_guards import has_attr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -35,17 +39,11 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.adapters.spanner._types import SpannerConnection
+    from sqlspec.adapters.spanner._typing import SpannerConnection
     from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import SyncDataDictionaryBase
-    from sqlspec.storage import (
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
     "SpannerDataDictionary",
@@ -54,6 +52,34 @@ __all__ = (
     "SpannerSyncDriver",
     "spanner_statement_config",
 )
+
+
+class _SpannerResultSetProtocol(Protocol):
+    metadata: Any
+
+    def __iter__(self) -> Iterator[Any]: ...
+
+
+class _SpannerReadProtocol(Protocol):
+    def execute_sql(
+        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> _SpannerResultSetProtocol: ...
+
+
+class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
+    committed: "Any | None"
+
+    def execute_update(
+        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> int: ...
+
+    def batch_update(
+        self, batch: "list[tuple[str, dict[str, Any] | None, dict[str, Any]]]"
+    ) -> "tuple[Any, list[int]]": ...
+
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
 
 
 class SpannerExceptionHandler:
@@ -112,6 +138,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
     dialect: "DialectType" = "spanner"
+    __slots__ = ("_data_dictionary", "_type_converter")
 
     def __init__(
         self,
@@ -126,7 +153,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
 
         json_deserializer = features.get("json_deserializer")
-        self._type_converter = SpannerTypeConverter(
+        self._type_converter = SpannerOutputConverter(
             enable_uuid_conversion=features.get("enable_uuid_conversion", True),
             json_deserializer=cast("Callable[[str], Any]", json_deserializer or from_json),
         )
@@ -147,15 +174,18 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         sql, params = self._get_compiled_sql(statement, self.statement_config)
         coerced_params = self._coerce_params(params)
         param_types_map = self._infer_param_types(coerced_params)
-        conn = cast("Any", cursor)
 
         if statement.returns_rows():
-            result_set = conn.execute_sql(sql, params=coerced_params, param_types=param_types_map)
+            reader = cast("_SpannerReadProtocol", cursor)
+            result_set = reader.execute_sql(sql, params=coerced_params, param_types=param_types_map)
             rows = list(result_set)
-            metadata = getattr(result_set, "metadata", None)
-            row_type = getattr(metadata, "row_type", None)
-            fields = getattr(row_type, "fields", None)
-            if fields is None:
+            try:
+                metadata = result_set.metadata
+                row_type = metadata.row_type
+                fields = row_type.fields
+            except AttributeError:
+                fields = None
+            if not fields:
                 msg = "Result set metadata not available."
                 raise SQLConversionError(msg)
             column_names = [field.name for field in fields]
@@ -171,8 +201,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        if has_attr(conn, "execute_update"):
-            row_count = conn.execute_update(sql, params=coerced_params, param_types=param_types_map)
+        if self._supports_write(cursor):
+            writer = cast("_SpannerWriteProtocol", cursor)
+            row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
         msg = "Cannot execute DML in a read-only Snapshot context."
@@ -181,17 +212,22 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _execute_script(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        conn = cast("Any", cursor)
+        is_transaction = self._supports_write(cursor)
+        reader = cast("_SpannerReadProtocol", cursor)
 
         count = 0
         for stmt in statements:
-            if has_attr(conn, "execute_update") and not stmt.upper().strip().startswith("SELECT"):
-                coerced_params = self._coerce_params(params)
-                conn.execute_update(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
+            is_select = stmt.upper().strip().startswith("SELECT")
+            coerced_params = self._coerce_params(params)
+            if not is_select and not is_transaction:
+                msg = "Cannot execute DML in a read-only Snapshot context."
+                raise SQLConversionError(msg)
+            if not is_select and is_transaction:
+                writer = cast("_SpannerWriteProtocol", cursor)
+                writer.execute_update(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
             else:
-                coerced_params = self._coerce_params(params)
                 _ = list(
-                    conn.execute_sql(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
+                    reader.execute_sql(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
                 )
             count += 1
 
@@ -200,10 +236,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
-        if not has_attr(cursor, "batch_update"):
+        if not self._supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
-        conn = cast("Any", cursor)
 
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -218,10 +253,41 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 coerced_params = {}
             batch_args.append((sql, coerced_params, self._infer_param_types(coerced_params)))
 
-        _status, row_counts = conn.batch_update(batch_args)
+        writer = cast("_SpannerWriteProtocol", cursor)
+        _status, row_counts = writer.batch_update(batch_args)
         total_rows = sum(row_counts) if row_counts else 0
 
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
+
+    def _supports_write(self, cursor: Any) -> bool:
+        """Check whether the cursor supports DML execution.
+
+        Args:
+            cursor: Connection or transaction object to inspect.
+
+        Returns:
+            True if DML execution is available, False otherwise.
+        """
+        try:
+            _ = cursor.execute_update
+        except AttributeError:
+            return False
+        return True
+
+    def _supports_batch_update(self, cursor: Any) -> bool:
+        """Check whether the cursor supports batch updates.
+
+        Args:
+            cursor: Connection or transaction object to inspect.
+
+        Returns:
+            True if batch updates are available, False otherwise.
+        """
+        try:
+            _ = cursor.batch_update
+        except AttributeError:
+            return False
+        return True
 
     def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
         """Infer Spanner param_types from Python values."""
@@ -240,16 +306,18 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return None
 
     def rollback(self) -> None:
-        if has_attr(self.connection, "rollback"):
-            self.connection.rollback()
+        if isinstance(self.connection, Transaction):
+            writer = cast("_SpannerWriteProtocol", self.connection)
+            writer.rollback()
 
     def commit(self) -> None:
         # Spanner Transaction has a `committed` property set after commit
         # Check it to avoid "Transaction already committed" errors
-        if has_attr(self.connection, "committed") and self.connection.committed is not None:
-            return
-        if has_attr(self.connection, "commit"):
-            self.connection.commit()
+        if isinstance(self.connection, Transaction):
+            writer = cast("_SpannerWriteProtocol", self.connection)
+            if writer.committed is not None:
+                return
+            writer.commit()
 
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
@@ -278,7 +346,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """Execute query and stream Arrow results to storage."""
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
@@ -310,12 +378,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 coerced = self._coerce_params(params)
                 batch_args.append((insert_sql, coerced, self._infer_param_types(coerced)))
 
-            conn = cast("Any", self.connection)
-            if has_attr(conn, "batch_update"):
-                conn.batch_update(batch_args)
-            else:
-                for batch_sql, batch_params, batch_types in batch_args:
-                    conn.execute_sql(batch_sql, params=batch_params, param_types=batch_types)
+            conn = self.connection
+            if not isinstance(conn, Transaction):
+                msg = "Arrow import requires a Transaction context."
+                raise SQLConversionError(msg)
+            writer = cast("_SpannerWriteProtocol", conn)
+            writer.batch_update(batch_args)
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -338,9 +406,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _truncate_table_sync(self, table: str) -> None:
         """Delete all rows from table (Spanner doesn't have TRUNCATE)."""
         delete_sql = f"DELETE FROM {table} WHERE TRUE"
-        conn = cast("Any", self.connection)
-        if has_attr(conn, "execute_update"):
-            conn.execute_update(delete_sql)
+        if isinstance(self.connection, Transaction):
+            writer = cast("_SpannerWriteProtocol", self.connection)
+            writer.execute_update(delete_sql)
+        else:
+            msg = "Delete requires a Transaction context."
+            raise SQLConversionError(msg)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

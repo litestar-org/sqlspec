@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import pytest
 
-from sqlspec import SQLResult, StatementStack
+from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.duckdb import DuckDBDriver
 
 pytestmark = pytest.mark.xdist_group("duckdb")
@@ -500,7 +500,6 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
 
 def test_duckdb_for_update_locking(duckdb_session: DuckDBDriver) -> None:
     """Test FOR UPDATE row locking with DuckDB (may have limited support)."""
-    from sqlspec import sql
 
     # Setup test table
     duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
@@ -536,7 +535,6 @@ def test_duckdb_for_update_locking(duckdb_session: DuckDBDriver) -> None:
 
 def test_duckdb_for_update_nowait(duckdb_session: DuckDBDriver) -> None:
     """Test FOR UPDATE NOWAIT with DuckDB."""
-    from sqlspec import sql
 
     # Setup test table
     duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
@@ -571,7 +569,6 @@ def test_duckdb_for_update_nowait(duckdb_session: DuckDBDriver) -> None:
 
 def test_duckdb_for_share_locking(duckdb_session: DuckDBDriver) -> None:
     """Test FOR SHARE row locking with DuckDB."""
-    from sqlspec import sql
 
     # Setup test table
     duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")

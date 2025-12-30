@@ -9,7 +9,7 @@ import tempfile
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.core import SQLResult
+from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -126,7 +126,6 @@ async def test_file_database_pooling_enabled() -> None:
 
 async def test_pooling_with_core_round_3(aiosqlite_config: AiosqliteConfig) -> None:
     """Test pooling integration."""
-    from sqlspec.core import SQL
 
     create_sql = SQL("""
         CREATE TABLE IF NOT EXISTS pool_core_test (

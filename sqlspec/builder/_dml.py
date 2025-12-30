@@ -7,10 +7,11 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
+from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
-from sqlspec.utils.type_guards import has_attr, has_expression_and_sql, has_parameter_builder, is_dict
+from sqlspec.utils.type_guards import has_expression_and_sql, has_parameter_builder, is_dict
 
 __all__ = (
     "DeleteFromClauseMixin",
@@ -235,13 +236,13 @@ class InsertFromSelectMixin:
         if current_expr.args.get("this") is None:
             msg = "The target table must be set using .into() before adding values."
             raise SQLBuilderError(msg)
-        subquery_parameters = getattr(select_builder, "_parameters", None)
-        if isinstance(subquery_parameters, dict):
+        subquery_parameters = select_builder.parameters
+        if subquery_parameters:
             builder_with_params = cast("SQLBuilderProtocol", self)
             for param_name, param_value in subquery_parameters.items():
                 builder_with_params.add_parameter(param_value, name=param_name)
 
-        select_expr = getattr(select_builder, "_expression", None)
+        select_expr = select_builder.get_expression()
         if select_expr and isinstance(select_expr, exp.Select):
             current_expr.set("expression", select_expr.copy())
         else:
@@ -295,18 +296,19 @@ class UpdateSetClauseMixin:
             return val
         if has_parameter_builder(val):
             subquery = val.build()
-            sql_text = subquery.sql if has_attr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
-            value_expr = exp.paren(exp.maybe_parse(sql_text, dialect=getattr(self, "dialect", None)))
-            for p_name, p_value in getattr(val, "parameters", {}).items():
+            sql_text = subquery.sql if isinstance(subquery, SafeQuery) else str(subquery)
+            query_builder = cast("QueryBuilder", self)
+            value_expr = exp.paren(exp.maybe_parse(sql_text, dialect=query_builder.dialect))
+            for p_name, p_value in val.parameters.items():
                 self.add_parameter(p_value, name=p_name)
             return value_expr
         if has_expression_and_sql(val):
             return extract_sql_object_expression(val, builder=self)
-        builder = cast("SQLBuilderProtocol", self)
+        sql_builder = cast("SQLBuilderProtocol", self)
         column_name = col if isinstance(col, str) else str(col)
         if "." in column_name:
             column_name = column_name.split(".")[-1]
-        placeholder, _ = builder.create_placeholder(val, column_name)
+        placeholder, _ = sql_builder.create_placeholder(val, column_name)
         return placeholder
 
     def set(self, *args: Any, **kwargs: Any) -> Self:
@@ -358,13 +360,13 @@ class UpdateFromClauseMixin:
         table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = exp.to_table(table, alias=alias)
-        elif has_parameter_builder(table):
-            subquery_params = getattr(table, "_parameters", None)
-            if isinstance(subquery_params, dict):
+        elif isinstance(table, SQLBuilderProtocol):
+            subquery_params = table.parameters
+            if subquery_params:
                 builder_with_params = cast("SQLBuilderProtocol", self)
                 for param_name, param_value in subquery_params.items():
                     builder_with_params.add_parameter(param_value, name=param_name)
-            raw_expression = getattr(table, "_expression", None)
+            raw_expression = table.get_expression()
             subquery_source = raw_expression if isinstance(raw_expression, exp.Expression) else exp.select()
             subquery_exp = exp.paren(subquery_source)
             table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp

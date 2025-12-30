@@ -4,7 +4,7 @@
 import asyncio
 import contextlib
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import SQL
 from sqlspec.exceptions import ImproperConfigurationError
@@ -214,8 +214,6 @@ def create_event_backend(
     config: "PsqlpyConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> PsqlpyEventsBackend | PsqlpyHybridEventsBackend | None:
     """Factory used by EventChannel to create the native psqlpy backend."""
-    from typing import cast
-
     match backend_name:
         case "listen_notify":
             try:

@@ -166,6 +166,11 @@ class ObStoreBackend:
             msg = f"Failed to initialize obstore backend for {uri}"
             raise StorageOperationFailedError(msg) from exc
 
+    @property
+    def is_local_store(self) -> bool:
+        """Return whether the backend uses local storage."""
+        return self._is_local_store
+
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "ObStoreBackend":
         """Create backend from configuration dictionary."""

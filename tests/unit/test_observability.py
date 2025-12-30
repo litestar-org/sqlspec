@@ -5,6 +5,8 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
@@ -24,6 +26,21 @@ from sqlspec.storage.pipeline import (
     reset_storage_bridge_metrics,
 )
 from sqlspec.utils.correlation import CorrelationContext
+
+
+def _is_compiled() -> bool:
+    """Check if driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+requires_interpreted = pytest.mark.skipif(
+    _is_compiled(), reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)"
+)
 
 
 def _lifecycle_config(hooks: dict[str, list[Any]]) -> "LifecycleConfig":
@@ -320,6 +337,7 @@ def test_lifecycle_spans_emit_even_without_hooks() -> None:
     assert "sqlspec.lifecycle.connection.destroy" in span_names
 
 
+@requires_interpreted
 def test_driver_dispatch_records_query_span() -> None:
     """Driver dispatch should start and finish query spans."""
 
@@ -385,6 +403,7 @@ def test_storage_span_records_telemetry_attributes() -> None:
     assert span_manager.finished[0].attributes["sqlspec.storage.backend"] == "s3"
 
 
+@requires_interpreted
 def test_write_storage_helper_emits_span() -> None:
     """Storage driver helper should wrap sync writes with spans."""
 
@@ -405,6 +424,7 @@ def test_write_storage_helper_emits_span() -> None:
     assert any(span.name == "sqlspec.storage.write" for span in span_manager.finished)
 
 
+@requires_interpreted
 def test_read_storage_helper_emits_span() -> None:
     """Reading from storage via helper should emit spans and return telemetry."""
 
@@ -414,7 +434,7 @@ def test_read_storage_helper_emits_span() -> None:
     statement_config = StatementConfig()
     driver = _DummyDriver(connection=object(), statement_config=statement_config, observability=runtime)
     pipeline = _FakeSyncPipeline()
-    driver.storage_pipeline_factory = lambda: pipeline  # type: ignore[assignment]
+    driver.storage_pipeline_factory = lambda: pipeline  # type: ignore[misc,assignment]
 
     with CorrelationContext.context("read-correlation"):
         _table, telemetry = driver._read_arrow_from_storage_sync(  # pyright: ignore[reportPrivateUsage]
@@ -466,6 +486,7 @@ def test_telemetry_snapshot_includes_loader_metrics(tmp_path: "Path") -> None:
     assert snapshot["SQLFileLoader.loader.files.loaded"] >= 1
 
 
+@requires_interpreted
 def test_disabled_runtime_avoids_lifecycle_counters() -> None:
     """Drivers should skip lifecycle hooks entirely when none are registered."""
 
@@ -480,6 +501,7 @@ def test_disabled_runtime_avoids_lifecycle_counters() -> None:
     assert all(value == 0 for value in snapshot.values())
 
 
+@requires_interpreted
 def test_runtime_with_lifecycle_hooks_records_counters() -> None:
     """Lifecycle counters should increment when hooks are configured."""
 
