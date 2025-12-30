@@ -1,19 +1,16 @@
 """Base classes and detection for adapter type conversion."""
 
 import re
+from collections.abc import Callable
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import Any, Final
 from uuid import UUID
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec._serialization import decode_json
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import Any, Final
 
 __all__ = (
     "DEFAULT_CACHE_SIZE",
@@ -31,11 +28,11 @@ __all__ = (
     "parse_datetime_rfc3339",
 )
 
-DEFAULT_SPECIAL_CHARS: "Final[frozenset[str]]" = frozenset({"{", "[", "-", ":", "T", "."})
-DEFAULT_CACHE_SIZE: "Final[int]" = 5000
-DEFAULT_DETECTION_CHARS: "Final[frozenset[str]]" = frozenset({"{", "[", "-", ":", "T"})
+DEFAULT_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
+DEFAULT_CACHE_SIZE: Final[int] = 5000
+DEFAULT_DETECTION_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T"})
 
-SPECIAL_TYPE_REGEX: "Final[re.Pattern[str]]" = re.compile(
+SPECIAL_TYPE_REGEX: Final[re.Pattern[str]] = re.compile(
     r"^(?:"
     r"(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|"
     r"(?P<iso_datetime>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)|"
@@ -156,7 +153,7 @@ def parse_datetime_rfc3339(dt_str: str) -> "datetime":
     return datetime.fromisoformat(dt_str)
 
 
-_TYPE_CONVERTERS: "Final[dict[str, Callable[[str], Any]]]" = {
+_TYPE_CONVERTERS: Final[dict[str, Callable[[str], Any]]] = {
     "uuid": convert_uuid,
     "iso_datetime": convert_iso_datetime,
     "iso_date": convert_iso_date,
