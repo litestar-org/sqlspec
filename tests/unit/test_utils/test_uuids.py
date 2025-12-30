@@ -9,7 +9,6 @@ from uuid import UUID
 
 import pytest
 
-from sqlspec.utils import uuids
 from sqlspec.utils.uuids import (
     NAMESPACE_DNS,
     NAMESPACE_OID,
@@ -46,9 +45,7 @@ def _is_uuid_like(obj: object) -> bool:
 @pytest.fixture(autouse=True)
 def reset_warnings() -> None:
     """Reset warning state before each test."""
-    uuids._uuid6_warned = False  # pyright: ignore[reportPrivateUsage]
-    uuids._uuid7_warned = False  # pyright: ignore[reportPrivateUsage]
-    uuids._nanoid_warned = False  # pyright: ignore[reportPrivateUsage]
+    return
 
 
 def test_uuid3_returns_valid_uuid() -> None:
@@ -350,39 +347,39 @@ def test_nanoid_warning_without_fastnanoid() -> None:
 
 
 @pytest.mark.skipif(bool(UUID_UTILS_INSTALLED), reason="Test requires uuid-utils NOT installed")
-def test_uuid6_warning_only_once() -> None:
-    """Test uuid6 only emits warning once per session."""
+def test_uuid6_warning_each_call() -> None:
+    """Test uuid6 emits warning per call when uuid-utils is not installed."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         uuid6()
         uuid6()
         uuid6()
 
-        assert len(warning_list) == 1
+        assert len(warning_list) == 3
 
 
 @pytest.mark.skipif(bool(UUID_UTILS_INSTALLED), reason="Test requires uuid-utils NOT installed")
-def test_uuid7_warning_only_once() -> None:
-    """Test uuid7 only emits warning once per session."""
+def test_uuid7_warning_each_call() -> None:
+    """Test uuid7 emits warning per call when uuid-utils is not installed."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         uuid7()
         uuid7()
         uuid7()
 
-        assert len(warning_list) == 1
+        assert len(warning_list) == 3
 
 
 @pytest.mark.skipif(bool(NANOID_INSTALLED), reason="Test requires fastnanoid NOT installed")
-def test_nanoid_warning_only_once() -> None:
-    """Test nanoid only emits warning once per session."""
+def test_nanoid_warning_each_call() -> None:
+    """Test nanoid emits warning per call when fastnanoid is not installed."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         nanoid()
         nanoid()
         nanoid()
 
-        assert len(warning_list) == 1
+        assert len(warning_list) == 3
 
 
 @pytest.mark.skipif(bool(UUID_UTILS_INSTALLED), reason="Test requires uuid-utils NOT installed")

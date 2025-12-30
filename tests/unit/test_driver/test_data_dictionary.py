@@ -2,9 +2,26 @@
 
 from unittest.mock import Mock
 
+import pytest
+
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
 from sqlspec.driver import SyncDriverAdapterBase, VersionInfo
+
+
+def _is_compiled() -> bool:
+    """Check if driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    _is_compiled(), reason="Test requires mock specs of compiled driver base classes."
+)
 
 
 class TestVersionInfo:

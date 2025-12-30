@@ -154,13 +154,19 @@ exclude = [
   "sqlspec/typing.py",                     # Type aliases
   "sqlspec/_typing.py",                    # Type aliases
   "sqlspec/config.py",                     # Main config
+  "sqlspec/adapters/**/adk/**/*.py",       # Adapter configurations
+  "sqlspec/adapters/**/events/**/*.py",    # Adapter configurations
+  "sqlspec/adapters/**/litestar/**/*.py",  # Adapter configurations
   "sqlspec/adapters/**/config.py",         # Adapter configurations
   "sqlspec/adapters/**/_typing.py",        # Type definitions (mypyc incompatible)
+  "sqlspec/adapters/spanner/dialect/*.py", # Spanner dialect (uses dynamic attributes)
+  "sqlspec/adapters/*/pool.py",            # Exclude custom pool
   "sqlspec/extensions/**",                 # All extensions
   "sqlspec/**/__init__.py",                # Init files (usually just imports)
   "sqlspec/protocols.py",                  # Protocol definitions
   "sqlspec/builder/**/*.py",               # Builder (not performance critical)
   "sqlspec/migrations/commands.py",        # Migration command CLI (dynamic imports)
+
 ]
 include = [
   "sqlspec/core/**/*.py",          # Core module
@@ -171,8 +177,9 @@ include = [
   "sqlspec/driver/**/*.py",
   # "sqlspec/migrations/**/*.py",    # Migrations module
   # === ADAPTER MODULES ===
-  "sqlspec/adapters/**/*.py", # All adapters
-
+  "sqlspec/adapters/**/driver.py",          # All adapters
+  "sqlspec/adapters/**/type_converter.py",  # All adapters
+  "sqlspec/adapters/**/data_dictionary.py", # All adapters
   # === UTILITY MODULES ===
   "sqlspec/utils/text.py",                # Text utilities
   "sqlspec/utils/sync_tools.py",          # Synchronous utility functions
@@ -185,9 +192,8 @@ include = [
   "sqlspec/utils/correlation.py",         # Correlation context helpers
   "sqlspec/utils/portal.py",              # Thread portal utilities
   "sqlspec/utils/singleton.py",           # Lightweight singleton helpers
-  "sqlspec/utils/logging.py",             # Logging utilities
   "sqlspec/utils/schema.py",              # Schema transformation (refactored for mypyc)
-  "sqlspec/utils/uuids.py",               # UUID generation utilities
+  "sqlspec/utils/uuids.py",               # UUID utilities
 
 ]
 mypy-args = [

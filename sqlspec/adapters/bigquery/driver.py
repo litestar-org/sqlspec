@@ -85,7 +85,9 @@ def _identity(value: Any) -> Any:
     return value
 
 
-def _tuple_to_list(value: tuple[Any, ...]) -> list[Any]:
+def _tuple_to_list(value: "tuple[Any, ...] | list[Any]") -> "list[Any]":
+    if isinstance(value, list):
+        return value
     return list(value)
 
 

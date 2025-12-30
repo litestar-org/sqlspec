@@ -533,6 +533,7 @@ exclude = [
     "sqlspec/adapters/*/config.py",      # Configuration classes
     "sqlspec/adapters/*/_typing.py",     # Type classes often not found during mypy checks
     "sqlspec/config.py",                 # Main config
+    "sqlspec/adapters/spanner/dialect/*.py", # Spanner dialect (dynamic attributes)
     "sqlspec/**/__init__.py",            # Init files (usually just imports)
 ]
 include = [
