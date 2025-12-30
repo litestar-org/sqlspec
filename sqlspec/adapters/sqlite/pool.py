@@ -56,7 +56,6 @@ class SqliteConnectionPool:
         enable_optimizations: bool = True,
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
-        **kwargs: Any,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -65,7 +64,6 @@ class SqliteConnectionPool:
             enable_optimizations: Whether to apply performance PRAGMAs
             recycle_seconds: Connection recycle time in seconds (default 24h)
             health_check_interval: Seconds of idle time before running health check
-            **kwargs: Ignored pool parameters for compatibility
         """
         if "check_same_thread" not in connection_parameters:
             connection_parameters = {**connection_parameters, "check_same_thread": False}

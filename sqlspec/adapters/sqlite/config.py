@@ -144,14 +144,35 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
 
-        excluded_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
+        excluded_keys = {
+            "enable_optimizations",
+            "health_check_interval",
+            "pool_min_size",
+            "pool_max_size",
+            "pool_timeout",
+            "pool_recycle_seconds",
+            "extra",
+        }
         return {k: v for k, v in self.connection_config.items() if v is not None and k not in excluded_keys}
 
     def _create_pool(self) -> SqliteConnectionPool:
         """Create connection pool from configuration."""
         config_dict = self._get_connection_config_dict()
 
-        pool = SqliteConnectionPool(connection_parameters=config_dict, **self.connection_config)
+        pool_kwargs: dict[str, Any] = {}
+        recycle_seconds = self.connection_config.get("pool_recycle_seconds")
+        if recycle_seconds is not None:
+            pool_kwargs["recycle_seconds"] = recycle_seconds
+
+        health_check_interval = self.connection_config.get("health_check_interval")
+        if health_check_interval is not None:
+            pool_kwargs["health_check_interval"] = health_check_interval
+
+        enable_optimizations = self.connection_config.get("enable_optimizations")
+        if enable_optimizations is not None:
+            pool_kwargs["enable_optimizations"] = enable_optimizations
+
+        pool = SqliteConnectionPool(connection_parameters=config_dict, **pool_kwargs)
 
         if self.driver_features.get("enable_custom_adapters", False):
             self._register_type_adapters()
