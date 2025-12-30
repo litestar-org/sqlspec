@@ -172,7 +172,7 @@ include = [
   "sqlspec/driver/**/*.py",
   # "sqlspec/migrations/**/*.py",    # Migrations module
   # === ADAPTER MODULES ===
-  "sqlspec/adapters/*/type_converter.py",
+  "sqlspec/adapters/*/_type_converter.py", # Type converters (input/output)
   "sqlspec/adapters/*/data_dictionary.py",
   "sqlspec/adapters/*/driver.py",
 
@@ -189,8 +189,8 @@ include = [
   "sqlspec/utils/portal.py",              # Thread portal utilities
   "sqlspec/utils/singleton.py",           # Lightweight singleton helpers
   "sqlspec/utils/logging.py",             # Logging utilities
-  # NOTE: uuids.py excluded - has optional dependency conditionals that mypyc can't handle
-  # NOTE: schema.py excluded - imports from typing module with optional dependencies
+  "sqlspec/utils/schema.py",              # Schema transformation (refactored for mypyc)
+  "sqlspec/utils/uuids.py",               # UUID generation utilities
 
 ]
 mypy-args = [

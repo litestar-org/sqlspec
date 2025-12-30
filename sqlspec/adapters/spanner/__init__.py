@@ -3,7 +3,7 @@
 from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.adapters.spanner import dialect
-from sqlspec.adapters.spanner._type_handlers import (
+from sqlspec.adapters.spanner._type_converter import (
     bytes_to_spanner,
     coerce_params_for_spanner,
     infer_spanner_param_types,

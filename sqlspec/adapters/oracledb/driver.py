@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, cast
 import oracledb
 from oracledb import AsyncCursor, Cursor
 
+from sqlspec.adapters.oracledb._type_converter import OracleOutputConverter
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
-from sqlspec.adapters.oracledb.type_converter import OracleTypeConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -69,7 +69,7 @@ logger = get_logger(__name__)
 # Oracle-specific constants
 LARGE_STRING_THRESHOLD = 4000  # Threshold for large string parameters to avoid ORA-01704
 
-_type_converter = OracleTypeConverter()
+_type_converter = OracleOutputConverter()
 
 IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 

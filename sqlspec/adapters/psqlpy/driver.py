@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Any, Final
 import psqlpy.exceptions
 from psqlpy.extra_types import JSONB
 
+from sqlspec.adapters.psqlpy._type_converter import PostgreSQLOutputConverter
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
-from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -67,7 +67,7 @@ __all__ = (
 
 logger = get_logger("adapters.psqlpy")
 
-_type_converter = PostgreSQLTypeConverter()
+_type_converter = PostgreSQLOutputConverter()
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 

@@ -38,6 +38,7 @@ from sqlspec.utils.type_guards import (
 __all__ = (
     "_DEFAULT_TYPE_DECODERS",
     "DataT",
+    "_convert_numpy_recursive",
     "_convert_numpy_to_list",
     "_default_msgspec_deserializer",
     "_is_list_type_target",
@@ -111,12 +112,51 @@ def _convert_dataclass(data: Any, schema_type: Any) -> Any:
     return schema_type(**dict(data)) if is_dict(data) else (schema_type(**data) if isinstance(data, dict) else data)
 
 
+class _IsTypePredicate:
+    """Callable predicate to check if a type matches a target type."""
+
+    __slots__ = ("_type",)
+
+    def __init__(self, target_type: type) -> None:
+        self._type = target_type
+
+    def __call__(self, x: Any) -> bool:
+        return x is self._type
+
+
+class _UUIDDecoder:
+    """Decoder for UUID types."""
+
+    __slots__ = ()
+
+    def __call__(self, t: type, v: Any) -> Any:
+        return t(v.hex)
+
+
+class _ISOFormatDecoder:
+    """Decoder for types with isoformat() method (datetime, date, time)."""
+
+    __slots__ = ()
+
+    def __call__(self, t: type, v: Any) -> Any:
+        return t(v.isoformat())
+
+
+class _EnumDecoder:
+    """Decoder for Enum types."""
+
+    __slots__ = ()
+
+    def __call__(self, t: type, v: Any) -> Any:
+        return t(v.value)
+
+
 _DEFAULT_TYPE_DECODERS: Final["list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]"] = [
-    (lambda x: x is UUID, lambda t, v: t(v.hex)),
-    (lambda x: x is datetime.datetime, lambda t, v: t(v.isoformat())),
-    (lambda x: x is datetime.date, lambda t, v: t(v.isoformat())),
-    (lambda x: x is datetime.time, lambda t, v: t(v.isoformat())),
-    (lambda x: x is Enum, lambda t, v: t(v.value)),
+    (_IsTypePredicate(UUID), _UUIDDecoder()),
+    (_IsTypePredicate(datetime.datetime), _ISOFormatDecoder()),
+    (_IsTypePredicate(datetime.date), _ISOFormatDecoder()),
+    (_IsTypePredicate(datetime.time), _ISOFormatDecoder()),
+    (_IsTypePredicate(Enum), _EnumDecoder()),
     (_is_list_type_target, _convert_numpy_to_list),
 ]
 
@@ -171,6 +211,32 @@ def _default_msgspec_deserializer(
     return value
 
 
+def _convert_numpy_recursive(obj: Any) -> Any:
+    """Recursively convert numpy arrays to lists.
+
+    This is a module-level function to avoid nested function definitions
+    which are problematic for mypyc compilation.
+
+    Args:
+        obj: Object to convert (may contain numpy arrays nested in dicts/lists)
+
+    Returns:
+        Object with all numpy arrays converted to lists
+    """
+    if not NUMPY_INSTALLED:
+        return obj
+
+    import numpy as np
+
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: _convert_numpy_recursive(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_convert_numpy_recursive(item) for item in obj)
+    return obj
+
+
 def _convert_msgspec(data: Any, schema_type: Any) -> Any:
     """Convert data to msgspec Struct."""
     rename_config = get_msgspec_rename_config(schema_type)
@@ -191,23 +257,7 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
             logger.debug("Field name transformation failed for msgspec schema: %s", e)
 
     if NUMPY_INSTALLED:
-        try:
-            import numpy as np
-
-            def _convert_numpy(obj: Any) -> Any:
-                return (
-                    obj.tolist()
-                    if isinstance(obj, np.ndarray)
-                    else {k: _convert_numpy(v) for k, v in obj.items()}
-                    if isinstance(obj, dict)
-                    else type(obj)(_convert_numpy(item) for item in obj)
-                    if isinstance(obj, (list, tuple))
-                    else obj
-                )
-
-            transformed_data = _convert_numpy(transformed_data)
-        except ImportError:
-            pass
+        transformed_data = _convert_numpy_recursive(transformed_data)
 
     return convert(
         obj=transformed_data,

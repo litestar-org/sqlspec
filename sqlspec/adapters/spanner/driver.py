@@ -6,9 +6,12 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
 
-from sqlspec.adapters.spanner._type_handlers import coerce_params_for_spanner, infer_spanner_param_types
+from sqlspec.adapters.spanner._type_converter import (
+    SpannerOutputConverter,
+    coerce_params_for_spanner,
+    infer_spanner_param_types,
+)
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
-from sqlspec.adapters.spanner.type_converter import SpannerTypeConverter
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -149,7 +152,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
 
         json_deserializer = features.get("json_deserializer")
-        self._type_converter = SpannerTypeConverter(
+        self._type_converter = SpannerOutputConverter(
             enable_uuid_conversion=features.get("enable_uuid_conversion", True),
             json_deserializer=cast("Callable[[str], Any]", json_deserializer or from_json),
         )

@@ -3,8 +3,12 @@
 Provides automatic registration of JSON codecs and pgvector extension
 for asyncpg connections. Supports custom JSON serializers/deserializers
 and optional vector type support.
+
+All functions are designed for mypyc compilation with no nested functions
+or closures.
 """
 
+import importlib
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.typing import PGVECTOR_INSTALLED
@@ -21,6 +25,14 @@ logger = get_logger(__name__)
 
 
 def _is_missing_vector_error(error: Exception) -> bool:
+    """Check if error indicates missing vector type.
+
+    Args:
+        error: Exception to check.
+
+    Returns:
+        True if error indicates missing vector type.
+    """
     message = str(error).lower()
     return 'type "vector" does not exist' in message or "unknown type" in message
 
@@ -62,9 +74,8 @@ async def register_pgvector_support(connection: "AsyncpgConnection") -> None:
         return
 
     try:
-        import pgvector.asyncpg
-
-        await pgvector.asyncpg.register_vector(connection)
+        pgvector_asyncpg = importlib.import_module("pgvector.asyncpg")
+        await pgvector_asyncpg.register_vector(connection)
         logger.debug("Registered pgvector support on asyncpg connection")
     except (ValueError, TypeError) as exc:
         message = str(exc).lower()

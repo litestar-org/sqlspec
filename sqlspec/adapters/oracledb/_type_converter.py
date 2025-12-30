@@ -7,13 +7,14 @@ efficient LOB (Large Object) processing and JSON storage detection.
 import array
 import re
 from datetime import datetime
-from functools import lru_cache
 from typing import Any, Final
 
-from sqlspec.core import BaseTypeConverter
+from sqlspec.core._type_converter import CachedOutputConverter
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.type_guards import is_readable
+
+__all__ = ("ORACLE_JSON_STORAGE_REGEX", "ORACLE_SPECIAL_CHARS", "OracleOutputConverter")
 
 ORACLE_JSON_STORAGE_REGEX: Final[re.Pattern[str]] = re.compile(
     r"^(?:"
@@ -28,47 +29,37 @@ ORACLE_JSON_STORAGE_REGEX: Final[re.Pattern[str]] = re.compile(
 ORACLE_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
 
 
-class OracleTypeConverter(BaseTypeConverter):
-    """Oracle-specific type conversion with LOB optimization.
+class OracleOutputConverter(CachedOutputConverter):
+    """Oracle-specific output conversion with LOB optimization.
 
-    Extends the base TypeDetector with Oracle-specific functionality
+    Extends CachedOutputConverter with Oracle-specific functionality
     including streaming LOB support and JSON storage type detection.
-    Includes per-instance LRU cache for improved performance.
     """
 
-    __slots__ = ("_convert_cache",)
+    __slots__ = ()
 
     def __init__(self, cache_size: int = 5000) -> None:
-        """Initialize converter with per-instance conversion cache.
+        """Initialize converter with Oracle-specific options.
 
         Args:
             cache_size: Maximum number of string values to cache (default: 5000)
         """
-        super().__init__()
+        super().__init__(special_chars=ORACLE_SPECIAL_CHARS, cache_size=cache_size)
 
-        @lru_cache(maxsize=cache_size)
-        def _cached_convert(value: str) -> Any:
-            if not value or not any(c in value for c in ORACLE_SPECIAL_CHARS):
-                return value
-            detected_type = self.detect_type(value)
-            if detected_type:
-                return self.convert_value(value, detected_type)
-            return value
-
-        self._convert_cache = _cached_convert
-
-    def convert_if_detected(self, value: Any) -> Any:
-        """Convert string if special type detected (cached).
+    def _convert_detected(self, value: str, detected_type: str) -> Any:
+        """Convert value with Oracle-specific handling.
 
         Args:
-            value: Value to potentially convert
+            value: String value to convert.
+            detected_type: Detected type name.
 
         Returns:
-            Converted value or original value
+            Converted value, or original on failure.
         """
-        if not isinstance(value, str):
+        try:
+            return self.convert_value(value, detected_type)
+        except Exception:
             return value
-        return self._convert_cache(value)
 
     async def process_lob(self, value: Any) -> Any:
         """Process Oracle LOB objects efficiently.
@@ -85,7 +76,7 @@ class OracleTypeConverter(BaseTypeConverter):
         read_func = ensure_async_(value.read)
         return await read_func()
 
-    def detect_json_storage_type(self, column_info: dict[str, Any]) -> bool:
+    def detect_json_storage_type(self, column_info: "dict[str, Any]") -> bool:
         """Detect if column stores JSON data.
 
         Args:
@@ -145,7 +136,7 @@ class OracleTypeConverter(BaseTypeConverter):
             text_chunks.append(str(chunk))
         return "".join(text_chunks).encode("utf-8")
 
-    def convert_oracle_value(self, value: Any, column_info: dict[str, Any]) -> Any:
+    def convert_oracle_value(self, value: Any, column_info: "dict[str, Any]") -> Any:
         """Convert Oracle-specific value with column context.
 
         Args:
@@ -159,11 +150,11 @@ class OracleTypeConverter(BaseTypeConverter):
             if self.detect_json_storage_type(column_info):
                 content = self.handle_large_lob(value)
                 content_str = content.decode("utf-8") if isinstance(content, bytes) else content
-                return self.convert_if_detected(content_str)
+                return self.convert(content_str)
             return self.handle_large_lob(value)
 
         if isinstance(value, str):
-            return self.convert_if_detected(value)
+            return self.convert(value)
 
         return value
 
@@ -202,7 +193,6 @@ class OracleTypeConverter(BaseTypeConverter):
         Returns:
             array.array compatible with Oracle VECTOR if value is ndarray,
             otherwise original value.
-
         """
         if not NUMPY_INSTALLED:
             return value
@@ -215,6 +205,3 @@ class OracleTypeConverter(BaseTypeConverter):
             return numpy_converter_in(value)
 
         return value
-
-
-__all__ = ("ORACLE_JSON_STORAGE_REGEX", "ORACLE_SPECIAL_CHARS", "OracleTypeConverter")

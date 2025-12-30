@@ -9,8 +9,8 @@ import datetime
 import decimal
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from sqlspec.adapters.adbc._type_converter import ADBCOutputConverter
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.adapters.adbc.type_converter import ADBCTypeConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -390,7 +390,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                     else:
                         result.append(param)
                 elif isinstance(param, dict):
-                    result.append(ADBCTypeConverter(self.dialect).convert_dict(param))  # type: ignore[arg-type]
+                    result.append(ADBCOutputConverter(self.dialect).convert_dict(param))  # type: ignore[arg-type]
                 else:
                     if statement_config.parameter_config.type_coercion_map:
                         for type_check, converter in statement_config.parameter_config.type_coercion_map.items():

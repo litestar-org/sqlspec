@@ -3,10 +3,14 @@
 Provides registration functions for SQLite's adapter/converter system to enable
 custom type handling. All handlers are optional and must be explicitly enabled
 via SqliteDriverFeatures configuration.
+
+All functions are designed for mypyc compilation using functools.partial
+instead of lambdas for adapter registration.
 """
 
 import json
 import sqlite3
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.utils.logging import get_logger
@@ -51,6 +55,36 @@ def json_converter(value: bytes, deserializer: "Callable[[str], Any] | None" = N
     return deserializer(value.decode("utf-8"))
 
 
+def _make_json_adapter(serializer: "Callable[[Any], str] | None") -> "Callable[[Any], str]":
+    """Create a JSON adapter function with bound serializer.
+
+    This is a module-level factory to avoid lambda closures which are
+    problematic for mypyc compilation.
+
+    Args:
+        serializer: Optional JSON serializer callable.
+
+    Returns:
+        Adapter function ready for sqlite3.register_adapter.
+    """
+    return partial(json_adapter, serializer=serializer)
+
+
+def _make_json_converter(deserializer: "Callable[[str], Any] | None") -> "Callable[[bytes], Any]":
+    """Create a JSON converter function with bound deserializer.
+
+    This is a module-level factory to avoid lambda closures which are
+    problematic for mypyc compilation.
+
+    Args:
+        deserializer: Optional JSON deserializer callable.
+
+    Returns:
+        Converter function ready for sqlite3.register_converter.
+    """
+    return partial(json_converter, deserializer=deserializer)
+
+
 def register_type_handlers(
     json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> None:
@@ -63,10 +97,13 @@ def register_type_handlers(
         json_serializer: Optional custom JSON serializer (e.g., orjson.dumps).
         json_deserializer: Optional custom JSON deserializer (e.g., orjson.loads).
     """
-    sqlite3.register_adapter(dict, lambda v: json_adapter(v, json_serializer))
-    sqlite3.register_adapter(list, lambda v: json_adapter(v, json_serializer))
+    dict_adapter = _make_json_adapter(json_serializer)
+    list_adapter = _make_json_adapter(json_serializer)
+    converter = _make_json_converter(json_deserializer)
 
-    sqlite3.register_converter(DEFAULT_JSON_TYPE, lambda v: json_converter(v, json_deserializer))
+    sqlite3.register_adapter(dict, dict_adapter)
+    sqlite3.register_adapter(list, list_adapter)
+    sqlite3.register_converter(DEFAULT_JSON_TYPE, converter)
 
     logger.debug("Registered SQLite custom type handlers (JSON dict/list adapters)")
 

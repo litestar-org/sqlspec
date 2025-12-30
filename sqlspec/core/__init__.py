@@ -90,6 +90,12 @@ Example Usage:
 """
 
 from sqlspec.core import filters
+from sqlspec.core._type_converter import (
+    DEFAULT_CACHE_SIZE,
+    DEFAULT_SPECIAL_CHARS,
+    BaseInputConverter,
+    CachedOutputConverter,
+)
 from sqlspec.core.cache import (
     CacheConfig,
     CachedStatement,
@@ -207,17 +213,21 @@ from sqlspec.core.type_conversion import (
 from sqlspec.exceptions import StackExecutionError
 
 __all__ = (
+    "DEFAULT_CACHE_SIZE",
+    "DEFAULT_SPECIAL_CHARS",
     "DRIVER_PARAMETER_PROFILES",
     "EXECUTE_MANY_MIN_ROWS",
     "PARAMETER_REGEX",
     "SQL",
     "AnyCollectionFilter",
     "ArrowResult",
+    "BaseInputConverter",
     "BaseTypeConverter",
     "BeforeAfterFilter",
     "CacheConfig",
     "CacheKey",
     "CacheStats",
+    "CachedOutputConverter",
     "CachedStatement",
     "CompiledSQL",
     "DriverParameterProfile",

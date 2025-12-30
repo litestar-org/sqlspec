@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import duckdb
 
+from sqlspec.adapters.duckdb._type_converter import DuckDBOutputConverter
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
-from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -65,7 +65,7 @@ logger = get_logger("adapters.duckdb")
 _TIME_TO_ISO = build_time_iso_converter()
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
-_type_converter = DuckDBTypeConverter()
+_type_converter = DuckDBOutputConverter()
 
 
 class DuckDBCursor:
@@ -226,7 +226,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
             enable_uuid_conversion = driver_features.get("enable_uuid_conversion", True)
             if not enable_uuid_conversion:
-                type_converter = DuckDBTypeConverter(enable_uuid_conversion=enable_uuid_conversion)
+                type_converter = DuckDBOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
                 type_coercion_map = dict(param_config.type_coercion_map)
                 type_coercion_map[str] = type_converter.convert_if_detected
                 param_config = param_config.replace(type_coercion_map=type_coercion_map)

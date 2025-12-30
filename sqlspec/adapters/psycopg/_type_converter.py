@@ -2,11 +2,13 @@
 
 Provides automatic conversion between NumPy arrays and PostgreSQL vector types
 via pgvector-python library. Supports both sync and async connections.
+
+All functions are designed for mypyc compilation with imports inside
+functions to avoid module-level optional dependency issues.
 """
 
+import importlib
 from typing import TYPE_CHECKING, Any
-
-from psycopg import ProgrammingError, errors
 
 from sqlspec.typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
 from sqlspec.utils.logging import get_logger
@@ -21,6 +23,16 @@ logger = get_logger(__name__)
 
 
 def _is_missing_vector_error(error: Exception) -> bool:
+    """Check if error indicates missing vector type in database.
+
+    Args:
+        error: Exception to check.
+
+    Returns:
+        True if error indicates vector type not found.
+    """
+    from psycopg import errors
+
     message = str(error).lower()
     return (
         "vector type not found" in message
@@ -39,6 +51,8 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
     Args:
         connection: Psycopg sync connection.
     """
+    from psycopg import ProgrammingError
+
     if not PGVECTOR_INSTALLED:
         logger.debug("pgvector not installed - skipping vector type handlers")
         return
@@ -47,9 +61,8 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
         logger.debug("NumPy not installed - registering pgvector without NumPy support")
 
     try:
-        import pgvector.psycopg
-
-        pgvector.psycopg.register_vector(connection)
+        pgvector_psycopg = importlib.import_module("pgvector.psycopg")
+        pgvector_psycopg.register_vector(connection)
         logger.debug("Registered pgvector type handlers on psycopg sync connection")
     except (ValueError, TypeError, ProgrammingError) as error:
         if _is_missing_vector_error(error):
@@ -69,6 +82,8 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
     Args:
         connection: Psycopg async connection.
     """
+    from psycopg import ProgrammingError
+
     if not PGVECTOR_INSTALLED:
         logger.debug("pgvector not installed - skipping vector type handlers")
         return
@@ -77,8 +92,8 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
         logger.debug("NumPy not installed - registering pgvector without NumPy support")
 
     try:
-        from pgvector.psycopg import register_vector_async
-
+        pgvector_psycopg = importlib.import_module("pgvector.psycopg")
+        register_vector_async = pgvector_psycopg.register_vector_async
         await register_vector_async(connection)
         logger.debug("Registered pgvector type handlers on psycopg async connection")
     except (ValueError, TypeError, ProgrammingError) as error:

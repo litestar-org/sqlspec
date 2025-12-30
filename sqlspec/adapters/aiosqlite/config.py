@@ -18,7 +18,7 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolClosedError,
     AiosqlitePoolConnection,
 )
-from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
+from sqlspec.adapters.sqlite._type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.logging import get_logger
