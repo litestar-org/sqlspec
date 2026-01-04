@@ -33,6 +33,8 @@ from sqlspec.exceptions import (
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json
 
+from sqlspec.adapters.spanner._typing import SpannerSessionContext
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
 __all__ = (
     "SpannerDataDictionary",
     "SpannerExceptionHandler",
+    "SpannerSessionContext",
     "SpannerSyncCursor",
     "SpannerSyncDriver",
     "spanner_statement_config",

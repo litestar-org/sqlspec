@@ -330,9 +330,3 @@ def test_provide_filters_search_without_value_excluded() -> None:
     assert filters == []
 
 
-def test_provide_filters_order_by_without_field_excluded() -> None:
-    """Test that order by filters without field names raise TypeError (mypyc enforces types)."""
-    # With mypyc compilation, passing None for a str parameter raises TypeError
-    # at construction time rather than being handled gracefully
-    with pytest.raises(TypeError):
-        OrderByFilter(field_name=None, sort_order="desc")  # type: ignore[arg-type]

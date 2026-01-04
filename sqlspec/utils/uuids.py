@@ -22,7 +22,7 @@ When fastnanoid is NOT installed:
 import warnings
 from collections.abc import Callable
 from importlib import import_module
-from typing import Any
+from typing import Any, cast
 from uuid import NAMESPACE_DNS, NAMESPACE_OID, NAMESPACE_URL, NAMESPACE_X500, UUID
 from uuid import uuid3 as _stdlib_uuid3
 from uuid import uuid4 as _stdlib_uuid4
@@ -109,7 +109,9 @@ def uuid3(name: str, namespace: "UUID | None" = None) -> "UUID":
     namespace_value = NAMESPACE_DNS if namespace is None else namespace
     if module is None:
         return _stdlib_uuid3(namespace_value, name)
-    return module.uuid3(_convert_namespace(namespace_value, module), name)
+    # The uuid-utils module is loaded dynamically, so Mypy treats it as Any.
+    # We cast the return value to UUID to satisfy the return type annotation.
+    return cast("UUID", module.uuid3(_convert_namespace(namespace_value, module), name))
 
 
 def uuid4() -> "UUID":
@@ -124,7 +126,7 @@ def uuid4() -> "UUID":
     module = _load_uuid_utils()
     if module is None:
         return _stdlib_uuid4()
-    return module.uuid4()
+    return cast("UUID", module.uuid4())
 
 
 def uuid5(name: str, namespace: "UUID | None" = None) -> "UUID":
@@ -144,7 +146,7 @@ def uuid5(name: str, namespace: "UUID | None" = None) -> "UUID":
     namespace_value = NAMESPACE_DNS if namespace is None else namespace
     if module is None:
         return _stdlib_uuid5(namespace_value, name)
-    return module.uuid5(_convert_namespace(namespace_value, module), name)
+    return cast("UUID", module.uuid5(_convert_namespace(namespace_value, module), name))
 
 
 def uuid6() -> "UUID":
@@ -169,7 +171,7 @@ def uuid6() -> "UUID":
             stacklevel=2,
         )
         return _stdlib_uuid4()
-    return module.uuid6()
+    return cast("UUID", module.uuid6())
 
 
 def uuid7() -> "UUID":
@@ -194,7 +196,7 @@ def uuid7() -> "UUID":
             stacklevel=2,
         )
         return _stdlib_uuid4()
-    return module.uuid7()
+    return cast("UUID", module.uuid7())
 
 
 def nanoid() -> str:
@@ -220,4 +222,4 @@ def nanoid() -> str:
             stacklevel=2,
         )
         return _nanoid_impl()
-    return module.generate()
+    return cast("str", module.generate())

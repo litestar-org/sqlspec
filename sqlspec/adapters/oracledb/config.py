@@ -1,10 +1,9 @@
 """OracleDB database configuration with direct field-based configuration."""
 
-import contextlib
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 import oracledb
+from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers
@@ -19,9 +18,11 @@ from sqlspec.adapters.oracledb.driver import (
     OracleAsyncCursor,
     OracleAsyncDriver,
     OracleAsyncExceptionHandler,
+    OracleAsyncSessionContext,
     OracleSyncCursor,
     OracleSyncDriver,
     OracleSyncExceptionHandler,
+    OracleSyncSessionContext,
     oracledb_statement_config,
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
@@ -30,7 +31,7 @@ from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Generator
+    from collections.abc import Callable
 
     from oracledb import AuthMode
 
@@ -117,6 +118,31 @@ class OracleDriverFeatures(TypedDict):
     enable_numpy_vectors: NotRequired[bool]
     enable_lowercase_column_names: NotRequired[bool]
     enable_uuid_binary: NotRequired[bool]
+
+
+class OracleSyncConnectionContext:
+    """Context manager for Oracle sync connections."""
+
+    __slots__ = ("_config", "_conn")
+
+    def __init__(self, config: "OracleSyncConfig") -> None:
+        self._config = config
+        self._conn: OracleSyncConnection | None = None
+
+    def __enter__(self) -> "OracleSyncConnection":
+        if self._config.connection_instance is None:
+            self._config.connection_instance = self._config.create_pool()
+        self._conn = self._config.connection_instance.acquire()
+        return self._conn
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._conn:
+            if self._config.connection_instance:
+                self._config.connection_instance.release(self._conn)
+            self._conn = None
+        return None
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
@@ -223,43 +249,48 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self.connection_instance = self.create_pool()
         return self.connection_instance.acquire()
 
-    @contextlib.contextmanager
-    def provide_connection(self) -> "Generator[OracleSyncConnection, None, None]":
+    def provide_connection(self) -> "OracleSyncConnectionContext":
         """Provide a connection context manager.
 
-        Yields:
-            An Oracle Connection instance.
+        Returns:
+            An Oracle Connection context manager.
         """
-        if self.connection_instance is None:
-            self.connection_instance = self.create_pool()
-        conn = self.connection_instance.acquire()
-        try:
-            yield conn
-        finally:
-            self.connection_instance.release(conn)
+        return OracleSyncConnectionContext(self)
 
-    @contextlib.contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> "Generator[OracleSyncDriver, None, None]":
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "OracleSyncSessionContext":
         """Provide a driver session context manager.
 
         Args:
-            *args: Positional arguments (unused).
+            *_args: Positional arguments (unused).
             statement_config: Optional statement configuration override.
-            **kwargs: Keyword arguments (unused).
+            **_kwargs: Keyword arguments (unused).
 
-        Yields:
-            An OracleSyncDriver instance.
+        Returns:
+            An OracleSyncDriver session context manager.
         """
-        _ = (args, kwargs)  # Mark as intentionally unused
-        with self.provide_connection() as conn:
-            driver = self.driver_type(
-                connection=conn,
-                statement_config=statement_config or self.statement_config,
-                driver_features=self.driver_features,
-            )
-            yield self._prepare_driver(driver)
+        conn_holder: dict[str, OracleSyncConnection] = {}
+
+        def acquire_connection() -> OracleSyncConnection:
+            if self.connection_instance is None:
+                self.connection_instance = self.create_pool()
+            conn = self.connection_instance.acquire()
+            conn_holder["conn"] = conn
+            return conn
+
+        def release_connection(_conn: OracleSyncConnection) -> None:
+            if "conn" in conn_holder and self.connection_instance:
+                self.connection_instance.release(conn_holder["conn"])
+                conn_holder.clear()
+
+        return OracleSyncSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or oracledb_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     def provide_pool(self) -> "OracleSyncConnectionPool":
         """Provide pool instance.
@@ -290,15 +321,43 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             "OracleConnectionParams": OracleConnectionParams,
             "OracleDriverFeatures": OracleDriverFeatures,
             "OraclePoolParams": OraclePoolParams,
+            "OracleSyncConnectionContext": OracleSyncConnectionContext,
             "OracleSyncConnection": OracleSyncConnection,
             "OracleSyncConnectionPool": OracleSyncConnectionPool,
             "OracleSyncCursor": OracleSyncCursor,
             "OracleSyncDriver": OracleSyncDriver,
             "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
+            "OracleSyncSessionContext": OracleSyncSessionContext,
         })
         return namespace
 
 
+class OracleAsyncConnectionContext:
+    """Async context manager for Oracle connections."""
+
+    __slots__ = ("_config", "_conn")
+
+    def __init__(self, config: "OracleAsyncConfig") -> None:
+        self._config = config
+        self._conn: OracleAsyncConnection | None = None
+
+    async def __aenter__(self) -> "OracleAsyncConnection":
+        if self._config.connection_instance is None:
+            self._config.connection_instance = await self._config.create_pool()
+        self._conn = cast("OracleAsyncConnection", await self._config.connection_instance.acquire())
+        return self._conn
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._conn:
+            if self._config.connection_instance:
+                await self._config.connection_instance.release(self._conn)
+            self._conn = None
+        return None
+
+
+@mypyc_attr(native_class=False)
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections."""
 
@@ -406,43 +465,48 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             self.connection_instance = await self.create_pool()
         return cast("OracleAsyncConnection", await self.connection_instance.acquire())
 
-    @asynccontextmanager
-    async def provide_connection(self) -> "AsyncGenerator[OracleAsyncConnection, None]":
+    def provide_connection(self) -> "OracleAsyncConnectionContext":
         """Provide an async connection context manager.
 
-        Yields:
-            An Oracle AsyncConnection instance.
+        Returns:
+            An Oracle AsyncConnection context manager.
         """
-        if self.connection_instance is None:
-            self.connection_instance = await self.create_pool()
-        conn = await self.connection_instance.acquire()
-        try:
-            yield conn
-        finally:
-            await self.connection_instance.release(conn)
+        return OracleAsyncConnectionContext(self)
 
-    @asynccontextmanager
-    async def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> "AsyncGenerator[OracleAsyncDriver, None]":
+    def provide_session(
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "OracleAsyncSessionContext":
         """Provide an async driver session context manager.
 
         Args:
-            *args: Positional arguments (unused).
+            *_args: Positional arguments (unused).
             statement_config: Optional statement configuration override.
-            **kwargs: Keyword arguments (unused).
+            **_kwargs: Keyword arguments (unused).
 
-        Yields:
-            An OracleAsyncDriver instance.
+        Returns:
+            An OracleAsyncDriver session context manager.
         """
-        _ = (args, kwargs)  # Mark as intentionally unused
-        async with self.provide_connection() as conn:
-            driver = self.driver_type(
-                connection=conn,
-                statement_config=statement_config or self.statement_config,
-                driver_features=self.driver_features,
-            )
-            yield self._prepare_driver(driver)
+        conn_holder: dict[str, OracleAsyncConnection] = {}
+
+        async def acquire_connection() -> OracleAsyncConnection:
+            if self.connection_instance is None:
+                self.connection_instance = await self.create_pool()
+            conn = cast("OracleAsyncConnection", await self.connection_instance.acquire())
+            conn_holder["conn"] = conn
+            return conn
+
+        async def release_connection(_conn: OracleAsyncConnection) -> None:
+            if "conn" in conn_holder and self.connection_instance:
+                await self.connection_instance.release(conn_holder["conn"])
+                conn_holder.clear()
+
+        return OracleAsyncSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or oracledb_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     async def provide_pool(self) -> "OracleAsyncConnectionPool":
         """Provide async pool instance.
@@ -455,21 +519,20 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         return self.connection_instance
 
     def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for OracleDB async types.
-
-        Provides OracleDB async-specific types for Litestar framework recognition.
+        """Get the signature namespace for OracleAsyncConfig types.
 
         Returns:
             Dictionary mapping type names to types.
         """
-
         namespace = super().get_signature_namespace()
         namespace.update({
+            "OracleAsyncConnectionContext": OracleAsyncConnectionContext,
             "OracleAsyncConnection": OracleAsyncConnection,
             "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
             "OracleAsyncCursor": OracleAsyncCursor,
             "OracleAsyncDriver": OracleAsyncDriver,
             "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
+            "OracleAsyncSessionContext": OracleAsyncSessionContext,
             "OracleConnectionParams": OracleConnectionParams,
             "OracleDriverFeatures": OracleDriverFeatures,
             "OraclePoolParams": OraclePoolParams,

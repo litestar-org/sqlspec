@@ -1,13 +1,18 @@
 """ADBC database configuration."""
 
 from collections.abc import Callable
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._typing import AdbcConnection
-from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, get_adbc_statement_config
+from sqlspec.adapters.adbc.driver import (
+    AdbcCursor,
+    AdbcDriver,
+    AdbcExceptionHandler,
+    AdbcSessionContext,
+    get_adbc_statement_config,
+)
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -18,9 +23,6 @@ from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
-    from contextlib import AbstractContextManager
-
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.observability import ObservabilityConfig
@@ -146,6 +148,28 @@ class AdbcDriverFeatures(TypedDict):
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
 
 
+class AdbcConnectionContext:
+    """Context manager for ADBC connections."""
+
+    __slots__ = ("_config", "_connection")
+
+    def __init__(self, config: "AdbcConfig") -> None:
+        self._config = config
+        self._connection: AdbcConnection | None = None
+
+    def __enter__(self) -> "AdbcConnection":
+        self._connection = self._config.create_connection()
+        return self._connection
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._connection:
+            self._connection.close()
+            self._connection = None
+        return None
+
+
 class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     """ADBC configuration for Arrow Database Connectivity.
 
@@ -251,7 +275,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             ImproperConfigurationError: If driver cannot be loaded.
         """
         driver_path = self._resolve_driver_name()
-
         try:
             connect_func = import_string(driver_path)
         except ImportError as e:
@@ -312,51 +335,53 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             raise ImproperConfigurationError(msg) from e
         return connection
 
-    @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[AdbcConnection, None, None]":
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "AdbcConnectionContext":
         """Provide a connection context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
-        Yields:
-            A connection instance.
+        Returns:
+            A connection context manager.
         """
-        connection = self.create_connection()
-        try:
-            yield connection
-        finally:
-            connection.close()
+        return AdbcConnectionContext(self)
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> "AbstractContextManager[AdbcDriver]":
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "AdbcSessionContext":
         """Provide a driver session context manager.
 
         Args:
-            *args: Additional arguments.
+            *_args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments.
+            **_kwargs: Additional keyword arguments.
 
         Returns:
             A context manager that yields an AdbcDriver instance.
         """
+        final_statement_config = (
+            statement_config or self.statement_config or get_adbc_statement_config(str(self._get_dialect() or "sqlite"))
+        )
+        conn_holder: dict[str, AdbcConnection] = {}
 
-        @contextmanager
-        def session_manager() -> "Generator[AdbcDriver, None, None]":
-            with self.provide_connection(*args, **kwargs) as connection:
-                final_statement_config = (
-                    statement_config
-                    or self.statement_config
-                    or get_adbc_statement_config(str(self._get_dialect() or "sqlite"))
-                )
-                driver = self.driver_type(
-                    connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
-                )
-                yield self._prepare_driver(driver)
+        def acquire_connection() -> AdbcConnection:
+            conn = self.create_connection()
+            conn_holder["conn"] = conn
+            return conn
 
-        return session_manager()
+        def release_connection(_conn: AdbcConnection) -> None:
+            if "conn" in conn_holder:
+                conn_holder["conn"].close()
+                conn_holder.clear()
+
+        return AdbcSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=final_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     def _get_connection_config_dict(self) -> dict[str, Any]:
         """Get the connection configuration dictionary.
@@ -398,18 +423,21 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         return config
 
     def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for types.
+        """Get the signature namespace for AdbcConfig types.
 
         Returns:
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
         namespace.update({
+            "AdbcConnectionContext": AdbcConnectionContext,
             "AdbcConnection": AdbcConnection,
             "AdbcConnectionParams": AdbcConnectionParams,
             "AdbcCursor": AdbcCursor,
             "AdbcDriver": AdbcDriver,
+            "AdbcDriverFeatures": AdbcDriverFeatures,
             "AdbcExceptionHandler": AdbcExceptionHandler,
+            "AdbcSessionContext": AdbcSessionContext,
         })
         return namespace
 

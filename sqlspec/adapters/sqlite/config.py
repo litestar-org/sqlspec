@@ -1,13 +1,18 @@
 """SQLite database configuration with thread-local connections."""
 
 import uuid
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
-from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, sqlite_statement_config
+from sqlspec.adapters.sqlite.driver import (
+    SqliteCursor,
+    SqliteDriver,
+    SqliteExceptionHandler,
+    SqliteSessionContext,
+    sqlite_statement_config,
+)
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
@@ -17,7 +22,7 @@ from sqlspec.utils.serializers import from_json, to_json
 logger = get_logger("adapters.sqlite")
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -64,6 +69,28 @@ class SqliteDriverFeatures(TypedDict):
 
 
 __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
+
+
+class SqliteConnectionContext:
+    """Context manager for Sqlite connections."""
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "SqliteConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    def __enter__(self) -> SqliteConnection:
+        pool = self._config.provide_pool()
+        self._ctx = pool.get_connection()
+        return self._ctx.__enter__()  # type: ignore[no-any-return]
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._ctx:
+            return self._ctx.__exit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+        return None
 
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
@@ -205,33 +232,51 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         pool = self.provide_pool()
         return pool.acquire()
 
-    @contextmanager
-    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[SqliteConnection, None, None]":
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "SqliteConnectionContext":
         """Provide a SQLite connection context manager.
 
-        Yields:
-            SqliteConnection: A thread-local connection
-        """
-        pool = self.provide_pool()
-        with pool.get_connection() as connection:
-            yield connection
+        Args:
+            *args: Additional arguments.
+            **kwargs: Additional keyword arguments.
 
-    @contextmanager
+        Returns:
+            A Sqlite connection context manager.
+        """
+        return SqliteConnectionContext(self)
+
     def provide_session(
-        self, *args: "Any", statement_config: "StatementConfig | None" = None, **kwargs: "Any"
-    ) -> "Generator[SqliteDriver, None, None]":
+        self, *_args: "Any", statement_config: "StatementConfig | None" = None, **_kwargs: "Any"
+    ) -> "SqliteSessionContext":
         """Provide a SQLite driver session.
 
-        Yields:
-            SqliteDriver: A driver instance with thread-local connection
+        Args:
+            *_args: Additional arguments.
+            statement_config: Optional statement configuration override.
+            **_kwargs: Additional keyword arguments.
+
+        Returns:
+            A Sqlite driver session context manager.
         """
-        with self.provide_connection(*args, **kwargs) as connection:
-            driver = self.driver_type(
-                connection=connection,
-                statement_config=statement_config or self.statement_config,
-                driver_features=self.driver_features,
-            )
-            yield self._prepare_driver(driver)
+        conn_ctx_holder: dict[str, Any] = {}
+
+        def acquire_connection() -> SqliteConnection:
+            pool = self.provide_pool()
+            ctx = pool.get_connection()
+            conn_ctx_holder["ctx"] = ctx
+            return ctx.__enter__()
+
+        def release_connection(_conn: SqliteConnection) -> None:
+            if "ctx" in conn_ctx_holder:
+                conn_ctx_holder["ctx"].__exit__(None, None, None)
+                conn_ctx_holder.clear()
+
+        return SqliteSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or sqlite_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SQLite types.
@@ -241,6 +286,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """
         namespace = super().get_signature_namespace()
         namespace.update({
+            "SqliteConnectionContext": SqliteConnectionContext,
             "SqliteConnection": SqliteConnection,
             "SqliteConnectionParams": SqliteConnectionParams,
             "SqliteConnectionPool": SqliteConnectionPool,
@@ -248,5 +294,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             "SqliteDriver": SqliteDriver,
             "SqliteDriverFeatures": SqliteDriverFeatures,
             "SqliteExceptionHandler": SqliteExceptionHandler,
+            "SqliteSessionContext": SqliteSessionContext,
         })
         return namespace

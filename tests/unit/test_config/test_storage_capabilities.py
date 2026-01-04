@@ -18,9 +18,7 @@ def _is_compiled() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    _is_compiled(), reason="Test requires interpreted subclasses of compiled driver bases."
-)
+pytestmark = pytest.mark.skipif(_is_compiled(), reason="Test requires interpreted subclasses of compiled driver bases.")
 
 
 class _DummyDriver(SyncDriverAdapterBase):

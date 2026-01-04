@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final
 import psqlpy.exceptions
 from psqlpy.extra_types import JSONB
 
+from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import (
@@ -61,6 +62,7 @@ __all__ = (
     "PsqlpyCursor",
     "PsqlpyDriver",
     "PsqlpyExceptionHandler",
+    "PsqlpySessionContext",
     "build_psqlpy_statement_config",
     "psqlpy_statement_config",
 )

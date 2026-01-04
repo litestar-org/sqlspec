@@ -239,7 +239,7 @@ def test_arrow_duckdb_advanced_analytics() -> None:
                 AVG(value) as avg_value,
                 STDDEV(value) as stddev_value,
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY value) as median_value,
-                ARRAY_AGG(DISTINCT unnest(tags)) as all_tags,
+                list_distinct(flatten(ARRAY_AGG(tags))) as all_tags,
                 MIN(timestamp) as first_timestamp,
                 MAX(timestamp) as last_timestamp
             FROM analytics_test

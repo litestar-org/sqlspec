@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 import psycopg
 from psycopg import sql as psycopg_sql
 
-from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg._typing import (
+    PsycopgAsyncConnection,
+    PsycopgAsyncSessionContext,
+    PsycopgSyncConnection,
+    PsycopgSyncSessionContext,
+)
 from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.core import (
     SQL,
@@ -63,9 +68,11 @@ __all__ = (
     "PsycopgAsyncCursor",
     "PsycopgAsyncDriver",
     "PsycopgAsyncExceptionHandler",
+    "PsycopgAsyncSessionContext",
     "PsycopgSyncCursor",
     "PsycopgSyncDriver",
     "PsycopgSyncExceptionHandler",
+    "PsycopgSyncSessionContext",
     "build_psycopg_statement_config",
     "psycopg_statement_config",
 )

@@ -315,6 +315,11 @@ filterwarnings = [
   "ignore:`use_rich_markup=` will be deprecated:PendingDeprecationWarning",
   "ignore:`show_metavars_column=` will be deprecated:PendingDeprecationWarning",
   "ignore:`append_metavars_help=` will be deprecated:PendingDeprecationWarning",
+  "ignore:You are using a Python version .+ which Google will stop supporting:FutureWarning",
+  "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.api_core:FutureWarning",
+  "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.spanner_admin_database_v1:FutureWarning",
+  "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.spanner_admin_instance_v1:FutureWarning",
+  "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.bigquery_storage_v1:FutureWarning",
 ]
 markers = [
   "integration: marks tests that require an external database",

@@ -18,7 +18,7 @@ from google.cloud.bigquery import ArrayQueryParameter, LoadJobConfig, QueryJob, 
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
-from sqlspec.adapters.bigquery._typing import BigQueryConnection
+from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
 from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
@@ -70,6 +70,7 @@ __all__ = (
     "BigQueryCursor",
     "BigQueryDriver",
     "BigQueryExceptionHandler",
+    "BigQuerySessionContext",
     "bigquery_statement_config",
     "build_bigquery_statement_config",
 )

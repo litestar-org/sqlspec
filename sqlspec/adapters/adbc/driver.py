@@ -9,6 +9,7 @@ import datetime
 import decimal
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
 from sqlspec.core import (
@@ -55,7 +56,7 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-__all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "get_adbc_statement_config")
+__all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext", "get_adbc_statement_config")
 
 logger = get_logger("adapters.adbc")
 

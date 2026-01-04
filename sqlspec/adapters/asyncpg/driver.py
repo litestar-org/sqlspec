@@ -51,10 +51,13 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
+from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
+
 __all__ = (
     "AsyncpgCursor",
     "AsyncpgDriver",
     "AsyncpgExceptionHandler",
+    "AsyncpgSessionContext",
     "_configure_asyncpg_parameter_serializers",
     "asyncpg_statement_config",
     "build_asyncpg_statement_config",

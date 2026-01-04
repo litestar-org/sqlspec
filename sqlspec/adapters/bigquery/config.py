@@ -1,6 +1,5 @@
 """BigQuery database configuration."""
 
-import contextlib
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
@@ -11,6 +10,8 @@ from sqlspec.adapters.bigquery.driver import (
     BigQueryCursor,
     BigQueryDriver,
     BigQueryExceptionHandler,
+    BigQuerySessionContext,
+    bigquery_statement_config,
     build_bigquery_statement_config,
 )
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
@@ -22,7 +23,7 @@ from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable
 
     from google.api_core.client_info import ClientInfo
     from google.api_core.client_options import ClientOptions
@@ -99,6 +100,25 @@ class BigQueryDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[Any], None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
+
+
+class BigQueryConnectionContext:
+    """Context manager for BigQuery connections."""
+
+    __slots__ = ("_config", "_connection")
+
+    def __init__(self, config: "BigQueryConfig") -> None:
+        self._config = config
+        self._connection: BigQueryConnection | None = None
+
+    def __enter__(self) -> BigQueryConnection:
+        self._connection = self._config.create_connection()
+        return self._connection
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        return None
 
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
@@ -252,42 +272,45 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             raise ImproperConfigurationError(msg) from e
         return connection
 
-    @contextlib.contextmanager
-    def provide_connection(self, *_args: Any, **_kwargs: Any) -> "Generator[BigQueryConnection, None, None]":
+    def provide_connection(self, *_args: Any, **_kwargs: Any) -> "BigQueryConnectionContext":
         """Provide a BigQuery client within a context manager.
 
         Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
+            *_args: Additional arguments.
+            **_kwargs: Additional keyword arguments.
 
-        Yields:
-            A BigQuery Client instance.
+        Returns:
+            A BigQuery connection context manager.
         """
-        connection = self.create_connection()
-        yield connection
+        return BigQueryConnectionContext(self)
 
-    @contextlib.contextmanager
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "Generator[BigQueryDriver, None, None]":
+    ) -> "BigQuerySessionContext":
         """Provide a BigQuery driver session context manager.
 
         Args:
-            *args: Additional arguments.
+            *_args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments.
+            **_kwargs: Additional keyword arguments.
 
-        Yields:
-            A context manager that yields a BigQueryDriver instance.
+        Returns:
+            A BigQuery driver session context manager.
         """
 
-        with self.provide_connection(*_args, **_kwargs) as connection:
-            final_statement_config = statement_config or self.statement_config
+        def acquire_connection() -> BigQueryConnection:
+            return self.create_connection()
 
-            driver = self.driver_type(
-                connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
-            )
-            yield self._prepare_driver(driver)
+        def release_connection(_conn: BigQueryConnection) -> None:
+            pass
+
+        return BigQuerySessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or bigquery_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for BigQuery types.
@@ -295,14 +318,16 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Returns:
             Dictionary mapping type names to types.
         """
-
         namespace = super().get_signature_namespace()
         namespace.update({
+            "BigQueryConnectionContext": BigQueryConnectionContext,
             "BigQueryConnection": BigQueryConnection,
             "BigQueryConnectionParams": BigQueryConnectionParams,
             "BigQueryCursor": BigQueryCursor,
             "BigQueryDriver": BigQueryDriver,
+            "BigQueryDriverFeatures": BigQueryDriverFeatures,
             "BigQueryExceptionHandler": BigQueryExceptionHandler,
+            "BigQuerySessionContext": BigQuerySessionContext,
         })
         return namespace
 

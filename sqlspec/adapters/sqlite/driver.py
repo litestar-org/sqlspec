@@ -32,6 +32,8 @@ from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 from sqlspec.utils.type_guards import has_sqlite_error
 
+from sqlspec.adapters.sqlite._typing import SqliteSessionContext
+
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
@@ -41,7 +43,7 @@ if TYPE_CHECKING:
     from sqlspec.driver._sync import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-__all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
+__all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext", "sqlite_statement_config")
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787

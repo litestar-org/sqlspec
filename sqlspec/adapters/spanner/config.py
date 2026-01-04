@@ -1,7 +1,5 @@
 """Spanner configuration."""
 
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from google.cloud.spanner_v1 import Client
@@ -9,7 +7,7 @@ from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import SpannerConnection
-from sqlspec.adapters.spanner.driver import SpannerSyncDriver, spanner_statement_config
+from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver, spanner_statement_config
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints
@@ -18,6 +16,8 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from google.auth.credentials import Credentials
     from google.cloud.spanner_v1.database import Database
 
@@ -67,6 +67,71 @@ class SpannerDriverFeatures(TypedDict):
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     session_labels: "NotRequired[dict[str, str]]"
+
+
+class SpannerConnectionContext:
+    """Context manager for Spanner connections."""
+
+    __slots__ = ("_config", "_connection", "_session", "_transaction")
+
+    def __init__(self, config: "SpannerSyncConfig", transaction: bool = False) -> None:
+        self._config = config
+        self._transaction = transaction
+        self._connection: SpannerConnection | None = None
+        self._session: Any = None
+
+    def __enter__(self) -> SpannerConnection:
+        database = self._config.get_database()
+        if self._transaction:
+            self._session = cast("Any", database).session()
+            self._session.create()
+            try:
+                txn = self._session.transaction()
+                txn.__enter__()
+                self._connection = cast("SpannerConnection", txn)
+            except Exception:
+                self._session.delete()
+                raise
+            else:
+                return self._connection
+        else:
+            self._session = cast("Any", database).snapshot(multi_use=True)
+            self._connection = cast("SpannerConnection", self._session.__enter__())
+            return self._connection
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._transaction and self._connection:
+            txn = cast("Any", self._connection)
+            try:
+                if exc_type is None:
+                    try:
+                        txn_id = txn._transaction_id
+                    except AttributeError:
+                        txn_id = None
+                    try:
+                        committed = txn.committed
+                    except AttributeError:
+                        committed = None
+                    if txn_id is not None and committed is None:
+                        txn.commit()
+                else:
+                    try:
+                        rollback_txn_id = txn._transaction_id
+                    except AttributeError:
+                        rollback_txn_id = None
+                    if rollback_txn_id is not None:
+                        txn.rollback()
+            finally:
+                if self._session:
+                    self._session.delete()
+        elif self._session:
+            self._session.__exit__(exc_type, exc_val, exc_tb)
+
+        self._connection = None
+        self._session = None
+        return None
 
 
 class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSessionPool", SpannerSyncDriver]):
@@ -194,10 +259,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         if self.connection_instance and supports_close(self.connection_instance):
             self.connection_instance.close()
 
-    @contextmanager
-    def provide_connection(
-        self, *args: Any, transaction: "bool" = False, **kwargs: Any
-    ) -> Generator[SpannerConnection, None, None]:
+    def provide_connection(self, *args: Any, transaction: "bool" = False, **kwargs: Any) -> "SpannerConnectionContext":
         """Yield a Snapshot (default) or Transaction context from the configured pool.
 
         Args:
@@ -206,71 +268,74 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                 execute_update() for DML statements. If False (default), yields
                 a read-only Snapshot context for SELECT queries.
             **kwargs: Additional keyword arguments (unused, for interface compatibility).
-
-        Note: For complex transactional logic with retries, use database.run_in_transaction()
-        directly. The Transaction context here auto-commits on successful exit.
         """
-        database = self.get_database()
-        if transaction:
-            session = cast("Any", database).session()
-            session.create()
-            try:
-                txn = session.transaction()
-                txn.__enter__()
-                try:
-                    yield cast("SpannerConnection", txn)
-                    # Only commit if not already committed (driver.commit() may have been called)
-                    try:
-                        txn_id = txn._transaction_id
-                    except AttributeError:
-                        txn_id = None
-                    try:
-                        committed = txn.committed
-                    except AttributeError:
-                        committed = None
-                    has_txn_id = txn_id is not None
-                    already_committed = committed is not None
-                    if has_txn_id and not already_committed:
-                        txn.commit()
-                except Exception:
-                    try:
-                        rollback_txn_id = txn._transaction_id
-                    except AttributeError:
-                        rollback_txn_id = None
-                    if rollback_txn_id is not None:
-                        txn.rollback()
-                    raise
-            finally:
-                session.delete()
-        else:
-            with cast("Any", database).snapshot(multi_use=True) as snapshot:
-                yield cast("SpannerConnection", snapshot)
+        return SpannerConnectionContext(self, transaction=transaction)
 
-    @contextmanager
     def provide_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, transaction: "bool" = False, **kwargs: Any
-    ) -> Generator[SpannerSyncDriver, None, None]:
-        with self.provide_connection(*args, transaction=transaction, **kwargs) as connection:
-            driver = self.driver_type(
-                connection=connection,
-                statement_config=statement_config or self.statement_config,
-                driver_features=self.driver_features,
-            )
-            yield self._prepare_driver(driver)
+    ) -> "SpannerSessionContext":
+        """Provide a Spanner driver session context manager.
 
-    @contextmanager
+        Args:
+            *args: Additional arguments.
+            statement_config: Optional statement configuration override.
+            transaction: Whether to use a transaction.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            A Spanner driver session context manager.
+        """
+        connection_ctx = SpannerConnectionContext(self, transaction=transaction)
+
+        def acquire_connection() -> SpannerConnection:
+            return connection_ctx.__enter__()
+
+        def release_connection(
+            _conn: SpannerConnection,
+            exc_type: "type[BaseException] | None",
+            exc_val: "BaseException | None",
+            exc_tb: Any,
+        ) -> None:
+            connection_ctx.__exit__(exc_type, exc_val, exc_tb)
+
+        return SpannerSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or spanner_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
+
     def provide_write_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> Generator[SpannerSyncDriver, None, None]:
-        with self.provide_session(*args, statement_config=statement_config, transaction=True, **kwargs) as driver:
-            yield driver
+    ) -> "SpannerSessionContext":
+        """Provide a Spanner driver write session context manager.
 
-    def get_signature_namespace(self) -> dict[str, Any]:
+        Args:
+            *args: Additional arguments.
+            statement_config: Optional statement configuration override.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            A Spanner driver write session context manager.
+        """
+        return self.provide_session(*args, statement_config=statement_config, transaction=True, **kwargs)
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for SpannerSyncConfig types.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
         namespace = super().get_signature_namespace()
         namespace.update({
-            "SpannerSyncConfig": SpannerSyncConfig,
+            "SpannerConnectionContext": SpannerConnectionContext,
+            "SpannerConnection": SpannerConnection,
             "SpannerConnectionParams": SpannerConnectionParams,
             "SpannerDriverFeatures": SpannerDriverFeatures,
+            "SpannerPoolParams": SpannerPoolParams,
+            "SpannerSessionContext": SpannerSessionContext,
+            "SpannerSyncConfig": SpannerSyncConfig,
             "SpannerSyncDriver": SpannerSyncDriver,
         })
         return namespace

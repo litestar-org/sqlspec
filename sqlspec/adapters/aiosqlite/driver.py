@@ -44,7 +44,15 @@ if TYPE_CHECKING:
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-__all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "aiosqlite_statement_config")
+from sqlspec.adapters.aiosqlite._typing import AiosqliteSessionContext
+
+__all__ = (
+    "AiosqliteCursor",
+    "AiosqliteDriver",
+    "AiosqliteExceptionHandler",
+    "AiosqliteSessionContext",
+    "aiosqlite_statement_config",
+)
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787

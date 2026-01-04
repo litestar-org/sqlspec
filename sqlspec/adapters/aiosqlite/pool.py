@@ -3,7 +3,6 @@
 import asyncio
 import time
 from contextlib import suppress
-from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -13,6 +12,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 
 __all__ = (
@@ -20,6 +21,7 @@ __all__ = (
     "AiosqliteConnectionPool",
     "AiosqlitePoolClosedError",
     "AiosqlitePoolConnection",
+    "AiosqlitePoolConnectionContext",
 )
 
 logger = get_logger(__name__)
@@ -149,10 +151,7 @@ class AiosqlitePoolConnectionContext:
         return self._connection.connection
 
     async def __aexit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: "TracebackType | None",
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is None:
             return False

@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, cast
 import oracledb
 from oracledb import AsyncCursor, Cursor
 
-from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
+from sqlspec.adapters.oracledb._typing import (
+    OracleAsyncConnection,
+    OracleAsyncSessionContext,
+    OracleSyncConnection,
+    OracleSyncSessionContext,
+)
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
@@ -52,7 +57,7 @@ from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_pipeline_capability, is_readable
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.adapters.oracledb._typing import OraclePipelineDriver
@@ -77,8 +82,10 @@ IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[
 __all__ = (
     "OracleAsyncDriver",
     "OracleAsyncExceptionHandler",
+    "OracleAsyncSessionContext",
     "OracleSyncDriver",
     "OracleSyncExceptionHandler",
+    "OracleSyncSessionContext",
     "oracledb_statement_config",
 )
 

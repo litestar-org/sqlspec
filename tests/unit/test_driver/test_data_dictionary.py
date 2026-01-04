@@ -19,9 +19,7 @@ def _is_compiled() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    _is_compiled(), reason="Test requires mock specs of compiled driver base classes."
-)
+pytestmark = pytest.mark.skipif(_is_compiled(), reason="Test requires mock specs of compiled driver base classes.")
 
 
 class TestVersionInfo:

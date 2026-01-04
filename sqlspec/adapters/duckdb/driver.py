@@ -52,10 +52,13 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
+from sqlspec.adapters.duckdb._typing import DuckDBSessionContext
+
 __all__ = (
     "DuckDBCursor",
     "DuckDBDriver",
     "DuckDBExceptionHandler",
+    "DuckDBSessionContext",
     "build_duckdb_statement_config",
     "duckdb_statement_config",
 )
