@@ -583,10 +583,20 @@ class ObStoreBackend:
         buffer.seek(0)
         await self.write_bytes_async(resolved_path, buffer.read())
 
-    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
+    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+        """Stream Arrow record batches from storage asynchronously.
+
+        Args:
+            pattern: Glob pattern to match files.
+            **kwargs: Additional arguments passed to stream_arrow().
+
+        Returns:
+            AsyncIterator yielding Arrow record batches.
+        """
+        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
+
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
-        for batch in self.stream_arrow(resolved_pattern, **kwargs):
-            yield batch
+        return AsyncArrowBatchIterator(self.stream_arrow(resolved_pattern, **kwargs))
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...

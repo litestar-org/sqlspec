@@ -36,7 +36,7 @@ def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
 
 def _build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
     table_identifier = _compose_table_identifier(table)
-    column_sql = psycopg_sql.SQL(", ").join(psycopg_sql.Identifier(column) for column in columns)
+    column_sql = psycopg_sql.SQL(", ").join([psycopg_sql.Identifier(column) for column in columns])
     return psycopg_sql.SQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
 
 

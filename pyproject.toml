@@ -153,25 +153,24 @@ exclude = [
   "sqlspec/cli.py",                 # CLI module (not performance critical)
   "sqlspec/typing.py",              # Type aliases
   "sqlspec/_typing.py",             # Type aliases
+  "sqlspec/**/_typing.py",          # Type aliases (mypyc-incompatible)
   "sqlspec/config.py",              # Main config
   "sqlspec/extensions/**",          # All extensions
   "sqlspec/**/__init__.py",         # Init files (usually just imports)
   "sqlspec/protocols.py",           # Protocol definitions
   "sqlspec/builder/**/*.py",        # Builder (not performance critical)
   "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
-
 ]
 include = [
   "sqlspec/core/**/*.py",          # Core module
   "sqlspec/loader.py",             # Loader module
-  "sqlspec/observability/**/*.py", # Observability utilities
-  # Driver layer (compiled for execution pipeline)
-  "sqlspec/driver/**/*.py",
-  # "sqlspec/migrations/**/*.py",    # Migrations module
-  # === ADAPTER MODULES ===
+  "sqlspec/observability/**/*.py", # Observability utilities 
+  "sqlspec/driver/**/*.py",        # Driver module
+  # "sqlspec/storage/**/*.py",       # Storage module
+  # "sqlspec/migrations/**/*.py",            # Migrations module 
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
-  # === UTILITY MODULES ===
+  # "sqlspec/adapters/**/driver.py",         # All adapters type converters 
   "sqlspec/utils/text.py",                # Text utilities
   "sqlspec/utils/sync_tools.py",          # Synchronous utility functions
   "sqlspec/utils/type_guards.py",         # Type guard utilities

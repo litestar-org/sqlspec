@@ -299,18 +299,19 @@ class FSSpecBackend:
         """Write bytes to storage asynchronously."""
         return await async_(self.write_bytes)(path, data, **kwargs)
 
-    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.
 
         Args:
             pattern: The glob pattern to match.
             **kwargs: Additional arguments to pass to the glob method.
 
-        Yields:
-            Arrow record batches from matching files.
+        Returns:
+            AsyncIterator yielding Arrow record batches.
         """
-        for batch in self.stream_arrow(pattern, **kwargs):
-            yield batch
+        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
+
+        return AsyncArrowBatchIterator(self.stream_arrow(pattern, **kwargs))
 
     async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""

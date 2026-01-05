@@ -233,7 +233,8 @@ def _convert_numpy_recursive(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _convert_numpy_recursive(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return type(obj)(_convert_numpy_recursive(item) for item in obj)
+        converted = [_convert_numpy_recursive(item) for item in obj]
+        return type(obj)(converted)
     return obj
 
 

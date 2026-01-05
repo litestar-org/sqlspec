@@ -363,18 +363,19 @@ class LocalStore:
         """Write Arrow table asynchronously."""
         self.write_arrow(path, table, **kwargs)
 
-    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches asynchronously.
 
         Args:
             pattern: Glob pattern to match files.
             **kwargs: Additional arguments passed to stream_arrow().
 
-        Yields:
-            Arrow record batches from matching files.
+        Returns:
+            AsyncIterator yielding Arrow record batches.
         """
-        for batch in self.stream_arrow(pattern, **kwargs):
-            yield batch
+        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
+
+        return AsyncArrowBatchIterator(self.stream_arrow(pattern, **kwargs))
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
