@@ -64,6 +64,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     eliminates cross-trait attribute access that caused mypyc segmentation faults.
     """
 
+    __slots__ = ()
+
     dialect: "DialectType | None" = None
 
     @property
