@@ -608,7 +608,7 @@ class ObjectStoreProtocol(Protocol):
         """Check if path points to a prefix (directory-like)."""
         return False
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
         """Get object metadata."""
         return {}
 
@@ -672,7 +672,7 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)
 
-    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
         """Async get object metadata."""
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)

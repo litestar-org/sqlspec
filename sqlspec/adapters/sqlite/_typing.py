@@ -54,24 +54,19 @@ class SqliteSessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
-        self._driver: "SqliteDriver | None" = None
+        self._driver: SqliteDriver | None = None
 
     def __enter__(self) -> "SqliteDriver":
         from sqlspec.adapters.sqlite.driver import SqliteDriver
 
         self._connection = self._acquire_connection()
         self._driver = SqliteDriver(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
+            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: Any,
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)

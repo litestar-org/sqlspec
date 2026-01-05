@@ -9,6 +9,7 @@ from mypy_extensions import mypyc_attr
 from sqlspec.core import SQL, ProcessedState, StackResult, Statement, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.driver._common import (
+    AsyncExceptionHandler,
     CommonDriverAttributesMixin,
     DataDictionaryMixin,
     ExecutionResult,
@@ -35,7 +36,6 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from contextlib import AbstractAsyncContextManager
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -113,24 +113,60 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
         started = perf_counter()
 
+        result: SQLResult | None = None
+        exc_handler = self.handle_database_exceptions()
+        cursor_manager = self.with_cursor(connection)
+        cursor: Any | None = None
+        exc: Exception | None = None
+        exc_handler_entered = False
+        cursor_entered = False
+
         try:
-            async with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
-                special_result = await self._try_special_handling(cursor, statement)
-                if special_result is not None:
-                    result = special_result
-                elif statement.is_script:
-                    execution_result = await self._execute_script(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-                elif statement.is_many:
-                    execution_result = await self._execute_many(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
+            await exc_handler.__aenter__()
+            exc_handler_entered = True
+            cursor = await cursor_manager.__aenter__()
+            cursor_entered = True
+            special_result = await self._try_special_handling(cursor, statement)
+            if special_result is not None:
+                result = special_result
+            elif statement.is_script:
+                execution_result = await self._execute_script(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
+            elif statement.is_many:
+                execution_result = await self._execute_many(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
+            else:
+                execution_result = await self._execute_statement(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
+        except Exception as err:
+            exc = err
+        finally:
+            if cursor_entered:
+                if exc is None:
+                    await cursor_manager.__aexit__(None, None, None)
                 else:
-                    execution_result = await self._execute_statement(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-        except Exception as exc:  # pragma: no cover
-            runtime.span_manager.end_span(span, error=exc)
-            runtime.emit_error(exc, **query_context)
-            raise
+                    await cursor_manager.__aexit__(type(exc), exc, exc.__traceback__)
+            if exc_handler_entered:
+                if exc is None:
+                    await exc_handler.__aexit__(None, None, None)
+                else:
+                    await exc_handler.__aexit__(type(exc), exc, exc.__traceback__)
+
+        if exc is not None:
+            mapped_exc = exc_handler.pending_exception or exc
+            runtime.span_manager.end_span(span, error=mapped_exc)
+            runtime.emit_error(mapped_exc, **query_context)
+            if exc_handler.pending_exception is not None:
+                raise mapped_exc from exc
+            raise exc
+
+        if exc_handler.pending_exception is not None:
+            mapped_exc = exc_handler.pending_exception
+            runtime.span_manager.end_span(span, error=mapped_exc)
+            runtime.emit_error(mapped_exc, **query_context)
+            raise mapped_exc from None
+
+        assert result is not None  # Guaranteed: no exception means result was assigned
 
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
@@ -150,6 +186,19 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         return result
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if the connection is inside a transaction.
+
+        Each adapter MUST override this method with direct attribute access
+        for optimal mypyc performance. Do not use getattr chains.
+
+        Raises:
+            NotImplementedError: Always - subclasses must override.
+
+        """
+        msg = "Adapters must override _connection_in_transaction()"
+        raise NotImplementedError(msg)
+
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:
         """Create and return an async context manager for cursor acquisition and cleanup.
@@ -159,11 +208,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
 
     @abstractmethod
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "AsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
-            AsyncContextManager that can be used in async with statements
+            Exception handler with deferred exception pattern for mypyc compatibility.
+            The handler stores mapped exceptions in pending_exception rather than
+            raising from __aexit__ to avoid ABI boundary violations.
 
         """
 
@@ -179,7 +230,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     async def commit(self) -> None:
         """Commit the current transaction on the current connection."""
 
-    @abstractmethod
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
 
@@ -195,6 +245,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             None if standard execution should proceed
 
         """
+        _ = (cursor, statement)
+        return None
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a SQL script containing multiple statements.
@@ -995,7 +1047,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -1013,9 +1065,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             StorageBridgeJob with execution telemetry.
 
-        Raises:
-            StorageCapabilityError: If not implemented.
-
         """
         self._raise_storage_not_implemented("select_to_storage")
         raise NotImplementedError
@@ -1025,7 +1074,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load Arrow data into the target table.
@@ -1040,7 +1089,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             StorageBridgeJob with execution telemetry.
 
         Raises:
-            StorageCapabilityError: If not implemented.
+            NotImplementedError: If not implemented.
 
         """
         self._raise_storage_not_implemented("load_from_arrow")
@@ -1052,7 +1101,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into the target table.
@@ -1067,9 +1116,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             StorageBridgeJob with execution telemetry.
 
-        Raises:
-            StorageCapabilityError: If not implemented.
-
         """
         self._raise_storage_not_implemented("load_from_storage")
         raise NotImplementedError
@@ -1082,9 +1128,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Returns:
             Staging metadata dict.
-
-        Raises:
-            StorageCapabilityError: If not implemented.
 
         """
         self._raise_storage_not_implemented("stage_artifact")
@@ -1226,7 +1269,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         return build_ingest_telemetry(table, format_label=format_label)
 
-    def _attach_partition_telemetry(self, telemetry: "StorageTelemetry", partitioner: "dict[str, Any] | None") -> None:
+    def _attach_partition_telemetry(
+        self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"
+    ) -> None:
         """Attach partitioner info to telemetry dict.
 
         Args:

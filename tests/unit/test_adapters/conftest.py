@@ -19,6 +19,53 @@ from sqlspec.exceptions import SQLSpecError
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
+
+class MockSyncExceptionHandler:
+    """Mock sync exception handler for testing.
+
+    Implements the SyncExceptionHandler protocol with deferred exception pattern.
+    """
+
+    __slots__ = ("pending_exception",)
+
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
+
+    def __enter__(self) -> "MockSyncExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        if exc_type is None:
+            return False
+        if isinstance(exc_val, Exception):
+            self.pending_exception = SQLSpecError(f"Mock database error: {exc_val}")
+            return True
+        return False
+
+
+class MockAsyncExceptionHandler:
+    """Mock async exception handler for testing.
+
+    Implements the AsyncExceptionHandler protocol with deferred exception pattern.
+    """
+
+    __slots__ = ("pending_exception",)
+
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
+
+    async def __aenter__(self) -> "MockAsyncExceptionHandler":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        if exc_type is None:
+            return False
+        if isinstance(exc_val, Exception):
+            self.pending_exception = SQLSpecError(f"Mock async database error: {exc_val}")
+            return True
+        return False
+
+
 __all__ = (
     "MockAsyncConnection",
     "MockAsyncCursor",
@@ -287,13 +334,9 @@ class MockSyncDriver(SyncDriverAdapterBase):
         finally:
             cursor.close()
 
-    @contextmanager
-    def handle_database_exceptions(self) -> "Generator[None, None, None]":
+    def handle_database_exceptions(self) -> "MockSyncExceptionHandler":
         """Handle database exceptions."""
-        try:
-            yield
-        except Exception as e:
-            raise SQLSpecError(f"Mock database error: {e}") from e
+        return MockSyncExceptionHandler()
 
     def _try_special_handling(self, cursor: MockSyncCursor, statement: SQL) -> Any | None:
         """Mock special handling - always return None."""
@@ -398,13 +441,9 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         finally:
             await cursor.close()
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+    def handle_database_exceptions(self) -> "MockAsyncExceptionHandler":
         """Handle database exceptions."""
-        try:
-            yield
-        except Exception as e:
-            raise SQLSpecError(f"Mock async database error: {e}") from e
+        return MockAsyncExceptionHandler()
 
     async def _try_special_handling(self, cursor: MockAsyncCursor, statement: SQL) -> Any | None:
         """Mock async special handling - always return None."""

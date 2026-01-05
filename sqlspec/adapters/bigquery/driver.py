@@ -5,25 +5,22 @@ Provides Google Cloud BigQuery connectivity with parameter style conversion,
 type coercion, error handling, and query job management.
 """
 
-import datetime
 import io
 import os
 from collections.abc import Callable
-from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
 from google.api_core.retry import Retry
-from google.cloud.bigquery import ArrayQueryParameter, LoadJobConfig, QueryJob, QueryJobConfig, ScalarQueryParameter
+from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
+from sqlspec.adapters.bigquery.core import _build_bigquery_profile, _create_bq_parameters
 from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
     StatementConfig,
     build_literal_inlining_transform,
     build_statement_config_from_profile,
@@ -46,11 +43,10 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_errors, has_value_attribute
+from sqlspec.utils.type_guards import has_errors
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from contextlib import AbstractContextManager
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementFilter
@@ -80,164 +76,6 @@ HTTP_NOT_FOUND = 404
 HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
-
-
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _tuple_to_list(value: "tuple[Any, ...] | list[Any]") -> "list[Any]":
-    if isinstance(value, list):
-        return value
-    return list(value)
-
-
-_BQ_TYPE_MAP: dict[type, tuple[str, str | None]] = {
-    bool: ("BOOL", None),
-    int: ("INT64", None),
-    float: ("FLOAT64", None),
-    Decimal: ("BIGNUMERIC", None),
-    str: ("STRING", None),
-    bytes: ("BYTES", None),
-    datetime.date: ("DATE", None),
-    datetime.time: ("TIME", None),
-    dict: ("JSON", None),
-}
-
-
-def _create_array_parameter(name: str, value: Any, array_type: str) -> ArrayQueryParameter:
-    """Create BigQuery ARRAY parameter.
-
-    Args:
-        name: Parameter name.
-        value: Array value (converted to list, empty list if None).
-        array_type: BigQuery array element type.
-
-    Returns:
-        ArrayQueryParameter instance.
-    """
-    return ArrayQueryParameter(name, array_type, [] if value is None else list(value))
-
-
-def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> ScalarQueryParameter:
-    """Create BigQuery JSON parameter as STRING type.
-
-    Args:
-        name: Parameter name.
-        value: JSON-serializable value.
-        json_serializer: Function to serialize to JSON string.
-
-    Returns:
-        ScalarQueryParameter with STRING type.
-    """
-    return ScalarQueryParameter(name, "STRING", json_serializer(value))
-
-
-def _create_scalar_parameter(name: str, value: Any, param_type: str) -> ScalarQueryParameter:
-    """Create BigQuery scalar parameter.
-
-    Args:
-        name: Parameter name.
-        value: Scalar value.
-        param_type: BigQuery parameter type (INT64, FLOAT64, etc.).
-
-    Returns:
-        ScalarQueryParameter instance.
-    """
-    return ScalarQueryParameter(name, param_type, value)
-
-
-def _get_bq_param_type(value: Any) -> tuple[str | None, str | None]:
-    """Determine BigQuery parameter type from Python value.
-
-    Args:
-        value: Python value to determine BigQuery type for
-
-    Returns:
-        Tuple of (parameter_type, array_element_type)
-    """
-    if value is None:
-        return ("STRING", None)
-
-    value_type = type(value)
-
-    if value_type is datetime.datetime:
-        return ("TIMESTAMP" if value.tzinfo else "DATETIME", None)
-
-    if value_type in _BQ_TYPE_MAP:
-        return _BQ_TYPE_MAP[value_type]
-
-    if isinstance(value, (list, tuple)):
-        if not value:
-            msg = "Cannot determine BigQuery ARRAY type for empty sequence."
-            raise SQLSpecError(msg)
-        element_type, _ = _get_bq_param_type(value[0])
-        if element_type is None:
-            msg = f"Unsupported element type in ARRAY: {type(value[0])}"
-            raise SQLSpecError(msg)
-        return "ARRAY", element_type
-
-    return None, None
-
-
-def _get_bq_param_creator_map(json_serializer: "Callable[[Any], str]") -> dict[str, Any]:
-    """Get BigQuery parameter creator map with configurable JSON serializer.
-
-    Args:
-        json_serializer: Function to serialize dict/list to JSON string.
-
-    Returns:
-        Dictionary mapping parameter types to creator functions.
-    """
-    return {
-        "ARRAY": _create_array_parameter,
-        "JSON": lambda name, value, _: _create_json_parameter(name, value, json_serializer),
-        "SCALAR": _create_scalar_parameter,
-    }
-
-
-def _create_bq_parameters(
-    parameters: Any, json_serializer: "Callable[[Any], str]"
-) -> "list[ArrayQueryParameter | ScalarQueryParameter]":
-    """Create BigQuery QueryParameter objects from parameters.
-
-    Args:
-        parameters: Dict of named parameters or list of positional parameters
-        json_serializer: Function to serialize dict/list to JSON string
-
-    Returns:
-        List of BigQuery QueryParameter objects
-    """
-    if not parameters:
-        return []
-
-    bq_parameters: list[ArrayQueryParameter | ScalarQueryParameter] = []
-    param_creator_map = _get_bq_param_creator_map(json_serializer)
-
-    if isinstance(parameters, dict):
-        for name, value in parameters.items():
-            param_name_for_bq = name.lstrip("@")
-            actual_value = value.value if has_value_attribute(value) else value
-            param_type, array_element_type = _get_bq_param_type(actual_value)
-
-            if param_type == "ARRAY" and array_element_type:
-                creator = param_creator_map["ARRAY"]
-                bq_parameters.append(creator(param_name_for_bq, actual_value, array_element_type))
-            elif param_type == "JSON":
-                creator = param_creator_map["JSON"]
-                bq_parameters.append(creator(param_name_for_bq, actual_value, None))
-            elif param_type:
-                creator = param_creator_map["SCALAR"]
-                bq_parameters.append(creator(param_name_for_bq, actual_value, param_type))
-            else:
-                msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(actual_value)}"
-                raise SQLSpecError(msg)
-
-    elif isinstance(parameters, (list, tuple)):
-        msg = "BigQuery driver requires named parameters (e.g., @name); positional parameters are not supported"
-        raise SQLSpecError(msg)
-
-    return bq_parameters
 
 
 class BigQueryCursor:
@@ -270,19 +108,31 @@ class BigQueryExceptionHandler:
 
     Maps HTTP status codes and error reasons to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __exit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    def __enter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __enter__(self) -> "BigQueryExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         _ = exc_tb
         if exc_type is None:
-            return
+            return False
         if issubclass(exc_type, GoogleCloudError):
-            self._map_bigquery_exception(exc_val)
+            try:
+                self._map_bigquery_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_bigquery_exception(self, e: Any) -> None:
         """Map BigQuery exception to SQLSpec exception.
@@ -424,7 +274,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         """Commit transaction - BigQuery doesn't support transactions."""
 
-    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+    def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
 
@@ -596,22 +446,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
             List of dictionaries representing the rows
         """
         return [dict(row) for row in rows_iterator]
-
-    def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "SQLResult | None":
-        """Hook for BigQuery-specific special operations.
-
-        BigQuery doesn't have complex special operations like PostgreSQL COPY,
-        so this always returns None to proceed with standard execution.
-
-        Args:
-            cursor: BigQuery cursor object
-            statement: SQL statement to analyze
-
-        Returns:
-            None - always proceeds with standard execution for BigQuery
-        """
-        _ = (cursor, statement)
-        return None
 
     def _inline_literals(self, expression: "sqlglot.Expression", parameters: Any) -> str:
         """Inline literal values into a parsed SQLGlot expression."""
@@ -888,7 +722,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             statement: SQL statement, string, or QueryBuilder
             *parameters: Query parameters or filters
             statement_config: Optional statement configuration override
-            return_format: "table" for pyarrow.Table (default), "batch" for RecordBatch
+            return_format: "table" for pyarrow.Table (default), "batch" for RecordBatch,
+                "batches" for list of RecordBatch, "reader" for RecordBatchReader
             native_only: If True, raise error if Storage API unavailable (default: False)
             batch_size: Batch size hint (for future streaming implementation)
             arrow_schema: Optional pyarrow.Schema for type casting
@@ -961,17 +796,24 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
             # Apply schema casting if requested
             if arrow_schema is not None:
+                if not isinstance(arrow_schema, pa.Schema):
+                    msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
+                    raise TypeError(msg)
                 arrow_table = arrow_table.cast(arrow_schema)
 
-            # Convert to batch if requested
             if return_format == "batch":
-                batches = arrow_table.to_batches()
+                batches = arrow_table.to_batches(max_chunksize=batch_size)
                 arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
+            elif return_format == "batches":
+                arrow_data = arrow_table.to_batches(max_chunksize=batch_size)
+            elif return_format == "reader":
+                batches = arrow_table.to_batches(max_chunksize=batch_size)
+                arrow_data = pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
             else:
                 arrow_data = arrow_table
 
         # Create ArrowResult
-        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
+        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows)
 
     def select_to_storage(
         self,
@@ -980,7 +822,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -1001,7 +843,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -1032,7 +874,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into BigQuery."""
@@ -1046,38 +888,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         telemetry_payload = self._build_load_job_telemetry(job, table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload)
-
-
-def _build_bigquery_profile() -> DriverParameterProfile:
-    """Create the BigQuery driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="BigQuery",
-        default_style=ParameterStyle.NAMED_AT,
-        supported_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
-        default_execution_style=ParameterStyle.NAMED_AT,
-        supported_execution_styles={ParameterStyle.NAMED_AT},
-        has_native_list_expansion=True,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={
-            int: _identity,
-            float: _identity,
-            bytes: _identity,
-            datetime.datetime: _identity,
-            datetime.date: _identity,
-            datetime.time: _identity,
-            Decimal: _identity,
-            dict: _identity,
-            list: _identity,
-            type(None): lambda _: None,
-        },
-        extras={"json_tuple_strategy": "tuple", "type_coercion_overrides": {list: _identity, tuple: _tuple_to_list}},
-        default_dialect="bigquery",
-    )
 
 
 _BIGQUERY_PROFILE = _build_bigquery_profile()

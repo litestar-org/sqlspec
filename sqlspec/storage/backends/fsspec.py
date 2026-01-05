@@ -1,4 +1,5 @@
 # pyright: reportPrivateUsage=false
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, overload
 from urllib.parse import urlparse
@@ -12,87 +13,11 @@ from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
-
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("FSSpecBackend",)
 
 logger = get_logger(__name__)
-
-
-class _ArrowStreamer:
-    """Async iterator for streaming Arrow batches from FSSpec backend.
-
-    Uses async_() to offload blocking operations to thread pool,
-    preventing event loop blocking during file I/O and iteration.
-
-    CRITICAL: Creates generators on main thread, offloads only next() calls.
-    """
-
-    __slots__ = ("_initialized", "backend", "batch_iterator", "kwargs", "paths_iterator", "pattern")
-
-    def __init__(self, backend: "FSSpecBackend", pattern: str, **kwargs: Any) -> None:
-        self.backend = backend
-        self.pattern = pattern
-        self.kwargs = kwargs
-        self.paths_iterator: Iterator[str] | None = None
-        self.batch_iterator: Iterator[ArrowRecordBatch] | None = None
-        self._initialized = False
-
-    def __aiter__(self) -> "_ArrowStreamer":
-        return self
-
-    async def _initialize(self) -> None:
-        """Initialize paths iterator asynchronously."""
-        if not self._initialized:
-            paths = await async_(self.backend.glob)(self.pattern, **self.kwargs)
-            self.paths_iterator = iter(paths)
-            self._initialized = True
-
-    async def __anext__(self) -> "ArrowRecordBatch":
-        """Get next Arrow batch asynchronously.
-
-        Iterative state machine that avoids recursion and blocking calls.
-
-        Returns:
-            Arrow record batches from matching files.
-
-        Raises:
-            StopAsyncIteration: When no more batches available.
-        """
-        await self._initialize()
-
-        while True:
-            if self.batch_iterator is not None:
-
-                def _safe_next_batch() -> "ArrowRecordBatch":
-                    try:
-                        return next(self.batch_iterator)  # type: ignore[arg-type]
-                    except StopIteration as e:
-                        raise StopAsyncIteration from e
-
-                try:
-                    return await async_(_safe_next_batch)()
-                except StopAsyncIteration:
-                    self.batch_iterator = None
-                    continue
-
-            try:
-                path = next(self.paths_iterator)  # type: ignore[arg-type]
-            except StopIteration as e:
-                raise StopAsyncIteration from e
-
-            self.batch_iterator = self.backend._stream_file_batches(path)
-
-    async def aclose(self) -> None:
-        """Close underlying batch iterator."""
-        if self.batch_iterator is not None:
-            try:
-                close_method = self.batch_iterator.close  # type: ignore[attr-defined]
-                await async_(close_method)()
-            except AttributeError:
-                pass
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -282,7 +207,7 @@ class FSSpecBackend:
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return self.fs.isdir(resolved_path)  # type: ignore[no-any-return]
 
-    def get_metadata(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: str | Path, **kwargs: Any) -> dict[str, object]:
         """Get object metadata."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         try:
@@ -339,26 +264,32 @@ class FSSpecBackend:
         )
         raise NotImplementedError(msg)
 
-    def _stream_file_batches(self, obj_path: str | Path) -> "Iterator[ArrowRecordBatch]":
+    def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
+        """Stream Arrow record batches from storage.
+
+        Args:
+            pattern: The glob pattern to match.
+            **kwargs: Additional arguments to pass to the glob method.
+
+        Yields:
+            Arrow record batches from matching files.
+        """
         pq = import_pyarrow_parquet()
-
-        file_handle = execute_sync_storage_operation(
-            lambda: self.fs.open(obj_path, mode="rb"),
-            backend=self.backend_type,
-            operation="stream_open",
-            path=str(obj_path),
-        )
-
-        with file_handle as stream:
-            parquet_file = execute_sync_storage_operation(
-                lambda: pq.ParquetFile(stream), backend=self.backend_type, operation="stream_arrow", path=str(obj_path)
-            )
-            yield from parquet_file.iter_batches()
-
-    def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        import_pyarrow_parquet()
         for obj_path in self.glob(pattern, **kwargs):
-            yield from self._stream_file_batches(obj_path)
+            file_handle = execute_sync_storage_operation(
+                lambda path=obj_path: self.fs.open(path, mode="rb"),  # type: ignore[misc]
+                backend=self.backend_type,
+                operation="stream_open",
+                path=str(obj_path),
+            )
+            with file_handle as stream:
+                parquet_file = execute_sync_storage_operation(
+                    lambda: pq.ParquetFile(stream),
+                    backend=self.backend_type,
+                    operation="stream_arrow",
+                    path=str(obj_path),
+                )
+                yield from parquet_file.iter_batches()  # pyright: ignore[reportUnknownMemberType]
 
     async def read_bytes_async(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from storage asynchronously."""
@@ -368,17 +299,18 @@ class FSSpecBackend:
         """Write bytes to storage asynchronously."""
         return await async_(self.write_bytes)(path, data, **kwargs)
 
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
+    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.
 
         Args:
             pattern: The glob pattern to match.
             **kwargs: Additional arguments to pass to the glob method.
 
-        Returns:
-            AsyncIterator of Arrow record batches
+        Yields:
+            Arrow record batches from matching files.
         """
-        return _ArrowStreamer(self, pattern, **kwargs)
+        for batch in self.stream_arrow(pattern, **kwargs):
+            yield batch
 
     async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""
@@ -408,7 +340,7 @@ class FSSpecBackend:
         """Move object in storage asynchronously."""
         await async_(self.move)(source, destination, **kwargs)
 
-    async def get_metadata_async(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: str | Path, **kwargs: Any) -> dict[str, object]:
         """Get object metadata from storage asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
@@ -430,8 +362,8 @@ class FSSpecBackend:
 
     async def read_arrow_async(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage asynchronously."""
-        return await async_(self.read_arrow)(path, **kwargs)
+        return self.read_arrow(path, **kwargs)
 
     async def write_arrow_async(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""
-        await async_(self.write_arrow)(path, table, **kwargs)
+        self.write_arrow(path, table, **kwargs)

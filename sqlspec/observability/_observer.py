@@ -147,7 +147,7 @@ def default_statement_observer(event: StatementEvent) -> None:
     sql_preview, sql_truncated, sql_length = _truncate_text(event.sql, max_chars=_LOG_SQL_MAX_CHARS)
     sql_preview = sql_preview.replace("\n", " ").strip()
 
-    extra: dict[str, Any] = {
+    extra: dict[str, object | None] = {
         "driver": event.driver,
         "adapter": event.adapter,
         "bind_key": event.bind_key,
@@ -194,7 +194,7 @@ def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool, int]:
     return value[:max_chars], True, length
 
 
-def _summarize_parameters(parameters: Any) -> dict[str, Any]:
+def _summarize_parameters(parameters: Any) -> "dict[str, str | int | None]":
     if parameters is None:
         return {"parameters_type": None, "parameters_size": None}
     if isinstance(parameters, dict):

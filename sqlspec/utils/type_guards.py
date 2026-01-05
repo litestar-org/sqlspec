@@ -405,9 +405,13 @@ def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":
     Returns:
         True if the object is a StatementFilter, False otherwise
     """
-    from sqlspec.core import StatementFilter as FilterProtocol
+    from sqlspec.core.filters import StatementFilter as FilterProtocol
 
-    return isinstance(obj, FilterProtocol)
+    if isinstance(obj, FilterProtocol):
+        return True
+    append_to_statement = getattr(obj, "append_to_statement", None)
+    get_cache_key = getattr(obj, "get_cache_key", None)
+    return callable(append_to_statement) and callable(get_cache_key)
 
 
 def is_limit_offset_filter(obj: Any) -> "TypeGuard[LimitOffsetFilter]":

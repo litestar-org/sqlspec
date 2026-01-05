@@ -1,11 +1,9 @@
 """PostgreSQL psycopg driver implementation."""
 
-import datetime
 from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import psycopg
-from psycopg import sql as psycopg_sql
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
@@ -13,11 +11,15 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncConnection,
     PsycopgSyncSessionContext,
 )
+from sqlspec.adapters.psycopg.core import (
+    _build_copy_from_command,
+    _build_psycopg_profile,
+    _build_truncate_command,
+    _psycopg_pipeline_supported,
+)
 from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.core import (
     SQL,
-    DriverParameterProfile,
-    ParameterStyle,
     ParameterStyleConfig,
     SQLResult,
     StackOperation,
@@ -54,7 +56,6 @@ from sqlspec.utils.type_guards import has_sqlstate, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
@@ -78,18 +79,6 @@ __all__ = (
 )
 
 logger = get_logger("adapters.psycopg")
-
-
-def _psycopg_pipeline_supported() -> bool:
-    """Return True when libpq pipeline support is available."""
-    try:
-        capabilities = psycopg.capabilities
-    except AttributeError:
-        return False
-    try:
-        return bool(capabilities.has_pipeline())
-    except Exception:  # pragma: no cover - defensive guard for unexpected capability implementations
-        return False
 
 
 class _PreparedStackOperation(NamedTuple):
@@ -160,25 +149,6 @@ TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
 
 
-def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
-    parts = [part for part in table.split(".") if part]
-    if not parts:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    identifiers = [psycopg_sql.Identifier(part) for part in parts]
-    return psycopg_sql.SQL(".").join(identifiers)
-
-
-def _build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
-    table_identifier = _compose_table_identifier(table)
-    column_sql = psycopg_sql.SQL(", ").join(psycopg_sql.Identifier(column) for column in columns)
-    return psycopg_sql.SQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
-
-
-def _build_truncate_command(table: str) -> "psycopg_sql.Composed":
-    return psycopg_sql.SQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
-
-
 class PsycopgSyncCursor:
     """Context manager for PostgreSQL psycopg cursor management."""
 
@@ -202,18 +172,30 @@ class PsycopgSyncExceptionHandler:
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __exit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    def __enter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __enter__(self) -> "PsycopgSyncExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_type is None:
-            return
+            return False
         if issubclass(exc_type, psycopg.Error):
-            self._map_postgres_exception(exc_val)
+            try:
+                self._map_postgres_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_postgres_exception(self, e: Any) -> None:
         """Map PostgreSQL exception to SQLSpec exception.
@@ -359,7 +341,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+    def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgSyncExceptionHandler()
 
@@ -629,7 +611,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -650,7 +632,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -680,7 +662,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts into PostgreSQL via COPY."""
@@ -733,18 +715,30 @@ class PsycopgAsyncExceptionHandler:
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __aexit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    async def __aenter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aenter__(self) -> "PsycopgAsyncExceptionHandler":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_type is None:
-            return
+            return False
         if issubclass(exc_type, psycopg.Error):
-            self._map_postgres_exception(exc_val)
+            try:
+                self._map_postgres_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_postgres_exception(self, e: Any) -> None:
         """Map PostgreSQL exception to SQLSpec exception.
@@ -896,7 +890,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgAsyncExceptionHandler()
 
@@ -1169,7 +1163,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -1190,7 +1184,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -1220,7 +1214,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts asynchronously."""
@@ -1249,41 +1243,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
-
-
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _build_psycopg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
-    """Return custom type coercions for psycopg."""
-
-    return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}
-
-
-def _build_psycopg_profile() -> DriverParameterProfile:
-    """Create the psycopg driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="Psycopg",
-        default_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-            ParameterStyle.QMARK,
-        },
-        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
-        has_native_list_expansion=True,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions=_build_psycopg_custom_type_coercions(),
-        default_dialect="postgres",
-    )
 
 
 _PSYCOPG_PROFILE = _build_psycopg_profile()

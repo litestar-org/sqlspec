@@ -101,7 +101,7 @@ class StorageTelemetry(TypedDict, total=False):
     partitions_created: int
     duration_s: float
     format: str
-    extra: "dict[str, Any]"
+    extra: "dict[str, object]"
     backend: str
     correlation_id: str
     config: str
@@ -296,7 +296,7 @@ class SyncStoragePipeline:
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         """Read an artifact from storage and decode it into an Arrow table."""
 
-        backend, path = self._resolve_backend(source, **(storage_options or {}))
+        backend, path = self._resolve_backend(source, storage_options)
         backend_name = backend.backend_type
         payload = execute_sync_storage_operation(
             partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
@@ -337,7 +337,7 @@ class SyncStoragePipeline:
         """Delete staged artifacts best-effort."""
 
         for artifact in artifacts:
-            backend, path = self._resolve_backend(artifact["uri"])
+            backend, path = self._resolve_backend(artifact["uri"], None)
             try:
                 execute_sync_storage_operation(
                     partial(backend.delete, path), backend=backend.backend_type, operation="delete", path=path
@@ -355,7 +355,7 @@ class SyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = self._resolve_backend(destination, **storage_options)
+        backend, path = self._resolve_backend(destination, storage_options)
         backend_name = backend.backend_type
         start = perf_counter()
         execute_sync_storage_operation(
@@ -375,13 +375,14 @@ class SyncStoragePipeline:
         return telemetry
 
     def _resolve_backend(
-        self, destination: StorageDestination, **backend_options: Any
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
     ) -> "tuple[ObjectStoreProtocol, str]":
         destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-        alias_resolution = self._resolve_alias_destination(destination_str, backend_options)
+        options = backend_options or {}
+        alias_resolution = self._resolve_alias_destination(destination_str, options)
         if alias_resolution is not None:
             return alias_resolution
-        backend = self.registry.get(destination_str, **backend_options)
+        backend = self.registry.get(destination_str, **options)
         normalized_path = self._normalize_path_for_backend(destination_str)
         return backend, normalized_path
 
@@ -461,7 +462,7 @@ class AsyncStoragePipeline:
 
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
         for artifact in artifacts:
-            backend, path = self._resolve_backend(artifact["uri"])
+            backend, path = self._resolve_backend(artifact["uri"], None)
             backend_name = backend.backend_type
             if supports_async_delete(backend):
                 try:
@@ -495,7 +496,7 @@ class AsyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = self._resolve_backend(destination, **storage_options)
+        backend, path = self._resolve_backend(destination, storage_options)
         backend_name = backend.backend_type
         start = perf_counter()
         if supports_async_write_bytes(backend):
@@ -538,7 +539,7 @@ class AsyncStoragePipeline:
     async def read_arrow_async(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
-        backend, path = self._resolve_backend(source, **(storage_options or {}))
+        backend, path = self._resolve_backend(source, storage_options)
         backend_name = backend.backend_type
         if supports_async_read_bytes(backend):
             payload = await execute_async_storage_operation(
@@ -567,13 +568,14 @@ class AsyncStoragePipeline:
         return table, telemetry
 
     def _resolve_backend(
-        self, destination: StorageDestination, **backend_options: Any
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
     ) -> "tuple[ObjectStoreProtocol, str]":
         destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-        alias_resolution = self._resolve_alias_destination(destination_str, backend_options)
+        options = backend_options or {}
+        alias_resolution = self._resolve_alias_destination(destination_str, options)
         if alias_resolution is not None:
             return alias_resolution
-        backend = self.registry.get(destination_str, **backend_options)
+        backend = self.registry.get(destination_str, **options)
         normalized_path = self._normalize_path_for_backend(destination_str)
         return backend, normalized_path
 

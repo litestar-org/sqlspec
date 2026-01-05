@@ -55,24 +55,19 @@ class BigQuerySessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
-        self._driver: "BigQueryDriver | None" = None
+        self._driver: BigQueryDriver | None = None
 
     def __enter__(self) -> "BigQueryDriver":
         from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
         self._connection = self._acquire_connection()
         self._driver = BigQueryDriver(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
+            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: Any,
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)

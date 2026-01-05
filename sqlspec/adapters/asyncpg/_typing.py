@@ -65,24 +65,19 @@ class AsyncpgSessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
-        self._driver: "AsyncpgDriver | None" = None
+        self._driver: AsyncpgDriver | None = None
 
     async def __aenter__(self) -> "AsyncpgDriver":
         from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 
         self._connection = await self._acquire_connection()
         self._driver = AsyncpgDriver(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
+            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: Any,
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)

@@ -5,7 +5,7 @@ import re
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.observability._config import ObservabilityConfig
-from sqlspec.observability._dispatcher import LifecycleDispatcher
+from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
 from sqlspec.observability._observer import StatementObserver, create_event, default_statement_observer
 from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
@@ -43,7 +43,7 @@ class ObservabilityRuntime:
         self.config = config
         self.bind_key = bind_key
         self.config_name = config_name or "SQLSpecConfig"
-        lifecycle_config = cast("dict[str, Iterable[Any]] | None", config.lifecycle)
+        lifecycle_config = cast("dict[str, Iterable[LifecycleHook]] | None", config.lifecycle)
         self.lifecycle = LifecycleDispatcher(lifecycle_config)
         self.span_manager = SpanManager(config.telemetry)
         observers: list[StatementObserver] = []

@@ -40,8 +40,8 @@ def test_sqlite_load_from_storage(sqlite_session: SqliteDriver, tmp_path: Path) 
         "storage_bridge_sqlite", str(destination), file_format="parquet", overwrite=True
     )
 
-    assert job.telemetry["extra"]["source"]["destination"].endswith("sqlite-bridge.parquet")
-    assert job.telemetry["extra"]["source"]["backend"]
+    assert job.telemetry["extra"]["source"]["destination"].endswith("sqlite-bridge.parquet")  # type: ignore[index]
+    assert job.telemetry["extra"]["source"]["backend"]  # type: ignore[index]
 
     result = sqlite_session.execute("SELECT id, label FROM storage_bridge_sqlite ORDER BY id")
     assert result.data == [{"id": 10, "label": "gamma"}, {"id": 11, "label": "delta"}]

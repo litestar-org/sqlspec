@@ -9,6 +9,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard
 
 
 StatementObserver = Callable[["StatementEvent"], None]
+LifecycleHook = Callable[[dict[str, Any]], None]
 
 
 class RedactionConfig:
@@ -205,9 +206,9 @@ def _merge_redaction(base: "RedactionConfig | None", override: "RedactionConfig 
 def _normalize_lifecycle(config: "LifecycleConfig | None") -> "LifecycleConfig | None":
     if config is None:
         return None
-    normalized: dict[str, list[Any]] = {}
+    normalized: dict[str, list[LifecycleHook]] = {}
     for event, hooks in config.items():
-        normalized[event] = list(cast("Iterable[Any]", hooks))
+        normalized[event] = list(cast("Iterable[LifecycleHook]", hooks))
     return cast("LifecycleConfig", normalized)
 
 
@@ -218,11 +219,13 @@ def _merge_lifecycle(base: "LifecycleConfig | None", override: "LifecycleConfig 
         return _normalize_lifecycle(override)
     if override is None:
         return _normalize_lifecycle(base)
-    merged_dict: dict[str, list[Any]] = cast("dict[str, list[Any]]", _normalize_lifecycle(base)) or {}
+    merged_dict: dict[str, list[LifecycleHook]] = (
+        cast("dict[str, list[LifecycleHook]]", _normalize_lifecycle(base)) or {}
+    )
     for event, hooks in override.items():
         merged_dict.setdefault(event, [])
-        merged_dict[event].extend(cast("Iterable[Any]", hooks))
+        merged_dict[event].extend(cast("Iterable[LifecycleHook]", hooks))
     return cast("LifecycleConfig", merged_dict)
 
 
-__all__ = ("ObservabilityConfig", "RedactionConfig", "StatementObserver", "TelemetryConfig")
+__all__ = ("LifecycleHook", "ObservabilityConfig", "RedactionConfig", "StatementObserver", "TelemetryConfig")

@@ -521,7 +521,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         async def release_connection(_conn: AsyncpgConnection) -> None:
             if "conn" in connection_holder and self.connection_instance is not None:
-                await self.connection_instance.release(connection_holder["conn"])
+                await self.connection_instance.release(connection_holder["conn"])  # type: ignore[arg-type]
                 connection_holder.clear()
 
         return AsyncpgSessionContext(

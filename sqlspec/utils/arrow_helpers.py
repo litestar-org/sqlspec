@@ -9,15 +9,21 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
-    from sqlspec.typing import ArrowRecordBatch, ArrowTable
+    from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable
 
 __all__ = ("convert_dict_to_arrow",)
 
 
 @overload
 def convert_dict_to_arrow(
-    data: "list[dict[str, Any]]", return_format: Literal["table", "reader"] = "table", batch_size: int | None = None
+    data: "list[dict[str, Any]]", return_format: Literal["table"] = "table", batch_size: int | None = None
 ) -> "ArrowTable": ...
+
+
+@overload
+def convert_dict_to_arrow(
+    data: "list[dict[str, Any]]", return_format: Literal["reader"], batch_size: int | None = None
+) -> "ArrowRecordBatchReader": ...
 
 
 @overload
@@ -36,7 +42,7 @@ def convert_dict_to_arrow(
     data: "list[dict[str, Any]]",
     return_format: Literal["table", "reader", "batch", "batches"] = "table",
     batch_size: int | None = None,
-) -> "ArrowTable | ArrowRecordBatch | list[ArrowRecordBatch]":
+) -> "ArrowTable | ArrowRecordBatch | ArrowRecordBatchReader | list[ArrowRecordBatch]":
     """Convert list of dictionaries to Arrow Table or RecordBatch.
 
     Handles empty results, NULL values, and automatic type inference.
@@ -46,7 +52,7 @@ def convert_dict_to_arrow(
     Args:
         data: List of dictionaries (one per row).
         return_format: Output format - "table" for Table, "batch"/"batches" for RecordBatch.
-            "reader" is converted to "table" (streaming handled at driver level).
+            "reader" returns a RecordBatchReader.
         batch_size: Chunk size for batching (used when return_format="batch"/"batches").
 
     Returns:
@@ -75,8 +81,11 @@ def convert_dict_to_arrow(
         empty_schema = pa.schema([])
         empty_table = pa.Table.from_pydict({}, schema=empty_schema)
 
+        if return_format == "reader":
+            return pa.RecordBatchReader.from_batches(empty_table.schema, empty_table.to_batches())
+
         if return_format in {"batch", "batches"}:
-            batches = empty_table.to_batches()
+            batches = empty_table.to_batches(max_chunksize=batch_size)
             return batches[0] if batches else pa.RecordBatch.from_pydict({})
 
         return empty_table
@@ -85,11 +94,15 @@ def convert_dict_to_arrow(
 
     arrow_table = pa.Table.from_pydict(columns)
 
+    if return_format == "reader":
+        batches = arrow_table.to_batches(max_chunksize=batch_size)
+        return pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
+
     if return_format == "batches":
         return arrow_table.to_batches(max_chunksize=batch_size)
 
     if return_format == "batch":
-        batches = arrow_table.to_batches()
+        batches = arrow_table.to_batches(max_chunksize=batch_size)
         return batches[0] if batches else pa.RecordBatch.from_pydict({})
 
     return arrow_table

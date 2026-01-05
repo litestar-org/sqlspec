@@ -135,7 +135,7 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
     return {"rows_processed": rows, "bytes_processed": bytes_processed, "format": format_label}
 
 
-def attach_partition_telemetry(telemetry: "StorageTelemetry", partitioner: "dict[str, Any] | None") -> None:
+def attach_partition_telemetry(telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None") -> None:
     """Attach partitioner info to telemetry dict (mutates in place).
 
     Args:

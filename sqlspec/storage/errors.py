@@ -1,7 +1,7 @@
 """Storage error normalization helpers."""
 
 import errno
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from sqlspec.exceptions import FileNotFoundInStorageError, StorageOperationFailedError
 from sqlspec.utils.logging import get_logger
@@ -69,7 +69,7 @@ def raise_storage_error(error: Exception, *, backend: str, operation: str, path:
     is_missing = _is_missing_error(error)
     normalized = _normalize_storage_error(error, backend=backend, operation=operation, path=path)
 
-    log_extra: Mapping[str, Any] = {
+    log_extra: Mapping[str, str | bool | None] = {
         "storage_backend": backend,
         "storage_operation": operation,
         "storage_path": path,

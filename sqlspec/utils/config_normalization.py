@@ -7,14 +7,11 @@ consistent across pooled and non-pooled adapters.
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.deprecation import warn_deprecation
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 __all__ = ("apply_pool_deprecations", "normalize_connection_config")
-
-_POOL_DEPRECATION_INFO = "Parameter renamed for consistency across pooled and non-pooled adapters"
 
 
 def apply_pool_deprecations(
@@ -25,11 +22,11 @@ def apply_pool_deprecations(
     version: str = "0.33.0",
     removal_in: str = "0.34.0",
 ) -> tuple["Any | None", "Any | None"]:
-    """Apply deprecated pool_config/pool_instance arguments.
+    """Apply legacy pool_config/pool_instance aliases.
 
     Several adapters historically accepted ``pool_config`` and ``pool_instance``. SQLSpec standardized
     these to ``connection_config`` and ``connection_instance``. This helper preserves the prior
-    behavior without repeating the same deprecation handling blocks in every adapter config.
+    behavior without emitting deprecation warnings.
 
     Args:
         kwargs: Keyword arguments passed to the adapter config constructor (mutated in-place).
@@ -42,30 +39,12 @@ def apply_pool_deprecations(
         Updated (connection_config, connection_instance).
     """
     if "pool_config" in kwargs:
-        warn_deprecation(
-            version=version,
-            deprecated_name="pool_config",
-            kind="parameter",
-            removal_in=removal_in,
-            alternative="connection_config",
-            info=_POOL_DEPRECATION_INFO,
-            stacklevel=3,
-        )
         if connection_config is None:
             connection_config = kwargs.pop("pool_config")
         else:
             kwargs.pop("pool_config")
 
     if "pool_instance" in kwargs:
-        warn_deprecation(
-            version=version,
-            deprecated_name="pool_instance",
-            kind="parameter",
-            removal_in=removal_in,
-            alternative="connection_instance",
-            info=_POOL_DEPRECATION_INFO,
-            stacklevel=3,
-        )
         if connection_instance is None:
             connection_instance = kwargs.pop("pool_instance")
         else:

@@ -6,7 +6,20 @@ import logging
 import re
 from contextlib import suppress
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Literal,
+    NamedTuple,
+    NoReturn,
+    Optional,
+    Protocol,
+    TypeVar,
+    cast,
+    overload,
+)
 
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
@@ -55,6 +68,7 @@ __all__ = (
     "EXEC_CURSOR_RESULT",
     "EXEC_ROWCOUNT_OVERRIDE",
     "EXEC_SPECIAL_DATA",
+    "AsyncExceptionHandler",
     "ColumnMetadata",
     "CommonDriverAttributesMixin",
     "DataDictionaryMixin",
@@ -63,12 +77,43 @@ __all__ = (
     "IndexMetadata",
     "ScriptExecutionResult",
     "StackExecutionObserver",
+    "SyncExceptionHandler",
     "VersionInfo",
     "describe_stack_statement",
     "handle_single_row_error",
     "hash_stack_operations",
     "make_cache_key_hashable",
 )
+
+
+class SyncExceptionHandler(Protocol):
+    """Protocol for synchronous exception handlers with deferred exception pattern.
+
+    Exception handlers implement this protocol to avoid ABI boundary violations
+    with mypyc-compiled code. Instead of raising exceptions from __exit__,
+    handlers store mapped exceptions in pending_exception for the caller to raise.
+    """
+
+    pending_exception: Exception | None
+
+    def __enter__(self) -> "SyncExceptionHandler": ...
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
+
+
+class AsyncExceptionHandler(Protocol):
+    """Protocol for asynchronous exception handlers with deferred exception pattern.
+
+    Exception handlers implement this protocol to avoid ABI boundary violations
+    with mypyc-compiled code. Instead of raising exceptions from __aexit__,
+    handlers store mapped exceptions in pending_exception for the caller to raise.
+    """
+
+    pending_exception: Exception | None
+
+    async def __aenter__(self) -> "AsyncExceptionHandler": ...
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
 
 
 logger = get_logger("driver")
@@ -236,13 +281,18 @@ class IndexMetadata:
         return hash((self.name, self.table_name, tuple(self.columns), self.unique, self.primary))
 
 
+_CONVERT_TO_TUPLE = object()
+_CONVERT_TO_FROZENSET = object()
+
+
 def make_cache_key_hashable(obj: Any) -> Any:
     """Recursively convert unhashable types to hashable ones for cache keys.
 
+    Uses an iterative stack-based approach to avoid C-stack recursion limits
+    in mypyc-compiled code.
+
     For array-like objects (NumPy arrays, Python arrays, etc.), we use structural
     info (dtype + shape or typecode + length) rather than content for cache keys.
-    This ensures high cache hit rates for parameterized queries with different
-    vector values while avoiding expensive content hashing.
 
     Args:
         obj: Object to make hashable.
@@ -250,40 +300,107 @@ def make_cache_key_hashable(obj: Any) -> Any:
     Returns:
         A hashable representation of the object. Collections become tuples,
         arrays become structural tuples like ("ndarray", dtype, shape).
-
-    Examples:
-        >>> make_cache_key_hashable([1, 2, 3])
-        (1, 2, 3)
-        >>> make_cache_key_hashable({"a": 1, "b": 2})
-        (('a', 1), ('b', 2))
-
     """
-    if isinstance(obj, (list, tuple)):
-        return tuple(make_cache_key_hashable(item) for item in obj)
-    if isinstance(obj, dict):
-        return tuple(sorted((k, make_cache_key_hashable(v)) for k, v in obj.items()))
-    if isinstance(obj, set):
-        return frozenset(make_cache_key_hashable(item) for item in obj)
+    # Fast path for common immutable scalar types
+    if isinstance(obj, (int, str, bytes, bool, float, type(None))):
+        return obj
 
-    if has_typecode_and_len(obj):
-        return ("array", obj.typecode, len(obj))
-    if has_typecode(obj):
-        return ("array", obj.typecode)
+    # Stack contains tuples of (object, parent_list, index_in_parent)
+    # We build the result in-place in temporary lists, then convert to tuples/sets
+    # A placeholder list is used as the root "parent"
+    root: list[Any] = [obj]
+    stack = [(obj, root, 0)]
 
-    if has_array_interface(obj):
-        try:
-            dtype_str = obj.dtype.str if has_dtype_str(obj.dtype) else str(type(obj))
-            shape = tuple(int(s) for s in obj.shape)
-        except (AttributeError, TypeError):
+    while stack:
+        current_obj, parent, idx = stack.pop()
+
+        # Post-processing markers
+        if current_obj is _CONVERT_TO_TUPLE:
+            parent[idx] = tuple(parent[idx])
+            continue
+
+        if current_obj is _CONVERT_TO_FROZENSET:
+            parent[idx] = frozenset(parent[idx])
+            continue
+
+        # Handle structural types (arrays) - these are terminal nodes
+        if has_typecode_and_len(current_obj):
+            parent[idx] = ("array", current_obj.typecode, len(current_obj))
+            continue
+        if has_typecode(current_obj):
+            parent[idx] = ("array", current_obj.typecode)
+            continue
+        if has_array_interface(current_obj):
             try:
-                length = len(obj)
+                dtype_str = current_obj.dtype.str if has_dtype_str(current_obj.dtype) else str(type(current_obj))
+                shape = tuple(int(s) for s in current_obj.shape)
+                parent[idx] = ("ndarray", dtype_str, shape)
             except (AttributeError, TypeError):
-                return ("array_like", type(obj).__name__)
-            else:
-                return ("array_like", type(obj).__name__, length)
-        else:
-            return ("ndarray", dtype_str, shape)
-    return obj
+                try:
+                    length = len(current_obj)
+                    parent[idx] = ("array_like", type(current_obj).__name__, length)
+                except (AttributeError, TypeError):
+                    parent[idx] = ("array_like", type(current_obj).__name__)
+            continue
+
+        # Handle collections
+        if isinstance(current_obj, (list, tuple)):
+            # Create a new list for transformed items
+            new_list = [None] * len(current_obj)
+            parent[idx] = new_list  # Placeholder, will be converted to tuple later
+
+            # Push marker first so it is processed LAST (LIFO)
+            stack.append((_CONVERT_TO_TUPLE, parent, idx))
+
+            # Push items in reverse order
+            stack.extend((current_obj[i], new_list, i) for i in range(len(current_obj) - 1, -1, -1))
+            continue
+
+        if isinstance(current_obj, dict):
+            # Sort items by key for deterministic caching
+            try:
+                sorted_items = sorted(current_obj.items())
+            except TypeError:
+                sorted_items = list(current_obj.items())
+
+            items_list = []
+            for k, v in sorted_items:
+                items_list.append([k, v])  # Temporary list [k, v]
+
+            parent[idx] = items_list  # Will become tuple(tuple(k, v')...)
+
+            # Push marker first
+            stack.append((_CONVERT_TO_TUPLE, parent, idx))  # Convert items_list to tuple of tuples
+
+            # Push children
+            for i in range(len(items_list) - 1, -1, -1):
+                # items_list[i] is [k, v]. We want to transform items_list[i][1].
+                # items_list[i] needs to become (k, v').
+                stack.append((_CONVERT_TO_TUPLE, items_list, i))  # Convert [k, v'] to (k, v')
+                stack.append((items_list[i][1], items_list[i], 1))  # Transform v
+
+            continue
+
+        if isinstance(current_obj, set):
+            # Convert to list, sort if possible
+            try:
+                sorted_list = sorted(current_obj)
+            except TypeError:
+                sorted_list = list(current_obj)
+
+            new_list = [None] * len(sorted_list)
+            parent[idx] = new_list
+
+            # Push marker first
+            stack.append((_CONVERT_TO_FROZENSET, parent, idx))
+
+            stack.extend((sorted_list[i], new_list, i) for i in range(len(sorted_list) - 1, -1, -1))
+            continue
+
+        # Base case: Object is likely hashable or unknown
+        parent[idx] = current_obj
+
+    return root[0]
 
 
 def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
@@ -1030,19 +1147,6 @@ class CommonDriverAttributesMixin:
         for filter_obj in filters:
             sql_statement = filter_obj.append_to_statement(sql_statement)
         return sql_statement
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if the connection is inside a transaction.
-
-        Each adapter MUST override this method with direct attribute access
-        for optimal mypyc performance. Do not use getattr chains.
-
-        Raises:
-            NotImplementedError: Always - subclasses must override.
-
-        """
-        msg = "Adapters must override _connection_in_transaction()"
-        raise NotImplementedError(msg)
 
     def split_script_statements(
         self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False

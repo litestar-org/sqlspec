@@ -5,16 +5,14 @@ database dialects, parameter style conversion, and transaction management.
 """
 
 import contextlib
-import datetime
-import decimal
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
+from sqlspec.adapters.adbc.core import _build_adbc_profile, get_type_coercion_map
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
 from sqlspec.core import (
     SQL,
-    DriverParameterProfile,
     ParameterStyle,
     StatementConfig,
     build_null_pruning_transform,
@@ -44,13 +42,11 @@ from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
-    from contextlib import AbstractContextManager
-
     from adbc_driver_manager.dbapi import Cursor
 
     from sqlspec.adapters.adbc._typing import AdbcConnection
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -80,18 +76,6 @@ DIALECT_PARAMETER_STYLES = {
 }
 
 
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _convert_array_for_postgres_adbc(value: Any) -> Any:
-    """Convert array values for PostgreSQL compatibility."""
-
-    if isinstance(value, tuple):
-        return list(value)
-    return value
-
-
 class AdbcCursor:
     """Context manager for cursor management."""
 
@@ -116,18 +100,30 @@ class AdbcExceptionHandler:
 
     ADBC propagates underlying database errors. Exception mapping
     depends on the specific ADBC driver being used.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __exit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    def __enter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __enter__(self) -> "AdbcExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         _ = exc_tb
         if exc_type is None:
-            return
-        self._map_adbc_exception(exc_val)
+            return False
+        try:
+            self._map_adbc_exception(exc_val)
+        except Exception as mapped:
+            self.pending_exception = mapped
+            return True
+        return False
 
     def _map_adbc_exception(self, e: Any) -> None:
         """Map ADBC exception to SQLSpec exception.
@@ -413,26 +409,13 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         return AdbcCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+    def handle_database_exceptions(self) -> "AdbcExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
             Exception handler context manager
         """
         return AdbcExceptionHandler()
-
-    def _try_special_handling(self, cursor: "Cursor", statement: SQL) -> "SQLResult | None":
-        """Handle special operations.
-
-        Args:
-            cursor: Database cursor
-            statement: SQL statement to analyze
-
-        Returns:
-            SQLResult if special operation was handled, None for standard execution
-        """
-        _ = (cursor, statement)
-        return None
 
     def _execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
@@ -643,7 +626,8 @@ class AdbcDriver(SyncDriverAdapterBase):
             statement: SQL statement, string, or QueryBuilder
             *parameters: Query parameters or filters
             statement_config: Optional statement configuration override
-            return_format: "table" for pyarrow.Table (default), "batch" for RecordBatch
+            return_format: "table" for pyarrow.Table (default), "batch" for RecordBatch,
+                "batches" for list of RecordBatch, "reader" for RecordBatchReader
             native_only: Ignored for ADBC (always uses native path)
             batch_size: Batch size hint (for future streaming implementation)
             arrow_schema: Optional pyarrow.Schema for type casting
@@ -683,17 +667,24 @@ class AdbcDriver(SyncDriverAdapterBase):
 
             # Apply schema casting if requested
             if arrow_schema is not None:
+                if not isinstance(arrow_schema, pa.Schema):
+                    msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
+                    raise TypeError(msg)
                 arrow_table = arrow_table.cast(arrow_schema)
 
-            # Convert to batch if requested
             if return_format == "batch":
-                batches = arrow_table.to_batches()
+                batches = arrow_table.to_batches(max_chunksize=batch_size)
                 arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
+            elif return_format == "batches":
+                arrow_data = arrow_table.to_batches(max_chunksize=batch_size)
+            elif return_format == "reader":
+                batches = arrow_table.to_batches(max_chunksize=batch_size)
+                arrow_data = pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
             else:
                 arrow_data = arrow_table
 
         # Create ArrowResult
-        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
+        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows)
 
     def select_to_storage(
         self,
@@ -702,7 +693,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -724,7 +715,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -747,65 +738,13 @@ class AdbcDriver(SyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and ingest it via ADBC."""
 
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-
-def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
-    """Return dialect-aware type coercion mapping for Arrow parameter handling."""
-
-    return {
-        datetime.datetime: lambda x: x,
-        datetime.date: lambda x: x,
-        datetime.time: lambda x: x,
-        decimal.Decimal: float,
-        bool: lambda x: x,
-        int: lambda x: x,
-        float: lambda x: x,
-        bytes: lambda x: x,
-        tuple: _convert_array_for_postgres_adbc,
-        list: _convert_array_for_postgres_adbc,
-        dict: lambda x: x,
-    }
-
-
-def _build_adbc_profile() -> DriverParameterProfile:
-    """Create the ADBC driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="ADBC",
-        default_style=ParameterStyle.QMARK,
-        supported_styles={ParameterStyle.QMARK},
-        default_execution_style=ParameterStyle.QMARK,
-        supported_execution_styles={ParameterStyle.QMARK},
-        has_native_list_expansion=True,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={
-            datetime.datetime: _identity,
-            datetime.date: _identity,
-            datetime.time: _identity,
-            decimal.Decimal: float,
-            bool: _identity,
-            int: _identity,
-            float: _identity,
-            bytes: _identity,
-            tuple: _convert_array_for_postgres_adbc,
-            list: _convert_array_for_postgres_adbc,
-            dict: _identity,
-        },
-        extras={
-            "type_coercion_overrides": {list: _convert_array_for_postgres_adbc, tuple: _convert_array_for_postgres_adbc}
-        },
-    )
 
 
 _ADBC_PROFILE = _build_adbc_profile()

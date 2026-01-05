@@ -94,24 +94,19 @@ class OracleSyncSessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
-        self._driver: "OracleSyncDriver | None" = None
+        self._driver: OracleSyncDriver | None = None
 
     def __enter__(self) -> "OracleSyncDriver":
         from sqlspec.adapters.oracledb.driver import OracleSyncDriver
 
         self._connection = self._acquire_connection()
         self._driver = OracleSyncDriver(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
+            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: Any,
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
@@ -154,24 +149,19 @@ class OracleAsyncSessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
-        self._driver: "OracleAsyncDriver | None" = None
+        self._driver: OracleAsyncDriver | None = None
 
     async def __aenter__(self) -> "OracleAsyncDriver":
         from sqlspec.adapters.oracledb.driver import OracleAsyncDriver
 
         self._connection = await self._acquire_connection()
         self._driver = OracleAsyncDriver(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
+            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: Any,
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)

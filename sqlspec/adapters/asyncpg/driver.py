@@ -1,6 +1,5 @@
 """AsyncPG PostgreSQL driver implementation for async PostgreSQL operations."""
 
-import datetime
 import re
 from collections import OrderedDict
 from io import BytesIO
@@ -8,10 +7,10 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 
 import asyncpg
 
+from sqlspec.adapters.asyncpg.core import _build_asyncpg_profile, _configure_asyncpg_parameter_serializers
 from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
 from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
+    SQL,
     StackOperation,
     StackResult,
     StatementStack,
@@ -44,10 +43,9 @@ from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPreparedStatement
-    from sqlspec.core import SQL, ArrowResult, ParameterStyleConfig, SQLResult, StatementConfig
+    from sqlspec.core import ArrowResult, SQLResult, StatementConfig
     from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
@@ -98,18 +96,37 @@ class AsyncpgExceptionHandler:
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __aexit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    async def __aenter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aenter__(self) -> "AsyncpgExceptionHandler":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_val is None:
-            return
+            return False
+        if isinstance(exc_val, asyncpg.PostgresError):
+            try:
+                self._map_postgres_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+            return False
         if has_sqlstate(exc_val):
-            self._map_postgres_exception(exc_val)
+            try:
+                self._map_postgres_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_postgres_exception(self, e: Any) -> None:
         """Map PostgreSQL exception to SQLSpec exception.
@@ -120,6 +137,22 @@ class AsyncpgExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
+        if isinstance(e, asyncpg.exceptions.UniqueViolationError):
+            self._raise_unique_violation(e, "23505")
+            return
+        if isinstance(e, asyncpg.exceptions.ForeignKeyViolationError):
+            self._raise_foreign_key_violation(e, "23503")
+            return
+        if isinstance(e, asyncpg.exceptions.NotNullViolationError):
+            self._raise_not_null_violation(e, "23502")
+            return
+        if isinstance(e, asyncpg.exceptions.CheckViolationError):
+            self._raise_check_violation(e, "23514")
+            return
+        if isinstance(e, asyncpg.exceptions.PostgresSyntaxError):
+            self._raise_parsing_error(e, "42601")
+            return
+
         error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
@@ -231,7 +264,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Create context manager for AsyncPG cursor."""
         return AsyncpgCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "AsyncpgExceptionHandler":
         """Handle database exceptions with PostgreSQL error codes."""
         return AsyncpgExceptionHandler()
 
@@ -494,7 +527,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -515,7 +548,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -539,7 +572,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and ingest it via COPY."""
@@ -635,75 +668,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return bool(self.connection.is_in_transaction())
 
 
-def _convert_datetime_param(value: Any) -> Any:
-    """Convert datetime parameter, handling ISO strings."""
-
-    if isinstance(value, str):
-        return datetime.datetime.fromisoformat(value)
-    return value
-
-
-def _convert_date_param(value: Any) -> Any:
-    """Convert date parameter, handling ISO strings."""
-
-    if isinstance(value, str):
-        return datetime.date.fromisoformat(value)
-    return value
-
-
-def _convert_time_param(value: Any) -> Any:
-    """Convert time parameter, handling ISO strings."""
-
-    if isinstance(value, str):
-        return datetime.time.fromisoformat(value)
-    return value
-
-
-def _build_asyncpg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
-    """Return custom type coercions for AsyncPG."""
-
-    return {
-        datetime.datetime: _convert_datetime_param,
-        datetime.date: _convert_date_param,
-        datetime.time: _convert_time_param,
-    }
-
-
-def _build_asyncpg_profile() -> DriverParameterProfile:
-    """Create the AsyncPG driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="AsyncPG",
-        default_style=ParameterStyle.NUMERIC,
-        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
-        default_execution_style=ParameterStyle.NUMERIC,
-        supported_execution_styles={ParameterStyle.NUMERIC},
-        has_native_list_expansion=True,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="driver",
-        custom_type_coercions=_build_asyncpg_custom_type_coercions(),
-        default_dialect="postgres",
-    )
-
-
 _ASYNC_PG_PROFILE = _build_asyncpg_profile()
 
 register_driver_profile("asyncpg", _ASYNC_PG_PROFILE)
-
-
-def _configure_asyncpg_parameter_serializers(
-    parameter_config: "ParameterStyleConfig",
-    serializer: "Callable[[Any], str]",
-    *,
-    deserializer: "Callable[[str], Any] | None" = None,
-) -> "ParameterStyleConfig":
-    """Return a parameter configuration updated with AsyncPG JSON codecs."""
-
-    effective_deserializer = deserializer or parameter_config.json_deserializer or from_json
-    return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
 
 
 def build_asyncpg_statement_config(

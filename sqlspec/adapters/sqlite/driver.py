@@ -2,19 +2,17 @@
 
 import contextlib
 import sqlite3
-from datetime import date, datetime
-from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
-from sqlspec.core import (
-    ArrowResult,
-    DriverParameterProfile,
-    ParameterStyle,
-    build_statement_config_from_profile,
-    get_cache_config,
-    register_driver_profile,
+from sqlspec.adapters.sqlite._typing import SqliteSessionContext
+from sqlspec.adapters.sqlite.core import (
+    _build_sqlite_insert_statement,
+    _build_sqlite_profile,
+    _format_sqlite_identifier,
+    process_sqlite_result,
 )
+from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
+from sqlspec.core import ArrowResult, build_statement_config_from_profile, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -29,16 +27,11 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 from sqlspec.utils.type_guards import has_sqlite_error
 
-from sqlspec.adapters.sqlite._typing import SqliteSessionContext
-
 if TYPE_CHECKING:
-    from contextlib import AbstractContextManager
-
     from sqlspec.adapters.sqlite._typing import SqliteConnection
-    from sqlspec.core import SQL, SQLResult, StatementConfig
+    from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -53,8 +46,6 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
-_TIME_TO_ISO = build_time_iso_converter()
-_DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 
 class SqliteCursor:
@@ -101,18 +92,30 @@ class SqliteExceptionHandler:
 
     Maps SQLite extended result codes to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __exit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    def __enter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __enter__(self) -> "SqliteExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_type is None:
-            return
+            return False
         if issubclass(exc_type, sqlite3.Error):
-            self._map_sqlite_exception(exc_val)
+            try:
+                self._map_sqlite_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_sqlite_exception(self, e: Any) -> None:
         """Map SQLite exception to SQLSpec exception.
@@ -258,25 +261,13 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         return SqliteCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+    def handle_database_exceptions(self) -> "SqliteExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
-            Context manager that converts SQLite exceptions to SQLSpec exceptions
+            Exception handler with deferred exception pattern for mypyc compatibility.
         """
         return SqliteExceptionHandler()
-
-    def _try_special_handling(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "SQLResult | None":
-        """Hook for SQLite-specific special operations.
-
-        Args:
-            cursor: SQLite cursor object
-            statement: SQL statement to analyze
-
-        Returns:
-            None - always proceeds with standard execution for SQLite
-        """
-        return None
 
     def _execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -339,12 +330,10 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-
-            data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+            data, column_names, row_count = process_sqlite_result(fetched_data, cursor.description)
 
             return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+                cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
             )
 
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
@@ -357,7 +346,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -378,7 +367,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -406,7 +395,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into SQLite."""
@@ -474,58 +463,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = SqliteSyncDataDictionary()
         return self._data_dictionary
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-def _quote_sqlite_identifier(identifier: str) -> str:
-    normalized = identifier.replace('"', '""')
-    return f'"{normalized}"'
-
-
-def _format_sqlite_identifier(identifier: str) -> str:
-    cleaned = identifier.strip()
-    if not cleaned:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-
-    if "." not in cleaned:
-        return _quote_sqlite_identifier(cleaned)
-
-    return ".".join(_quote_sqlite_identifier(part) for part in cleaned.split(".") if part)
-
-
-def _build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:
-    column_clause = ", ".join(_quote_sqlite_identifier(column) for column in columns)
-    placeholders = ", ".join("?" for _ in columns)
-    return f"INSERT INTO {_format_sqlite_identifier(table)} ({column_clause}) VALUES ({placeholders})"
-
-
-def _build_sqlite_profile() -> DriverParameterProfile:
-    """Create the SQLite driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="SQLite",
-        default_style=ParameterStyle.QMARK,
-        supported_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-        default_execution_style=ParameterStyle.QMARK,
-        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-        has_native_list_expansion=False,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={
-            bool: _bool_to_int,
-            datetime: _TIME_TO_ISO,
-            date: _TIME_TO_ISO,
-            Decimal: _DECIMAL_TO_STRING,
-        },
-        default_dialect="sqlite",
-    )
 
 
 _SQLITE_PROFILE = _build_sqlite_profile()

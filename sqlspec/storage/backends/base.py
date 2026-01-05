@@ -68,7 +68,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, object]:
         """Get object metadata from storage."""
         raise NotImplementedError
 
@@ -143,7 +143,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, object]:
         """Get object metadata from storage asynchronously."""
         raise NotImplementedError
 

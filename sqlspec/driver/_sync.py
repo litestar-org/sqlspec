@@ -13,6 +13,7 @@ from sqlspec.driver._common import (
     DataDictionaryMixin,
     ExecutionResult,
     StackExecutionObserver,
+    SyncExceptionHandler,
     VersionInfo,
     describe_stack_statement,
     handle_single_row_error,
@@ -35,7 +36,6 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from contextlib import AbstractContextManager
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -103,8 +103,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
         started = perf_counter()
 
+        result: SQLResult | None = None
+        exc_handler = self.handle_database_exceptions()
         try:
-            with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
+            with exc_handler, self.with_cursor(connection) as cursor:
                 special_result = self._try_special_handling(cursor, statement)
                 if special_result is not None:
                     result = special_result
@@ -118,9 +120,22 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                     execution_result = self._execute_statement(cursor, statement)
                     result = self.build_statement_result(statement, execution_result)
         except Exception as exc:  # pragma: no cover - instrumentation path
+            if exc_handler.pending_exception is not None:
+                mapped_exc = exc_handler.pending_exception
+                runtime.span_manager.end_span(span, error=mapped_exc)
+                runtime.emit_error(mapped_exc, **query_context)
+                raise mapped_exc from exc
             runtime.span_manager.end_span(span, error=exc)
             runtime.emit_error(exc, **query_context)
             raise
+
+        if exc_handler.pending_exception is not None:
+            mapped_exc = exc_handler.pending_exception
+            runtime.span_manager.end_span(span, error=mapped_exc)
+            runtime.emit_error(mapped_exc, **query_context)
+            raise mapped_exc from None
+
+        assert result is not None  # Guaranteed: no exception means result was assigned
 
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
@@ -140,6 +155,19 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         return result
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if the connection is inside a transaction.
+
+        Each adapter MUST override this method with direct attribute access
+        for optimal mypyc performance. Do not use getattr chains.
+
+        Raises:
+            NotImplementedError: Always - subclasses must override.
+
+        """
+        msg = "Adapters must override _connection_in_transaction()"
+        raise NotImplementedError(msg)
+
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:
         """Create and return a context manager for cursor acquisition and cleanup.
@@ -149,11 +177,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
 
     @abstractmethod
-    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+    def handle_database_exceptions(self) -> "SyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
-            ContextManager that can be used in with statements
+            Exception handler with deferred exception pattern for mypyc compatibility.
+            The handler stores mapped exceptions in pending_exception rather than
+            raising from __exit__ to avoid ABI boundary violations.
 
         """
 
@@ -169,7 +199,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     def commit(self) -> None:
         """Commit the current transaction on the current connection."""
 
-    @abstractmethod
     def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
 
@@ -185,6 +214,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             None if standard execution should proceed
 
         """
+        _ = (cursor, statement)
+        return None
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a SQL script containing multiple statements.
@@ -983,7 +1014,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -1013,7 +1044,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load Arrow data into the target table.
@@ -1040,7 +1071,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into the target table.
@@ -1212,7 +1243,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         return build_ingest_telemetry(table, format_label=format_label)
 
-    def _attach_partition_telemetry(self, telemetry: "StorageTelemetry", partitioner: "dict[str, Any] | None") -> None:
+    def _attach_partition_telemetry(
+        self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"
+    ) -> None:
         """Attach partitioner info to telemetry dict.
 
         Args:

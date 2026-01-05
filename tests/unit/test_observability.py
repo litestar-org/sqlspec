@@ -1,9 +1,9 @@
 """Unit tests for observability helpers."""
 
 from collections.abc import Iterable
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -26,6 +26,24 @@ from sqlspec.storage.pipeline import (
     reset_storage_bridge_metrics,
 )
 from sqlspec.utils.correlation import CorrelationContext
+
+
+class _NoOpExceptionHandler:
+    """No-op exception handler for testing.
+
+    Implements the SyncExceptionHandler protocol but never maps exceptions.
+    """
+
+    __slots__ = ("pending_exception",)
+
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
+
+    def __enter__(self) -> "_NoOpExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
+        return False
 
 
 def _is_compiled() -> bool:
@@ -159,8 +177,8 @@ class _DummyDriver(SyncDriverAdapterBase):
 
         return _cursor()
 
-    def handle_database_exceptions(self):
-        return nullcontext()
+    def handle_database_exceptions(self) -> "_NoOpExceptionHandler":
+        return _NoOpExceptionHandler()
 
     def begin(self) -> None:  # pragma: no cover - unused in tests
         return None

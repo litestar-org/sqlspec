@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
 
+from sqlspec.adapters.spanner._typing import SpannerSessionContext
+from sqlspec.adapters.spanner.core import _build_spanner_profile
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.spanner.type_converter import (
     SpannerOutputConverter,
@@ -13,8 +15,6 @@ from sqlspec.adapters.spanner.type_converter import (
     infer_spanner_param_types,
 )
 from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
     StatementConfig,
     build_statement_config_from_profile,
     create_arrow_result,
@@ -33,16 +33,13 @@ from sqlspec.exceptions import (
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json
 
-from sqlspec.adapters.spanner._typing import SpannerSessionContext
-
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from contextlib import AbstractContextManager
 
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.spanner._typing import SpannerConnection
-    from sqlspec.core import ArrowResult, SQLResult
+    from sqlspec.core import ArrowResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -86,20 +83,33 @@ class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
 
 
 class SpannerExceptionHandler:
-    """Map Spanner client exceptions to SQLSpec exceptions."""
+    """Map Spanner client exceptions to SQLSpec exceptions.
 
-    __slots__ = ()
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __exit__
+    to avoid ABI boundary violations with compiled code.
+    """
 
-    def __enter__(self) -> None:
-        return None
+    __slots__ = ("pending_exception",)
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
+
+    def __enter__(self) -> "SpannerExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         _ = exc_tb
         if exc_type is None:
-            return
+            return False
 
         if isinstance(exc_val, api_exceptions.GoogleAPICallError):
-            self._map_spanner_exception(exc_val)
+            try:
+                self._map_spanner_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_spanner_exception(self, exc: Any) -> None:
         if isinstance(exc, api_exceptions.AlreadyExists):
@@ -165,13 +175,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def with_cursor(self, connection: "SpannerConnection") -> "SpannerSyncCursor":
         return SpannerSyncCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+    def handle_database_exceptions(self) -> "SpannerExceptionHandler":
         return SpannerExceptionHandler()
-
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
-        _ = cursor
-        _ = statement
-        return None
 
     def _execute_statement(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
@@ -341,7 +346,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -361,7 +366,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -399,7 +404,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into Spanner table."""
@@ -419,25 +424,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return False
-
-
-def _build_spanner_profile() -> DriverParameterProfile:
-    return DriverParameterProfile(
-        name="Spanner",
-        default_style=ParameterStyle.NAMED_AT,
-        supported_styles={ParameterStyle.NAMED_AT},
-        default_execution_style=ParameterStyle.NAMED_AT,
-        supported_execution_styles={ParameterStyle.NAMED_AT},
-        has_native_list_expansion=True,
-        json_serializer_strategy="none",
-        default_dialect="spanner",
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=True,
-        custom_type_coercions=None,
-        extras={},
-    )
 
 
 _SPANNER_PROFILE = _build_spanner_profile()

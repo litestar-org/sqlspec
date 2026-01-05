@@ -148,38 +148,29 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc", "hatch-cython"]
 enable-by-default = false
 exclude = [
-  "tests/**",                              # Test files
-  "sqlspec/__main__.py",                   # Entry point (can't run directly when compiled)
-  "sqlspec/cli.py",                        # CLI module (not performance critical)
-  "sqlspec/typing.py",                     # Type aliases
-  "sqlspec/_typing.py",                    # Type aliases
-  "sqlspec/config.py",                     # Main config
-  "sqlspec/adapters/**/adk/**/*.py",       # Adapter configurations
-  "sqlspec/adapters/**/events/**/*.py",    # Adapter configurations
-  "sqlspec/adapters/**/litestar/**/*.py",  # Adapter configurations
-  "sqlspec/adapters/**/config.py",         # Adapter configurations
-  "sqlspec/adapters/**/_typing.py",        # Type definitions (mypyc incompatible)
-  "sqlspec/adapters/spanner/dialect/*.py", # Spanner dialect (uses dynamic attributes)
-  "sqlspec/adapters/*/pool.py",            # Exclude custom pool
-  "sqlspec/extensions/**",                 # All extensions
-  "sqlspec/**/__init__.py",                # Init files (usually just imports)
-  "sqlspec/protocols.py",                  # Protocol definitions
-  "sqlspec/builder/**/*.py",               # Builder (not performance critical)
-  "sqlspec/migrations/commands.py",        # Migration command CLI (dynamic imports)
+  "tests/**",                       # Test files
+  "sqlspec/__main__.py",            # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                 # CLI module (not performance critical)
+  "sqlspec/typing.py",              # Type aliases
+  "sqlspec/_typing.py",             # Type aliases
+  "sqlspec/config.py",              # Main config
+  "sqlspec/extensions/**",          # All extensions
+  "sqlspec/**/__init__.py",         # Init files (usually just imports)
+  "sqlspec/protocols.py",           # Protocol definitions
+  "sqlspec/builder/**/*.py",        # Builder (not performance critical)
+  "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
 
 ]
 include = [
   "sqlspec/core/**/*.py",          # Core module
   "sqlspec/loader.py",             # Loader module
-  "sqlspec/storage/**/*.py",       # Storage layer
   "sqlspec/observability/**/*.py", # Observability utilities
   # Driver layer (compiled for execution pipeline)
   "sqlspec/driver/**/*.py",
   # "sqlspec/migrations/**/*.py",    # Migrations module
   # === ADAPTER MODULES ===
-  "sqlspec/adapters/**/driver.py",          # All adapters
-  "sqlspec/adapters/**/type_converter.py",  # All adapters
-  "sqlspec/adapters/**/data_dictionary.py", # All adapters
+  "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
+  "sqlspec/adapters/**/type_converter.py", # All adapters type converters
   # === UTILITY MODULES ===
   "sqlspec/utils/text.py",                # Text utilities
   "sqlspec/utils/sync_tools.py",          # Synchronous utility functions

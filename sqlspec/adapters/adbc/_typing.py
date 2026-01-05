@@ -56,24 +56,19 @@ class AdbcSessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
-        self._driver: "AdbcDriver | None" = None
+        self._driver: AdbcDriver | None = None
 
     def __enter__(self) -> "AdbcDriver":
         from sqlspec.adapters.adbc.driver import AdbcDriver
 
         self._connection = self._acquire_connection()
         self._driver = AdbcDriver(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
+            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: Any,
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)

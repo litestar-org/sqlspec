@@ -55,24 +55,19 @@ class PsqlpySessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
-        self._driver: "PsqlpyDriver | None" = None
+        self._driver: PsqlpyDriver | None = None
 
     async def __aenter__(self) -> "PsqlpyDriver":
         from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 
         self._connection = await self._acquire_connection()
         self._driver = PsqlpyDriver(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
+            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: Any,
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)

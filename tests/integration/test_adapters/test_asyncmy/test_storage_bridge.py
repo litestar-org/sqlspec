@@ -50,8 +50,8 @@ async def test_asyncmy_load_from_storage(tmp_path: Path, asyncmy_driver: Asyncmy
     )
 
     assert job.telemetry["destination"] == "storage_bridge_scores"
-    assert job.telemetry["extra"]["source"]["destination"].endswith("scores.parquet")
-    assert job.telemetry["extra"]["source"]["backend"]
+    assert job.telemetry["extra"]["source"]["destination"].endswith("scores.parquet")  # type: ignore[index]
+    assert job.telemetry["extra"]["source"]["backend"]  # type: ignore[index]
 
     rows = await asyncmy_driver.select("SELECT id, score FROM storage_bridge_scores ORDER BY id")
     assert len(rows) == 2

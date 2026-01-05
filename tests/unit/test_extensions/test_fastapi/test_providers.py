@@ -3,8 +3,6 @@
 import datetime
 from uuid import UUID, uuid4
 
-import pytest
-
 from sqlspec.core import (
     BeforeAfterFilter,
     InCollectionFilter,
@@ -328,5 +326,3 @@ def test_provide_filters_search_without_value_excluded() -> None:
     # SearchFilter with None value should be excluded
     filters = provider(search_filter=SearchFilter(field_name={"name"}, value=None, ignore_case=False))  # type: ignore[arg-type]
     assert filters == []
-
-

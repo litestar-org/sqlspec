@@ -282,7 +282,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             if self.connection_instance:
                 ctx = self.connection_instance.connection()
                 conn_ctx_holder["ctx"] = ctx
-                return ctx.__enter__()
+                return ctx.__enter__()  # type: ignore[return-value]
             conn = self.create_connection()
             conn_ctx_holder["conn"] = conn
             return conn
@@ -540,7 +540,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 self.connection_instance = await self.create_pool()
             ctx = self.connection_instance.connection()
             conn_ctx_holder["ctx"] = ctx
-            return await ctx.__aenter__()
+            return await ctx.__aenter__()  # type: ignore[return-value]
 
         async def release_connection(_conn: PsycopgAsyncConnection) -> None:
             if "ctx" in conn_ctx_holder:
