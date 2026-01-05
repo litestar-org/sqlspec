@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 
     from sqlspec.core import ParameterStyleConfig
 
+__all__ = ("build_asyncpg_profile", "configure_asyncpg_parameter_serializers")
+
 
 def _convert_datetime_param(value: Any) -> Any:
     """Convert datetime parameter, handling ISO strings."""
@@ -46,7 +48,7 @@ def _build_asyncpg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]
     }
 
 
-def _build_asyncpg_profile() -> "DriverParameterProfile":
+def build_asyncpg_profile() -> "DriverParameterProfile":
     """Create the AsyncPG driver parameter profile."""
 
     return DriverParameterProfile(
@@ -66,7 +68,7 @@ def _build_asyncpg_profile() -> "DriverParameterProfile":
     )
 
 
-def _configure_asyncpg_parameter_serializers(
+def configure_asyncpg_parameter_serializers(
     parameter_config: "ParameterStyleConfig",
     serializer: "Callable[[Any], str]",
     *,

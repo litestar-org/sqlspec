@@ -7,7 +7,7 @@ from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
 
 from sqlspec.adapters.spanner._typing import SpannerSessionContext
-from sqlspec.adapters.spanner.core import _build_spanner_profile
+from sqlspec.adapters.spanner.core import build_spanner_profile
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.spanner.type_converter import (
     SpannerOutputConverter,
@@ -426,7 +426,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return False
 
 
-_SPANNER_PROFILE = _build_spanner_profile()
+_SPANNER_PROFILE = build_spanner_profile()
 register_driver_profile("spanner", _SPANNER_PROFILE)
 
 spanner_statement_config = build_statement_config_from_profile(

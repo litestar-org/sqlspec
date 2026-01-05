@@ -17,7 +17,7 @@ from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
-from sqlspec.adapters.bigquery.core import _build_bigquery_profile, _create_bq_parameters
+from sqlspec.adapters.bigquery.core import build_bigquery_profile, create_bq_parameters
 from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
@@ -430,7 +430,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if job_config:
             self._copy_job_config_attrs(job_config, final_job_config)
 
-        bq_parameters = _create_bq_parameters(parameters, self._json_serializer)
+        bq_parameters = create_bq_parameters(parameters, self._json_serializer)
         final_job_config.query_parameters = bq_parameters
 
         return conn.query(sql_str, job_config=final_job_config)
@@ -812,8 +812,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
             else:
                 arrow_data = arrow_table
 
-        # Create ArrowResult
-        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows)
+            # Create ArrowResult
+            return create_arrow_result(
+                statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows
+            )
+        msg = "Unreachable"
+        raise RuntimeError(msg)  # pragma: no cover
 
     def select_to_storage(
         self,
@@ -890,7 +894,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return self._create_storage_job(telemetry_payload)
 
 
-_BIGQUERY_PROFILE = _build_bigquery_profile()
+_BIGQUERY_PROFILE = build_bigquery_profile()
 
 register_driver_profile("bigquery", _BIGQUERY_PROFILE)
 

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Generator
-from pathlib import Path
-from typing import TYPE_CHECKING
+import warnings
 
-import pytest
-from minio import Minio
+warnings.filterwarnings(
+    "ignore", message="You are using a Python version.*which Google will stop supporting", category=FutureWarning
+)
+
+from collections.abc import Generator  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import TYPE_CHECKING  # noqa: E402
+
+import pytest  # noqa: E402
+from minio import Minio  # noqa: E402
 
 if TYPE_CHECKING:
     from pytest_databases.docker.minio import MinioService

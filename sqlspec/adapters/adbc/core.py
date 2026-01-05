@@ -39,7 +39,7 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     }
 
 
-def _build_adbc_profile() -> "DriverParameterProfile":
+def build_adbc_profile() -> "DriverParameterProfile":
     """Create the ADBC driver parameter profile."""
 
     return DriverParameterProfile(

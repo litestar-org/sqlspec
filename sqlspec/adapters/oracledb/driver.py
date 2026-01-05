@@ -15,13 +15,13 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncSessionContext,
 )
 from sqlspec.adapters.oracledb.core import (
-    _ORACLEDB_VERSION,
-    _TYPE_CONVERTER,
-    _build_oracledb_profile,
-    _coerce_sync_row_values,
-    _normalize_column_names,
-    _oracle_insert_statement,
-    _oracle_truncate_statement,
+    ORACLEDB_VERSION,
+    TYPE_CONVERTER,
+    build_oracledb_profile,
+    coerce_sync_row_values,
+    normalize_column_names,
+    oracle_insert_statement,
+    oracle_truncate_statement,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
 from sqlspec.core import (
@@ -293,7 +293,7 @@ class OraclePipelineMixin:
         else:
             first = rows[0]
             names = [f"column_{index}" for index in range(len(first) if isinstance(first, Sized) else 0)]
-        names = _normalize_column_names(names, driver.driver_features)
+        names = normalize_column_names(names, driver.driver_features)
 
         normalized_rows: list[dict[str, Any]] = []
         for row in rows:
@@ -329,12 +329,12 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     for value in row:
         if is_readable(value):
             try:
-                processed_value = await _TYPE_CONVERTER.process_lob(value)
+                processed_value = await TYPE_CONVERTER.process_lob(value)
             except Exception:
                 coerced_values.append(value)
                 continue
             if isinstance(processed_value, str):
-                processed_value = _TYPE_CONVERTER.convert_if_detected(processed_value)
+                processed_value = TYPE_CONVERTER.convert_if_detected(processed_value)
             coerced_values.append(processed_value)
         else:
             coerced_values.append(value)
@@ -718,10 +718,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
-            column_names = _normalize_column_names(column_names, self.driver_features)  # pyright: ignore[reportArgumentType]
+            column_names = normalize_column_names(column_names, self.driver_features)  # pyright: ignore[reportArgumentType]
 
             # Oracle returns tuples - convert to consistent dict format after LOB hydration
-            data = [dict(zip(column_names, _coerce_sync_row_values(row), strict=False)) for row in fetched_data]
+            data = [dict(zip(column_names, coerce_sync_row_values(row), strict=False)) for row in fetched_data]
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
@@ -761,7 +761,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return version
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
-        return _ORACLEDB_VERSION
+        return ORACLEDB_VERSION
 
     def _pipeline_native_supported(self) -> bool:
         if self._pipeline_support is not None:
@@ -808,7 +808,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             self._truncate_table_sync(table)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            statement = _oracle_insert_statement(table, columns)
+            statement = oracle_insert_statement(table, columns)
             with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
                 cursor.executemany(statement, records)
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
@@ -945,7 +945,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             )
 
         arrow_table = pa.table(oracle_df)
-        column_names = _normalize_column_names(arrow_table.column_names, self.driver_features)
+        column_names = normalize_column_names(arrow_table.column_names, self.driver_features)
         if column_names != arrow_table.column_names:
             arrow_table = arrow_table.rename_columns(column_names)
 
@@ -983,7 +983,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return self._data_dictionary
 
     def _truncate_table_sync(self, table: str) -> None:
-        statement = _oracle_truncate_statement(table)
+        statement = oracle_truncate_statement(table)
         with self.handle_database_exceptions():
             self.connection.execute(statement)
 
@@ -1183,7 +1183,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return version
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
-        return _ORACLEDB_VERSION
+        return ORACLEDB_VERSION
 
     async def _execute_statement(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
@@ -1214,7 +1214,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if is_select_like:
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
-            column_names = _normalize_column_names(column_names, self.driver_features)  # pyright: ignore[reportArgumentType]
+            column_names = normalize_column_names(column_names, self.driver_features)  # pyright: ignore[reportArgumentType]
 
             # Oracle returns tuples - convert to consistent dict format after LOB hydration
             data = []
@@ -1268,7 +1268,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             await self._truncate_table_async(table)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            statement = _oracle_insert_statement(table, columns)
+            statement = oracle_insert_statement(table, columns)
             async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
                 await cursor.executemany(statement, records)
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
@@ -1407,7 +1407,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             )
 
         arrow_table = pa.table(oracle_df)
-        column_names = _normalize_column_names(arrow_table.column_names, self.driver_features)
+        column_names = normalize_column_names(arrow_table.column_names, self.driver_features)
         if column_names != arrow_table.column_names:
             arrow_table = arrow_table.rename_columns(column_names)
 
@@ -1445,7 +1445,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return self._data_dictionary
 
     async def _truncate_table_async(self, table: str) -> None:
-        statement = _oracle_truncate_statement(table)
+        statement = oracle_truncate_statement(table)
         async with self.handle_database_exceptions():
             await self.connection.execute(statement)
 
@@ -1454,7 +1454,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return False
 
 
-_ORACLE_PROFILE = _build_oracledb_profile()
+_ORACLE_PROFILE = build_oracledb_profile()
 
 register_driver_profile("oracledb", _ORACLE_PROFILE)
 

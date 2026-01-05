@@ -27,7 +27,7 @@ def _quote_sqlite_identifier(identifier: str) -> str:
     return f'"{normalized}"'
 
 
-def _format_sqlite_identifier(identifier: str) -> str:
+def format_sqlite_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
         msg = "Table name must not be empty"
@@ -39,10 +39,10 @@ def _format_sqlite_identifier(identifier: str) -> str:
     return ".".join(_quote_sqlite_identifier(part) for part in cleaned.split(".") if part)
 
 
-def _build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:
+def build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(_quote_sqlite_identifier(column) for column in columns)
     placeholders = ", ".join("?" for _ in columns)
-    return f"INSERT INTO {_format_sqlite_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+    return f"INSERT INTO {format_sqlite_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
 def process_sqlite_result(
@@ -68,7 +68,7 @@ def process_sqlite_result(
     return data, column_names, len(data)
 
 
-def _build_sqlite_profile() -> "DriverParameterProfile":
+def build_sqlite_profile() -> "DriverParameterProfile":
     """Create the SQLite driver parameter profile."""
 
     return DriverParameterProfile(

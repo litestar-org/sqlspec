@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any, cast
 import aiosqlite
 
 from sqlspec.adapters.aiosqlite.core import (
-    _build_aiosqlite_profile,  # pyright: ignore[reportPrivateUsage]
-    _build_sqlite_insert_statement,  # pyright: ignore[reportPrivateUsage]
-    _format_sqlite_identifier,  # pyright: ignore[reportPrivateUsage]
+    build_aiosqlite_profile,
+    build_sqlite_insert_statement,
+    format_sqlite_identifier,
     process_sqlite_result,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteAsyncDataDictionary
@@ -328,7 +328,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = _build_sqlite_insert_statement(table, columns)
+            insert_sql = build_sqlite_insert_statement(table, columns)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 await cursor.executemany(insert_sql, records)
 
@@ -390,7 +390,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def _truncate_table_async(self, table: str) -> None:
-        statement = f"DELETE FROM {_format_sqlite_identifier(table)}"
+        statement = f"DELETE FROM {format_sqlite_identifier(table)}"
         async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             await cursor.execute(statement)
 
@@ -414,7 +414,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_AIOSQLITE_PROFILE = _build_aiosqlite_profile()
+_AIOSQLITE_PROFILE = build_aiosqlite_profile()
 
 register_driver_profile("aiosqlite", _AIOSQLITE_PROFILE)
 

@@ -16,6 +16,22 @@ from sqlspec.utils.type_converters import build_nested_decimal_normalizer
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+__all__ = (
+    "build_psqlpy_insert_statement",
+    "build_psqlpy_profile",
+    "coerce_numeric_for_write",
+    "coerce_parameter_for_cast",
+    "coerce_records_for_execute_many",
+    "encode_records_for_binary_copy",
+    "format_table_identifier",
+    "normalize_scalar_parameter",
+    "prepare_dict_parameter",
+    "prepare_list_parameter",
+    "prepare_tuple_parameter",
+    "split_schema_and_table",
+)
+
+
 _JSON_CASTS: Final[frozenset[str]] = frozenset({"JSON", "JSONB"})
 _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
     "TIMESTAMP",
@@ -80,7 +96,7 @@ def _coerce_timestamp_parameter(value: Any) -> Any:
     return value
 
 
-def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
+def coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
     """Apply cast-aware coercion for psqlpy parameters."""
 
     upper_cast = cast_type.upper()
@@ -93,35 +109,35 @@ def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable
     return value
 
 
-def _prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
+def prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
     normalized = _DECIMAL_NORMALIZER(value)
     return normalized if isinstance(normalized, dict) else value
 
 
-def _prepare_list_parameter(value: "list[Any]") -> list[Any]:
+def prepare_list_parameter(value: "list[Any]") -> list[Any]:
     return [_DECIMAL_NORMALIZER(item) for item in value]
 
 
-def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
+def prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
     return tuple(_DECIMAL_NORMALIZER(item) for item in value)
 
 
-def _normalize_scalar_parameter(value: Any) -> Any:
+def normalize_scalar_parameter(value: Any) -> Any:
     return value
 
 
-def _coerce_numeric_for_write(value: Any) -> Any:
+def coerce_numeric_for_write(value: Any) -> Any:
     if isinstance(value, float):
         return decimal.Decimal(str(value))
     if isinstance(value, decimal.Decimal):
         return value
     if isinstance(value, list):
-        return [_coerce_numeric_for_write(item) for item in value]
+        return [coerce_numeric_for_write(item) for item in value]
     if isinstance(value, tuple):
-        coerced = [_coerce_numeric_for_write(item) for item in value]
+        coerced = [coerce_numeric_for_write(item) for item in value]
         return tuple(coerced)
     if isinstance(value, dict):
-        return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
+        return {key: coerce_numeric_for_write(item) for key, item in value.items()}
     return value
 
 
@@ -140,10 +156,10 @@ def _format_copy_value(value: Any) -> str:
         return to_json(value)
     if isinstance(value, (bytes, bytearray)):
         return value.decode("utf-8")
-    return str(_coerce_numeric_for_write(value))
+    return str(coerce_numeric_for_write(value))
 
 
-def _encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
+def encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
     """Encode row tuples into a bytes payload compatible with binary_copy_to_table."""
 
     buffer = io.StringIO()
@@ -154,7 +170,7 @@ def _encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
     return buffer.getvalue().encode("utf-8")
 
 
-def _split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
+def split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
     cleaned = identifier.strip()
     if not cleaned:
         msg = "Table name must not be empty"
@@ -177,23 +193,23 @@ def _quote_identifier(identifier: str) -> str:
     return f'"{normalized}"'
 
 
-def _format_table_identifier(identifier: str) -> str:
-    schema_name, table_name = _split_schema_and_table(identifier)
+def format_table_identifier(identifier: str) -> str:
+    schema_name, table_name = split_schema_and_table(identifier)
     if schema_name:
         return f"{_quote_identifier(schema_name)}.{_quote_identifier(table_name)}"
     return _quote_identifier(table_name)
 
 
-def _build_psqlpy_insert_statement(table: str, columns: "list[str]") -> str:
+def build_psqlpy_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(_quote_identifier(column) for column in columns)
     placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
-    return f"INSERT INTO {_format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+    return f"INSERT INTO {format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def _coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[list[Any]]":
+def coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[list[Any]]":
     formatted_records: list[list[Any]] = []
     for record in records:
-        coerced = _coerce_numeric_for_write(record)
+        coerced = coerce_numeric_for_write(record)
         if isinstance(coerced, tuple):
             formatted_records.append(list(coerced))
         elif isinstance(coerced, list):
@@ -203,7 +219,7 @@ def _coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[
     return formatted_records
 
 
-def _build_psqlpy_profile() -> "DriverParameterProfile":
+def build_psqlpy_profile() -> "DriverParameterProfile":
     """Create the psqlpy driver parameter profile."""
 
     return DriverParameterProfile(

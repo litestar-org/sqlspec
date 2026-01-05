@@ -6,6 +6,9 @@ from decimal import Decimal
 from sqlspec.core import DriverParameterProfile, ParameterStyle
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
+__all__ = ("build_duckdb_profile",)
+
+
 _TIME_TO_ISO = build_time_iso_converter()
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
@@ -14,7 +17,7 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _build_duckdb_profile() -> "DriverParameterProfile":
+def build_duckdb_profile() -> "DriverParameterProfile":
     """Create the DuckDB driver parameter profile."""
 
     return DriverParameterProfile(

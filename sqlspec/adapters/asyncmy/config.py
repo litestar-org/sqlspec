@@ -243,9 +243,11 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         acquire_ctx_holder: dict[str, Any] = {}
 
         async def acquire_connection() -> AsyncmyConnection:
-            if self.connection_instance is None:
-                self.connection_instance = await self.create_pool()
-            ctx = self.connection_instance.acquire()
+            pool = self.connection_instance
+            if pool is None:
+                pool = await self.create_pool()
+                self.connection_instance = pool
+            ctx = pool.acquire()
             acquire_ctx_holder["ctx"] = ctx
             return await ctx.__aenter__()
 

@@ -12,18 +12,18 @@ import psqlpy.exceptions
 
 from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
-    _build_psqlpy_insert_statement,
-    _build_psqlpy_profile,
-    _coerce_numeric_for_write,
-    _coerce_parameter_for_cast,
-    _coerce_records_for_execute_many,
-    _encode_records_for_binary_copy,
-    _format_table_identifier,
-    _normalize_scalar_parameter,
-    _prepare_dict_parameter,
-    _prepare_list_parameter,
-    _prepare_tuple_parameter,
-    _split_schema_and_table,
+    build_psqlpy_insert_statement,
+    build_psqlpy_profile,
+    coerce_numeric_for_write,
+    coerce_parameter_for_cast,
+    coerce_records_for_execute_many,
+    encode_records_for_binary_copy,
+    format_table_identifier,
+    normalize_scalar_parameter,
+    prepare_dict_parameter,
+    prepare_list_parameter,
+    prepare_tuple_parameter,
+    split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
@@ -277,7 +277,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             prepared = tuple(prepared)
 
         if not is_many and isinstance(prepared, tuple):
-            return tuple(_normalize_scalar_parameter(item) for item in prepared)
+            return tuple(normalize_scalar_parameter(item) for item in prepared)
 
         return prepared
 
@@ -321,7 +321,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                             prepared_value = converter(prepared_value)
                             break
                 if cast_type:
-                    prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
+                    prepared_value = coerce_parameter_for_cast(prepared_value, cast_type, serializer)
                 result.append(prepared_value)
             return tuple(result) if isinstance(parameters, tuple) else result
         return parameters
@@ -402,7 +402,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             values = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
 
             if should_coerce:
-                values = list(_coerce_numeric_for_write(values))
+                values = list(coerce_numeric_for_write(values))
 
             formatted_parameters.append(values)
 
@@ -427,7 +427,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         driver_parameters = prepared_parameters
         operation_type = statement.operation_type
         should_coerce = operation_type != "SELECT"
-        effective_parameters = _coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
+        effective_parameters = coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
 
         if statement.returns_rows():
             query_result = await cursor.fetch(sql, effective_parameters or [])
@@ -529,20 +529,20 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            schema_name, table_name = _split_schema_and_table(table)
+            schema_name, table_name = split_schema_and_table(table)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
                 try:
-                    copy_payload = _encode_records_for_binary_copy(records)
+                    copy_payload = encode_records_for_binary_copy(records)
                     copy_operation = cursor.binary_copy_to_table(copy_payload, table_name, **copy_kwargs)
                     if inspect.isawaitable(copy_operation):
                         await copy_operation
                 except (TypeError, psqlpy.exceptions.DatabaseError) as exc:
                     logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
-                    insert_sql = _build_psqlpy_insert_statement(table, columns)
-                    formatted_records = _coerce_records_for_execute_many(records)
+                    insert_sql = build_psqlpy_insert_statement(table, columns)
+                    formatted_records = coerce_records_for_execute_many(records)
                     insert_operation = cursor.execute_many(insert_sql, formatted_records)
                     if inspect.isawaitable(insert_operation):
                         await insert_operation
@@ -593,7 +593,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def _truncate_table_async(self, table: str) -> None:
-        qualified = _format_table_identifier(table)
+        qualified = format_table_identifier(table)
         async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             await cursor.execute(f"TRUNCATE TABLE {qualified}")
 
@@ -613,7 +613,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_PSQLPY_PROFILE = _build_psqlpy_profile()
+_PSQLPY_PROFILE = build_psqlpy_profile()
 
 register_driver_profile("psqlpy", _PSQLPY_PROFILE)
 
@@ -622,9 +622,9 @@ def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> Param
     base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=serializer).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[dict] = _prepare_dict_parameter
-    updated_type_map[list] = _prepare_list_parameter
-    updated_type_map[tuple] = _prepare_tuple_parameter
+    updated_type_map[dict] = prepare_dict_parameter
+    updated_type_map[list] = prepare_list_parameter
+    updated_type_map[tuple] = prepare_tuple_parameter
 
     return base_config.replace(type_coercion_map=updated_type_map)
 

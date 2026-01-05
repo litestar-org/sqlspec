@@ -9,9 +9,18 @@ from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import DriverParameterProfile, ParameterStyle
 from sqlspec.utils.type_guards import is_readable
 
+__all__ = (
+    "build_oracledb_profile",
+    "coerce_sync_row_values",
+    "normalize_column_names",
+    "oracle_insert_statement",
+    "oracle_truncate_statement",
+)
+
+
 IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _VERSION_COMPONENTS: Final[int] = 3
-_TYPE_CONVERTER = OracleOutputConverter()
+TYPE_CONVERTER = OracleOutputConverter()
 
 
 def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
@@ -29,10 +38,10 @@ def _resolve_oracledb_version() -> "tuple[int, int, int]":
     return _parse_version_tuple(version)
 
 
-_ORACLEDB_VERSION: Final[tuple[int, int, int]] = _resolve_oracledb_version()
+ORACLEDB_VERSION: Final[tuple[int, int, int]] = _resolve_oracledb_version()
 
 
-def _normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
+def normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
     should_lowercase = driver_features.get("enable_lowercase_column_names", False)
     if not should_lowercase:
         return column_names
@@ -45,17 +54,17 @@ def _normalize_column_names(column_names: "list[str]", driver_features: "dict[st
     return normalized
 
 
-def _oracle_insert_statement(table: str, columns: "list[str]") -> str:
+def oracle_insert_statement(table: str, columns: "list[str]") -> str:
     column_list = ", ".join(columns)
     placeholders = ", ".join(f":{idx + 1}" for idx in range(len(columns)))
     return f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})"
 
 
-def _oracle_truncate_statement(table: str) -> str:
+def oracle_truncate_statement(table: str) -> str:
     return f"TRUNCATE TABLE {table}"
 
 
-def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+def coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     """Coerce LOB handles to concrete values for synchronous execution.
 
     Processes each value in the row, reading LOB objects and applying
@@ -77,14 +86,14 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
                 coerced_values.append(value)
                 continue
             if isinstance(processed_value, str):
-                processed_value = _TYPE_CONVERTER.convert_if_detected(processed_value)
+                processed_value = TYPE_CONVERTER.convert_if_detected(processed_value)
             coerced_values.append(processed_value)
             continue
         coerced_values.append(value)
     return coerced_values
 
 
-def _build_oracledb_profile() -> "DriverParameterProfile":
+def build_oracledb_profile() -> "DriverParameterProfile":
     """Create the OracleDB driver parameter profile."""
     return DriverParameterProfile(
         name="OracleDB",

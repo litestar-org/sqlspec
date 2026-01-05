@@ -8,7 +8,7 @@ import contextlib
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
-from sqlspec.adapters.adbc.core import _build_adbc_profile, get_type_coercion_map
+from sqlspec.adapters.adbc.core import build_adbc_profile, get_type_coercion_map
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
 from sqlspec.core import (
@@ -683,8 +683,12 @@ class AdbcDriver(SyncDriverAdapterBase):
             else:
                 arrow_data = arrow_table
 
-        # Create ArrowResult
-        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows)
+            # Create ArrowResult
+            return create_arrow_result(
+                statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows
+            )
+        msg = "Unreachable"
+        raise RuntimeError(msg)  # pragma: no cover
 
     def select_to_storage(
         self,
@@ -747,7 +751,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
 
-_ADBC_PROFILE = _build_adbc_profile()
+_ADBC_PROFILE = build_adbc_profile()
 
 register_driver_profile("adbc", _ADBC_PROFILE)
 

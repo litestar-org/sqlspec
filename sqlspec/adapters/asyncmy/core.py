@@ -3,6 +3,8 @@
 from sqlspec.core import DriverParameterProfile, ParameterStyle
 from sqlspec.exceptions import SQLSpecError
 
+__all__ = ("build_asyncmy_insert_statement", "build_asyncmy_profile", "format_mysql_identifier")
+
 
 def _bool_to_int(value: bool) -> int:
     return int(value)
@@ -13,7 +15,7 @@ def _quote_mysql_identifier(identifier: str) -> str:
     return f"`{normalized}`"
 
 
-def _format_mysql_identifier(identifier: str) -> str:
+def format_mysql_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
         msg = "Table name must not be empty"
@@ -23,13 +25,13 @@ def _format_mysql_identifier(identifier: str) -> str:
     return formatted or _quote_mysql_identifier(cleaned)
 
 
-def _build_asyncmy_insert_statement(table: str, columns: "list[str]") -> str:
+def build_asyncmy_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(_quote_mysql_identifier(column) for column in columns)
     placeholders = ", ".join("%s" for _ in columns)
-    return f"INSERT INTO {_format_mysql_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+    return f"INSERT INTO {format_mysql_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def _build_asyncmy_profile() -> "DriverParameterProfile":
+def build_asyncmy_profile() -> "DriverParameterProfile":
     """Create the AsyncMy driver parameter profile."""
 
     return DriverParameterProfile(

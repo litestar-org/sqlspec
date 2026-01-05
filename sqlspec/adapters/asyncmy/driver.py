@@ -10,11 +10,7 @@ import asyncmy.errors  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
-from sqlspec.adapters.asyncmy.core import (
-    _build_asyncmy_insert_statement,
-    _build_asyncmy_profile,
-    _format_mysql_identifier,
-)
+from sqlspec.adapters.asyncmy.core import build_asyncmy_insert_statement, build_asyncmy_profile, format_mysql_identifier
 from sqlspec.adapters.asyncmy.data_dictionary import MySQLAsyncDataDictionary
 from sqlspec.core import ArrowResult, build_statement_config_from_profile, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
@@ -492,7 +488,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = _build_asyncmy_insert_statement(table, columns)
+            insert_sql = build_asyncmy_insert_statement(table, columns)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 await cursor.executemany(insert_sql, records)
 
@@ -557,7 +553,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def _truncate_table_async(self, table: str) -> None:
-        statement = f"TRUNCATE TABLE {_format_mysql_identifier(table)}"
+        statement = f"TRUNCATE TABLE {format_mysql_identifier(table)}"
         async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             await cursor.execute(statement)
 
@@ -583,7 +579,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_ASYNCMY_PROFILE = _build_asyncmy_profile()
+_ASYNCMY_PROFILE = build_asyncmy_profile()
 
 register_driver_profile("asyncmy", _ASYNCMY_PROFILE)
 

@@ -12,10 +12,10 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncSessionContext,
 )
 from sqlspec.adapters.psycopg.core import (
-    _build_copy_from_command,
-    _build_psycopg_profile,
-    _build_truncate_command,
-    _psycopg_pipeline_supported,
+    build_copy_from_command,
+    build_psycopg_profile,
+    build_truncate_command,
+    psycopg_pipeline_supported,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.core import (
@@ -465,7 +465,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             not isinstance(stack, StatementStack)
             or not stack
             or self.stack_native_disabled
-            or not _psycopg_pipeline_supported()
+            or not psycopg_pipeline_supported()
             or continue_on_error
         ):
             return super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -644,7 +644,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             self._truncate_table_sync(table)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            copy_sql = _build_copy_from_command(table, columns)
+            copy_sql = build_copy_from_command(table, columns)
             with ExitStack() as stack:
                 stack.enter_context(self.handle_database_exceptions())
                 cursor = stack.enter_context(self.with_cursor(self.connection))
@@ -682,7 +682,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         return self._data_dictionary
 
     def _truncate_table_sync(self, table: str) -> None:
-        truncate_sql = _build_truncate_command(table)
+        truncate_sql = build_truncate_command(table)
         with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             cursor.execute(truncate_sql)
 
@@ -1017,7 +1017,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             not isinstance(stack, StatementStack)
             or not stack
             or self.stack_native_disabled
-            or not _psycopg_pipeline_supported()
+            or not psycopg_pipeline_supported()
             or continue_on_error
         ):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -1196,7 +1196,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             await self._truncate_table_async(table)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            copy_sql = _build_copy_from_command(table, columns)
+            copy_sql = build_copy_from_command(table, columns)
             async with AsyncExitStack() as stack:
                 await stack.enter_async_context(self.handle_database_exceptions())
                 cursor = await stack.enter_async_context(self.with_cursor(self.connection))
@@ -1236,7 +1236,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         return self._data_dictionary
 
     async def _truncate_table_async(self, table: str) -> None:
-        truncate_sql = _build_truncate_command(table)
+        truncate_sql = build_truncate_command(table)
         async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             await cursor.execute(truncate_sql)
 
@@ -1245,7 +1245,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
 
-_PSYCOPG_PROFILE = _build_psycopg_profile()
+_PSYCOPG_PROFILE = build_psycopg_profile()
 
 register_driver_profile("psycopg", _PSYCOPG_PROFILE)
 

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import duckdb
 
-from sqlspec.adapters.duckdb.core import _build_duckdb_profile
+from sqlspec.adapters.duckdb.core import build_duckdb_profile
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import (
@@ -486,8 +486,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
             else:
                 arrow_data = arrow_table
 
-        # Create ArrowResult
-        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows)
+            # Create ArrowResult
+            return create_arrow_result(
+                statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows
+            )
+        msg = "Unreachable"
+        raise RuntimeError(msg)  # pragma: no cover
 
     def select_to_storage(
         self,
@@ -556,7 +560,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
 
-_DUCKDB_PROFILE = _build_duckdb_profile()
+_DUCKDB_PROFILE = build_duckdb_profile()
 
 register_driver_profile("duckdb", _DUCKDB_PROFILE)
 

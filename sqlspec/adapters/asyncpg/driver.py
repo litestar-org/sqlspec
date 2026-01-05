@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 
 import asyncpg
 
-from sqlspec.adapters.asyncpg.core import _build_asyncpg_profile, _configure_asyncpg_parameter_serializers
+from sqlspec.adapters.asyncpg.core import build_asyncpg_profile, configure_asyncpg_parameter_serializers
 from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
 from sqlspec.core import (
     SQL,
@@ -56,9 +56,9 @@ __all__ = (
     "AsyncpgDriver",
     "AsyncpgExceptionHandler",
     "AsyncpgSessionContext",
-    "_configure_asyncpg_parameter_serializers",
     "asyncpg_statement_config",
     "build_asyncpg_statement_config",
+    "configure_asyncpg_parameter_serializers",
 )
 
 logger = get_logger("adapters.asyncpg")
@@ -668,7 +668,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return bool(self.connection.is_in_transaction())
 
 
-_ASYNC_PG_PROFILE = _build_asyncpg_profile()
+_ASYNC_PG_PROFILE = build_asyncpg_profile()
 
 register_driver_profile("asyncpg", _ASYNC_PG_PROFILE)
 
@@ -688,7 +688,7 @@ def build_asyncpg_statement_config(
         json_deserializer=effective_deserializer,
     )
 
-    parameter_config = _configure_asyncpg_parameter_serializers(
+    parameter_config = configure_asyncpg_parameter_serializers(
         base_config.parameter_config, effective_serializer, deserializer=effective_deserializer
     )
 

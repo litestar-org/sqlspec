@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.sqlite._typing import SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
-    _build_sqlite_insert_statement,
-    _build_sqlite_profile,
-    _format_sqlite_identifier,
+    build_sqlite_insert_statement,
+    build_sqlite_profile,
+    format_sqlite_identifier,
     process_sqlite_result,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
@@ -380,7 +380,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = _build_sqlite_insert_statement(table, columns)
+            insert_sql = build_sqlite_insert_statement(table, columns)
             with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 cursor.executemany(insert_sql, records)
 
@@ -429,7 +429,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def _truncate_table_sync(self, table: str) -> None:
-        statement = f"DELETE FROM {_format_sqlite_identifier(table)}"
+        statement = f"DELETE FROM {format_sqlite_identifier(table)}"
         with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             cursor.execute(statement)
 
@@ -465,7 +465,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_SQLITE_PROFILE = _build_sqlite_profile()
+_SQLITE_PROFILE = build_sqlite_profile()
 
 register_driver_profile("sqlite", _SQLITE_PROFILE)
 

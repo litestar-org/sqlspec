@@ -2,8 +2,10 @@
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle
 
+__all__ = ("build_spanner_profile",)
 
-def _build_spanner_profile() -> "DriverParameterProfile":
+
+def build_spanner_profile() -> "DriverParameterProfile":
     """Create the Spanner driver parameter profile."""
 
     return DriverParameterProfile(

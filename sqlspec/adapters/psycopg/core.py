@@ -12,8 +12,10 @@ from sqlspec.exceptions import SQLSpecError
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+__all__ = ("build_copy_from_command", "build_psycopg_profile", "build_truncate_command", "psycopg_pipeline_supported")
 
-def _psycopg_pipeline_supported() -> bool:
+
+def psycopg_pipeline_supported() -> bool:
     """Return True when libpq pipeline support is available."""
     try:
         capabilities = psycopg.capabilities
@@ -34,13 +36,13 @@ def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
     return psycopg_sql.SQL(".").join(identifiers)
 
 
-def _build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
+def build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
     table_identifier = _compose_table_identifier(table)
     column_sql = psycopg_sql.SQL(", ").join([psycopg_sql.Identifier(column) for column in columns])
     return psycopg_sql.SQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
 
 
-def _build_truncate_command(table: str) -> "psycopg_sql.Composed":
+def build_truncate_command(table: str) -> "psycopg_sql.Composed":
     return psycopg_sql.SQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
 
 
@@ -54,7 +56,7 @@ def _build_psycopg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]
     return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}
 
 
-def _build_psycopg_profile() -> "DriverParameterProfile":
+def build_psycopg_profile() -> "DriverParameterProfile":
     """Create the psycopg driver parameter profile."""
 
     return DriverParameterProfile(

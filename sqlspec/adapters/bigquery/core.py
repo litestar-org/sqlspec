@@ -13,6 +13,8 @@ from sqlspec.utils.type_guards import has_value_attribute
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+__all__ = ("build_bigquery_profile", "create_bq_parameters")
+
 
 def _identity(value: Any) -> Any:
     return value
@@ -128,7 +130,7 @@ def _get_bq_param_creator_map(json_serializer: "Callable[[Any], str]") -> dict[s
     }
 
 
-def _create_bq_parameters(
+def create_bq_parameters(
     parameters: Any, json_serializer: "Callable[[Any], str]"
 ) -> "list[ArrayQueryParameter | ScalarQueryParameter]":
     """Create BigQuery QueryParameter objects from parameters.
@@ -172,7 +174,7 @@ def _create_bq_parameters(
     return bq_parameters
 
 
-def _build_bigquery_profile() -> "DriverParameterProfile":
+def build_bigquery_profile() -> "DriverParameterProfile":
     """Create the BigQuery driver parameter profile."""
 
     return DriverParameterProfile(
