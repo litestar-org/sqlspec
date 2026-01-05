@@ -454,15 +454,15 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
 async def test_aiosqlite_sql_object_integration(aiosqlite_session: AiosqliteDriver) -> None:
     """Test integration with SQL object."""
 
-    sql_obj = SQL("SELECT name, value FROM test_table WHERE value > ?")
+    sql_obj = SQL("SELECT name, value FROM test_table WHERE name = ? AND value > ?")
 
-    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("sql_test", 50))
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("sql_obj_test_unique", 50))
 
-    result = await aiosqlite_session.execute(sql_obj, (25,))
+    result = await aiosqlite_session.execute(sql_obj, ("sql_obj_test_unique", 25))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "sql_test"
+    assert result.data[0]["name"] == "sql_obj_test_unique"
     assert result.data[0]["value"] == 50
 
 

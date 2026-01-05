@@ -23,7 +23,7 @@ from sqlspec.adapters.asyncpg.driver import (
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._hints import EventRuntimeHints
-from sqlspec.typing import CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
+from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -336,6 +336,20 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 cloud_sql_instance_parts_expected = 2
                 if instance.count(":") != cloud_sql_instance_parts_expected:
                     msg = f"Invalid Cloud SQL instance format: {instance}. Expected format: 'project:region:instance'"
+                    raise ImproperConfigurationError(msg)
+            case (False, True):
+                if not ALLOYDB_CONNECTOR_INSTALLED:
+                    raise MissingDependencyError(
+                        package="google-cloud-alloydb-connector", install_package="google-cloud-alloydb-connector"
+                    )
+
+                instance_uri = self.driver_features.get("alloydb_instance_uri")
+                if not instance_uri:
+                    msg = "alloydb_instance_uri required when enable_alloydb is True. Format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+                    raise ImproperConfigurationError(msg)
+
+                if not instance_uri.startswith("projects/"):
+                    msg = f"Invalid AlloyDB instance URI format: {instance_uri}. Expected format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
                     raise ImproperConfigurationError(msg)
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":
