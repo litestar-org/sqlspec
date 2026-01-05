@@ -162,28 +162,25 @@ exclude = [
   "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
 ]
 include = [
-  "sqlspec/core/**/*.py",          # Core module
-  "sqlspec/loader.py",             # Loader module
-  "sqlspec/observability/**/*.py", # Observability utilities
-  "sqlspec/driver/**/*.py",        # Driver module
-  # "sqlspec/storage/**/*.py",       # Storage module
-  # "sqlspec/migrations/**/*.py",            # Migrations module
+  "sqlspec/core/**/*.py",                  # Core module
+  "sqlspec/loader.py",                     # Loader module
+  "sqlspec/observability/**/*.py",         # Observability utilities
+  "sqlspec/driver/**/*.py",                # Driver module
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
-  # "sqlspec/adapters/**/driver.py",         # All adapters type converters
-  "sqlspec/utils/text.py",                # Text utilities
-  "sqlspec/utils/sync_tools.py",          # Synchronous utility functions
-  "sqlspec/utils/type_guards.py",         # Type guard utilities
-  "sqlspec/utils/fixtures.py",            # File fixture loading
-  "sqlspec/utils/data_transformation.py", # Data transformation utilities
-  "sqlspec/utils/arrow_helpers.py",       # Arrow result helpers
-  "sqlspec/utils/serializers.py",         # Serialization helpers
-  "sqlspec/utils/type_converters.py",     # Adapter type converters
-  "sqlspec/utils/correlation.py",         # Correlation context helpers
-  "sqlspec/utils/portal.py",              # Thread portal utilities
-  "sqlspec/utils/singleton.py",           # Lightweight singleton helpers
-  "sqlspec/utils/schema.py",              # Schema transformation (refactored for mypyc)
-  "sqlspec/utils/uuids.py",               # UUID utilities
+  "sqlspec/utils/text.py",                 # Text utilities
+  "sqlspec/utils/sync_tools.py",           # Synchronous utility functions
+  "sqlspec/utils/type_guards.py",          # Type guard utilities
+  "sqlspec/utils/fixtures.py",             # File fixture loading
+  "sqlspec/utils/data_transformation.py",  # Data transformation utilities
+  "sqlspec/utils/arrow_helpers.py",        # Arrow result helpers
+  "sqlspec/utils/serializers.py",          # Serialization helpers
+  "sqlspec/utils/type_converters.py",      # Adapter type converters
+  "sqlspec/utils/correlation.py",          # Correlation context helpers
+  "sqlspec/utils/portal.py",               # Thread portal utilities
+  "sqlspec/utils/singleton.py",            # Lightweight singleton helpers
+  "sqlspec/utils/schema.py",               # Schema transformation (refactored for mypyc)
+  "sqlspec/utils/uuids.py",                # UUID utilities
 
 ]
 mypy-args = [
