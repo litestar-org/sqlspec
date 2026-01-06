@@ -42,7 +42,7 @@ __all__ = (
     "uuid_to_spanner",
 )
 
-SPANNER_SPECIAL_CHARS: "Final[frozenset[str]]"= frozenset({"{", "[", "-", ":", "T", "."})
+SPANNER_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
 UUID_BYTE_LENGTH: Final[int] = 16
 _SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None
 _JSON_OBJECT_TYPE: "type[Any] | None" = None
@@ -231,7 +231,7 @@ def spanner_json(value: Any) -> Any:
     json_type = _get_json_object_type()
     if isinstance(value, json_type):
         return value
-    return json_type(value)  # type: ignore[no-untyped-call]
+    return json_type(value)
 
 
 def coerce_params_for_spanner(
@@ -257,7 +257,7 @@ def coerce_params_for_spanner(
         return None
 
     json_object_type = _get_json_object_type()
-    coerced: "dict[str", Any] = {}
+    coerced: dict[str, Any] = {}
     for key, value in params.items():
         if isinstance(value, UUID):
             coerced[key] = bytes_to_spanner(uuid_to_spanner(value))
@@ -293,7 +293,7 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
 
     param_types = _get_param_types()
     json_object_type = _get_json_object_type()
-    types: "dict[str", Any] = {}
+    types: dict[str, Any] = {}
     json_type = _json_param_type()
     for key, value in params.items():
         if isinstance(value, bool):

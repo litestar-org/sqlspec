@@ -204,7 +204,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             State is wrapped with Jsonb() for PostgreSQL type safety.
             If owner_id_column is configured, owner_id value must be provided.
         """
-        params: "tuple[Any", ...]
+        params: tuple[Any, ...]
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
             INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
@@ -318,7 +318,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             WHERE app_name = %s
             ORDER BY update_time DESC
             """).format(table=pg_sql.Identifier(self._session_table))
-            params: "tuple[str", ...] = (app_name,)
+            params: tuple[str, ...] = (app_name,)
         else:
             query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -416,7 +416,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             BYTEA actions are converted to bytes.
         """
         where_clauses = ["session_id = %s"]
-        params: "list[Any]"= [session_id]
+        params: list[Any] = [session_id]
 
         if after_timestamp is not None:
             where_clauses.append("timestamp > %s")
@@ -659,7 +659,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             State is wrapped with Jsonb() for PostgreSQL type safety.
             If owner_id_column is configured, owner_id value must be provided.
         """
-        params: "tuple[Any", ...]
+        params: tuple[Any, ...]
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
             INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
@@ -773,7 +773,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             WHERE app_name = %s
             ORDER BY update_time DESC
             """).format(table=pg_sql.Identifier(self._session_table))
-            params: "tuple[str", ...] = (app_name,)
+            params: tuple[str, ...] = (app_name,)
         else:
             query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time

@@ -14,7 +14,7 @@ from sqlglot.tokens import TokenType
 __all__ = ("Spanner",)
 
 
-_SPANNER_KEYWORDS: "dict[str", TokenType] = {}
+_SPANNER_KEYWORDS: "dict[str, TokenType]" = {}
 interleave_token = cast("TokenType | None", TokenType.__dict__.get("INTERLEAVE"))
 if interleave_token is not None:
     _SPANNER_KEYWORDS["INTERLEAVE"] = interleave_token

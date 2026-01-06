@@ -72,7 +72,7 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
         return int(self._database().run_in_transaction(_txn_job))  # type: ignore[no-untyped-call]
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
-        types: "dict[str", Any] = {
+        types: dict[str, Any] = {
             "id": SPANNER_PARAM_TYPES.STRING,
             "session_id": SPANNER_PARAM_TYPES.STRING,
             "app_name": SPANNER_PARAM_TYPES.STRING,
@@ -103,7 +103,7 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
         database = self._database()
         existing_tables = {t.table_id for t in database.list_tables()}  # type: ignore[no-untyped-call]
 
-        ddl_statements: "list[str]"= []
+        ddl_statements: list[str] = []
         if self._memory_table not in existing_tables:
             ddl_statements.extend(self._get_create_memory_table_sql())
 
@@ -163,7 +163,7 @@ CREATE TABLE {self._memory_table} (
             return 0
 
         inserted_count = 0
-        statements: "list[tuple[str", dict[str, Any], dict[str, Any]]] = []
+        statements: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
         owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_param = ", @owner_id" if self._owner_id_column_name else ""

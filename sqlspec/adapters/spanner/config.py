@@ -171,7 +171,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self.connection_config.setdefault("max_sessions", 10)
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
-        features: "dict[str", Any] = dict(driver_features) if driver_features else {}
+        features: dict[str, Any] = dict(driver_features) if driver_features else {}
         features.setdefault("enable_uuid_conversion", True)
         features.setdefault("json_serializer", to_json)
         features.setdefault("json_deserializer", from_json)
@@ -240,7 +240,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
 
         pool_type = cast("type[AbstractSessionPool]", self.connection_config.get("pool_type", FixedSizePool))
 
-        pool_kwargs: "dict[str", Any] = {}
+        pool_kwargs: dict[str, Any] = {}
         if pool_type is FixedSizePool:
             if "size" in self.connection_config:
                 pool_kwargs["size"] = self.connection_config["size"]

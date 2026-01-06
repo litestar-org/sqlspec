@@ -190,11 +190,8 @@ def test_update_cache_config_clears_all_caches() -> None:
 
     mock_default_cache = MagicMock()
     mock_namespaced_cache = MagicMock()
-    original_default = cache_module._default_cache
-    original_namespaced = cache_module._namespaced_cache
-
-    cache_module._default_cache = mock_default_cache
-    cache_module._namespaced_cache = mock_namespaced_cache
+    original_default, original_namespaced = cache_module.get_cache_instances()
+    cache_module.set_cache_instances(mock_default_cache, mock_namespaced_cache)
 
     try:
         new_config = CacheConfig(sql_cache_size=1000)
@@ -202,11 +199,11 @@ def test_update_cache_config_clears_all_caches() -> None:
 
         mock_default_cache.clear.assert_called_once()
         mock_namespaced_cache.clear.assert_called_once()
-        assert cache_module._default_cache is None
-        assert cache_module._namespaced_cache is None
+        default_cache, namespaced_cache = cache_module.get_cache_instances()
+        assert default_cache is None
+        assert namespaced_cache is None
     finally:
-        cache_module._default_cache = original_default
-        cache_module._namespaced_cache = original_namespaced
+        cache_module.set_cache_instances(original_default, original_namespaced)
 
 
 def test_multiple_sqlspec_instances_share_cache_configuration() -> None:

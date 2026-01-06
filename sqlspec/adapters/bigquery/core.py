@@ -2,7 +2,7 @@
 
 import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle
 from sqlspec.exceptions import SQLSpecError
@@ -36,7 +36,7 @@ def _return_none(_: Any) -> None:
 
 
 _BIGQUERY_MODULE: Any | None = None
-_BQ_TYPE_MAP: "dict[type", tuple[str, str | None]] = {
+_BQ_TYPE_MAP: "dict[type, tuple[str, str | None]]" = {
     bool: ("BOOL", None),
     int: ("INT64", None),
     float: ("FLOAT64", None),
@@ -61,7 +61,7 @@ def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQuery
         ArrayQueryParameter instance.
     """
     bigquery = _get_bigquery_module()
-    return bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value))
+    return cast("BigQueryParam", bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value)))
 
 
 def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> "BigQueryParam":
@@ -76,7 +76,7 @@ def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[An
         ScalarQueryParameter with STRING type.
     """
     bigquery = _get_bigquery_module()
-    return bigquery.ScalarQueryParameter(name, "STRING", json_serializer(value))
+    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "STRING", json_serializer(value)))
 
 
 def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQueryParam":
@@ -91,7 +91,7 @@ def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQuer
         ScalarQueryParameter instance.
     """
     bigquery = _get_bigquery_module()
-    return bigquery.ScalarQueryParameter(name, param_type, value)
+    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, param_type, value))
 
 
 def _get_bigquery_module() -> Any:
@@ -149,7 +149,7 @@ def create_bq_parameters(parameters: Any, json_serializer: "Callable[[Any], str]
     if not parameters:
         return []
 
-    bq_parameters: "list[BigQueryParam]"= []
+    bq_parameters: list[BigQueryParam] = []
 
     if isinstance(parameters, dict):
         for name, value in parameters.items():

@@ -161,9 +161,9 @@ class SQL:
         self._dialect = self._normalize_dialect(config.dialect)
         self._processed_state: EmptyEnum | ProcessedState = Empty
         self._hash: int | None = None
-        self._filters: "list[StatementFilter]" = []
-        self._named_parameters: "dict[str, Any]" = {}
-        self._positional_parameters: "list[Any]" = []
+        self._filters: list[StatementFilter] = []
+        self._named_parameters: dict[str, Any] = {}
+        self._positional_parameters: list[Any] = []
         self._is_script = False
         self._raw_expression: exp.Expression | None = None
 
@@ -453,7 +453,7 @@ class SQL:
 
         return False
 
-def compile(self) -> "tuple[str, Any]":
+    def compile(self) -> "tuple[str, Any]":
         """Compile SQL statement with parameters.
 
         Returns:
@@ -675,7 +675,7 @@ def compile(self) -> "tuple[str, Any]":
             raise sqlspec.exceptions.SQLBuilderError(msg) from exc
 
         base_expression = expression
-        ctes: "list[exp.CTE] | None" = None
+        ctes: list[exp.CTE] | None = None
         if isinstance(expression, exp.With):
             if expression.this is None:
                 msg = "WITH expression does not include a base statement."
@@ -715,7 +715,7 @@ def compile(self) -> "tuple[str, Any]":
             and not isinstance(converted_params, (str, bytes, bytearray))
         ):
             param_info = converter.validator.extract_parameters(converted_sql)
-            param_map: "dict[str, Any]" = {}
+            param_map: dict[str, Any] = {}
             for index, param in enumerate(param_info):
                 if index >= len(converted_params):
                     break
@@ -860,7 +860,7 @@ class StatementConfig:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
                 raise TypeError(msg)
 
-        current_kwargs: "dict[str, Any]" = {
+        current_kwargs: dict[str, Any] = {
             "parameter_config": self.parameter_config,
             "enable_parsing": self.enable_parsing,
             "enable_validation": self.enable_validation,

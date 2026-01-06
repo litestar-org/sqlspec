@@ -197,7 +197,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         LIMIT %s
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
-        params: "tuple[str", str, str, str, int] = (query, app_name, user_id, query, limit)
+        params: tuple[str, str, str, str, int] = (query, app_name, user_id, query, limit)
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
@@ -217,7 +217,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
         pattern = f"%{query}%"
-        params: "tuple[str", str, str, int] = (app_name, user_id, pattern, limit)
+        params: tuple[str, str, str, int] = (app_name, user_id, pattern, limit)
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
@@ -385,7 +385,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         LIMIT %s
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
-        params: "tuple[str", str, str, str, int] = (query, app_name, user_id, query, limit)
+        params: tuple[str, str, str, str, int] = (query, app_name, user_id, query, limit)
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
@@ -405,7 +405,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
         pattern = f"%{query}%"
-        params: "tuple[str", str, str, int] = (app_name, user_id, pattern, limit)
+        params: tuple[str, str, str, int] = (app_name, user_id, pattern, limit)
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()

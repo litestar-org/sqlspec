@@ -436,7 +436,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return conn.query(sql_str, job_config=final_job_config)
 
     @staticmethod
-def _rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
+    def _rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
         """Convert BigQuery rows to dictionary format.
 
         Args:

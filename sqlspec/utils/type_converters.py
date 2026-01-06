@@ -17,7 +17,7 @@ __all__ = (
     "should_json_encode_sequence",
 )
 
-JSON_NESTED_TYPES: "Final[tuple[type[Any], ...]]" = (dict, list, tuple)
+JSON_NESTED_TYPES: Final[tuple[type[Any], ...]] = (dict, list, tuple)
 DEFAULT_DECIMAL_MODE: Final[str] = "preserve"
 
 

@@ -24,7 +24,7 @@ __all__ = ("OracleAsyncAQEventBackend", "OracleSyncAQEventBackend", "create_even
 
 _DEFAULT_QUEUE_NAME = "SQLSPEC_EVENTS_QUEUE"
 _DEFAULT_VISIBILITY: int | None
-_VISIBILITY_LOOKUP: "dict[str", int]
+_VISIBILITY_LOOKUP: "dict[str, int]"
 
 if oracledb is None:
     _DEFAULT_VISIBILITY = None

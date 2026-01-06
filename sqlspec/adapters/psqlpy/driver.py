@@ -309,7 +309,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Parameters with cast-aware type coercion applied
         """
         if isinstance(parameters, (list, tuple)):
-            result: "list[Any]"= []
+            result: list[Any] = []
             serializer = statement_config.parameter_config.json_serializer or to_json
             type_map = statement_config.parameter_config.type_coercion_map
             for idx, param in enumerate(parameters, start=1):
@@ -431,7 +431,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             query_result = await cursor.fetch(sql, effective_parameters or [])
-            dict_rows: "list[dict[str", Any]] = query_result.result() if query_result else []
+            dict_rows: list[dict[str, Any]] = query_result.result() if query_result else []
 
             return self.create_execution_result(
                 cursor,
@@ -531,7 +531,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if records:
             schema_name, table_name = split_schema_and_table(table)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
-                copy_kwargs: "dict[str", Any] = {"columns": columns}
+                copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
                 try:

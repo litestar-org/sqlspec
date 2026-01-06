@@ -72,7 +72,7 @@ class PsqlpyAsyncDataDictionary(AsyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_versions: "dict[str", VersionInfo] = {
+        feature_versions: dict[str, VersionInfo] = {
             "supports_json": VersionInfo(9, 2, 0),
             "supports_jsonb": VersionInfo(9, 4, 0),
             "supports_returning": VersionInfo(8, 2, 0),
@@ -81,7 +81,7 @@ class PsqlpyAsyncDataDictionary(AsyncDataDictionaryBase):
             "supports_cte": VersionInfo(8, 4, 0),
             "supports_partitioning": VersionInfo(10, 0, 0),
         }
-        feature_flags: "dict[str", bool] = {
+        feature_flags: dict[str, bool] = {
             "supports_uuid": True,
             "supports_arrays": True,
             "supports_transactions": True,

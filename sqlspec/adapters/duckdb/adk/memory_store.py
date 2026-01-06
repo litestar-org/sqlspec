@@ -217,7 +217,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     RETURNING 1
                     """
-                    params: "tuple[Any", ...] = (
+                    params: tuple[Any, ...] = (
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
@@ -319,7 +319,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         ORDER BY score DESC, timestamp DESC
         LIMIT ?
         """
-        params: "tuple[Any", ...] = (query, app_name, user_id, limit)
+        params: tuple[Any, ...] = (query, app_name, user_id, limit)
         with self._config.provide_connection() as conn:
             if not self._ensure_fts_extension(conn):
                 msg = "DuckDB FTS extension not available"
@@ -340,7 +340,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         LIMIT ?
         """
         pattern = f"%{query}%"
-        params: "tuple[Any", ...] = (app_name, user_id, pattern, limit)
+        params: tuple[Any, ...] = (app_name, user_id, pattern, limit)
         with self._config.provide_connection() as conn:
             cursor = conn.execute(sql, params)
             rows = cursor.fetchall()

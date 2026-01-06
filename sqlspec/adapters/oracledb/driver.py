@@ -89,7 +89,7 @@ __all__ = (
     "oracledb_statement_config",
 )
 
-PIPELINE_MIN_DRIVER_VERSION: "Final[tuple[int", int, int]] = (2, 4, 0)
+PIPELINE_MIN_DRIVER_VERSION: Final[tuple[int, int, int]] = (2, 4, 0)
 PIPELINE_MIN_DATABASE_MAJOR: Final[int] = 23
 
 
@@ -203,7 +203,7 @@ class OraclePipelineMixin:
         continue_on_error: bool,
         observer: StackExecutionObserver,
     ) -> "list[StackResult]":
-        stack_results: "list[StackResult]"= []
+        stack_results: list[StackResult] = []
         for index, (compiled, result) in enumerate(zip(compiled_operations, pipeline_results, strict=False)):
             try:
                 error = result.error
@@ -236,7 +236,7 @@ class OraclePipelineMixin:
         except AttributeError:
             columns = None
         data = self._rows_from_pipeline_result(columns, rows) if operation.returns_rows else None
-        metadata: "dict[str", Any] = {"pipeline_operation": operation.method}
+        metadata: dict[str, Any] = {"pipeline_operation": operation.method}
 
         try:
             warning = pipeline_result.warning
@@ -295,7 +295,7 @@ class OraclePipelineMixin:
             names = [f"column_{index}" for index in range(len(first) if isinstance(first, Sized) else 0)]
         names = normalize_column_names(names, driver.driver_features)
 
-        normalized_rows: "list[dict[str", Any]] = []
+        normalized_rows: list[dict[str, Any]] = []
         for row in rows:
             if isinstance(row, dict):
                 normalized_rows.append(row)
@@ -325,7 +325,7 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
         List of coerced values with LOBs read to strings/bytes.
 
     """
-    coerced_values: "list[Any]"= []
+    coerced_values: list[Any] = []
     for value in row:
         if is_readable(value):
             try:
@@ -348,7 +348,7 @@ ORA_PARSING_RANGE_START = 900
 ORA_PARSING_RANGE_END = 1000
 ORA_TABLESPACE_FULL = 1652
 
-_ERROR_CODE_MAPPING: "dict[int", tuple[type[SQLSpecError], str]] = {
+_ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     1: (UniqueViolationError, "unique constraint violation"),
     2291: (ForeignKeyViolationError, "foreign key constraint violation"),
     2292: (ForeignKeyViolationError, "foreign key constraint violation"),
@@ -665,7 +665,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         for compiled in compiled_operations:
             self._add_pipeline_operation(pipeline, compiled)
 
-        results: "list[StackResult]"= []
+        results: list[StackResult] = []
         started_transaction = False
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
@@ -1120,7 +1120,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         for compiled in compiled_operations:
             self._add_pipeline_operation(pipeline, compiled)
 
-        results: "list[StackResult]"= []
+        results: list[StackResult] = []
         started_transaction = False
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:

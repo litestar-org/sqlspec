@@ -823,7 +823,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         where_clauses = ["session_id = :session_id"]
-        params: "dict[str", Any] = {"session_id": session_id}
+        params: dict[str, Any] = {"session_id": session_id}
 
         if after_timestamp is not None:
             where_clauses.append("timestamp > :after_timestamp")

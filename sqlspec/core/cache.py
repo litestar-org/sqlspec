@@ -43,8 +43,10 @@ __all__ = (
     "get_cache",
     "get_cache_config",
     "get_default_cache",
+    "get_cache_instances",
     "get_pipeline_metrics",
     "reset_pipeline_registry",
+    "set_cache_instances",
 )
 
 T = TypeVar("T")
@@ -82,7 +84,7 @@ class CacheKey:
         self._hash = hash(key_data)
 
     @property
-def key_data(self) -> "tuple[Any, ...]":
+    def key_data(self) -> "tuple[Any, ...]":
         """Get the key data tuple."""
         return self._key_data
 
@@ -202,7 +204,7 @@ class LRUCache:
             max_size: Maximum number of cache entries
             ttl_seconds: Time-to-live in seconds (None for no expiration)
         """
-        self._cache: "dict[CacheKey, CacheNode]" = {}
+        self._cache: dict[CacheKey, CacheNode] = {}
         self._lock = threading.RLock()
         self._max_size = max_size
         self._ttl = ttl_seconds
@@ -363,6 +365,27 @@ def get_default_cache() -> LRUCache:
                 config = get_cache_config()
                 _default_cache = LRUCache(config.sql_cache_size)
     return _default_cache
+
+
+def get_cache_instances() -> "tuple[LRUCache | None, NamespacedCache | None]":
+    """Return the current cache instances.
+
+    Returns:
+        Tuple of (default_cache, namespaced_cache).
+    """
+    return _default_cache, _namespaced_cache
+
+
+def set_cache_instances(default_cache: "LRUCache | None", namespaced_cache: "NamespacedCache | None") -> None:
+    """Replace cache instances (used by tests and diagnostics).
+
+    Args:
+        default_cache: Default cache instance or None.
+        namespaced_cache: Namespaced cache instance or None.
+    """
+    global _default_cache, _namespaced_cache
+    _default_cache = default_cache
+    _namespaced_cache = namespaced_cache
 
 
 def clear_all_caches() -> None:
@@ -693,7 +716,7 @@ class NamespacedCache:
 
     @staticmethod
     def _build_caches(config: "CacheConfig", ttl_seconds: int | None) -> "dict[str, LRUCache]":
-        caches: "dict[str, LRUCache]" = {}
+        caches: dict[str, LRUCache] = {}
         for namespace, (_, size_getter) in NAMESPACED_CACHE_CONFIG.items():
             size = size_getter(config)
             caches[namespace] = LRUCache(size, ttl_seconds)

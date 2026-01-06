@@ -207,7 +207,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
 
-        params: "tuple[Any", ...]
+        params: tuple[Any, ...]
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
@@ -335,7 +335,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             WHERE app_name = ?
             ORDER BY update_time DESC
             """
-            params: "tuple[str", ...] = (app_name,)
+            params: tuple[str, ...] = (app_name,)
         else:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time

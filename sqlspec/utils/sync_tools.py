@@ -206,7 +206,8 @@ def async_(
         partial_f = functools.partial(function, *args, **kwargs)
         used_limiter = limiter or _default_limiter
         async with used_limiter:
-            return await asyncio.to_thread(partial_f)
+            result = await asyncio.to_thread(partial_f)
+            return cast("ReturnT", result)
 
     return wrapper
 

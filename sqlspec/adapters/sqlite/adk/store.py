@@ -255,7 +255,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         now_julian = _datetime_to_julian(now)
         state_json = to_json(state) if state else None
 
-        params: "tuple[Any", ...]
+        params: tuple[Any, ...]
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
@@ -379,7 +379,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             WHERE app_name = ?
             ORDER BY update_time DESC
             """
-            params: "tuple[str", ...] = (app_name,)
+            params: tuple[str, ...] = (app_name,)
         else:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -513,7 +513,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
     ) -> "list[EventRecord]":
         """Synchronous implementation of get_events."""
         where_clauses = ["session_id = ?"]
-        params: "list[Any]"= [session_id]
+        params: list[Any] = [session_id]
 
         if after_timestamp is not None:
             where_clauses.append("timestamp > ?")

@@ -38,7 +38,7 @@ def _convert_time_param(value: Any) -> Any:
     return value
 
 
-def _build_asyncpg_custom_type_coercions() -> "dict[type, "Callable[[Any], Any]"]":
+def _build_asyncpg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for AsyncPG."""
 
     return {

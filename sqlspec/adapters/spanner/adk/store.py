@@ -59,7 +59,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
         json_type = _json_param_type()
-        types: "dict[str", Any] = {
+        types: dict[str, Any] = {
             "id": SPANNER_PARAM_TYPES.STRING,
             "app_name": SPANNER_PARAM_TYPES.STRING,
             "user_id": SPANNER_PARAM_TYPES.STRING,
@@ -71,7 +71,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def _event_param_types(self, has_branch: bool) -> "dict[str, Any]":
         json_type = _json_param_type()
-        types: "dict[str", Any] = {
+        types: dict[str, Any] = {
             "id": SPANNER_PARAM_TYPES.STRING,
             "session_id": SPANNER_PARAM_TYPES.STRING,
             "app_name": SPANNER_PARAM_TYPES.STRING,
@@ -110,7 +110,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         state_json = to_json(state)
-        params: "dict[str", Any] = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_json}
+        params: dict[str, Any] = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_json}
         columns = "id, app_name, user_id, state, create_time, update_time"
         values = "@id, @app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP()"
         if self._owner_id_column_name:
@@ -179,8 +179,8 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             FROM {self._session_table}
             WHERE app_name = @app_name
         """
-        params: "dict[str", Any] = {"app_name": app_name}
-        types: "dict[str", Any] = {"app_name": SPANNER_PARAM_TYPES.STRING}
+        params: dict[str, Any] = {"app_name": app_name}
+        types: dict[str, Any] = {"app_name": SPANNER_PARAM_TYPES.STRING}
         if user_id is not None:
             sql = f"{sql} AND user_id = @user_id"
             params["user_id"] = user_id
@@ -189,7 +189,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(id), {self._shard_count})"
 
         rows = self._run_read(sql, params, types)
-        records: "list[SessionRecord]"= []
+        records: list[SessionRecord] = []
         for row in rows:
             state_value = self._decode_state(row[3])
             record: SessionRecord = {
@@ -237,7 +237,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         custom_serialized = (
             to_json(kwargs.get("custom_metadata")) if kwargs.get("custom_metadata") is not None else None
         )
-        params: "dict[str", Any] = {
+        params: dict[str, Any] = {
             "id": event_id,
             "session_id": session_id,
             "app_name": app_name,
@@ -371,7 +371,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         database = self._database()
         existing_tables = {t.table_id for t in database.list_tables()}  # type: ignore[no-untyped-call]
 
-        ddl_statements: "list[str]"= []
+        ddl_statements: list[str] = []
         if self._session_table not in existing_tables:
             ddl_statements.append(self._get_create_sessions_table_sql())
         if self._events_table not in existing_tables:

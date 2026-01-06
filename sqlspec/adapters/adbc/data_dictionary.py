@@ -289,8 +289,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         dialect = self._get_dialect(driver)
         version_info = self.get_version(driver)
 
-        feature_versions: "dict[str", VersionInfo] = {}
-        feature_flags: "dict[str", bool] = {}
+        feature_versions: dict[str, VersionInfo] = {}
+        feature_flags: dict[str, bool] = {}
 
         if dialect == "postgres":
             feature_versions = {

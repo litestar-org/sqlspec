@@ -116,7 +116,7 @@ class AsyncpgConnectionConfig(TypedDict):
     statement_cache_size: NotRequired[int]
     max_cached_statement_lifetime: NotRequired[int]
     max_cacheable_statement_size: NotRequired[int]
-    server_settings: "NotRequired[dict[str", str]]
+    server_settings: NotRequired["dict[str, str]"]
 
 
 class AsyncpgPoolConfig(AsyncpgConnectionConfig):
@@ -131,7 +131,7 @@ class AsyncpgPoolConfig(AsyncpgConnectionConfig):
     loop: NotRequired["AbstractEventLoop"]
     connection_class: NotRequired[type["AsyncpgConnection"]]
     record_class: NotRequired[type[Record]]
-    extra: "NotRequired[dict[str", Any]]
+    extra: NotRequired["dict[str, Any]"]
 
 
 class AsyncpgDriverFeatures(TypedDict):
@@ -276,7 +276,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
         )
 
-        features_dict: "dict[str", Any] = dict(driver_features) if driver_features else {}
+        features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
         serializer = features_dict.setdefault("json_serializer", to_json)
         deserializer = features_dict.setdefault("json_deserializer", from_json)
@@ -377,7 +377,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         database = config.get("database")
 
         async def get_conn() -> "AsyncpgConnection":
-            conn_kwargs: "dict[str", Any] = {
+            conn_kwargs: dict[str, Any] = {
                 "instance_connection_string": self.driver_features["cloud_sql_instance"],
                 "driver": "asyncpg",
                 "enable_iam_auth": self.driver_features.get("cloud_sql_enable_iam_auth", False),
@@ -414,7 +414,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         database = config.get("database")
 
         async def get_conn() -> "AsyncpgConnection":
-            conn_kwargs: "dict[str", Any] = {
+            conn_kwargs: dict[str, Any] = {
                 "instance_uri": self.driver_features["alloydb_instance_uri"],
                 "driver": "asyncpg",
                 "enable_iam_auth": self.driver_features.get("alloydb_enable_iam_auth", False),
@@ -526,7 +526,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             An AsyncPG driver session context manager.
         """
-        connection_holder: "dict[str", AsyncpgConnection] = {}
+        connection_holder: dict[str, AsyncpgConnection] = {}
 
         async def acquire_connection() -> AsyncpgConnection:
             if self.connection_instance is None:

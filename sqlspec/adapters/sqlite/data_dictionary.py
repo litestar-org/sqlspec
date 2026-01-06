@@ -69,14 +69,14 @@ class SqliteSyncDataDictionary(SyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_versions: "dict[str", VersionInfo] = {
+        feature_versions: dict[str, VersionInfo] = {
             "supports_json": VersionInfo(3, 38, 0),
             "supports_returning": VersionInfo(3, 35, 0),
             "supports_upsert": VersionInfo(3, 24, 0),
             "supports_window_functions": VersionInfo(3, 25, 0),
             "supports_cte": VersionInfo(3, 8, 3),
         }
-        feature_flags: "dict[str", bool] = {
+        feature_flags: dict[str, bool] = {
             "supports_transactions": True,
             "supports_prepared_statements": True,
             "supports_schemas": False,

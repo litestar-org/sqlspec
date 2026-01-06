@@ -69,11 +69,11 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_versions: "dict[str", VersionInfo] = {
+        feature_versions: dict[str, VersionInfo] = {
             "supports_returning": VersionInfo(0, 8, 0),
             "supports_upsert": VersionInfo(0, 8, 0),
         }
-        feature_flags: "dict[str", bool] = {
+        feature_flags: dict[str, bool] = {
             "supports_json": True,
             "supports_arrays": True,
             "supports_maps": True,

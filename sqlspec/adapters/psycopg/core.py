@@ -53,7 +53,7 @@ def _identity(value: Any) -> Any:
     return value
 
 
-def _build_psycopg_custom_type_coercions() -> "dict[type, "Callable[[Any], Any]"]":
+def _build_psycopg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for psycopg."""
 
     return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}

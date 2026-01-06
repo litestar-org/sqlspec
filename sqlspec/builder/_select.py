@@ -115,7 +115,7 @@ def _expr_not_like(col: "exp.Expression", placeholder: "exp.Placeholder") -> "ex
 
 
 def _expr_like_not(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
-    return col.like(placeholder).not_()
+    return exp.Not(this=cast("exp.Expression", col.like(placeholder)))
 
 
 def _expr_ilike(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":

@@ -255,10 +255,10 @@ class SchemaSerializer:
     def key(self) -> "tuple[type[Any] | None, bool]":
         return self._key
 
-def dump_one(self, item: Any) -> "dict[str, Any]":
+    def dump_one(self, item: Any) -> "dict[str, Any]":
         return self._dump(item)
 
-def dump_many(self, items: "Iterable[Any]") -> "list[dict[str, Any]]":
+    def dump_many(self, items: "Iterable[Any]") -> "list[dict[str, Any]]":
         return [self._dump(item) for item in items]
 
     def to_arrow(
@@ -297,20 +297,20 @@ def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], d
 
     if is_dataclass_instance(sample):
 
-def _dump_dataclass(value: Any) -> "dict[str, Any]":
-    return dataclass_to_dict(value, exclude_empty=exclude_unset)
+        def _dump_dataclass(value: Any) -> "dict[str, Any]":
+            return dataclass_to_dict(value, exclude_empty=exclude_unset)
 
-    return _dump_dataclass
+        return _dump_dataclass
     if is_pydantic_model(sample):
 
-def _dump_pydantic(value: Any) -> "dict[str, Any]":
+        def _dump_pydantic(value: Any) -> "dict[str, Any]":
             return cast("dict[str, Any]", value.model_dump(exclude_unset=exclude_unset))
 
         return _dump_pydantic
     if is_msgspec_struct(sample):
         if exclude_unset:
 
-def _dump(value: Any) -> "dict[str, Any]":
+            def _dump(value: Any) -> "dict[str, Any]":
                 return {
                     f: field_value
                     for f in value.__struct_fields__
@@ -323,14 +323,14 @@ def _dump(value: Any) -> "dict[str, Any]":
 
     if is_attrs_instance(sample):
 
-def _dump_attrs(value: Any) -> "dict[str, Any]":
+        def _dump_attrs(value: Any) -> "dict[str, Any]":
             return attrs_asdict(value, recurse=True)
 
         return _dump_attrs
 
     if has_dict_attribute(sample):
 
-def _dump_dict_attr(value: Any) -> "dict[str, Any]":
+        def _dump_dict_attr(value: Any) -> "dict[str, Any]":
             return dict(value.__dict__)
 
         return _dump_dict_attr

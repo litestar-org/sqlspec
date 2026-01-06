@@ -27,6 +27,34 @@ if TYPE_CHECKING:
 __all__ = ("LocalStore",)
 
 
+def _write_local_bytes(resolved: "Path", data: bytes) -> None:
+    """Write bytes to a local file, ensuring parent directories exist."""
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_bytes(data)
+
+
+def _delete_local_path(resolved: "Path") -> None:
+    """Delete a local file or directory."""
+    if resolved.is_dir():
+        shutil.rmtree(resolved)
+    elif resolved.exists():
+        resolved.unlink()
+
+
+def _copy_local_path(src: "Path", dst: "Path") -> None:
+    """Copy a local file or directory."""
+    if src.is_dir():
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dst)
+
+
+def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
+    """Write an Arrow table to a local path."""
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, str(resolved), **options)  # pyright: ignore
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class LocalStore:
     """Simple local file system storage backend.
@@ -101,11 +129,12 @@ class LocalStore:
         """Write bytes to file."""
         resolved = self._resolve_path(path)
 
-        def _action() -> None:
-            resolved.parent.mkdir(parents=True, exist_ok=True)
-            resolved.write_bytes(data)
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_bytes", path=str(resolved))
+        execute_sync_storage_operation(
+            partial(_write_local_bytes, resolved, data),
+            backend=self.backend_type,
+            operation="write_bytes",
+            path=str(resolved),
+        )
 
     def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from file."""
@@ -156,13 +185,9 @@ class LocalStore:
         """Delete file or directory."""
         resolved = self._resolve_path(path)
 
-        def _action() -> None:
-            if resolved.is_dir():
-                shutil.rmtree(resolved)
-            elif resolved.exists():
-                resolved.unlink()
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="delete", path=str(resolved))
+        execute_sync_storage_operation(
+            partial(_delete_local_path, resolved), backend=self.backend_type, operation="delete", path=str(resolved)
+        )
 
     def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy file or directory."""
@@ -170,13 +195,9 @@ class LocalStore:
         dst = self._resolve_path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
 
-        def _action() -> None:
-            if src.is_dir():
-                shutil.copytree(src, dst, dirs_exist_ok=True)
-            else:
-                shutil.copy2(src, dst)
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="copy", path=f"{src}->{dst}")
+        execute_sync_storage_operation(
+            partial(_copy_local_path, src, dst), backend=self.backend_type, operation="copy", path=f"{src}->{dst}"
+        )
 
     def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Move file or directory."""
@@ -259,11 +280,12 @@ class LocalStore:
         pq = import_pyarrow_parquet()
         resolved = self._resolve_path(path)
 
-        def _action() -> None:
-            resolved.parent.mkdir(parents=True, exist_ok=True)
-            pq.write_table(table, str(resolved), **kwargs)  # pyright: ignore
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_arrow", path=str(resolved))
+        execute_sync_storage_operation(
+            partial(_write_local_arrow, resolved, table, pq, kwargs),
+            backend=self.backend_type,
+            operation="write_arrow",
+            path=str(resolved),
+        )
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from files matching pattern.
@@ -363,7 +385,7 @@ class LocalStore:
         """Write Arrow table asynchronously."""
         self.write_arrow(path, table, **kwargs)
 
-    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches asynchronously.
 
         Args:

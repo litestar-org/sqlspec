@@ -21,6 +21,18 @@ __all__ = ("FSSpecBackend",)
 logger = get_logger(__name__)
 
 
+def _write_fsspec_bytes(fs: Any, resolved_path: str, data: bytes, options: "dict[str, Any]") -> None:
+    """Write raw bytes via an fsspec filesystem handle."""
+    with fs.open(resolved_path, mode="wb", **options) as file_obj:
+        file_obj.write(data)  # pyright: ignore
+
+
+def _write_fsspec_arrow(fs: Any, resolved_path: str, table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
+    """Write an Arrow table via an fsspec filesystem handle."""
+    with fs.open(resolved_path, mode="wb") as file_obj:
+        pq.write_table(table, file_obj, **options)  # pyright: ignore
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class FSSpecBackend:
     """Storage backend using fsspec.
@@ -103,11 +115,12 @@ class FSSpecBackend:
             if parent_dir and not self.fs.exists(parent_dir):
                 self.fs.makedirs(parent_dir, exist_ok=True)
 
-        def _action() -> None:
-            with self.fs.open(resolved_path, mode="wb", **kwargs) as file_obj:
-                file_obj.write(data)  # pyright: ignore
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_bytes", path=resolved_path)
+        execute_sync_storage_operation(
+            partial(_write_fsspec_bytes, self.fs, resolved_path, data, kwargs),
+            backend=self.backend_type,
+            operation="write_bytes",
+            path=resolved_path,
+        )
 
     def read_text(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from an object."""
@@ -176,11 +189,12 @@ class FSSpecBackend:
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
 
-        def _action() -> None:
-            with self.fs.open(resolved_path, mode="wb") as file_obj:
-                pq.write_table(table, file_obj, **kwargs)  # pyright: ignore
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_arrow", path=resolved_path)
+        execute_sync_storage_operation(
+            partial(_write_fsspec_arrow, self.fs, resolved_path, table, pq, kwargs),
+            backend=self.backend_type,
+            operation="write_arrow",
+            path=resolved_path,
+        )
 
     def _read_arrow(self, resolved_path: str, pq: Any, options: "dict[str, Any]") -> Any:
         with self.fs.open(resolved_path, mode="rb", **options) as file_obj:

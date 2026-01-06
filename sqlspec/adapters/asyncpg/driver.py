@@ -295,7 +295,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
 
         execution_args = statement.statement_config.execution_args
-        metadata: "dict[str", Any] = dict(execution_args) if execution_args else {}
+        metadata: dict[str, Any] = dict(execution_args) if execution_args else {}
         sql_text, _ = statement.compile()
         sql_upper = sql_text.upper()
         copy_data = metadata.get("postgres_copy_data")
@@ -377,7 +377,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     async def _execute_stack_native(
         self, stack: "StatementStack", *, continue_on_error: bool
     ) -> "tuple[StackResult, ...]":
-        results: "list[StackResult]"= []
+        results: list[StackResult] = []
 
         transaction_cm = None
         if not continue_on_error and not self._connection_in_transaction():

@@ -378,7 +378,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         )
 
         if isinstance(parameters, (list, tuple)):
-            result: "list[Any]"= []
+            result: list[Any] = []
             for idx, param in enumerate(parameters, start=1):  # pyright: ignore
                 cast_type = parameter_casts.get(idx, "").upper()
                 if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
@@ -499,7 +499,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
 
             if fetched_data and isinstance(fetched_data[0], tuple):
-                dict_data: "list[dict[Any", Any]] = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+                dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
             else:
                 dict_data = fetched_data  # type: ignore[assignment]
 
@@ -526,7 +526,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         if statement.is_script:
             sql = statement.raw_sql
-            prepared_parameters: "list[Any]"= []
+            prepared_parameters: list[Any] = []
         else:
             sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -766,7 +766,7 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
 
     sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
 
-    parameter_overrides: "dict[str", Any] = {
+    parameter_overrides: dict[str, Any] = {
         "default_parameter_style": default_style,
         "supported_parameter_styles": set(supported_styles),
         "default_execution_parameter_style": default_style,

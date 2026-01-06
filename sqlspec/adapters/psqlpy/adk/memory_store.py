@@ -188,7 +188,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         params = [query, app_name, user_id, limit]
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
             result = await conn.fetch(sql, params)
-            rows: "list[dict[str", Any]] = result.result() if result else []
+            rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
 
     async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
@@ -206,7 +206,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         params = [app_name, user_id, pattern, limit]
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
             result = await conn.fetch(sql, params)
-            rows: "list[dict[str", Any]] = result.result() if result else []
+            rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
 
     async def delete_entries_by_session(self, session_id: str) -> int:
@@ -217,7 +217,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
                 count_result = await conn.fetch(count_sql, [session_id])
-                count_rows: "list[dict[str", Any]] = count_result.result() if count_result else []
+                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [session_id])
                 return count
@@ -241,7 +241,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
                 count_result = await conn.fetch(count_sql, [])
-                count_rows: "list[dict[str", Any]] = count_result.result() if count_result else []
+                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [])
                 return count

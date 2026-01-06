@@ -25,7 +25,7 @@ __all__ = (
 logger = get_logger(__name__)
 
 
-DTYPE_TO_ARRAY_CODE: "dict[str", str] = {"float64": "d", "float32": "f", "uint8": "B", "int8": "b"}
+DTYPE_TO_ARRAY_CODE: "dict[str, str]" = {"float64": "d", "float32": "f", "uint8": "B", "int8": "b"}
 
 
 def numpy_converter_in(value: Any) -> "array.array[Any]":

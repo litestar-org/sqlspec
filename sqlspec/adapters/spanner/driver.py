@@ -198,9 +198,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 raise SQLConversionError(msg)
             column_names = [field.name for field in fields]
 
-            data: "list[dict[str", Any]] = []
+            data: list[dict[str, Any]] = []
             for row in rows:
-                item: "dict[str", Any] = {}
+                item: dict[str, Any] = {}
                 for index, column in enumerate(column_names):
                     item[column] = self._type_converter.convert_if_detected(row[index])
                 data.append(item)
@@ -254,7 +254,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             msg = "execute_many requires at least one parameter set"
             raise SQLConversionError(msg)
 
-        batch_args: "list[tuple[str", dict[str, Any] | None, dict[str, Any]]] = []
+        batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
         for params in prepared_parameters:
             coerced_params = self._coerce_params(params)
             if coerced_params is None:
@@ -380,7 +380,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             insert_sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('@p' + str(i) for i in range(len(columns)))})"
-            batch_args: "list[tuple[str", dict[str, Any] | None, dict[str, Any]]] = []
+            batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
             for record in records:
                 params = {f"p{i}": val for i, val in enumerate(record)}
                 coerced = self._coerce_params(params)

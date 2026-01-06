@@ -378,11 +378,11 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         if not version_info:
             return False
 
-        feature_flags: "dict[str", bool] = {
-            "supports_native_json": version_info.supports_native_json,
-            "supports_oson_blob": version_info.supports_oson_blob,
-            "supports_json_blob": version_info.supports_json_blob,
-            "supports_json": version_info.supports_json_blob,
+        feature_flags: dict[str, bool] = {
+            "supports_native_json": version_info.supports_native_json(),
+            "supports_oson_blob": version_info.supports_oson_blob(),
+            "supports_json_blob": version_info.supports_json_blob(),
+            "supports_json": version_info.supports_json_blob(),
             "supports_transactions": True,
             "supports_prepared_statements": True,
             "supports_schemas": True,
@@ -606,11 +606,11 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         if not version_info:
             return False
 
-        feature_flags: "dict[str", bool] = {
-            "supports_native_json": version_info.supports_native_json,
-            "supports_oson_blob": version_info.supports_oson_blob,
-            "supports_json_blob": version_info.supports_json_blob,
-            "supports_json": version_info.supports_json_blob,
+        feature_flags: dict[str, bool] = {
+            "supports_native_json": version_info.supports_native_json(),
+            "supports_oson_blob": version_info.supports_oson_blob(),
+            "supports_json_blob": version_info.supports_json_blob(),
+            "supports_json": version_info.supports_json_blob(),
             "supports_transactions": True,
             "supports_prepared_statements": True,
             "supports_schemas": True,

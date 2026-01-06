@@ -258,7 +258,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 for entry in entries:
                     content_json = self._serialize_json_field(entry["content_json"])
                     metadata_json = self._serialize_json_field(entry["metadata_json"])
-                    params: "tuple[Any", ...]
+                    params: tuple[Any, ...]
                     if self._owner_id_column_name:
                         params = (
                             entry["id"],
@@ -387,7 +387,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 cursor.close()  # type: ignore[no-untyped-call]
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
-        records: "list[MemoryRecord]"= []
+        records: list[MemoryRecord] = []
         for row in rows:
             content_json = row[7]
             if isinstance(content_json, dict):

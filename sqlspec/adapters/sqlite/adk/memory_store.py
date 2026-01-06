@@ -259,7 +259,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                      content_text, metadata_json, inserted_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
-                    params: "tuple[Any", ...] = (
+                    params: tuple[Any, ...] = (
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
@@ -344,7 +344,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         ORDER BY m.timestamp DESC
         LIMIT ?
         """
-        params: "tuple[Any", ...] = (app_name, user_id, query, limit)
+        params: tuple[Any, ...] = (app_name, user_id, query, limit)
         return self._fetch_records(sql, params)
 
     def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
@@ -362,7 +362,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         params = (app_name, user_id, pattern, limit)
         return self._fetch_records(sql, params)
 
-    def _fetch_records(self, sql: str, params: "tuple[Any", ...]) -> "list[MemoryRecord]":
+    def _fetch_records(self, sql: str, params: "tuple[Any, ...]") -> "list[MemoryRecord]":
         with self._config.provide_connection() as conn:
             self._enable_foreign_keys(conn)
             cursor = conn.execute(sql, params)

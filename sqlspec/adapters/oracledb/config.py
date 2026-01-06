@@ -84,7 +84,7 @@ class OraclePoolParams(OracleConnectionParams):
     max_sessions_per_shard: NotRequired[int]
     soda_metadata_cache: NotRequired[bool]
     ping_interval: NotRequired[int]
-    extra: "NotRequired[dict[str", Any]]
+    extra: NotRequired["dict[str, Any]"]
 
 
 class OracleDriverFeatures(TypedDict):
@@ -166,7 +166,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         *,
         connection_config: "OraclePoolParams | dict[str, Any] | None" = None,
         connection_instance: "OracleSyncConnectionPool | None" = None,
-        migration_config: "dict[str", Any] | None = None,
+        migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -192,7 +192,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         processed_connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or oracledb_statement_config
 
-        processed_driver_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
         processed_driver_features.setdefault("enable_lowercase_column_names", True)
         processed_driver_features.setdefault("enable_uuid_binary", True)
@@ -272,7 +272,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         Returns:
             An OracleSyncDriver session context manager.
         """
-        conn_holder: "dict[str", OracleSyncConnection] = {}
+        conn_holder: dict[str, OracleSyncConnection] = {}
 
         def acquire_connection() -> OracleSyncConnection:
             if self.connection_instance is None:
@@ -379,7 +379,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         *,
         connection_config: "OraclePoolParams | dict[str, Any] | None" = None,
         connection_instance: "OracleAsyncConnectionPool | None" = None,
-        migration_config: "dict[str", Any] | None = None,
+        migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -404,7 +404,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
         processed_connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
         processed_driver_features.setdefault("enable_lowercase_column_names", True)
         processed_driver_features.setdefault("enable_uuid_binary", True)
@@ -488,7 +488,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         Returns:
             An OracleAsyncDriver session context manager.
         """
-        conn_holder: "dict[str", OracleAsyncConnection] = {}
+        conn_holder: dict[str, OracleAsyncConnection] = {}
 
         async def acquire_connection() -> OracleAsyncConnection:
             if self.connection_instance is None:

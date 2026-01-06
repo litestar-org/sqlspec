@@ -220,6 +220,22 @@ def _encode_arrow_payload(table: "ArrowTable", format_choice: StorageFormat, *, 
     return result_bytes
 
 
+def _delete_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> None:
+    execute_sync_storage_operation(partial(backend.delete, path), backend=backend_name, operation="delete", path=path)
+
+
+def _write_backend_sync(backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str) -> None:
+    execute_sync_storage_operation(
+        partial(backend.write_bytes, path, payload), backend=backend_name, operation="write_bytes", path=path
+    )
+
+
+def _read_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> bytes:
+    return execute_sync_storage_operation(
+        partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
+    )
+
+
 def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "ArrowTable":
     pa = import_pyarrow()
     if format_choice == "parquet":
@@ -474,15 +490,8 @@ class AsyncStoragePipeline:
                         raise
                 continue
 
-            def _delete_sync(
-                backend: "ObjectStoreProtocol" = backend, path: str = path, backend_name: str = backend_name
-            ) -> None:
-                execute_sync_storage_operation(
-                    partial(backend.delete, path), backend=backend_name, operation="delete", path=path
-                )
-
             try:
-                await async_(_delete_sync)()
+                await async_(_delete_backend_sync)(backend=backend, path=path, backend_name=backend_name)
             except Exception:
                 if not ignore_errors:
                     raise
@@ -507,21 +516,7 @@ class AsyncStoragePipeline:
                 path=path,
             )
         else:
-
-            def _write_sync(
-                backend: "ObjectStoreProtocol" = backend,
-                path: str = path,
-                payload: bytes = payload,
-                backend_name: str = backend_name,
-            ) -> None:
-                execute_sync_storage_operation(
-                    partial(backend.write_bytes, path, payload),
-                    backend=backend_name,
-                    operation="write_bytes",
-                    path=path,
-                )
-
-            await async_(_write_sync)()
+            await async_(_write_backend_sync)(backend=backend, path=path, payload=payload, backend_name=backend_name)
 
         elapsed = perf_counter() - start
         bytes_written = len(payload)
@@ -546,15 +541,7 @@ class AsyncStoragePipeline:
                 partial(backend.read_bytes_async, path), backend=backend_name, operation="read_bytes", path=path
             )
         else:
-
-            def _read_sync(
-                backend: "ObjectStoreProtocol" = backend, path: str = path, backend_name: str = backend_name
-            ) -> bytes:
-                return execute_sync_storage_operation(
-                    partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
-                )
-
-            payload = await async_(_read_sync)()
+            payload = await async_(_read_backend_sync)(backend=backend, path=path, backend_name=backend_name)
 
         table = _decode_arrow_payload(payload, file_format)
         rows_processed = int(table.num_rows)

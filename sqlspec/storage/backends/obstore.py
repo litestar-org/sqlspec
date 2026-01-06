@@ -30,6 +30,12 @@ logger = get_logger(__name__)
 DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}
 
 
+def _read_obstore_bytes(store: Any, resolved_path: str) -> bytes:
+    """Read bytes via obstore."""
+    result = store.get(resolved_path)
+    return cast("bytes", result.bytes().to_bytes())
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class ObStoreBackend:
     """Object storage backend using obstore.
@@ -142,12 +148,11 @@ class ObStoreBackend:
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
-        def _action() -> bytes:
-            result = self.store.get(resolved_path)
-            return cast("bytes", result.bytes().to_bytes())
-
         return execute_sync_storage_operation(
-            _action, backend=self.backend_type, operation="read_bytes", path=resolved_path
+            partial(_read_obstore_bytes, self.store, resolved_path),
+            backend=self.backend_type,
+            operation="read_bytes",
+            path=resolved_path,
         )
 
     def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]

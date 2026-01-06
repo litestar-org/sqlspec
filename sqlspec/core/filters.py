@@ -115,7 +115,7 @@ class StatementFilter(ABC):
         return resolved_names
 
     @abstractmethod
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return a cache key for this filter's configuration.
 
         Returns:
@@ -157,7 +157,7 @@ class BeforeAfterFilter(StatementFilter):
             names.append(f"{self.field_name}_after")
         return names
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         param_names = self.get_param_names()
@@ -171,7 +171,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Apply filter to SQL expression only."""
-        conditions: "list[Condition]" = []
+        conditions: list[Condition] = []
         col_expr = exp.column(self.field_name)
 
         proposed_names = self.get_param_names()
@@ -198,7 +198,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
             final_condition = exp.And(this=final_condition, expression=cond)
         return result.where(final_condition)
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("BeforeAfterFilter", self.field_name, self.before, self.after)
 
@@ -239,7 +239,7 @@ class OnBeforeAfterFilter(StatementFilter):
             names.append(f"{self.field_name}_on_or_after")
         return names
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         param_names = self.get_param_names()
@@ -252,7 +252,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        conditions: "list[Condition]" = []
+        conditions: list[Condition] = []
 
         proposed_names = self.get_param_names()
         if not proposed_names:
@@ -282,7 +282,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
             final_condition = exp.And(this=final_condition, expression=cond)
         return result.where(final_condition)
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("OnBeforeAfterFilter", self.field_name, self.on_or_before, self.on_or_after)
 
@@ -322,7 +322,7 @@ class InCollectionFilter(InAnyFilter[T]):
             return []
         return [f"{self.field_name}_in_{i}" for i, _ in enumerate(self.values)]
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
@@ -340,7 +340,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
 
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
-        placeholder_expressions: "list[exp.Placeholder]" = [
+        placeholder_expressions: list[exp.Placeholder] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
@@ -350,7 +350,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
             result = result.add_named_parameter(resolved_name, value)
         return result
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("InCollectionFilter", self.field_name, values_tuple)
@@ -383,7 +383,7 @@ class NotInCollectionFilter(InAnyFilter[T]):
         # Use object id to ensure uniqueness between instances
         return [f"{self.field_name}_notin_{i}_{id(self)}" for i, _ in enumerate(self.values)]
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
@@ -398,7 +398,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
 
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
-        placeholder_expressions: "list[exp.Placeholder]" = [
+        placeholder_expressions: list[exp.Placeholder] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
@@ -410,7 +410,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
             result = result.add_named_parameter(resolved_name, value)
         return result
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("NotInCollectionFilter", self.field_name, values_tuple)
@@ -442,7 +442,7 @@ class AnyCollectionFilter(InAnyFilter[T]):
             return []
         return [f"{self.field_name}_any_{i}" for i, _ in enumerate(self.values)]
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
@@ -460,7 +460,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
 
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
-        placeholder_expressions: "list[exp.Expression]" = [
+        placeholder_expressions: list[exp.Expression] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
@@ -471,7 +471,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
             result = result.add_named_parameter(resolved_name, value)
         return result
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("AnyCollectionFilter", self.field_name, values_tuple)
@@ -503,7 +503,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
             return []
         return [f"{self.field_name}_not_any_{i}" for i, _ in enumerate(self.values)]
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
@@ -518,7 +518,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
 
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
-        placeholder_expressions: "list[exp.Expression]" = [
+        placeholder_expressions: list[exp.Expression] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
@@ -530,7 +530,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
             result = result.add_named_parameter(resolved_name, value)
         return result
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("NotAnyCollectionFilter", self.field_name, values_tuple)
@@ -570,7 +570,7 @@ class LimitOffsetFilter(PaginationFilter):
         """Get parameter names without storing them."""
         return ["limit", "offset"]
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         param_names = self.get_param_names()
         return [], {param_names[0]: self.limit, param_names[1]: self.offset}
@@ -599,7 +599,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         result = result.add_named_parameter(limit_param_name, self.limit)
         return result.add_named_parameter(offset_param_name, self.offset)
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("LimitOffsetFilter", self.limit, self.offset)
 
@@ -624,7 +624,7 @@ class OrderByFilter(StatementFilter):
     def sort_order(self) -> Literal["asc", "desc"]:
         return self._sort_order  # pyright: ignore
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         return [], {}
 
@@ -651,7 +651,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
 
         return statement.copy(statement=new_statement)
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("OrderByFilter", self.field_name, self.sort_order)
 
@@ -670,7 +670,7 @@ class SearchFilter(StatementFilter):
         self._ignore_case = ignore_case
 
     @property
-def field_name(self) -> "str | set[str]":
+    def field_name(self) -> "str | set[str]":
         return self._field_name
 
     @property
@@ -689,7 +689,7 @@ def field_name(self) -> "str | set[str]":
             return f"{self.field_name}_search"
         return "search_value"
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         param_name = self.get_param_name()
@@ -712,7 +712,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         if isinstance(self.field_name, str):
             result = statement.where(like_op(this=exp.column(self.field_name), expression=pattern_expr))
         elif isinstance(self.field_name, set) and self.field_name:
-            field_conditions: "list[Condition]" = [
+            field_conditions: list[Condition] = [
                 like_op(this=exp.column(field), expression=pattern_expr) for field in self.field_name
             ]
             if not field_conditions:
@@ -728,7 +728,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         search_value_with_wildcards = f"%{self.value}%"
         return result.add_named_parameter(param_name, search_value_with_wildcards)
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
         return ("SearchFilter", field_names, self.value, self.ignore_case)
@@ -749,7 +749,7 @@ class NullFilter(StatementFilter):
     def field_name(self) -> str:
         return self._field_name
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters.
 
         Returns empty parameters since IS NULL requires no values.
@@ -762,7 +762,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         is_null_condition = exp.Is(this=col_expr, expression=exp.Null())
         return statement.where(is_null_condition)
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("NullFilter", self.field_name)
 
@@ -782,7 +782,7 @@ class NotNullFilter(StatementFilter):
     def field_name(self) -> str:
         return self._field_name
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters.
 
         Returns empty parameters since IS NOT NULL requires no values.
@@ -796,7 +796,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         is_not_null_condition = exp.Not(this=is_null_condition)
         return statement.where(is_not_null_condition)
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("NotNullFilter", self.field_name)
 
@@ -815,7 +815,7 @@ class NotInSearchFilter(SearchFilter):
             return f"{self.field_name}_not_search"
         return "not_search_value"
 
-def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         param_name = self.get_param_name()
@@ -839,7 +839,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         if isinstance(self.field_name, str):
             result = statement.where(exp.Not(this=like_op(this=exp.column(self.field_name), expression=pattern_expr)))
         elif isinstance(self.field_name, set) and self.field_name:
-            field_conditions: "list[Condition]" = [
+            field_conditions: list[Condition] = [
                 exp.Not(this=like_op(this=exp.column(field), expression=pattern_expr)) for field in self.field_name
             ]
             if not field_conditions:
@@ -854,7 +854,7 @@ def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         search_value_with_wildcards = f"%{self.value}%"
         return result.add_named_parameter(param_name, search_value_with_wildcards)
 
-def get_cache_key(self) -> "tuple[Any, ...]":
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
         return ("NotInSearchFilter", field_names, self.value, self.ignore_case)
@@ -914,7 +914,7 @@ FilterTypes: TypeAlias = (
 )
 
 
-def create_filters(filters: "list[StatementFilter]") -> "tuple["StatementFilter", ...]":
+def create_filters(filters: "list[StatementFilter]") -> "tuple[StatementFilter, ...]":
     """Convert mutable filters to immutable tuple.
 
     Since StatementFilter classes are now immutable (with read-only properties),
@@ -936,7 +936,7 @@ def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str]":
     return (class_name, field_name)
 
 
-def canonicalize_filters(filters: "list[StatementFilter]") -> "tuple["StatementFilter", ...]":
+def canonicalize_filters(filters: "list[StatementFilter]") -> "tuple[StatementFilter, ...]":
     """Sort filters by type and field_name for consistent hashing.
 
     Args:

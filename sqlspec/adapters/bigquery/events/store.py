@@ -52,7 +52,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
 
     __slots__ = ()
 
-def _column_types(self) -> "tuple[str, str, str]":
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return BigQuery-specific column types.
 
         Returns:

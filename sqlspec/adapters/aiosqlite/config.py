@@ -54,7 +54,7 @@ class AiosqlitePoolParams(AiosqliteConnectionParams):
     connect_timeout: NotRequired[float]
     idle_timeout: NotRequired[float]
     operation_timeout: NotRequired[float]
-    extra: "NotRequired[dict[str", Any]]
+    extra: NotRequired["dict[str, Any]"]
 
 
 class AiosqliteDriverFeatures(TypedDict):
@@ -148,7 +148,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             **kwargs: Additional keyword arguments passed to the base configuration.
 
         """
-        config_dict: "dict[str", Any] = dict(connection_config) if connection_config else {}
+        config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
 
         if "database" not in config_dict or config_dict["database"] == ":memory:":
             config_dict["database"] = "file::memory:?cache=shared"
@@ -165,7 +165,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         config_dict = normalize_connection_config(config_dict)
 
-        processed_driver_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         processed_driver_features.setdefault("enable_custom_adapters", True)
         json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
         json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
@@ -245,7 +245,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             An AiosqliteDriver session context manager.
 
         """
-        pool_conn_holder: "dict[str", AiosqlitePoolConnection] = {}
+        pool_conn_holder: dict[str, AiosqlitePoolConnection] = {}
 
         async def acquire_connection() -> AiosqliteConnection:
             if self.connection_instance is None:

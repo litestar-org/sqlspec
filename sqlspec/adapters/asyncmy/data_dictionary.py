@@ -69,12 +69,12 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_versions: "dict[str", VersionInfo] = {
+        feature_versions: dict[str, VersionInfo] = {
             "supports_json": VersionInfo(5, 7, 8),
             "supports_cte": VersionInfo(8, 0, 1),
             "supports_window_functions": VersionInfo(8, 0, 2),
         }
-        feature_flags: "dict[str", bool] = {
+        feature_flags: dict[str, bool] = {
             "supports_returning": False,
             "supports_upsert": True,
             "supports_transactions": True,
@@ -219,7 +219,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
 
         result = await asyncmy_driver.execute(sql)
         # Parse SHOW INDEX output
-        indexes: "dict[str", dict[str, Any]] = {}
+        indexes: dict[str, dict[str, Any]] = {}
         for row in result.data:
             idx_name = row["Key_name"]
             if idx_name not in indexes:
