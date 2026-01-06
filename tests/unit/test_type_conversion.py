@@ -21,16 +21,7 @@ from sqlspec.core import (
     format_datetime_rfc3339,
     parse_datetime_rfc3339,
 )
-
-
-def _is_compiled() -> bool:
-    """Check if core modules are mypyc-compiled."""
-    try:
-        from sqlspec.core import type_converter
-
-        return hasattr(type_converter, "__file__") and (type_converter.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
+from tests.conftest import requires_interpreted
 
 
 class TestBaseTypeConverter:
@@ -167,13 +158,13 @@ class TestBaseTypeConverter:
             detected = self.detector.detect_type(string)
             assert detected is None, f"Incorrectly detected: {string}"
 
-    @pytest.mark.skipif(_is_compiled(), reason="mypyc enforces type annotations at call boundary")
+    @requires_interpreted
     def test_none_input(self) -> None:
         """Test that None input is handled correctly."""
         detected = self.detector.detect_type(None)  # type: ignore[arg-type]
         assert detected is None
 
-    @pytest.mark.skipif(_is_compiled(), reason="mypyc enforces type annotations at call boundary")
+    @requires_interpreted
     def test_non_string_input(self) -> None:
         """Test that non-string input is handled correctly."""
         non_strings = [123, [], {}, True]

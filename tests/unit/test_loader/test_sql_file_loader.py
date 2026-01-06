@@ -18,29 +18,15 @@ import pytest
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import (
-    CachedSQLFile,
     NamedStatement,
     SQLFile,
+    SQLFileCacheEntry,
     SQLFileLoader,
     _normalize_dialect,
     _normalize_query_name,
 )
 from sqlspec.storage.registry import StorageRegistry
-
-
-def _is_compiled() -> bool:
-    """Check if loader modules are mypyc-compiled."""
-    try:
-        from sqlspec import loader
-
-        return hasattr(loader, "__file__") and (loader.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-requires_interpreted = pytest.mark.skipif(
-    _is_compiled(), reason="Test checks __slots__ attribute which is not accessible on mypyc-compiled classes"
-)
+from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("loader")
 
@@ -113,11 +99,11 @@ def test_sql_file_with_metadata() -> None:
 
 
 def test_cached_sqlfile_creation() -> None:
-    """Test CachedSQLFile creation."""
+    """Test SQLFileCacheEntry creation."""
     sql_file = SQLFile("SELECT 1", "test.sql")
     statements = {"query1": NamedStatement("query1", "SELECT 1"), "query2": NamedStatement("query2", "SELECT 2")}
 
-    cached_file = CachedSQLFile(sql_file, statements)
+    cached_file = SQLFileCacheEntry(sql_file, statements)
 
     assert cached_file.sql_file == sql_file
     assert cached_file.parsed_statements == statements
@@ -126,9 +112,9 @@ def test_cached_sqlfile_creation() -> None:
 
 @requires_interpreted
 def test_cached_sqlfile_slots() -> None:
-    """Test that CachedSQLFile uses __slots__."""
+    """Test that SQLFileCacheEntry uses __slots__."""
     sql_file = SQLFile("SELECT 1", "test.sql")
-    cached_file = CachedSQLFile(sql_file, {})
+    cached_file = SQLFileCacheEntry(sql_file, {})
 
     assert hasattr(cached_file.__class__, "__slots__")
     assert cached_file.__class__.__slots__ == ("parsed_statements", "sql_file", "statement_names")
@@ -410,7 +396,7 @@ def test_is_file_unchanged(tmp_path: Path) -> None:
     loader = SQLFileLoader()
 
     sql_file_obj = SQLFile(original_content, str(sql_file))
-    cached_file = CachedSQLFile(sql_file_obj, {})
+    cached_file = SQLFileCacheEntry(sql_file_obj, {})
 
     assert loader._is_file_unchanged(str(sql_file), cached_file)
 

@@ -30,9 +30,8 @@ from sqlspec.driver._storage_helpers import (
 )
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
-from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+from sqlspec.utils.arrow_impl import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -709,8 +708,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             ... )
 
         """
-        ensure_pyarrow()
-
         if native_only:
             msg = (
                 f"Adapter '{self.__class__.__name__}' does not support native Arrow results. "
@@ -721,16 +718,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
 
-        arrow_data = convert_dict_to_arrow(result.data, return_format=return_format, batch_size=batch_size)
-
-        if arrow_schema is not None:
-            import pyarrow as pa
-
-            if not isinstance(arrow_schema, pa.Schema):
-                msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
-                raise TypeError(msg)
-
-            arrow_data = arrow_data.cast(arrow_schema)  # type: ignore[union-attr]
+        arrow_data = convert_dict_to_arrow_with_schema(
+            result.data, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
+        )
 
         return create_arrow_result(
             statement=result.statement,

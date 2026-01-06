@@ -21,7 +21,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import sqlspec.loader as loader_module
-from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
+from sqlspec.loader import NamedStatement, SQLFile, SQLFileCacheEntry, SQLFileLoader
 
 LOADER_COMPILED = loader_module.__file__.endswith((".so", ".pyd"))
 
@@ -172,7 +172,7 @@ SELECT 'from cache' as source;
 
         sql_file = SQLFile(content.strip(), tf.name)
         statements = {"cached_query": NamedStatement("cached_query", "SELECT 'from cache' as source")}
-        cached_file = CachedSQLFile(sql_file, statements)
+        cached_file = SQLFileCacheEntry(sql_file, statements)
 
         mock_cache.get_file.return_value = cached_file
 
@@ -228,7 +228,7 @@ SELECT 'original' as version;
 
         sql_file = SQLFile(original_content.strip(), tf.name)
         statements = {"changing_query": NamedStatement("changing_query", "SELECT 'original' as version")}
-        cached_file = CachedSQLFile(sql_file, statements)
+        cached_file = SQLFileCacheEntry(sql_file, statements)
 
         mock_cache.get_file.return_value = cached_file
 
@@ -252,7 +252,7 @@ def test_file_content_change_detection() -> None:
         tf.flush()
 
         sql_file = SQLFile(original_content, tf.name)
-        cached_file = CachedSQLFile(sql_file, {})
+        cached_file = SQLFileCacheEntry(sql_file, {})
 
         assert loader._is_file_unchanged(tf.name, cached_file)
 
@@ -273,7 +273,7 @@ def test_file_deletion_handling() -> None:
         tf.flush()
 
         sql_file = SQLFile(content, tf.name)
-        cached_file = CachedSQLFile(sql_file, {})
+        cached_file = SQLFileCacheEntry(sql_file, {})
 
         Path(tf.name).unlink()
 
@@ -286,14 +286,14 @@ def test_checksum_calculation_error_handling() -> None:
 
     with patch("sqlspec.loader.SQLFileLoader._read_file_content", side_effect=Exception("Read error")):
         sql_file = SQLFile("SELECT 1", "/nonexistent/file.sql")
-        cached_file = CachedSQLFile(sql_file, {})
+        cached_file = SQLFileCacheEntry(sql_file, {})
         result = loader._is_file_unchanged("/nonexistent/file.sql", cached_file)
 
         assert not result
 
 
 def test_cached_sqlfile_structure() -> None:
-    """Test CachedSQLFile structure and data integrity."""
+    """Test SQLFileCacheEntry structure and data integrity."""
     content = """
 -- name: test_query_1
 SELECT 1;
@@ -308,7 +308,7 @@ SELECT 2;
         "test_query_2": NamedStatement("test_query_2", "SELECT 2"),
     }
 
-    cached_file = CachedSQLFile(sql_file, statements)
+    cached_file = SQLFileCacheEntry(sql_file, statements)
 
     assert cached_file.sql_file == sql_file
     assert cached_file.parsed_statements == statements
@@ -348,7 +348,7 @@ SELECT COUNT(*) FROM users;
         cache_call_args = mock_cache.put_file.call_args[0]
         cached_data = cache_call_args[1]
 
-        assert isinstance(cached_data, CachedSQLFile)
+        assert isinstance(cached_data, SQLFileCacheEntry)
 
         assert "user_report" in cached_data.parsed_statements
         assert "analytics.user_report" not in cached_data.parsed_statements
@@ -370,7 +370,7 @@ SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE;
     cached_statements = {
         "daily_users": NamedStatement("daily_users", "SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE")
     }
-    cached_file = CachedSQLFile(cached_sql_file, cached_statements)
+    cached_file = SQLFileCacheEntry(cached_sql_file, cached_statements)
 
     loader = SQLFileLoader()
 
@@ -494,7 +494,7 @@ SELECT 'shared between loaders' as message;
 
             sql_file = SQLFile(content.strip(), tf.name)
             statements = {"shared_query": NamedStatement("shared_query", "SELECT 'shared between loaders' as message")}
-            cached_file = CachedSQLFile(sql_file, statements)
+            cached_file = SQLFileCacheEntry(sql_file, statements)
 
             shared_cache.get.return_value = cached_file
             shared_cache.reset_mock()
@@ -612,7 +612,7 @@ LIMIT 100;
             cached_statements = {
                 f"perf_query_{i:03d}": NamedStatement(f"perf_query_{i:03d}", f"SELECT {i}") for i in range(100)
             }
-            cached_file = CachedSQLFile(sql_file, cached_statements)
+            cached_file = SQLFileCacheEntry(sql_file, cached_statements)
 
             loader2 = SQLFileLoader()
             mock_cache.get_file.return_value = cached_file

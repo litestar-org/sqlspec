@@ -51,7 +51,7 @@ class PsycopgConnectionParams(TypedDict):
     sslkey: NotRequired[str]
     sslrootcert: NotRequired[str]
     autocommit: NotRequired[bool]
-    extra: NotRequired[dict[str, Any]]
+    extra: "NotRequired[dict[str", Any]]
 
 
 class PsycopgPoolParams(PsycopgConnectionParams):
@@ -67,7 +67,7 @@ class PsycopgPoolParams(PsycopgConnectionParams):
     reconnect_timeout: NotRequired[float]
     num_workers: NotRequired[int]
     configure: NotRequired["Callable[..., Any]"]
-    kwargs: NotRequired[dict[str, Any]]
+    kwargs: "NotRequired[dict[str", Any]]
 
 
 class PsycopgDriverFeatures(TypedDict):
@@ -96,6 +96,8 @@ class PsycopgDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 __all__ = (
@@ -152,9 +154,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         *,
         connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
         connection_instance: "ConnectionPool | None" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str", Any] | None = None,
         statement_config: "StatementConfig | None" = None,
-        driver_features: "dict[str, Any] | None" = None,
+        driver_features: "PsycopgDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         **kwargs: Any,
@@ -177,7 +179,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         processed_connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        processed_driver_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
         processed_driver_features.setdefault("json_serializer", serializer)
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
@@ -276,7 +278,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Returns:
             A PsycopgSyncDriver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
+        conn_ctx_holder: "dict[str", Any] = {}
 
         def acquire_connection() -> PsycopgSyncConnection:
             if self.connection_instance:
@@ -387,7 +389,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         connection_instance: "AsyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
-        driver_features: "dict[str, Any] | None" = None,
+        driver_features: "PsycopgDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         **kwargs: Any,
@@ -410,7 +412,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         processed_connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        processed_driver_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
         processed_driver_features.setdefault("json_serializer", serializer)
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
@@ -533,7 +535,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Returns:
             A PsycopgAsyncDriver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
+        conn_ctx_holder: "dict[str", Any] = {}
 
         async def acquire_connection() -> PsycopgAsyncConnection:
             if self.connection_instance is None:

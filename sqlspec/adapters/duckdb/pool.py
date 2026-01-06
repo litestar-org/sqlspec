@@ -81,7 +81,7 @@ class DuckDBConnectionPool:
         self._thread_local = threading.local()
         self._lock = threading.RLock()
         self._created_connections = 0
-        self._connection_times: dict[int, float] = {}
+        self._connection_times: "dict[int", float] = {}
 
     def _create_connection(self) -> DuckDBConnection:
         """Create a new DuckDB connection with extensions and secrets."""

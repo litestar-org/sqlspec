@@ -787,7 +787,7 @@ class HasParameterBuilderProtocol(Protocol):
         ...
 
     def build(self, dialect: Any = None) -> Any:
-        """Build the SQL query and return a SafeQuery-like object."""
+        """Build the SQL query and return a BuiltQuery-like object."""
         ...
 
 

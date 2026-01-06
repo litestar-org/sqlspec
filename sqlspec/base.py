@@ -581,12 +581,12 @@ class SQLSpec:
         """Update cache configuration with partial values.
 
         Args:
-            sql_cache_size: Size of the SQL statement cache.
-            fragment_cache_size: Size of the AST fragment cache.
+            sql_cache_size: Size of the statement/builder cache.
+            fragment_cache_size: Size of the expression/parameter/file cache.
             optimized_cache_size: Size of the optimized expression cache.
-            sql_cache_enabled: Enable/disable SQL cache.
-            fragment_cache_enabled: Enable/disable fragment cache.
-            optimized_cache_enabled: Enable/disable optimized cache.
+            sql_cache_enabled: Enable/disable statement and builder cache.
+            fragment_cache_enabled: Enable/disable expression/parameter/file cache.
+            optimized_cache_enabled: Enable/disable optimized expression cache.
         """
         current_config = get_cache_config()
         update_cache_config(

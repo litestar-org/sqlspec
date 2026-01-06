@@ -26,8 +26,8 @@ from sqlspec.core import (
     CacheConfig,
     CacheKey,
     CacheStats,
-    NamespacedCache,
     LRUCache,
+    NamespacedCache,
     clear_all_caches,
     get_cache,
     get_cache_config,
@@ -382,6 +382,81 @@ def test_namespaced_cache_parameter_operations() -> None:
 
     cache.delete_parameter(cache_key)
     assert cache.get_parameter(cache_key) is None
+
+
+def test_namespaced_cache_additional_namespaces() -> None:
+    """Test NamespacedCache optimized, builder, and file namespaces."""
+    cache = get_cache()
+
+    cache_key = "shared-key"
+    optimized_value = MagicMock()
+    builder_value = MagicMock()
+    file_value = MagicMock()
+
+    cache.put_optimized(cache_key, optimized_value)
+    cache.put_builder(cache_key, builder_value)
+    cache.put_file(cache_key, file_value)
+
+    assert cache.get_optimized(cache_key) is optimized_value
+    assert cache.get_builder(cache_key) is builder_value
+    assert cache.get_file(cache_key) is file_value
+
+    cache.delete_optimized(cache_key)
+    assert cache.get_optimized(cache_key) is None
+    assert cache.get_builder(cache_key) is builder_value
+    assert cache.get_file(cache_key) is file_value
+
+
+def test_namespaced_cache_respects_config_flags() -> None:
+    """Test that cache config flags disable namespaces."""
+    original_config = get_cache_config()
+
+    try:
+        update_cache_config(
+            CacheConfig(sql_cache_enabled=False, fragment_cache_enabled=False, optimized_cache_enabled=False)
+        )
+        cache = get_cache()
+
+        cache.put_statement("stmt", "value")
+        cache.put_builder("builder", "value")
+        cache.put_expression("expr", "value")
+        cache.put_parameter("param", "value")
+        cache.put_file("file", "value")
+        cache.put_optimized("opt", "value")
+
+        assert cache.get_statement("stmt") is None
+        assert cache.get_builder("builder") is None
+        assert cache.get_expression("expr") is None
+        assert cache.get_parameter("param") is None
+        assert cache.get_file("file") is None
+        assert cache.get_optimized("opt") is None
+    finally:
+        update_cache_config(original_config)
+
+
+def test_namespaced_cache_respects_compiled_flag() -> None:
+    """Test that compiled_cache_enabled disables all namespaces."""
+    original_config = get_cache_config()
+
+    try:
+        update_cache_config(CacheConfig(compiled_cache_enabled=False))
+        cache = get_cache()
+
+        cache.put_statement("stmt", "value")
+        cache.put_expression("expr", "value")
+        cache.put_parameter("param", "value")
+        cache.put_builder("builder", "value")
+        cache.put_file("file", "value")
+        cache.put_optimized("opt", "value")
+
+        assert cache.get_statement("stmt") is None
+        assert cache.get_expression("expr") is None
+        assert cache.get_parameter("param") is None
+        assert cache.get_builder("builder") is None
+        assert cache.get_file("file") is None
+        assert cache.get_optimized("opt") is None
+    finally:
+        update_cache_config(original_config)
 
 
 def test_get_default_cache_singleton() -> None:

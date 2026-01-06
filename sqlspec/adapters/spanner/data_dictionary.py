@@ -32,13 +32,13 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
 
     def get_feature_flag(self, driver: "SyncDriverAdapterBase", feature: str) -> bool:
         _ = driver
-        feature_checks = {
+        feature_flags: dict[str, bool] = {
             "supports_json": True,
             "supports_generators": False,
             "supports_index_clustering": True,
             "supports_interleaved_tables": True,
         }
-        return feature_checks.get(feature, False)
+        return feature_flags.get(feature, False)
 
     def get_optimal_type(self, driver: "SyncDriverAdapterBase", type_category: str) -> str:
         _ = driver

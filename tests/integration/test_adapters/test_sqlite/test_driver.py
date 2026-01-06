@@ -7,18 +7,9 @@ import pytest
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.sqlite import SqliteDriver
+from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("sqlite")
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
 
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -240,9 +231,7 @@ def test_sqlite_statement_stack_sequential(sqlite_session: SqliteDriver) -> None
     assert results[2].result.data[0]["total"] == 2
 
 
-@pytest.mark.skipif(
-    _is_compiled(), reason="mypyc-compiled driver modules have exception capture issues in continue_on_error mode"
-)
+@requires_interpreted
 def test_sqlite_statement_stack_continue_on_error(sqlite_session: SqliteDriver) -> None:
     """Sequential fallback should honor continue-on-error mode."""
 

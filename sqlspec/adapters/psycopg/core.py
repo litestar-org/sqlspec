@@ -3,7 +3,6 @@
 import datetime
 from typing import TYPE_CHECKING, Any
 
-import psycopg
 from psycopg import sql as psycopg_sql
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle
@@ -18,8 +17,10 @@ __all__ = ("build_copy_from_command", "build_psycopg_profile", "build_truncate_c
 def psycopg_pipeline_supported() -> bool:
     """Return True when libpq pipeline support is available."""
     try:
+        import psycopg
+
         capabilities = psycopg.capabilities
-    except AttributeError:
+    except (ImportError, AttributeError):
         return False
     try:
         return bool(capabilities.has_pipeline())
@@ -28,6 +29,8 @@ def psycopg_pipeline_supported() -> bool:
 
 
 def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
+    from psycopg import sql as psycopg_sql
+
     parts = [part for part in table.split(".") if part]
     if not parts:
         msg = "Table name must not be empty"
@@ -50,7 +53,7 @@ def _identity(value: Any) -> Any:
     return value
 
 
-def _build_psycopg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
+def _build_psycopg_custom_type_coercions() -> "dict[type, "Callable[[Any], Any]"]":
     """Return custom type coercions for psycopg."""
 
     return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}

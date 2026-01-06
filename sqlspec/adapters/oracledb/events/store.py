@@ -209,7 +209,7 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         self._in_memory, self._json_storage = _init_oracle_settings(self._extension_settings)
         self._oracle_version_info: OracleVersionInfo | None = None
 
-    def _column_types(self) -> tuple[str, str, str]:
+def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""
         storage = self._json_storage or JSONStorageType.BLOB_JSON
         if storage == JSONStorageType.JSON_NATIVE:
@@ -314,7 +314,7 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         self._in_memory, self._json_storage = _init_oracle_settings(self._extension_settings)
         self._oracle_version_info: OracleVersionInfo | None = None
 
-    def _column_types(self) -> tuple[str, str, str]:
+def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""
         storage = self._json_storage or JSONStorageType.BLOB_JSON
         if storage == JSONStorageType.JSON_NATIVE:

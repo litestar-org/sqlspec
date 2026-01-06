@@ -66,7 +66,7 @@ class BigQueryConnectionParams(TypedDict):
     dataframes_backend: NotRequired[str]
     enable_continuous_queries: NotRequired[bool]
     enable_vector_search: NotRequired[bool]
-    extra: NotRequired[dict[str, Any]]
+    extra: "NotRequired[dict[str", Any]]
 
 
 class BigQueryDriverFeatures(TypedDict):
@@ -100,6 +100,8 @@ class BigQueryDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[Any], None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 class BigQueryConnectionContext:
@@ -137,14 +139,14 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     requires_staging_for_load: ClassVar[bool] = True
-    staging_protocols: ClassVar[tuple[str, ...]] = ("gs://",)
+    staging_protocols: "ClassVar[tuple[str", ...]] = ("gs://",)
 
     def __init__(
         self,
         *,
         connection_config: "BigQueryConnectionParams | dict[str, Any] | None" = None,
         connection_instance: "Any" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str", Any] | None = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -168,7 +170,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         self.connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        processed_driver_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
         user_connection_hook = processed_driver_features.pop("on_connection_create", None)
         processed_driver_features.setdefault("enable_uuid_conversion", True)
         serializer = processed_driver_features.setdefault("json_serializer", to_json)
@@ -183,7 +185,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         local_observability = observability_config
         if user_connection_hook is not None:
 
-            def _wrap_hook(context: dict[str, Any]) -> None:
+            def _wrap_hook(context: "dict[str", Any]) -> None:
                 connection = context.get("connection")
                 if connection is None:
                     return
@@ -250,7 +252,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         try:
             client_fields = {"project", "location", "credentials", "client_options", "client_info"}
-            config_dict: dict[str, Any] = {
+            config_dict: "dict[str", Any] = {
                 field: value
                 for field, value in self.connection_config.items()
                 if field in client_fields and value is not None and value is not Empty

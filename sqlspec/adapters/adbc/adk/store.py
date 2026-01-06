@@ -525,7 +525,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
         state_json = self._serialize_state(state)
 
-        params: tuple[Any, ...]
+        params: "tuple[Any", ...]
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
@@ -660,7 +660,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             WHERE app_name = ?
             ORDER BY update_time DESC
             """
-            params: tuple[str, ...] = (app_name,)
+            params: "tuple[str", ...] = (app_name,)
         else:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time

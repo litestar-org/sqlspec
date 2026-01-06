@@ -2,7 +2,7 @@
 
 from importlib.util import find_spec
 
-_dependency_cache: dict[str, bool] = {}
+_dependency_cache: "dict[str, bool]" = {}
 
 
 def module_available(module_name: str) -> bool:

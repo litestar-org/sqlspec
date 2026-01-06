@@ -1,24 +1,12 @@
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
-import pytest
-
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDataDictionaryBase
+from tests.conftest import requires_interpreted
 
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-pytestmark = pytest.mark.skipif(_is_compiled(), reason="Test requires interpreted subclasses of compiled driver bases.")
+pytestmark = requires_interpreted
 
 
 class _DummyDriver(SyncDriverAdapterBase):

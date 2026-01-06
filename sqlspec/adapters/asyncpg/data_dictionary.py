@@ -7,8 +7,6 @@ from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, Fore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 
 logger = get_logger("adapters.asyncpg.data_dictionary")
@@ -75,23 +73,27 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks: dict[str, Callable[..., bool]] = {
-            "supports_json": lambda v: v >= VersionInfo(9, 2, 0),
-            "supports_jsonb": lambda v: v >= VersionInfo(9, 4, 0),
-            "supports_uuid": lambda _: True,  # UUID extension widely available
-            "supports_arrays": lambda _: True,  # PostgreSQL has excellent array support
-            "supports_returning": lambda v: v >= VersionInfo(8, 2, 0),
-            "supports_upsert": lambda v: v >= VersionInfo(9, 5, 0),  # ON CONFLICT
-            "supports_window_functions": lambda v: v >= VersionInfo(8, 4, 0),
-            "supports_cte": lambda v: v >= VersionInfo(8, 4, 0),
-            "supports_transactions": lambda _: True,
-            "supports_prepared_statements": lambda _: True,
-            "supports_schemas": lambda _: True,
-            "supports_partitioning": lambda v: v >= VersionInfo(10, 0, 0),
+        feature_versions: "dict[str", VersionInfo] = {
+            "supports_json": VersionInfo(9, 2, 0),
+            "supports_jsonb": VersionInfo(9, 4, 0),
+            "supports_returning": VersionInfo(8, 2, 0),
+            "supports_upsert": VersionInfo(9, 5, 0),
+            "supports_window_functions": VersionInfo(8, 4, 0),
+            "supports_cte": VersionInfo(8, 4, 0),
+            "supports_partitioning": VersionInfo(10, 0, 0),
+        }
+        feature_flags: "dict[str", bool] = {
+            "supports_uuid": True,
+            "supports_arrays": True,
+            "supports_transactions": True,
+            "supports_prepared_statements": True,
+            "supports_schemas": True,
         }
 
-        if feature in feature_checks:
-            return bool(feature_checks[feature](version_info))
+        if feature in feature_versions:
+            return bool(version_info >= feature_versions[feature])
+        if feature in feature_flags:
+            return feature_flags[feature]
 
         return False
 

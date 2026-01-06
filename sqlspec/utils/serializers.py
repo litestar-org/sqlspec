@@ -255,10 +255,10 @@ class SchemaSerializer:
     def key(self) -> "tuple[type[Any] | None, bool]":
         return self._key
 
-    def dump_one(self, item: Any) -> dict[str, Any]:
+def dump_one(self, item: Any) -> "dict[str, Any]":
         return self._dump(item)
 
-    def dump_many(self, items: "Iterable[Any]") -> list[dict[str, Any]]:
+def dump_many(self, items: "Iterable[Any]") -> "list[dict[str, Any]]":
         return [self._dump(item) for item in items]
 
     def to_arrow(
@@ -273,32 +273,44 @@ _SCHEMA_SERIALIZERS: dict[tuple[type[Any] | None, bool], SchemaSerializer] = {}
 _SERIALIZER_METRICS = _SerializerCacheMetrics()
 
 
-def _make_serializer_key(sample: Any, exclude_unset: bool) -> tuple[type[Any] | None, bool]:
+def _make_serializer_key(sample: Any, exclude_unset: bool) -> "tuple[type[Any] | None, bool]":
     if sample is None or isinstance(sample, dict):
         return (None, exclude_unset)
     return (type(sample), exclude_unset)
 
 
+def _dump_identity_dict(value: Any) -> "dict[str, Any]":
+    return cast("dict[str, Any]", value)
+
+
+def _dump_msgspec_fields(value: Any) -> "dict[str, Any]":
+    return {f: value.__getattribute__(f) for f in value.__struct_fields__}
+
+
+def _dump_mapping(value: Any) -> "dict[str, Any]":
+    return dict(value)
+
+
 def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], dict[str, Any]]":
     if sample is None or isinstance(sample, dict):
-        return lambda value: cast("dict[str, Any]", value)
+        return _dump_identity_dict
 
     if is_dataclass_instance(sample):
 
-        def _dump_dataclass(value: Any) -> dict[str, Any]:
-            return dataclass_to_dict(value, exclude_empty=exclude_unset)
+def _dump_dataclass(value: Any) -> "dict[str, Any]":
+    return dataclass_to_dict(value, exclude_empty=exclude_unset)
 
-        return _dump_dataclass
+    return _dump_dataclass
     if is_pydantic_model(sample):
 
-        def _dump_pydantic(value: Any) -> dict[str, Any]:
+def _dump_pydantic(value: Any) -> "dict[str, Any]":
             return cast("dict[str, Any]", value.model_dump(exclude_unset=exclude_unset))
 
         return _dump_pydantic
     if is_msgspec_struct(sample):
         if exclude_unset:
 
-            def _dump(value: Any) -> dict[str, Any]:
+def _dump(value: Any) -> "dict[str, Any]":
                 return {
                     f: field_value
                     for f in value.__struct_fields__
@@ -307,23 +319,23 @@ def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], d
 
             return _dump
 
-        return lambda value: {f: value.__getattribute__(f) for f in value.__struct_fields__}
+        return _dump_msgspec_fields
 
     if is_attrs_instance(sample):
 
-        def _dump_attrs(value: Any) -> dict[str, Any]:
+def _dump_attrs(value: Any) -> "dict[str, Any]":
             return attrs_asdict(value, recurse=True)
 
         return _dump_attrs
 
     if has_dict_attribute(sample):
 
-        def _dump_dict_attr(value: Any) -> dict[str, Any]:
+def _dump_dict_attr(value: Any) -> "dict[str, Any]":
             return dict(value.__dict__)
 
         return _dump_dict_attr
 
-    return lambda value: dict(value)
+    return _dump_mapping
 
 
 def get_collection_serializer(sample: Any, *, exclude_unset: bool = True) -> "SchemaSerializer":
@@ -343,7 +355,7 @@ def get_collection_serializer(sample: Any, *, exclude_unset: bool = True) -> "Sc
         return pipeline
 
 
-def serialize_collection(items: "Iterable[Any]", *, exclude_unset: bool = True) -> list[Any]:
+def serialize_collection(items: "Iterable[Any]", *, exclude_unset: bool = True) -> "list[Any]":
     """Serialize a collection using cached pipelines keyed by item type."""
 
     serialized: list[Any] = []
@@ -371,7 +383,7 @@ def reset_serializer_cache() -> None:
         _SERIALIZER_METRICS.reset()
 
 
-def get_serializer_metrics() -> dict[str, int]:
+def get_serializer_metrics() -> "dict[str, int]":
     """Return cache metrics aligned with the core pipeline counters."""
 
     with _SERIALIZER_LOCK:

@@ -92,7 +92,7 @@ class LocalStore:
         resolved = self._resolve_path(path)
         try:
             return execute_sync_storage_operation(
-                lambda: resolved.read_bytes(), backend=self.backend_type, operation="read_bytes", path=str(resolved)
+                resolved.read_bytes, backend=self.backend_type, operation="read_bytes", path=str(resolved)
             )
         except FileNotFoundInStorageError as error:
             raise FileNotFoundError(str(resolved)) from error
@@ -117,7 +117,7 @@ class LocalStore:
         encoded = data.encode(encoding)
         self.write_bytes(path, encoded, **kwargs)
 
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in directory."""
         # If prefix looks like a directory path, treat as directory
         if prefix and (prefix.endswith("/") or "/" in prefix):
@@ -184,10 +184,10 @@ class LocalStore:
         dst = self._resolve_path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
         execute_sync_storage_operation(
-            lambda: shutil.move(str(src), str(dst)), backend=self.backend_type, operation="move", path=f"{src}->{dst}"
+            partial(shutil.move, str(src), str(dst)), backend=self.backend_type, operation="move", path=f"{src}->{dst}"
         )
 
-    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
+    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find files matching pattern."""
         # Handle both relative and absolute patterns
         if Path(pattern).is_absolute():
@@ -208,17 +208,17 @@ class LocalStore:
 
         return sorted(results)
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
         """Get file metadata."""
         resolved = self._resolve_path(path)
         return execute_sync_storage_operation(
-            lambda: self._collect_metadata(resolved),
+            partial(self._collect_metadata, resolved),
             backend=self.backend_type,
             operation="get_metadata",
             path=str(resolved),
         )
 
-    def _collect_metadata(self, resolved: "Path") -> dict[str, object]:
+    def _collect_metadata(self, resolved: "Path") -> "dict[str, object]":
         if not resolved.exists():
             return {}
 
@@ -247,7 +247,7 @@ class LocalStore:
         return cast(
             "ArrowTable",
             execute_sync_storage_operation(
-                lambda: pq.read_table(str(resolved), **kwargs),
+                partial(pq.read_table, str(resolved), **kwargs),
                 backend=self.backend_type,
                 operation="read_arrow",
                 path=str(resolved),
@@ -300,7 +300,7 @@ class LocalStore:
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
 
     @overload
-    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+    def sign_sync(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
 
     def sign_sync(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
@@ -331,7 +331,7 @@ class LocalStore:
         """Write text to file asynchronously."""
         await async_(self.write_text)(path, data, encoding, **kwargs)
 
-    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects asynchronously."""
         return await async_(self.list_objects)(prefix, recursive, **kwargs)
 
@@ -351,7 +351,7 @@ class LocalStore:
         """Move file asynchronously."""
         await async_(self.move)(source, destination, **kwargs)
 
-    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
         """Get file metadata asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
@@ -363,7 +363,7 @@ class LocalStore:
         """Write Arrow table asynchronously."""
         self.write_arrow(path, table, **kwargs)
 
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches asynchronously.
 
         Args:
@@ -381,14 +381,10 @@ class LocalStore:
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
 
     @overload
-    async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+    async def sign_async(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
 
     async def sign_async(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
-        """Generate signed URL(s) asynchronously.
-
-        Raises:
-            NotImplementedError: Local file storage does not require URL signing.
-        """
+        """Generate signed URL(s) asynchronously."""
         return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]

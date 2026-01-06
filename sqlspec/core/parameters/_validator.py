@@ -40,7 +40,13 @@ class ParameterValidator:
 
     def __init__(self, cache_max_size: int = 5000) -> None:
         self._parameter_cache: OrderedDict[str, list[ParameterInfo]] = OrderedDict()
-        self._cache_max_size = cache_max_size
+        self._cache_max_size = max(cache_max_size, 0)
+
+    def set_cache_max_size(self, cache_max_size: int) -> None:
+        """Update the maximum cache size for parameter metadata."""
+        self._cache_max_size = max(cache_max_size, 0)
+        while len(self._parameter_cache) > self._cache_max_size:
+            self._parameter_cache.popitem(last=False)
 
     def _extract_parameter_style(self, match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
         """Map a regex match to a placeholder style and optional name."""
@@ -64,6 +70,9 @@ class ParameterValidator:
 
     def extract_parameters(self, sql: str) -> "list[ParameterInfo]":
         """Extract ordered parameter metadata from SQL text."""
+        if self._cache_max_size <= 0:
+            return self._extract_parameters_uncached(sql)
+
         cached_result = self._parameter_cache.get(sql)
         if cached_result is not None:
             self._parameter_cache.move_to_end(sql)
@@ -102,6 +111,35 @@ class ParameterValidator:
         if len(self._parameter_cache) >= self._cache_max_size:
             self._parameter_cache.popitem(last=False)
         self._parameter_cache[sql] = parameters
+        return parameters
+
+    def _extract_parameters_uncached(self, sql: str) -> "list[ParameterInfo]":
+        parameters: list[ParameterInfo] = []
+        ordinal = 0
+
+        skip_groups = (
+            "dquote",
+            "squote",
+            "dollar_quoted_string",
+            "line_comment",
+            "block_comment",
+            "pg_q_operator",
+            "pg_cast",
+            "sql_server_global",
+        )
+
+        if not any(c in sql for c in ("?", "%", ":", "@", "$")):
+            return []
+
+        for match in PARAMETER_REGEX.finditer(sql):
+            if any(match.group(group) for group in skip_groups):
+                continue
+            style, name = self._extract_parameter_style(match)
+            if style is None:
+                continue
+            placeholder_text = match.group(0)
+            parameters.append(ParameterInfo(name, style, match.start(), ordinal, placeholder_text))
+            ordinal += 1
         return parameters
 
     def get_sqlglot_incompatible_styles(self, dialect: str | None = None) -> "set[ParameterStyle]":

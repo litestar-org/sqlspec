@@ -17,8 +17,20 @@ __all__ = (
     "should_json_encode_sequence",
 )
 
-JSON_NESTED_TYPES: Final[tuple[type[Any], ...]] = (dict, list, tuple)
+JSON_NESTED_TYPES: "Final[tuple[type[Any], ...]]" = (dict, list, tuple)
 DEFAULT_DECIMAL_MODE: Final[str] = "preserve"
+
+
+def _decimal_identity(value: "decimal.Decimal") -> "decimal.Decimal":
+    return value
+
+
+def _decimal_to_string(value: "decimal.Decimal") -> str:
+    return str(value)
+
+
+def _decimal_to_float(value: "decimal.Decimal") -> float:
+    return float(value)
 
 
 def should_json_encode_sequence(sequence: "Sequence[Any]") -> bool:
@@ -61,11 +73,11 @@ def build_decimal_converter(*, mode: str = DEFAULT_DECIMAL_MODE) -> "Callable[[d
     """Create a Decimal converter according to the desired mode."""
 
     if mode == "preserve":
-        return lambda value: value
+        return _decimal_identity
     if mode == "string":
-        return lambda value: str(value)
+        return _decimal_to_string
     if mode == "float":
-        return lambda value: float(value)
+        return _decimal_to_float
 
     msg = f"Unsupported decimal converter mode: {mode}"
     raise ValueError(msg)

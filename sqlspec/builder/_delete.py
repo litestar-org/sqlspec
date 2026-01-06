@@ -11,7 +11,7 @@ from sqlglot import exp
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._dml import DeleteFromClauseMixin
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
@@ -61,14 +61,14 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
         """
         return exp.Delete()
 
-    def build(self, dialect: "DialectType" = None) -> "SafeQuery":
+    def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
         """Build the DELETE query with validation.
 
         Args:
             dialect: Optional dialect override for SQL generation.
 
         Returns:
-            SafeQuery: The built query with SQL and parameters.
+            BuiltQuery: The built query with SQL and parameters.
 
         Raises:
             SQLBuilderError: If the table is not specified.

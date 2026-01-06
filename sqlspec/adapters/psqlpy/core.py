@@ -6,8 +6,6 @@ import io
 import uuid
 from typing import TYPE_CHECKING, Any, Final
 
-from psqlpy.extra_types import JSONB
-
 from sqlspec.core import DriverParameterProfile, ParameterStyle
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.serializers import to_json
@@ -41,6 +39,22 @@ _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
 })
 _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
+_JSONB_TYPE: "type[Any] | None" = None
+_JSONB_RESOLVED: bool = False
+
+
+def _get_jsonb_type() -> "type[Any] | None":
+    global _JSONB_TYPE, _JSONB_RESOLVED
+    if _JSONB_RESOLVED:
+        return _JSONB_TYPE
+    try:
+        from psqlpy.extra_types import JSONB
+    except ImportError:
+        _JSONB_TYPE = None
+    else:
+        _JSONB_TYPE = JSONB
+    _JSONB_RESOLVED = True
+    return _JSONB_TYPE
 
 
 def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
@@ -48,16 +62,20 @@ def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[An
 
     if value is None:
         return None
+    jsonb_type = _get_jsonb_type()
     if cast_type == "JSONB":
-        if isinstance(value, JSONB):
+        if jsonb_type is not None and isinstance(value, jsonb_type):
             return value
-        if isinstance(value, dict):
-            return JSONB(value)
-        if isinstance(value, (list, tuple)):
-            return JSONB(list(value))
+        if jsonb_type is not None:
+            if isinstance(value, dict):
+                return jsonb_type(value)
+            if isinstance(value, (list, tuple)):
+                return jsonb_type(list(value))
     if isinstance(value, tuple):
         return list(value)
-    if isinstance(value, (dict, list, str, JSONB)):
+    if jsonb_type is not None and isinstance(value, jsonb_type):
+        return value
+    if isinstance(value, (dict, list, str)):
         return value
     try:
         serialized_value = serializer(value)
@@ -109,16 +127,16 @@ def coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[
     return value
 
 
-def prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
+def prepare_dict_parameter(value: "dict[str, Any]") -> "dict[str, Any]":
     normalized = _DECIMAL_NORMALIZER(value)
     return normalized if isinstance(normalized, dict) else value
 
 
-def prepare_list_parameter(value: "list[Any]") -> list[Any]:
+def prepare_list_parameter(value: "list[Any]") -> "list[Any]":
     return [_DECIMAL_NORMALIZER(item) for item in value]
 
 
-def prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
+def prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
     return tuple(_DECIMAL_NORMALIZER(item) for item in value)
 
 

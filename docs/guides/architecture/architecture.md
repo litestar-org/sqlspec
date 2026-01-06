@@ -42,7 +42,7 @@ graph TD
     F --> G[User Code];
 ```
 
-**Note**: The architecture uses a single-pass pipeline system with `SQLTransformContext` and `compose_pipeline`, delivering significant performance improvements, further enhanced by a comprehensive multi-tier caching system providing 12x+ performance improvements.
+**Note**: The architecture uses a single-pass pipeline system driven by `SQLProcessor`, delivering significant performance improvements, further enhanced by a consolidated namespaced cache.
 
 ---
 
@@ -98,13 +98,13 @@ Carries type information through the pipeline, ensuring that data types are hand
 
 ### Enhanced Caching Architecture (NEW)
 
-SQLSpec implements a comprehensive multi-tier caching system. While individual statements can toggle caching via `StatementConfig.enable_caching`, the underlying cache configuration is managed globally.
+SQLSpec uses a consolidated, namespaced cache for SQL artifacts plus internal per-pipeline caches. Individual statements can toggle caching via `StatementConfig.enable_caching`, while global cache sizing is controlled via `SQLSpec.configure_cache`.
 
 ```python
 # Global cache configuration (via SQLSpec.configure_cache)
-# - sql_cache_size: Size of the SQL statement cache
-# - fragment_cache_size: Size of the AST fragment cache
-# - optimized_cache_size: Size of the optimized expression cache
+# - sql_cache_size: Size of the statement/builder cache (statement namespace)
+# - fragment_cache_size: Size of the expression/parameter/file cache (expression namespace)
+# - optimized_cache_size: Size of the optimized expression cache (optimized namespace)
 
 # Cache integration in StatementConfig
 StatementConfig(
@@ -113,19 +113,22 @@ StatementConfig(
 )
 ```
 
-**Performance Benefits:**
+**Namespaced Cache (`sqlspec.core.cache.NamespacedCache`):**
 
-- **SQL Cache**: Avoids recompilation of identical queries
-- **Optimized Cache**: Reuses AST optimization results
-- **Builder Cache**: Accelerates QueryBuilder state serialization
-- **File Cache**: 12x+ speedup with checksum validation
-- **Analysis Cache**: Caches pipeline step results for reuse
+- **statement**: Compiled SQL + parameters (`CachedStatement`)
+- **expression**: Parsed SQLGlot expressions (also used by static builder expressions)
+- **parameter**: Parameter conversion results
+- **optimized**: Optimized SQLGlot expressions
+- **builder**: Built SQL statements from builders
+- **file**: SQLFile loader entries with checksum validation
 
 **StatementConfig-Aware Caching:**
 
-- All cache keys include StatementConfig hash to prevent cross-contamination
+- Cache keys include StatementConfig hash to prevent cross-contamination
 - Different configurations maintain separate cache entries
-- Automatic cache invalidation on configuration changes
+- Pipeline registry keeps per-config SQLProcessor caches and parse caches for fast repeats
+- Pipeline cache sizes derive from `CacheConfig` (`sql_cache_size` for compiled results, `fragment_cache_size` for parse/parameter caches)
+- Pipeline cache enablement follows `CacheConfig` flags (`compiled_cache_enabled`, `sql_cache_enabled`, `fragment_cache_enabled`)
 
 ---
 
@@ -257,7 +260,7 @@ statement_config = StatementConfig(
 **Key Enhancements:**
 
 - **StatementConfig Integration**: Parameter processing respects overall configuration
-- **Pipeline Awareness**: Works with SQLTransformContext for consistency
+- **Pipeline Awareness**: Works with SQLProcessor for consistency
 - **Enhanced Caching**: Parameter processing results are cached with StatementConfig keys
 - **Script Compilation**: New `needs_static_script_compilation` flag for script handling
 - **Type Preservation**: Enhanced TypedParameter support through pipeline

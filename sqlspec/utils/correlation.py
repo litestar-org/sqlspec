@@ -80,7 +80,7 @@ class CorrelationContext:
         cls.set(None)
 
     @classmethod
-    def to_dict(cls) -> dict[str, Any]:
+    def to_dict(cls) -> "dict[str, Any]":
         """Get correlation context as a dictionary.
 
         Returns:
@@ -116,7 +116,7 @@ def correlation_context(correlation_id: str | None = None) -> Generator[str, Non
 class _CorrelationAdapter(LoggerAdapter):  # pyright: ignore
     """Logger adapter that adds correlation ID to all logs."""
 
-    def process(self, msg: str, kwargs: MutableMapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    def process(self, msg: str, kwargs: MutableMapping[str, Any]) -> "tuple[str, dict[str, Any]]":
         """Add correlation ID to the log record."""
 
         extra = kwargs.get("extra", {})

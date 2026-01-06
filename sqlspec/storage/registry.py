@@ -259,7 +259,7 @@ class StorageRegistry:
         """Check if a named alias is registered."""
         return alias in self._alias_configs
 
-    def list_aliases(self) -> list[str]:
+    def list_aliases(self) -> "list[str]":
         """List all registered aliases."""
         return list(self._alias_configs.keys())
 

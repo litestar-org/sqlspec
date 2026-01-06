@@ -15,6 +15,6 @@ class PsqlpyEventQueueStore(BaseEventQueueStore[PsqlpyConfig]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return PostgreSQL-optimized column types for the event queue."""
         return "JSONB", "JSONB", "TIMESTAMPTZ"

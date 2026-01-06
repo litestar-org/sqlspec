@@ -77,7 +77,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in storage."""
         raise NotImplementedError
 
@@ -102,12 +102,12 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
+    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching pattern."""
         raise NotImplementedError
 
     @abstractmethod
-    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, object]:
+    def get_metadata(self, path: str, **kwargs: Any) -> "dict[str, object]":
         """Get object metadata from storage."""
         raise NotImplementedError
 
@@ -157,7 +157,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in storage asynchronously."""
         raise NotImplementedError
 
@@ -182,7 +182,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, object]:
+    def get_metadata_async(self, path: str, **kwargs: Any) -> "dict[str, object]":
         """Get object metadata from storage asynchronously."""
         raise NotImplementedError
 

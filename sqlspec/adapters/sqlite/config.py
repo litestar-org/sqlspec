@@ -66,6 +66,8 @@ class SqliteDriverFeatures(TypedDict):
     enable_custom_adapters: NotRequired[bool]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
@@ -130,7 +132,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
-        config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
+        config_dict: "dict[str", Any] = dict(connection_config) if connection_config else {}
         if "database" not in config_dict or config_dict["database"] == ":memory:":
             config_dict["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
             config_dict["uri"] = True
@@ -144,7 +146,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
                 )
                 config_dict["uri"] = True
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        processed_driver_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
         processed_driver_features.setdefault("enable_custom_adapters", True)
         json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
         json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
@@ -186,7 +188,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """Create connection pool from configuration."""
         config_dict = self._get_connection_config_dict()
 
-        pool_kwargs: dict[str, Any] = {}
+        pool_kwargs: "dict[str", Any] = {}
         recycle_seconds = self.connection_config.get("pool_recycle_seconds")
         if recycle_seconds is not None:
             pool_kwargs["recycle_seconds"] = recycle_seconds
@@ -257,7 +259,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         Returns:
             A Sqlite driver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
+        conn_ctx_holder: "dict[str", Any] = {}
 
         def acquire_connection() -> SqliteConnection:
             pool = self.provide_pool()

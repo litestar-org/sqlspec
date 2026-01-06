@@ -1,6 +1,7 @@
 """SQL statement and configuration management."""
 
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.builder import QueryBuilder
     from sqlspec.core.filters import StatementFilter
 
 
@@ -46,8 +48,6 @@ MODIFYING_OPERATIONS: Final = {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"}
 
 
 SQL_CONFIG_SLOTS: Final = (
-    "pre_process_steps",
-    "post_process_steps",
     "dialect",
     "enable_analysis",
     "enable_caching",
@@ -59,6 +59,7 @@ SQL_CONFIG_SLOTS: Final = (
     "execution_mode",
     "execution_args",
     "output_transformer",
+    "statement_transformers",
     "parameter_config",
     "parameter_converter",
     "parameter_validator",
@@ -133,6 +134,7 @@ class SQL:
         "_original_parameters",
         "_positional_parameters",
         "_processed_state",
+        "_raw_expression",
         "_raw_sql",
         "_statement_config",
     )
@@ -141,7 +143,7 @@ class SQL:
         self,
         statement: "str | exp.Expression | 'SQL'",
         *parameters: "Any | StatementFilter | list[Any | StatementFilter]",
-        statement_config: Optional["StatementConfig"] = None,
+        statement_config: "StatementConfig | None" = None,
         is_many: bool | None = None,
         **kwargs: Any,
     ) -> None:
@@ -159,10 +161,11 @@ class SQL:
         self._dialect = self._normalize_dialect(config.dialect)
         self._processed_state: EmptyEnum | ProcessedState = Empty
         self._hash: int | None = None
-        self._filters: list[StatementFilter] = []
-        self._named_parameters: dict[str, Any] = {}
-        self._positional_parameters: list[Any] = []
+        self._filters: "list[StatementFilter]" = []
+        self._named_parameters: "dict[str, Any]" = {}
+        self._positional_parameters: "list[Any]" = []
         self._is_script = False
+        self._raw_expression: exp.Expression | None = None
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement)
@@ -174,6 +177,7 @@ class SQL:
             else:
                 dialect = self._dialect
                 self._raw_sql = statement.sql(dialect=str(dialect) if dialect else None)
+                self._raw_expression = statement
 
             self._is_many = is_many if is_many is not None else self._should_auto_detect_many(parameters)
 
@@ -181,7 +185,7 @@ class SQL:
         self._process_parameters(*parameters, **kwargs)
 
     def _create_auto_config(
-        self, _statement: "str | exp.Expression | 'SQL'", _parameters: tuple, _kwargs: dict[str, Any]
+        self, _statement: "str | exp.Expression | 'SQL'", _parameters: tuple, _kwargs: "dict[str, Any]"
     ) -> "StatementConfig":
         """Create default StatementConfig when none provided.
 
@@ -217,6 +221,7 @@ class SQL:
             sql_obj: Existing SQL object to copy from
         """
         self._raw_sql = sql_obj.raw_sql
+        self._raw_expression = sql_obj.raw_expression
         self._filters = sql_obj.filters.copy()
         self._named_parameters = sql_obj.named_parameters.copy()
         self._positional_parameters = sql_obj.positional_parameters.copy()
@@ -333,7 +338,12 @@ class SQL:
         """SQLGlot expression."""
         if self._processed_state is not Empty:
             return self._processed_state.parsed_expression
-        return None
+        return self._raw_expression
+
+    @property
+    def raw_expression(self) -> "exp.Expression | None":
+        """Original expression supplied at construction, if available."""
+        return self._raw_expression
 
     @property
     def filters(self) -> "list[StatementFilter]":
@@ -363,11 +373,6 @@ class SQL:
         return self._dialect
 
     @property
-    def _statement(self) -> "exp.Expression | None":
-        """Internal SQLGlot expression."""
-        return self.expression
-
-    @property
     def statement_expression(self) -> "exp.Expression | None":
         """Get parsed statement expression (public API).
 
@@ -376,7 +381,7 @@ class SQL:
         """
         if self._processed_state is not Empty:
             return self._processed_state.parsed_expression
-        return None
+        return self._raw_expression
 
     @property
     def is_many(self) -> bool:
@@ -448,7 +453,7 @@ class SQL:
 
         return False
 
-    def compile(self) -> tuple[str, Any]:
+def compile(self) -> "tuple[str, Any]":
         """Compile SQL statement with parameters.
 
         Returns:
@@ -460,7 +465,9 @@ class SQL:
                 raw_sql = self._raw_sql
                 params = self._named_parameters or self._positional_parameters
                 is_many = self._is_many
-                compiled_result = pipeline.compile_with_shared_pipeline(config, raw_sql, params, is_many=is_many)
+                compiled_result = pipeline.compile_with_pipeline(
+                    config, raw_sql, params, is_many=is_many, expression=self._raw_expression
+                )
 
                 self._processed_state = ProcessedState(
                     compiled_sql=compiled_result.compiled_sql,
@@ -509,8 +516,9 @@ class SQL:
         Returns:
             New SQL instance with modifications applied
         """
+        statement_expression = self._raw_expression if statement is None else statement
         new_sql = SQL(
-            statement or self._raw_sql,
+            statement_expression or self._raw_sql,
             *(parameters if parameters is not None else self._original_parameters),
             statement_config=self._statement_config,
             is_many=self._is_many,
@@ -563,11 +571,14 @@ class SQL:
         Returns:
             New SQL instance with the WHERE condition applied
         """
-        try:
-            current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
-        except ParseError:
-            subquery_sql = f"SELECT * FROM ({self._raw_sql}) AS subquery"
-            current_expr = sqlglot.parse_one(subquery_sql, dialect=self._dialect)
+        if self.statement_expression is not None:
+            current_expr = self.statement_expression.copy()
+        else:
+            try:
+                current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+            except ParseError:
+                subquery_sql = f"SELECT * FROM ({self._raw_sql}) AS subquery"
+                current_expr = sqlglot.parse_one(subquery_sql, dialect=self._dialect)
 
         condition_expr: exp.Expression
         if isinstance(condition, str):
@@ -625,6 +636,94 @@ class SQL:
 
         explain_builder = Explain(self, dialect=self._dialect, options=options)
         return explain_builder.build()
+
+    def builder(self, dialect: "DialectType | None" = None) -> "QueryBuilder":
+        """Create a query builder seeded from this SQL statement.
+
+        Args:
+            dialect: Optional SQL dialect override for parsing and rendering.
+
+        Returns:
+            QueryBuilder instance initialized with the parsed statement.
+
+        Raises:
+            SQLBuilderError: If the statement cannot be parsed.
+
+        Notes:
+            Statements outside the DML set return an ExpressionBuilder without
+            DML-specific helper methods.
+        """
+        if self._is_many:
+            msg = "QueryBuilder does not support execute_many SQL statements."
+            raise sqlspec.exceptions.SQLBuilderError(msg)
+
+        from sqlspec.builder import Delete, ExpressionBuilder, Insert, Merge, Select, Update
+
+        builder_dialect = dialect or self._dialect
+        converter = self._statement_config.parameter_converter or ParameterConverter(
+            self._statement_config.parameter_validator
+        )
+        raw_params = self.parameters
+        converted_sql, converted_params = converter.convert_placeholder_style(
+            self._raw_sql, raw_params, ParameterStyle.NAMED_COLON, is_many=False
+        )
+
+        try:
+            expression = sqlglot.parse_one(converted_sql, dialect=builder_dialect)
+        except ParseError as exc:
+            msg = f"Failed to parse SQL for builder: {exc}"
+            raise sqlspec.exceptions.SQLBuilderError(msg) from exc
+
+        base_expression = expression
+        ctes: "list[exp.CTE] | None" = None
+        if isinstance(expression, exp.With):
+            if expression.this is None:
+                msg = "WITH expression does not include a base statement."
+                raise sqlspec.exceptions.SQLBuilderError(msg)
+            base_expression = expression.this
+            ctes = list(expression.expressions)
+
+        builder: QueryBuilder
+        if isinstance(base_expression, (exp.Select, exp.Union, exp.Except, exp.Intersect, exp.Values)):
+            builder = Select(dialect=builder_dialect)
+            builder.set_expression(base_expression.copy())
+        elif isinstance(base_expression, exp.Insert):
+            builder = Insert(dialect=builder_dialect)
+            builder.set_expression(base_expression.copy())
+        elif isinstance(base_expression, exp.Update):
+            builder = Update(dialect=builder_dialect)
+            builder.set_expression(base_expression.copy())
+        elif isinstance(base_expression, exp.Delete):
+            builder = Delete(dialect=builder_dialect)
+            builder.set_expression(base_expression.copy())
+        elif isinstance(base_expression, exp.Merge):
+            builder = Merge(dialect=builder_dialect)
+            builder.set_expression(base_expression.copy())
+        else:
+            builder = ExpressionBuilder(base_expression.copy(), dialect=builder_dialect)
+
+        if ctes:
+            builder.load_ctes(ctes)
+
+        if isinstance(converted_params, Mapping):
+            builder.load_parameters(converted_params)
+            return builder
+
+        if (
+            converted_params
+            and isinstance(converted_params, Sequence)
+            and not isinstance(converted_params, (str, bytes, bytearray))
+        ):
+            param_info = converter.validator.extract_parameters(converted_sql)
+            param_map: "dict[str, Any]" = {}
+            for index, param in enumerate(param_info):
+                if index >= len(converted_params):
+                    break
+                param_name = param.name or f"param_{param.ordinal}"
+                param_map[param_name] = converted_params[index]
+            builder.load_parameters(param_map)
+
+        return builder
 
     def __hash__(self) -> int:
         """Hash value computation."""
@@ -691,11 +790,10 @@ class StatementConfig:
         parameter_converter: "ParameterConverter | None" = None,
         parameter_validator: "ParameterValidator | None" = None,
         dialect: "DialectType | None" = None,
-        pre_process_steps: "list[Any] | None" = None,
-        post_process_steps: "list[Any] | None" = None,
         execution_mode: "str | None" = None,
         execution_args: "dict[str, Any] | None" = None,
         output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
+        statement_transformers: "Sequence[Callable[[exp.Expression, Any], tuple[exp.Expression, Any]]] | None" = None,
     ) -> None:
         """Initialize StatementConfig.
 
@@ -711,11 +809,10 @@ class StatementConfig:
             parameter_converter: Handles parameter style conversions
             parameter_validator: Validates parameter usage and styles
             dialect: SQL dialect
-            pre_process_steps: Optional list of preprocessing steps
-            post_process_steps: Optional list of postprocessing steps
             execution_mode: Special execution mode
             execution_args: Arguments for special execution modes
             output_transformer: Optional output transformation function
+            statement_transformers: Optional AST transformers executed during compilation
         """
         self.enable_parsing = enable_parsing
         self.enable_validation = enable_validation
@@ -741,11 +838,13 @@ class StatementConfig:
         )
 
         self.dialect = dialect
-        self.pre_process_steps = pre_process_steps
-        self.post_process_steps = post_process_steps
         self.execution_mode = execution_mode
         self.execution_args = execution_args
         self.output_transformer = output_transformer
+        if statement_transformers:
+            self.statement_transformers = tuple(statement_transformers)
+        else:
+            self.statement_transformers = ()
 
     def replace(self, **kwargs: Any) -> "StatementConfig":
         """Immutable update pattern.
@@ -761,7 +860,7 @@ class StatementConfig:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
                 raise TypeError(msg)
 
-        current_kwargs: dict[str, Any] = {
+        current_kwargs: "dict[str, Any]" = {
             "parameter_config": self.parameter_config,
             "enable_parsing": self.enable_parsing,
             "enable_validation": self.enable_validation,
@@ -773,11 +872,10 @@ class StatementConfig:
             "parameter_converter": self.parameter_converter,
             "parameter_validator": self.parameter_validator,
             "dialect": self.dialect,
-            "pre_process_steps": self.pre_process_steps,
-            "post_process_steps": self.post_process_steps,
             "execution_mode": self.execution_mode,
             "execution_args": self.execution_args,
             "output_transformer": self.output_transformer,
+            "statement_transformers": self.statement_transformers,
         }
         current_kwargs.update(kwargs)
         return type(self)(**current_kwargs)
@@ -793,6 +891,10 @@ class StatementConfig:
             self.enable_parameter_type_wrapping,
             self.enable_caching,
             str(self.dialect),
+            self.parameter_config.hash(),
+            self.execution_mode,
+            self.output_transformer,
+            self.statement_transformers,
         ))
 
     def __repr__(self) -> str:
@@ -809,11 +911,10 @@ class StatementConfig:
             f"parameter_converter={self.parameter_converter!r}",
             f"parameter_validator={self.parameter_validator!r}",
             f"dialect={self.dialect!r}",
-            f"pre_process_steps={self.pre_process_steps!r}",
-            f"post_process_steps={self.post_process_steps!r}",
             f"execution_mode={self.execution_mode!r}",
             f"execution_args={self.execution_args!r}",
             f"output_transformer={self.output_transformer!r}",
+            f"statement_transformers={self.statement_transformers!r}",
         ]
         return f"{self.__class__.__name__}({', '.join(field_strs)})"
 
@@ -834,11 +935,10 @@ class StatementConfig:
             and self.enable_parameter_type_wrapping == other.enable_parameter_type_wrapping
             and self.enable_caching == other.enable_caching
             and self.dialect == other.dialect
-            and self.pre_process_steps == other.pre_process_steps
-            and self.post_process_steps == other.post_process_steps
             and self.execution_mode == other.execution_mode
             and self.execution_args == other.execution_args
             and self.output_transformer == other.output_transformer
+            and self.statement_transformers == other.statement_transformers
         )
 
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:

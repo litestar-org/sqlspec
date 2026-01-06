@@ -7,18 +7,9 @@ import pytest
 from sqlspec import StatementStack
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.exceptions import StackExecutionError
+from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("sqlite")
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
 
 
 @pytest.fixture()
@@ -118,9 +109,7 @@ def test_fail_fast_rolls_back_new_transaction(sqlite_stack_session: "SqliteDrive
     assert _table_count(sqlite_stack_session) == 0
 
 
-@pytest.mark.skipif(
-    _is_compiled(), reason="mypyc-compiled driver modules have exception capture issues in continue_on_error mode"
-)
+@requires_interpreted
 def test_continue_on_error_commits_successes(sqlite_stack_session: "SqliteDriver") -> None:
     stack = (
         StatementStack()

@@ -436,7 +436,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return conn.query(sql_str, job_config=final_job_config)
 
     @staticmethod
-    def _rows_to_results(rows_iterator: Any) -> list[dict[str, Any]]:
+def _rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
         """Convert BigQuery rows to dictionary format.
 
         Args:
@@ -531,11 +531,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return None
 
     def _execute_bulk_insert(
-        self,
-        cursor: Any,
-        sql: str,
-        parameters: "list[dict[str, Any]]",
-        expression: "exp.Expression | None" = None,
+        self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]", expression: "exp.Expression | None" = None
     ) -> ExecutionResult | None:
         """Execute INSERT using Parquet bulk load.
 
@@ -577,11 +573,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return None
 
     def _execute_many_with_inlining(
-        self,
-        cursor: Any,
-        sql: str,
-        parameters: "list[dict[str, Any]]",
-        expression: "exp.Expression | None" = None,
+        self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]", expression: "exp.Expression | None" = None
     ) -> ExecutionResult:
         """Execute many using literal inlining.
 

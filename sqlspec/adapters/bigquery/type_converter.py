@@ -11,7 +11,7 @@ from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 
 __all__ = ("BIGQUERY_SPECIAL_CHARS", "BQ_TYPE_MAP", "BigQueryOutputConverter")
 
-BQ_TYPE_MAP: Final[dict[str, str]] = {
+BQ_TYPE_MAP: "Final[dict[str", str]] = {
     "str": "STRING",
     "int": "INT64",
     "float": "FLOAT64",
@@ -27,7 +27,7 @@ BQ_TYPE_MAP: Final[dict[str, str]] = {
     "dict": "STRUCT",
 }
 
-BIGQUERY_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
+BIGQUERY_SPECIAL_CHARS: "Final[frozenset[str]]"= frozenset({"{", "[", "-", ":", "T", "."})
 
 
 class BigQueryOutputConverter(CachedOutputConverter):

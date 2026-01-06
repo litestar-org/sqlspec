@@ -225,7 +225,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         """
         state_json = json.dumps(state)
 
-        params: tuple[Any, ...]
+        params: "tuple[Any", ...]
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
@@ -345,7 +345,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             WHERE app_name = %s
             ORDER BY update_time DESC
             """
-            params: tuple[str, ...] = (app_name,)
+            params: "tuple[str", ...] = (app_name,)
         else:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -449,7 +449,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             Parses JSON fields and converts BLOB actions to bytes.
         """
         where_clauses = ["session_id = %s"]
-        params: list[Any] = [session_id]
+        params: "list[Any]"= [session_id]
 
         if after_timestamp is not None:
             where_clauses.append("timestamp > %s")

@@ -208,7 +208,7 @@ class AiosqliteConnectionPool:
         self._operation_timeout = operation_timeout
         self._health_check_interval = health_check_interval
 
-        self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
+        self._connection_registry: "dict[str", AiosqlitePoolConnection] = {}
         self._wal_initialized = False
         self._warmed = False
 

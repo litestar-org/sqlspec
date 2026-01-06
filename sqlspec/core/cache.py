@@ -16,12 +16,16 @@ from typing import TYPE_CHECKING, Any, Final
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
-from sqlspec.core.pipeline import get_statement_pipeline_metrics, reset_statement_pipeline_cache
+from sqlspec.core.pipeline import (
+    configure_statement_pipeline_cache,
+    get_statement_pipeline_metrics,
+    reset_statement_pipeline_cache,
+)
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_field_name, has_filter_attributes
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     import sqlglot.expressions as exp
 
@@ -31,9 +35,9 @@ __all__ = (
     "CacheStats",
     "CachedStatement",
     "FiltersView",
+    "LRUCache",
     "NamespacedCache",
     "ParametersView",
-    "LRUCache",
     "canonicalize_filters",
     "create_cache_key",
     "get_cache",
@@ -68,7 +72,7 @@ class CacheKey:
 
     __slots__ = ("_hash", "_key_data")
 
-    def __init__(self, key_data: tuple[Any, ...]) -> None:
+    def __init__(self, key_data: "tuple[Any, ...]") -> None:
         """Initialize cache key.
 
         Args:
@@ -78,7 +82,7 @@ class CacheKey:
         self._hash = hash(key_data)
 
     @property
-    def key_data(self) -> tuple[Any, ...]:
+def key_data(self) -> "tuple[Any, ...]":
         """Get the key data tuple."""
         return self._key_data
 
@@ -198,7 +202,7 @@ class LRUCache:
             max_size: Maximum number of cache entries
             ttl_seconds: Time-to-live in seconds (None for no expiration)
         """
-        self._cache: dict[CacheKey, CacheNode] = {}
+        self._cache: "dict[CacheKey, CacheNode]" = {}
         self._lock = threading.RLock()
         self._max_size = max_size
         self._ttl = ttl_seconds
@@ -356,7 +360,8 @@ def get_default_cache() -> LRUCache:
     if _default_cache is None:
         with _cache_lock:
             if _default_cache is None:
-                _default_cache = LRUCache()
+                config = get_cache_config()
+                _default_cache = LRUCache(config.sql_cache_size)
     return _default_cache
 
 
@@ -366,9 +371,10 @@ def clear_all_caches() -> None:
         _default_cache.clear()
     cache = get_cache()
     cache.clear()
+    reset_statement_pipeline_cache()
 
 
-def get_cache_statistics() -> dict[str, CacheStats]:
+def get_cache_statistics() -> "dict[str, CacheStats]":
     """Get statistics from all cache instances.
 
     Returns:
@@ -403,13 +409,13 @@ class CacheConfig:
         """Initialize cache configuration.
 
         Args:
-            compiled_cache_enabled: Enable compiled SQL caching
-            sql_cache_enabled: Enable SQL statement caching
-            fragment_cache_enabled: Enable AST fragment caching
-            optimized_cache_enabled: Enable optimized expression caching
-            sql_cache_size: Maximum SQL cache entries
-            fragment_cache_size: Maximum fragment cache entries
-            optimized_cache_size: Maximum optimized cache entries
+            compiled_cache_enabled: Master switch for namespaced caches and compiled SQL caching.
+            sql_cache_enabled: Enable statement and builder caching.
+            fragment_cache_enabled: Enable expression, parameter, and file caching.
+            optimized_cache_enabled: Enable optimized expression caching.
+            sql_cache_size: Maximum statement/builder cache entries.
+            fragment_cache_size: Maximum expression/parameter/file cache entries.
+            optimized_cache_size: Maximum optimized cache entries.
         """
         self.compiled_cache_enabled = compiled_cache_enabled
         self.sql_cache_enabled = sql_cache_enabled
@@ -429,7 +435,18 @@ def get_cache_config() -> CacheConfig:
     global _global_cache_config
     if _global_cache_config is None:
         _global_cache_config = CacheConfig()
+        _configure_pipeline_cache(_global_cache_config)
     return _global_cache_config
+
+
+def _configure_pipeline_cache(config: "CacheConfig") -> None:
+    compiled_cache_enabled = config.compiled_cache_enabled and config.sql_cache_enabled
+    fragment_cache_enabled = config.compiled_cache_enabled and config.fragment_cache_enabled
+    cache_size = config.sql_cache_size if compiled_cache_enabled else 0
+    parse_cache_size = config.fragment_cache_size if fragment_cache_enabled else 0
+    configure_statement_pipeline_cache(
+        cache_size=cache_size, parse_cache_size=parse_cache_size, cache_enabled=compiled_cache_enabled
+    )
 
 
 def update_cache_config(config: CacheConfig) -> None:
@@ -443,13 +460,17 @@ def update_cache_config(config: CacheConfig) -> None:
     logger = get_logger("sqlspec.cache")
     logger.info("Cache configuration updated: %s", config)
 
-    global _global_cache_config
+    global _default_cache, _global_cache_config, _namespaced_cache
     _global_cache_config = config
 
-    lru_cache = get_default_cache()
-    lru_cache.clear()
-    cache = get_cache()
-    cache.clear()
+    _configure_pipeline_cache(config)
+
+    if _default_cache is not None:
+        _default_cache.clear()
+    if _namespaced_cache is not None:
+        _namespaced_cache.clear()
+    _default_cache = None
+    _namespaced_cache = None
 
     logger = get_logger("sqlspec.cache")
     logger.info(
@@ -463,7 +484,7 @@ def update_cache_config(config: CacheConfig) -> None:
     )
 
 
-def get_cache_stats() -> dict[str, CacheStats]:
+def get_cache_stats() -> "dict[str, CacheStats]":
     """Get cache statistics from all caches.
 
     Returns:
@@ -494,7 +515,7 @@ class ParametersView:
 
     __slots__ = ("_named_ref", "_positional_ref")
 
-    def __init__(self, positional: list[Any], named: dict[str, Any]) -> None:
+    def __init__(self, positional: "list[Any]", named: "dict[str, Any]") -> None:
         """Initialize parameters view.
 
         Args:
@@ -606,33 +627,83 @@ def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> st
     """Create optimized cache key using string concatenation.
 
     Args:
-        namespace: Cache namespace (statement, expression, parameter)
-        key: Base cache key
-        dialect: SQL dialect (optional)
+        namespace: Cache namespace name.
+        key: Base cache key.
+        dialect: SQL dialect (optional).
 
     Returns:
-        Optimized cache key string
+        Optimized cache key string.
     """
     return f"{namespace}:{dialect or 'default'}:{key}"
+
+
+def _sql_cache_enabled(config: "CacheConfig") -> bool:
+    return config.sql_cache_enabled
+
+
+def _sql_cache_size(config: "CacheConfig") -> int:
+    return config.sql_cache_size
+
+
+def _fragment_cache_enabled(config: "CacheConfig") -> bool:
+    return config.fragment_cache_enabled
+
+
+def _fragment_cache_size(config: "CacheConfig") -> int:
+    return config.fragment_cache_size
+
+
+def _optimized_cache_enabled(config: "CacheConfig") -> bool:
+    return config.optimized_cache_enabled
+
+
+def _optimized_cache_size(config: "CacheConfig") -> int:
+    return config.optimized_cache_size
+
+
+NAMESPACED_CACHE_CONFIG: "dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]" = {
+    "statement": (_sql_cache_enabled, _sql_cache_size),
+    "builder": (_sql_cache_enabled, _sql_cache_size),
+    "expression": (_fragment_cache_enabled, _fragment_cache_size),
+    "parameter": (_fragment_cache_enabled, _fragment_cache_size),
+    "file": (_fragment_cache_enabled, _fragment_cache_size),
+    "optimized": (_optimized_cache_enabled, _optimized_cache_size),
+}
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class NamespacedCache:
     """Single cache with namespace isolation.
 
-    Use explicit namespace methods to avoid stringly-typed cache access.
+    Uses per-namespace LRU caches sized by CacheConfig to keep memory usage
+    predictable while avoiding stringly-typed cache access.
     """
 
-    __slots__ = ("_cache",)
+    __slots__ = ("_caches", "_config")
 
-    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
+    def __init__(self, config: "CacheConfig | None" = None, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
         """Initialize namespaced cache.
 
         Args:
-            max_size: Maximum number of cache entries
-            ttl_seconds: Time-to-live in seconds (None for no expiration)
+            config: Cache configuration to apply.
+            ttl_seconds: Time-to-live in seconds (None for no expiration).
         """
-        self._cache = LRUCache(max_size, ttl_seconds)
+        self._config = config or get_cache_config()
+        self._caches = self._build_caches(self._config, ttl_seconds)
+
+    @staticmethod
+    def _build_caches(config: "CacheConfig", ttl_seconds: int | None) -> "dict[str, LRUCache]":
+        caches: "dict[str, LRUCache]" = {}
+        for namespace, (_, size_getter) in NAMESPACED_CACHE_CONFIG.items():
+            size = size_getter(config)
+            caches[namespace] = LRUCache(size, ttl_seconds)
+        return caches
+
+    def _is_enabled(self, namespace: str) -> bool:
+        if not self._config.compiled_cache_enabled:
+            return False
+        enabled_getter = NAMESPACED_CACHE_CONFIG[namespace][0]
+        return bool(enabled_getter(self._config))
 
     def _get(self, namespace: str, key: str, dialect: str | None = None) -> Any | None:
         """Get cached value by namespace.
@@ -645,9 +716,12 @@ class NamespacedCache:
         Returns:
             Cached value or None if not found.
         """
+        if not self._is_enabled(namespace):
+            return None
+        cache = self._caches[namespace]
         full_key = create_cache_key(namespace, key, dialect)
         cache_key = CacheKey((full_key,))
-        return self._cache.get(cache_key)
+        return cache.get(cache_key)
 
     def _put(self, namespace: str, key: str, value: Any, dialect: str | None = None) -> None:
         """Put cached value by namespace.
@@ -658,9 +732,12 @@ class NamespacedCache:
             value: Value to cache.
             dialect: Optional SQL dialect.
         """
+        if not self._is_enabled(namespace):
+            return
+        cache = self._caches[namespace]
         full_key = create_cache_key(namespace, key, dialect)
         cache_key = CacheKey((full_key,))
-        self._cache.put(cache_key, value)
+        cache.put(cache_key, value)
 
     def _delete(self, namespace: str, key: str, dialect: str | None = None) -> bool:
         """Delete cached value by namespace.
@@ -673,9 +750,12 @@ class NamespacedCache:
         Returns:
             True when the key was found and deleted.
         """
+        if not self._is_enabled(namespace):
+            return False
+        cache = self._caches[namespace]
         full_key = create_cache_key(namespace, key, dialect)
         cache_key = CacheKey((full_key,))
-        return self._cache.delete(cache_key)
+        return cache.delete(cache_key)
 
     def get_statement(self, key: str, dialect: str | None = None) -> Any | None:
         """Get cached statement data.
@@ -883,11 +963,20 @@ class NamespacedCache:
 
     def clear(self) -> None:
         """Clear all cache entries."""
-        self._cache.clear()
+        for cache in self._caches.values():
+            cache.clear()
 
     def get_stats(self) -> CacheStats:
         """Get cache statistics."""
-        return self._cache.get_stats()
+        aggregated = CacheStats()
+        for cache in self._caches.values():
+            stats = cache.get_stats()
+            aggregated.hits += stats.hits
+            aggregated.misses += stats.misses
+            aggregated.evictions += stats.evictions
+            aggregated.total_operations += stats.total_operations
+            aggregated.memory_usage += stats.memory_usage
+        return aggregated
 
 
 _namespaced_cache: NamespacedCache | None = None
@@ -903,7 +992,7 @@ def get_cache() -> NamespacedCache:
     if _namespaced_cache is None:
         with _cache_lock:
             if _namespaced_cache is None:
-                _namespaced_cache = NamespacedCache()
+                _namespaced_cache = NamespacedCache(get_cache_config())
     return _namespaced_cache
 
 
@@ -930,11 +1019,7 @@ class Filter:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Filter):
             return False
-        return (
-            self.field_name == other.field_name
-            and self.operation == other.operation
-            and self.value == other.value
-        )
+        return self.field_name == other.field_name and self.operation == other.operation and self.value == other.value
 
     def __hash__(self) -> int:
         return hash((self.field_name, self.operation, self.value))
@@ -954,7 +1039,11 @@ def canonicalize_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
 
     # Deduplicate and sort for canonical representation
     unique_filters = set(filters)
-    return tuple(sorted(unique_filters, key=lambda f: (f.field_name, f.operation, str(f.value))))
+    return tuple(sorted(unique_filters, key=_filter_sort_key))
+
+
+def _filter_sort_key(filter_obj: "Filter") -> "tuple[str, str, str]":
+    return filter_obj.field_name, filter_obj.operation, str(filter_obj.value)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

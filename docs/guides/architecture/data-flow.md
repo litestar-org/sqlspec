@@ -10,12 +10,12 @@ This document provides a detailed, in-depth analysis of how SQL statements and p
 
 ## High-Level Overview
 
-The core of `sqlspec` is designed around a **single-pass processing pipeline** with **enhanced multi-tier caching**. A user's SQL input, whether a raw string or a `QueryBuilder` object, is converted into a `SQL` object. This object then flows through a series of transformations and validations via `SQLTransformContext` and `compose_pipeline` before being executed by a database-specific driver. The result is then packaged into a standardized `SQLResult` object.
+The core of `sqlspec` is designed around a **single-pass processing pipeline** with **namespaced caching**. A user's SQL input, whether a raw string or a `QueryBuilder` object, is converted into a `SQL` object. Compilation then flows through `SQLProcessor` (parameter normalization + sqlglot parsing) before being executed by a database-specific driver. The result is packaged into a standardized `SQLResult` object.
 
 **Key Enhancements in Current Implementation:**
 
-- **Multi-tier caching system** providing 12x+ performance improvements
-- **SQLTransformContext** for state management through pipeline steps
+- **Namespaced caching system** providing major performance improvements
+- **SQLProcessor** for single-pass compilation with parameter normalization
 - **StatementConfig-aware processing** with cache key generation
 - **Enhanced template method pattern** in driver execution
 
@@ -25,7 +25,7 @@ Here is a high-level Mermaid diagram illustrating the enhanced flow:
 graph TD
     A[User Input: SQL("SELECT ..."), sql.select(), etc.] --> B{SQL Object};
     B --> C{Driver.execute()};
-    C --> D[Enhanced Pipeline: SQLTransformContext + Multi-tier Caching];
+    C --> D[Pipeline: SQLProcessor + Namespaced Caching];
     D --> E[StatementConfig-Aware Processing];
     E --> F{Driver Template Method Pattern};
     F --> G[Database-Specific Execution];
@@ -47,7 +47,7 @@ The journey begins when a user creates a `SQL` object. This can be done in sever
 
 When a `SQL` object is initialized, the following enhanced process occurs:
 
-1. **Statement Normalization**: The input (string, `QueryBuilder`, or `sqlglot` expression) is converted into a `sqlglot` expression tree via the `_to_expression` method. This creates the Abstract Syntax Tree (AST) that represents the SQL query.
+1. **Statement Normalization**: When the input is a `sqlglot` expression, SQLSpec retains the AST and avoids re-parsing. String inputs are parsed during compilation.
 
 2. **Enhanced Parameter and Filter Processing**: Parameters and filters are processed and stored with type preservation:
    - Positional arguments become `_positional_parameters` with `TypedParameter` support
@@ -62,12 +62,12 @@ When a `SQL` object is initialized, the following enhanced process occurs:
        enable_parsing=True,
        enable_validation=True,
        enable_transformations=True,
-       enable_caching=True,  # NEW: Multi-tier caching control
+       enable_caching=True,  # Namespaced caching control
        parameter_config=ParameterStyleConfig(...)  # Enhanced parameter handling
    )
    ```
 
-4. **Lazy Processing Initialization**: The SQL object sets up for lazy processing, deferring expensive operations until `_ensure_processed()` is called during compilation.
+4. **Lazy Processing Initialization**: The SQL object defers compilation until `compile()` is invoked.
 
 ### 2. The Enhanced `Driver.execute()` Method
 
@@ -103,35 +103,32 @@ Before execution, the `SQL` object undergoes comprehensive processing through th
 
 The `SQL.compile()` method triggers the enhanced processing pipeline:
 
-1. **Multi-Tier Caching Architecture**: The system now implements comprehensive caching at multiple levels:
+1. **Namespaced Cache Architecture**: SQLSpec centralizes SQL artifact caching in a single namespaced cache:
 
    ```python
-   # Cache types and their benefits:
-   sql_cache: Dict[str, str]              # Compiled SQL strings (avoids recompilation)
-   optimized_cache: Dict[str, Expression] # Post-optimization AST expressions
-   builder_cache: Dict[str, bytes]        # QueryBuilder state serialization
-   file_cache: Dict[str, CachedSQLFile]   # File loading with checksums (12x+ speedup)
-   analysis_cache: Dict[str, Any]         # Pipeline step results for reuse
+   # Namespaced cache entries:
+   statement_cache: CachedStatement       # Compiled SQL + execution parameters
+   expression_cache: Expression           # Parsed SQLGlot expressions
+   parameter_cache: Any                   # Parameter conversion results
+   optimized_cache: Expression            # Optimized SQLGlot expressions
+   builder_cache: SQL                     # Builder → SQL statement results
+   file_cache: SQLFileCacheEntry          # File loading with checksums (12x+ speedup)
    ```
 
-2. **Enhanced Pipeline Execution**: The `_ensure_processed` method runs the advanced pipeline using `SQLTransformContext` and `compose_pipeline`:
+   The shared pipeline registry keeps per-config SQLProcessor caches (including parse caches)
+   so repeated compiles reuse both conversion and parsing work.
+
+2. **Enhanced Pipeline Execution**: SQLSpec compiles statements through `SQLProcessor`:
 
    ```python
-   context = SQLTransformContext(
-       current_expression=expression,
-       original_expression=expression.copy(),
-       parameters=combined_params,
-       dialect=config.dialect,
-       metadata={},
-       statement_config=config
-   )
+   processor = SQLProcessor(statement_config)
 
-   # Pipeline steps with caching integration:
-   pipeline = compose_pipeline([
-       parameterize_literals_step,  # Extract literals → parameters
-       optimize_step,               # SQLGlot optimization with caching
-       validate_step                # Security validation with cached results
-   ])
+   # Parameter normalization + parse once
+   result = processor.compile(sql, parameters)
+
+   # Result includes compiled SQL, execution parameters, and the parsed expression
+   compiled_sql = result.compiled_sql
+   expression = result.expression
    ```
 
 3. **StatementConfig-Aware Processing**: All pipeline operations respect StatementConfig for consistent behavior:
@@ -382,7 +379,7 @@ class MyDatabaseDriver(SyncDriverAdapterBase):
             statement_config = StatementConfig(
                 dialect="mydatabase",
                 parameter_config=parameter_config,
-                enable_caching=True  # Enable multi-tier caching
+                enable_caching=True  # Enable namespaced caching
             )
         super().__init__(connection, statement_config, driver_features)
 ```
@@ -433,9 +430,9 @@ class MyDatabaseConfig(DatabaseConfig):
 
 By following this pattern, you automatically get:
 
-- **Multi-tier caching system** with 12x+ performance improvements
+- **Namespaced caching system** with improved hot-path performance
 - **Enhanced parameter processing** with type preservation
-- **SQLTransformContext pipeline** with security validation
+- **SQLProcessor-driven pipeline** with parse-once behavior and validation
 - **StatementConfig-aware processing** for consistent behavior
 - **Template method coordination** with special handling hooks
 - **Standardized SQLResult objects** with consistent API
@@ -476,7 +473,7 @@ The enhanced architecture provides a solid foundation that handles the complex a
 
 The enhanced architecture provides significant performance improvements:
 
-1. **Multi-tier Caching**: 12x+ speedup for file operations and frequent queries
+1. **Namespaced Caching**: Faster reuse of parsed SQL and parameter results
 2. **StatementConfig-Aware Processing**: Eliminates cross-contamination and processing overhead
 3. **Enhanced Pipeline**: Optimized AST operations with cached results
 4. **Template Method Pattern**: Reduces duplicate code and improves maintainability
@@ -487,7 +484,7 @@ The enhanced architecture provides significant performance improvements:
 1. **Single-Pass Processing**: Parse once, transform once, validate once
 2. **Configuration-Driven**: StatementConfig controls all processing behavior
 3. **Template Method Coordination**: Base class orchestrates, drivers implement specifics
-4. **Cache-Aware Design**: Multi-tier caching integrated throughout the pipeline
+4. **Cache-Aware Design**: Namespaced caching integrated throughout the pipeline
 5. **Type Safety**: Enhanced TypedParameter support preserves type information
 6. **Error Resilience**: Comprehensive error handling and resource cleanup
 

@@ -170,7 +170,7 @@ class OptimizedData:
 For existing code or when dataclasses are not suitable, using a regular class with `__slots__` is a highly effective and proven pattern for SQLSpec.
 
 ```python
-# ✅ GOOD: This pattern is used in SQLSpec for classes like CachedSQLFile
+# ✅ GOOD: This pattern is used in SQLSpec for classes like SQLFileCacheEntry
 class Connection:
     __slots__ = ("host", "port", "database", "_connected")
 
@@ -690,7 +690,7 @@ def ensure_fsspec() -> None:
 
 ```python
 # ✅ DO: Use regular class with __slots__ for optimal MyPyC performance
-class CachedSQLFile:
+class SQLFileCacheEntry:
     """Cached SQL file with parsed queries for efficient reloading.
 
     CRITICAL: Uses regular class with __slots__ instead of @dataclass
@@ -708,7 +708,7 @@ class CachedSQLFile:
 
 # ❌ DON'T: Use @dataclass for performance-critical cached structures
 @dataclass
-class CachedSQLFile:  # This prevents MyPyC optimization
+class SQLFileCacheEntry:  # This prevents MyPyC optimization
     sql_file: SQLFile
     parsed_queries: dict[str, str]
     query_names: list[str] = field(init=False)

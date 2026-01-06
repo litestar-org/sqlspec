@@ -45,7 +45,7 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+def _column_types(self) -> "tuple[str, str, str]":
         """Return Spanner-specific column types."""
         return "JSON", "JSON", "TIMESTAMP"
 

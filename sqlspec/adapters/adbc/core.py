@@ -25,17 +25,17 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     """Return dialect-aware type coercion mapping for Arrow parameter handling."""
 
     return {
-        datetime.datetime: lambda x: x,
-        datetime.date: lambda x: x,
-        datetime.time: lambda x: x,
+        datetime.datetime: _identity,
+        datetime.date: _identity,
+        datetime.time: _identity,
         decimal.Decimal: float,
-        bool: lambda x: x,
-        int: lambda x: x,
-        float: lambda x: x,
-        bytes: lambda x: x,
+        bool: _identity,
+        int: _identity,
+        float: _identity,
+        bytes: _identity,
         tuple: _convert_array_for_postgres_adbc,
         list: _convert_array_for_postgres_adbc,
-        dict: lambda x: x,
+        dict: _identity,
     }
 
 

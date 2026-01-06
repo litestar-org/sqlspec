@@ -5,10 +5,11 @@ Provides abstract base classes and core functionality for SQL query builders.
 """
 
 import hashlib
+import re
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from collections.abc import Callable, Iterable, Mapping
+from typing import Any, NoReturn, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -22,6 +23,7 @@ from sqlspec.core import (
     SQL,
     ParameterStyle,
     ParameterStyleConfig,
+    SQLResult,
     StatementConfig,
     get_cache,
     get_cache_config,
@@ -31,17 +33,15 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
 
-if TYPE_CHECKING:
-    from sqlspec.core import SQLResult
-
-__all__ = ("QueryBuilder", "SafeQuery")
+__all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
+PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
 
 logger = get_logger(__name__)
 
 
-class SafeQuery:
+class BuiltQuery:
     """SQL query with bound parameters."""
 
     __slots__ = ("dialect", "parameters", "sql")
@@ -53,10 +53,10 @@ class SafeQuery:
 
     def __repr__(self) -> str:
         parameter_keys = sorted(self.parameters.keys())
-        return f"SafeQuery(sql={self.sql!r}, parameters={parameter_keys!r}, dialect={self.dialect!r})"
+        return f"BuiltQuery(sql={self.sql!r}, parameters={parameter_keys!r}, dialect={self.dialect!r})"
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SafeQuery):
+        if not isinstance(other, BuiltQuery):
             return NotImplemented
         return self.sql == other.sql and self.parameters == other.parameters and self.dialect == other.dialect
 
@@ -367,6 +367,52 @@ class QueryBuilder(ABC):
         self._parameters[param_name] = value
         return self, param_name
 
+    def load_parameters(self, parameters: "Mapping[str, Any]") -> None:
+        """Load a parameter mapping into the builder.
+
+        Args:
+            parameters: Mapping of parameter names to values.
+
+        Raises:
+            SQLBuilderError: If a parameter name already exists on the builder.
+        """
+        if not parameters:
+            return
+
+        for name, value in parameters.items():
+            if name in self._parameters:
+                self._raise_sql_builder_error(f"Parameter name '{name}' already exists.")
+            self._parameters[name] = value
+            self._update_parameter_counter(name)
+
+    def load_ctes(self, ctes: "Iterable[exp.CTE]") -> None:
+        """Load SQLGlot CTE nodes into the builder.
+
+        Args:
+            ctes: Iterable of CTE expressions to register.
+
+        Raises:
+            SQLBuilderError: If a CTE alias is missing or duplicated.
+        """
+        for cte in ctes:
+            alias = self._resolve_cte_alias(cte)
+            if alias in self._with_ctes:
+                self._raise_sql_builder_error(f"CTE '{alias}' already exists.")
+            self._with_ctes[alias] = cte
+
+    def _resolve_cte_alias(self, cte: exp.CTE) -> str:
+        alias_name = cte.alias_or_name
+        if not alias_name:
+            self._raise_sql_builder_error("CTE alias is required.")
+        return str(alias_name)
+
+    def _update_parameter_counter(self, name: str) -> None:
+        match = PARAMETER_INDEX_PATTERN.match(name)
+        if not match:
+            return
+        index = int(match.group("index"))
+        self._parameter_counter = max(self._parameter_counter, index)
+
     def _generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name when collision occurs.
 
@@ -513,7 +559,7 @@ class QueryBuilder(ABC):
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
 
-    def build(self, dialect: DialectType = None) -> "SafeQuery":
+    def build(self, dialect: DialectType = None) -> "BuiltQuery":
         """Builds the SQL query string and parameters.
 
         Args:
@@ -521,7 +567,7 @@ class QueryBuilder(ABC):
                     instead of the builder's default dialect.
 
         Returns:
-            SafeQuery: A dataclass containing the SQL string and parameters.
+            BuiltQuery: A dataclass containing the SQL string and parameters.
 
         Examples:
             # Use builder's default dialect
@@ -555,7 +601,7 @@ class QueryBuilder(ABC):
             err_msg = f"Error generating SQL from expression: {e!s}"
             self._raise_sql_builder_error(err_msg, e)
 
-        return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=dialect or self.dialect)
+        return BuiltQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=dialect or self.dialect)
 
     def to_sql(self, show_parameters: bool = False, dialect: DialectType = None) -> str:
         """Return SQL string with optional parameter substitution.
@@ -722,7 +768,7 @@ class QueryBuilder(ABC):
         """Extract parameters for SQL statement creation.
 
         Args:
-            raw_parameters: Raw parameter data from SafeQuery
+            raw_parameters: Raw parameter data from BuiltQuery
 
         Returns:
             Tuple of (kwargs, parameters) for SQL statement construction
@@ -842,7 +888,7 @@ class QueryBuilder(ABC):
         copy: bool = True,
         optimize_expression: bool | None = None,
         dialect: DialectType | None = None,
-    ) -> "SafeQuery":
+    ) -> "BuiltQuery":
         """Compile a pre-built expression with optional caching and parameters.
 
         Designed for hot paths that construct an AST once and reuse it with
@@ -858,14 +904,14 @@ class QueryBuilder(ABC):
             dialect: Optional dialect override for SQL generation.
 
         Returns:
-            SafeQuery containing SQL and parameters.
+            BuiltQuery containing SQL and parameters.
         """
 
         expr: exp.Expression | None = None
 
         if cache_key is not None:
             cache = get_cache()
-            cached_expr = cache.get("static_expression", cache_key)
+            cached_expr = cache.get_expression(cache_key)
             if cached_expr is None:
                 if expression_factory is None:
                     msg = "expression_factory is required when cache_key is provided"
@@ -877,7 +923,7 @@ class QueryBuilder(ABC):
                 should_optimize = self.enable_optimization if optimize_expression is None else optimize_expression
                 if should_optimize:
                     expr_to_store = self._optimize_expression(expr_to_store)
-                cache.put("static_expression", cache_key, expr_to_store)
+                cache.put_expression(cache_key, expr_to_store)
                 cached_expr = expr_to_store
             expr = cached_expr.copy() if copy else cached_expr
         else:
@@ -895,6 +941,28 @@ class QueryBuilder(ABC):
         target_dialect = str(dialect) if dialect else self.dialect_name
         identify = self._should_identify(target_dialect)
         sql_string = expr.sql(dialect=target_dialect, pretty=True, identify=identify)
-        return SafeQuery(
+        return BuiltQuery(
             sql=sql_string, parameters=parameters.copy() if parameters else {}, dialect=dialect or self.dialect
         )
+
+
+class ExpressionBuilder(QueryBuilder):
+    """Builder wrapper for a pre-parsed SQLGlot expression."""
+
+    __slots__ = ()
+
+    def __init__(self, expression: exp.Expression, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        if not is_expression(expression):
+            self._raise_invalid_expression_type(expression)
+        self._expression = expression
+
+    def _create_base_expression(self) -> exp.Expression:
+        if self._expression is None:
+            msg = "ExpressionBuilder requires an expression at construction."
+            self._raise_sql_builder_error(msg)
+        return self._expression
+
+    @property
+    def _expected_result_type(self) -> "type[SQLResult]":
+        return SQLResult

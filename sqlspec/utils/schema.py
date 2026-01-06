@@ -53,7 +53,7 @@ _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.
 _DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
 
 
-def _is_list_type_target(target_type: Any) -> TypeGuard[list[object]]:
+def _is_list_type_target(target_type: Any) -> "TypeGuard[list[object]]":
     """Check if target type is a list type (e.g., list[float])."""
     try:
         origin = target_type.__origin__
@@ -151,7 +151,7 @@ class _EnumDecoder:
         return t(v.value)
 
 
-_DEFAULT_TYPE_DECODERS: Final["list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]"] = [
+_DEFAULT_TYPE_DECODERS: Final[list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]] = [
     (_IsTypePredicate(UUID), _UUIDDecoder()),
     (_IsTypePredicate(datetime.datetime), _ISOFormatDecoder()),
     (_IsTypePredicate(datetime.date), _ISOFormatDecoder()),

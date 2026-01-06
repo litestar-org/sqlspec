@@ -168,6 +168,7 @@ include = [
   "sqlspec/driver/**/*.py",                # Driver module
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
+  "sqlspec/adapters/**/data_dictionary.py", # Adapter metadata queries
   "sqlspec/utils/text.py",                 # Text utilities
   "sqlspec/utils/sync_tools.py",           # Synchronous utility functions
   "sqlspec/utils/type_guards.py",          # Type guard utilities

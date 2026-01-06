@@ -20,7 +20,7 @@ __all__ = (
 _DEFAULT_JSON_SERIALIZER: Callable[[Any], str] = to_json
 _DEFAULT_JSON_DESERIALIZER: Callable[[str], Any] = from_json
 
-DRIVER_PARAMETER_PROFILES: dict[str, DriverParameterProfile] = {}
+DRIVER_PARAMETER_PROFILES: "dict[str, DriverParameterProfile]" = {}
 
 
 def get_driver_profile(adapter_key: str) -> "DriverParameterProfile":

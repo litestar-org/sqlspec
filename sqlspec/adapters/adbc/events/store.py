@@ -127,7 +127,7 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         logger.debug("Unknown ADBC driver, defaulting to SQLite dialect: driver=%s uri=%s", driver_lower, uri_lower)
         return DIALECT_SQLITE
 
-    def _column_types(self) -> tuple[str, str, str]:
+def _column_types(self) -> "tuple[str, str, str]":
         """Return payload, metadata, and timestamp column types for the dialect."""
         dialect = self.dialect
 

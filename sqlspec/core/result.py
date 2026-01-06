@@ -11,7 +11,7 @@ Classes:
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, Optional, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
@@ -26,7 +26,16 @@ from sqlspec.storage import (
     SyncStoragePipeline,
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
-from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
+from sqlspec.utils.arrow_impl import (
+    arrow_table_column_names,
+    arrow_table_num_columns,
+    arrow_table_num_rows,
+    arrow_table_to_pandas,
+    arrow_table_to_polars,
+    arrow_table_to_pylist,
+    ensure_arrow_table,
+)
+from sqlspec.utils.module_loader import ensure_pandas, ensure_polars
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
@@ -65,7 +74,7 @@ class StatementResult(ABC, Iterable[Any]):
         rows_affected: int = 0,
         last_inserted_id: int | str | None = None,
         execution_time: float | None = None,
-        metadata: Optional["dict[str, Any]"] = None,
+        metadata: "dict[str, Any] | None" = None,
     ) -> None:
         """Initialize statement result.
 
@@ -166,21 +175,21 @@ class SQLResult(StatementResult):
     def __init__(
         self,
         statement: "SQL",
-        data: list[dict[str, Any]] | None = None,
+        data: "list[dict[str, Any]] | None" = None,
         rows_affected: int = 0,
         last_inserted_id: int | str | None = None,
         execution_time: float | None = None,
-        metadata: Optional["dict[str, Any]"] = None,
+        metadata: "dict[str, Any] | None" = None,
         error: Exception | None = None,
         operation_type: OperationType = "SELECT",
         operation_index: int | None = None,
         parameters: Any | None = None,
-        column_names: Optional["list[str]"] = None,
+        column_names: "list[str] | None" = None,
         total_count: int | None = None,
         has_more: bool = False,
-        inserted_ids: Optional["list[int | str]"] = None,
-        statement_results: Optional["list[SQLResult]"] = None,
-        errors: Optional["list[str]"] = None,
+        inserted_ids: "list[int | str] | None" = None,
+        statement_results: "list[SQLResult] | None" = None,
+        errors: "list[str] | None" = None,
         total_statements: int = 0,
         successful_statements: int = 0,
     ) -> None:
@@ -482,7 +491,7 @@ class SQLResult(StatementResult):
     def all(self, *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
 
     @overload
-    def all(self, *, schema_type: None = None) -> list[dict[str, Any]]: ...
+    def all(self, *, schema_type: None = None) -> "list[dict[str, Any]]": ...
 
     def all(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[SchemaT] | list[dict[str, Any]]":
         """Return all rows as a list.
@@ -709,8 +718,8 @@ class ArrowResult(StatementResult):
         rows_affected: int = 0,
         last_inserted_id: int | str | None = None,
         execution_time: float | None = None,
-        metadata: Optional["dict[str, Any]"] = None,
-        schema: Optional["dict[str, Any]"] = None,
+        metadata: "dict[str, Any] | None" = None,
+        schema: "dict[str, Any] | None" = None,
     ) -> None:
         """Initialize Arrow result.
 
@@ -755,15 +764,7 @@ class ArrowResult(StatementResult):
         if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
-
-        ensure_pyarrow()
-
-        import pyarrow as pa
-
-        if not isinstance(self.data, pa.Table):
-            msg = f"Expected an Arrow Table, but got {type(self.data).__name__}"
-            raise TypeError(msg)
-        return self.data
+        return ensure_arrow_table(self.data)
 
     @property
     def column_names(self) -> "list[str]":
@@ -776,8 +777,7 @@ class ArrowResult(StatementResult):
             ValueError: If no Arrow table is available.
             TypeError: If data is not an Arrow Table.
         """
-        table = self.get_data()
-        return list(table.column_names)
+        return arrow_table_column_names(self.get_data())
 
     @property
     def num_rows(self) -> int:
@@ -790,8 +790,7 @@ class ArrowResult(StatementResult):
             ValueError: If no Arrow table is available.
             TypeError: If data is not an Arrow Table.
         """
-        table = self.get_data()
-        return table.num_rows
+        return arrow_table_num_rows(self.get_data())
 
     @property
     def num_columns(self) -> int:
@@ -804,8 +803,7 @@ class ArrowResult(StatementResult):
             ValueError: If no Arrow table is available.
             TypeError: If data is not an Arrow Table.
         """
-        table = self.get_data()
-        return table.num_columns
+        return arrow_table_num_columns(self.get_data())
 
     def to_pandas(self) -> "PandasDataFrame":
         """Convert Arrow data to pandas DataFrame.
@@ -821,19 +819,7 @@ class ArrowResult(StatementResult):
             >>> df = result.to_pandas()
             >>> print(df.head())
         """
-        if self.data is None:
-            msg = "No Arrow table available"
-            raise ValueError(msg)
-
-        ensure_pandas()
-
-        import pandas as pd
-
-        result = self.data.to_pandas()
-        if not isinstance(result, pd.DataFrame):
-            msg = f"Expected a pandas DataFrame, but got {type(result).__name__}"
-            raise TypeError(msg)
-        return result
+        return arrow_table_to_pandas(self.get_data())
 
     def to_polars(self) -> "PolarsDataFrame":
         """Convert Arrow data to Polars DataFrame.
@@ -849,19 +835,7 @@ class ArrowResult(StatementResult):
             >>> df = result.to_polars()
             >>> print(df.head())
         """
-        if self.data is None:
-            msg = "No Arrow table available"
-            raise ValueError(msg)
-
-        ensure_polars()
-
-        import polars as pl
-
-        result = pl.from_arrow(self.data)
-        if not isinstance(result, pl.DataFrame):
-            msg = f"Expected a Polars DataFrame, but got {type(result).__name__}"
-            raise TypeError(msg)
-        return result
+        return arrow_table_to_polars(self.get_data())
 
     def to_dict(self) -> "list[dict[str, Any]]":
         """Convert Arrow data to list of dictionaries.
@@ -881,9 +855,7 @@ class ArrowResult(StatementResult):
             >>> print(rows[0])
             {'id': 1, 'name': 'Alice'}
         """
-        table = self.get_data()
-        result: list[dict[str, Any]] = table.to_pylist()
-        return result
+        return arrow_table_to_pylist(self.get_data())
 
     def write_to_storage_sync(
         self,
@@ -930,8 +902,7 @@ class ArrowResult(StatementResult):
             >>> print(len(result))
             100
         """
-        table = self.get_data()
-        return table.num_rows
+        return arrow_table_num_rows(self.get_data())
 
     def __iter__(self) -> "Iterator[dict[str, Any]]":
         """Iterate over rows as dictionaries.
@@ -949,11 +920,7 @@ class ArrowResult(StatementResult):
             >>> for row in result:
             ...     print(row["name"])
         """
-        if self.data is None:
-            msg = "No Arrow table available"
-            raise ValueError(msg)
-
-        yield from self.data.to_pylist()
+        yield from arrow_table_to_pylist(self.get_data())
 
 
 class EmptyResult(StatementResult):
@@ -970,7 +937,7 @@ class EmptyResult(StatementResult):
     def is_success(self) -> bool:
         return True
 
-    def get_data(self) -> list[Any]:
+    def get_data(self) -> "list[Any]":
         return []
 
 
@@ -1067,11 +1034,11 @@ class StackResult:
 
 def create_sql_result(
     statement: "SQL",
-    data: list[dict[str, Any]] | None = None,
+    data: "list[dict[str, Any]] | None" = None,
     rows_affected: int = 0,
     last_inserted_id: int | str | None = None,
     execution_time: float | None = None,
-    metadata: Optional["dict[str, Any]"] = None,
+    metadata: "dict[str, Any] | None" = None,
     **kwargs: Any,
 ) -> SQLResult:
     """Create SQLResult instance.
@@ -1105,8 +1072,8 @@ def create_arrow_result(
     rows_affected: int = 0,
     last_inserted_id: int | str | None = None,
     execution_time: float | None = None,
-    metadata: Optional["dict[str, Any]"] = None,
-    schema: Optional["dict[str, Any]"] = None,
+    metadata: "dict[str, Any] | None" = None,
+    schema: "dict[str, Any] | None" = None,
 ) -> ArrowResult:
     """Create ArrowResult instance.
 

@@ -23,21 +23,7 @@ import pytest
 
 from sqlspec.base import SQLSpec
 from sqlspec.core import CacheConfig
-
-
-def _is_compiled() -> bool:
-    """Check if core modules are mypyc-compiled."""
-    try:
-        from sqlspec.core import cache
-
-        return hasattr(cache, "__file__") and (cache.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-requires_interpreted = pytest.mark.skipif(
-    _is_compiled(), reason="Test uses @patch which doesn't work with mypyc-compiled modules"
-)
+from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("base")
 
@@ -198,21 +184,29 @@ def test_log_cache_stats_logs_to_configured_logger() -> None:
 
 
 @requires_interpreted
-@patch("sqlspec.core.cache.get_cache")
-@patch("sqlspec.core.cache.get_default_cache")
-def test_update_cache_config_clears_all_caches(mock_get_default_cache: MagicMock, mock_get_cache: MagicMock) -> None:
+def test_update_cache_config_clears_all_caches() -> None:
     """Test that updating cache configuration clears all existing caches."""
+    import sqlspec.core.cache as cache_module
+
     mock_default_cache = MagicMock()
-    mock_multi_cache = MagicMock()
-    mock_get_default_cache.return_value = mock_default_cache
-    mock_get_cache.return_value = mock_multi_cache
+    mock_namespaced_cache = MagicMock()
+    original_default = cache_module._default_cache
+    original_namespaced = cache_module._namespaced_cache
 
-    new_config = CacheConfig(sql_cache_size=1000)
+    cache_module._default_cache = mock_default_cache
+    cache_module._namespaced_cache = mock_namespaced_cache
 
-    SQLSpec.update_cache_config(new_config)
+    try:
+        new_config = CacheConfig(sql_cache_size=1000)
+        SQLSpec.update_cache_config(new_config)
 
-    mock_default_cache.clear.assert_called_once()
-    mock_multi_cache.clear.assert_called_once()
+        mock_default_cache.clear.assert_called_once()
+        mock_namespaced_cache.clear.assert_called_once()
+        assert cache_module._default_cache is None
+        assert cache_module._namespaced_cache is None
+    finally:
+        cache_module._default_cache = original_default
+        cache_module._namespaced_cache = original_namespaced
 
 
 def test_multiple_sqlspec_instances_share_cache_configuration() -> None:

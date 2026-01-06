@@ -3,8 +3,6 @@
 import re
 from typing import Any, Final
 
-import oracledb
-
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import DriverParameterProfile, ParameterStyle
 from sqlspec.utils.type_guards import is_readable
@@ -32,20 +30,24 @@ def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
 
 def _resolve_oracledb_version() -> "tuple[int, int, int]":
     try:
+        import oracledb
+    except ImportError:
+        return (0, 0, 0)
+    try:
         version = oracledb.__version__
     except AttributeError:
         version = "0.0.0"
     return _parse_version_tuple(version)
 
 
-ORACLEDB_VERSION: Final[tuple[int, int, int]] = _resolve_oracledb_version()
+ORACLEDB_VERSION: "Final[tuple[int", int, int]] = _resolve_oracledb_version()
 
 
 def normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
     should_lowercase = driver_features.get("enable_lowercase_column_names", False)
     if not should_lowercase:
         return column_names
-    normalized: list[str] = []
+    normalized: "list[str]"= []
     for name in column_names:
         if name and IMPLICIT_UPPER_COLUMN_PATTERN.fullmatch(name):
             normalized.append(name.lower())
@@ -77,7 +79,7 @@ def coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
         List of coerced values with LOBs read to strings/bytes.
 
     """
-    coerced_values: list[Any] = []
+    coerced_values: "list[Any]"= []
     for value in row:
         if is_readable(value):
             try:

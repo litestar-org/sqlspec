@@ -149,7 +149,7 @@ def _format_identifiers(identifiers: "set[tuple[str, int | str]]") -> str:
     if not identifiers:
         return "[]"
     formatted: list[str] = []
-    for identifier in sorted(identifiers, key=lambda item: (item[0], str(item[1]))):
+    for identifier in sorted(identifiers, key=_identifier_sort_key):
         kind, value = identifier
         if kind == "named":
             formatted.append(str(value))
@@ -158,6 +158,10 @@ def _format_identifiers(identifiers: "set[tuple[str, int | str]]") -> str:
         else:
             formatted.append(str(value))
     return "[" + ", ".join(formatted) + "]"
+
+
+def _identifier_sort_key(item: "tuple[str, int | str]") -> "tuple[str, str]":
+    return item[0], str(item[1])
 
 
 def _normalize_index_identifiers(expected: "set[tuple[str, int | str]]", actual: "set[tuple[str, int | str]]") -> bool:

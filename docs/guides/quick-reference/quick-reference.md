@@ -15,15 +15,15 @@ orphan: true
 
 ### Enhanced Caching System (NEW)
 
-- Multi-tier caching with StatementConfig-aware cache keys
-- File cache with checksum validation providing 12x+ performance improvements
-- Analysis cache for pipeline step results
+- Namespaced caching with StatementConfig-aware cache keys
+- File cache with checksum validation providing major performance improvements
+- Pipeline registry caches per-config SQLProcessor instances
 
 ### Pipeline Architecture (ENHANCED)
 
-- SQLTransformContext for state management
-- compose_pipeline for efficient step composition
-- Enhanced StatementConfig.get_pipeline_steps() support
+- SQLProcessor-driven compilation with parse-once semantics
+- ParameterProcessor normalization before parsing
+- StatementConfig toggles parsing, validation, and transformations
 
 ## Public API - Driver Execute Methods
 
@@ -82,26 +82,24 @@ def execute_script(
 graph TD
     A[User SQL + Params] --> B[SQL.__init__]
     B --> C{Lazy Processing}
-    C -->|When needed| D[_ensure_processed]
-    D --> E[SQLTransformContext]
-    E --> F[compose_pipeline]
-    F --> G[parameterize_literals_step]
-    G --> H[optimize_step + multi-tier caching]
-    H --> I[validate_step]
-    I --> J[_ProcessedState + analysis_cache]
-    J --> K[compile with StatementConfig-aware keys]
-    K --> L[Driver._dispatch_execution]
-    L --> M[Driver._perform_execute]
-    M --> N[cursor.execute]
+    C -->|When needed| D[SQL.compile()]
+    D --> E[ParameterProcessor.process]
+    E --> F[SQLProcessor.parse_one]
+    F --> G[AST transforms + validation]
+    G --> H[CompiledSQL + processor caches]
+    H --> I[Driver._dispatch_execution]
+    I --> J[Driver._perform_execute]
+    J --> K[cursor.execute]
 ```
 
-### Multi-Tier Caching Architecture (ENHANCED)
+### Namespaced Caching Architecture (ENHANCED)
 
-- **SQL Cache**: Compiled SQL strings with StatementConfig-aware cache keys
+- **Statement Cache**: Compiled SQL + parameters with StatementConfig-aware keys
+- **Expression Cache**: Parsed SQLGlot expressions (also used for static builder expressions)
+- **Parameter Cache**: Parameter conversion results
 - **Optimized Cache**: Post-optimization AST expressions for reuse
-- **Builder Cache**: QueryBuilder instances with state serialization
-- **File Cache**: SQLFileLoader with checksum validation (12x+ speedup)
-- **Analysis Cache**: Pipeline analysis results with step-specific caching
+- **Builder Cache**: Builder → SQL statement results
+- **File Cache**: SQLFileLoader entries with checksum validation (12x+ speedup)
 
 ## Key Classes & Their Roles
 
@@ -123,21 +121,17 @@ StatementConfig(
     enable_validation=True,                # Run security validators
     enable_transformations=True,           # Apply transformers
     enable_caching=True,                   # Cache processed results
+    statement_transformers=(...),          # Custom AST transformers
     parameter_config=ParameterStyleConfig(...), # Parameter configuration
 )
 ```
 
-### SQLTransformContext
+### SQLProcessor
 
 ```python
-@dataclass
-class SQLTransformContext:
-    current_expression: exp.Expression     # Modified AST
-    original_expression: exp.Expression    # Original AST
-    parameters: dict[str, Any]             # Extracted parameters
-    dialect: str                           # Target dialect
-    metadata: dict[str, Any]               # Step results
-    driver_adapter: Any                    # Current driver instance
+processor = SQLProcessor(StatementConfig(dialect="postgres"))
+compiled = processor.compile("SELECT * FROM users WHERE id = ?", [1])
+# compiled.compiled_sql, compiled.execution_parameters, compiled.expression
 ```
 
 ## Base Class Responsibilities

@@ -8,20 +8,11 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from tests.conftest import requires_interpreted
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
 pytestmark = pytest.mark.xdist_group("postgres")
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _async
-
-        return hasattr(_async, "__file__") and (_async.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
 
 
 @pytest.fixture
@@ -849,9 +840,7 @@ async def test_asyncpg_statement_stack_batch(asyncpg_session: AsyncpgDriver) -> 
     assert results[2].result.data[0]["total_rows"] == 2
 
 
-@pytest.mark.skipif(
-    _is_compiled(), reason="mypyc-compiled driver modules have exception capture issues in continue_on_error mode"
-)
+@requires_interpreted
 async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: AsyncpgDriver) -> None:
     """Stack execution should surface errors while continuing operations when requested."""
 

@@ -4,14 +4,19 @@ import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from google.cloud.bigquery import ArrayQueryParameter, ScalarQueryParameter
-
 from sqlspec.core import DriverParameterProfile, ParameterStyle
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.type_guards import has_value_attribute
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import TypeAlias
+
+    from google.cloud.bigquery import ArrayQueryParameter, ScalarQueryParameter
+
+    BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter
+else:
+    BigQueryParam = Any
 
 __all__ = ("build_bigquery_profile", "create_bq_parameters")
 
@@ -20,13 +25,18 @@ def _identity(value: Any) -> Any:
     return value
 
 
-def _tuple_to_list(value: "tuple[Any, ...] | list[Any]") -> "list[Any]":
-    if isinstance(value, list):
-        return value
-    return list(value)
+def _tuple_to_list(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return list(value)
+    return value
 
 
-_BQ_TYPE_MAP: dict[type, tuple[str, str | None]] = {
+def _return_none(_: Any) -> None:
+    return None
+
+
+_BIGQUERY_MODULE: Any | None = None
+_BQ_TYPE_MAP: "dict[type", tuple[str, str | None]] = {
     bool: ("BOOL", None),
     int: ("INT64", None),
     float: ("FLOAT64", None),
@@ -39,7 +49,7 @@ _BQ_TYPE_MAP: dict[type, tuple[str, str | None]] = {
 }
 
 
-def _create_array_parameter(name: str, value: Any, array_type: str) -> ArrayQueryParameter:
+def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQueryParam":
     """Create BigQuery ARRAY parameter.
 
     Args:
@@ -50,10 +60,11 @@ def _create_array_parameter(name: str, value: Any, array_type: str) -> ArrayQuer
     Returns:
         ArrayQueryParameter instance.
     """
-    return ArrayQueryParameter(name, array_type, [] if value is None else list(value))
+    bigquery = _get_bigquery_module()
+    return bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value))
 
 
-def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> ScalarQueryParameter:
+def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> "BigQueryParam":
     """Create BigQuery JSON parameter as STRING type.
 
     Args:
@@ -64,10 +75,11 @@ def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[An
     Returns:
         ScalarQueryParameter with STRING type.
     """
-    return ScalarQueryParameter(name, "STRING", json_serializer(value))
+    bigquery = _get_bigquery_module()
+    return bigquery.ScalarQueryParameter(name, "STRING", json_serializer(value))
 
 
-def _create_scalar_parameter(name: str, value: Any, param_type: str) -> ScalarQueryParameter:
+def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQueryParam":
     """Create BigQuery scalar parameter.
 
     Args:
@@ -78,10 +90,20 @@ def _create_scalar_parameter(name: str, value: Any, param_type: str) -> ScalarQu
     Returns:
         ScalarQueryParameter instance.
     """
-    return ScalarQueryParameter(name, param_type, value)
+    bigquery = _get_bigquery_module()
+    return bigquery.ScalarQueryParameter(name, param_type, value)
 
 
-def _get_bq_param_type(value: Any) -> tuple[str | None, str | None]:
+def _get_bigquery_module() -> Any:
+    global _BIGQUERY_MODULE
+    if _BIGQUERY_MODULE is None:
+        from google.cloud import bigquery
+
+        _BIGQUERY_MODULE = bigquery
+    return _BIGQUERY_MODULE
+
+
+def _get_bq_param_type(value: Any) -> "tuple[str | None, str | None]":
     """Determine BigQuery parameter type from Python value.
 
     Args:
@@ -114,25 +136,7 @@ def _get_bq_param_type(value: Any) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _get_bq_param_creator_map(json_serializer: "Callable[[Any], str]") -> dict[str, Any]:
-    """Get BigQuery parameter creator map with configurable JSON serializer.
-
-    Args:
-        json_serializer: Function to serialize dict/list to JSON string.
-
-    Returns:
-        Dictionary mapping parameter types to creator functions.
-    """
-    return {
-        "ARRAY": _create_array_parameter,
-        "JSON": lambda name, value, _: _create_json_parameter(name, value, json_serializer),
-        "SCALAR": _create_scalar_parameter,
-    }
-
-
-def create_bq_parameters(
-    parameters: Any, json_serializer: "Callable[[Any], str]"
-) -> "list[ArrayQueryParameter | ScalarQueryParameter]":
+def create_bq_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") -> "list[BigQueryParam]":
     """Create BigQuery QueryParameter objects from parameters.
 
     Args:
@@ -145,8 +149,7 @@ def create_bq_parameters(
     if not parameters:
         return []
 
-    bq_parameters: list[ArrayQueryParameter | ScalarQueryParameter] = []
-    param_creator_map = _get_bq_param_creator_map(json_serializer)
+    bq_parameters: "list[BigQueryParam]"= []
 
     if isinstance(parameters, dict):
         for name, value in parameters.items():
@@ -155,14 +158,11 @@ def create_bq_parameters(
             param_type, array_element_type = _get_bq_param_type(actual_value)
 
             if param_type == "ARRAY" and array_element_type:
-                creator = param_creator_map["ARRAY"]
-                bq_parameters.append(creator(param_name_for_bq, actual_value, array_element_type))
+                bq_parameters.append(_create_array_parameter(param_name_for_bq, actual_value, array_element_type))
             elif param_type == "JSON":
-                creator = param_creator_map["JSON"]
-                bq_parameters.append(creator(param_name_for_bq, actual_value, None))
+                bq_parameters.append(_create_json_parameter(param_name_for_bq, actual_value, json_serializer))
             elif param_type:
-                creator = param_creator_map["SCALAR"]
-                bq_parameters.append(creator(param_name_for_bq, actual_value, param_type))
+                bq_parameters.append(_create_scalar_parameter(param_name_for_bq, actual_value, param_type))
             else:
                 msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(actual_value)}"
                 raise SQLSpecError(msg)
@@ -199,7 +199,7 @@ def build_bigquery_profile() -> "DriverParameterProfile":
             Decimal: _identity,
             dict: _identity,
             list: _identity,
-            type(None): lambda _: None,
+            type(None): _return_none,
         },
         extras={"json_tuple_strategy": "tuple", "type_coercion_overrides": {list: _identity, tuple: _tuple_to_list}},
         default_dialect="bigquery",

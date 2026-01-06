@@ -15,7 +15,7 @@ class PsycopgSyncEventQueueStore(BaseEventQueueStore[PsycopgSyncConfig]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return PostgreSQL-optimized column types for the event queue.
 
         Returns:
@@ -33,7 +33,7 @@ class PsycopgAsyncEventQueueStore(BaseEventQueueStore[PsycopgAsyncConfig]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return PostgreSQL-optimized column types for the event queue.
 
         Returns:

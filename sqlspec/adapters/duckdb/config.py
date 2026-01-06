@@ -51,7 +51,7 @@ class DuckDBConnectionParams(TypedDict):
 
     database: NotRequired[str]
     read_only: NotRequired[bool]
-    config: NotRequired[dict[str, Any]]
+    config: "NotRequired[dict[str", Any]]
     memory_limit: NotRequired[str]
     threads: NotRequired[int]
     temp_directory: NotRequired[str]
@@ -82,7 +82,7 @@ class DuckDBConnectionParams(TypedDict):
     binary_as_string: NotRequired[bool]
     arrow_large_buffer_size: NotRequired[bool]
     errors_as_json: NotRequired[bool]
-    extra: NotRequired[dict[str, Any]]
+    extra: "NotRequired[dict[str", Any]]
 
 
 class DuckDBPoolParams(DuckDBConnectionParams):
@@ -124,7 +124,7 @@ class DuckDBSecretConfig(TypedDict):
     name: str
     """Name of the secret."""
 
-    value: dict[str, Any]
+    value: "dict[str", Any]
     """Secret configuration values."""
 
     scope: NotRequired[str]
@@ -160,7 +160,9 @@ class DuckDBDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
-    extension_flags: NotRequired[dict[str, Any]]
+    extension_flags: "NotRequired[dict[str", Any]]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 class DuckDBConnectionContext:
@@ -243,7 +245,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         *,
         connection_config: "DuckDBPoolParams | dict[str, Any] | None" = None,
         connection_instance: "DuckDBConnectionPool | None" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str", Any] | None = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "DuckDBDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -271,12 +273,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if processed_connection_config.get("database") in {":memory:", ""}:
             processed_connection_config["database"] = ":memory:shared_db"
 
-        extension_flags: dict[str, Any] = {}
+        extension_flags: "dict[str", Any] = {}
         for key in tuple(processed_connection_config.keys()):
             if key in EXTENSION_FLAG_KEYS:
                 extension_flags[key] = processed_connection_config.pop(key)
 
-        processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        processed_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
         user_connection_hook = cast(
             "Callable[[Any], None] | None", processed_features.pop("on_connection_create", None)
         )
@@ -291,7 +293,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         local_observability = observability_config
         if user_connection_hook is not None:
 
-            def _wrap_lifecycle_hook(context: dict[str, Any]) -> None:
+            def _wrap_lifecycle_hook(context: "dict[str", Any]) -> None:
                 connection = context.get("connection")
                 if connection is None:
                     return
@@ -341,7 +343,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         pool_recycle_seconds = self.connection_config.get("pool_recycle_seconds")
         health_check_interval = self.connection_config.get("health_check_interval")
-        pool_kwargs: dict[str, Any] = {}
+        pool_kwargs: "dict[str", Any] = {}
         if pool_recycle_seconds is not None:
             pool_kwargs["pool_recycle_seconds"] = pool_recycle_seconds
         if health_check_interval is not None:
@@ -405,7 +407,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         Returns:
             A DuckDB driver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
+        conn_ctx_holder: "dict[str", Any] = {}
 
         def acquire_connection() -> DuckDBConnection:
             pool = self.provide_pool()

@@ -21,15 +21,14 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
-from google.cloud.spanner_v1 import JsonObject, param_types
-
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
-from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from sqlspec.protocols import SpannerParamTypesProtocol
 
 __all__ = (
     "SPANNER_SPECIAL_CHARS",
@@ -43,9 +42,28 @@ __all__ = (
     "uuid_to_spanner",
 )
 
-SPANNER_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
-SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
+SPANNER_SPECIAL_CHARS: "Final[frozenset[str]]"= frozenset({"{", "[", "-", ":", "T", "."})
 UUID_BYTE_LENGTH: Final[int] = 16
+_SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None
+_JSON_OBJECT_TYPE: "type[Any] | None" = None
+
+
+def _get_param_types() -> "SpannerParamTypesProtocol":
+    global _SPANNER_PARAM_TYPES
+    if _SPANNER_PARAM_TYPES is None:
+        from google.cloud.spanner_v1 import param_types
+
+        _SPANNER_PARAM_TYPES = cast("SpannerParamTypesProtocol", param_types)
+    return _SPANNER_PARAM_TYPES
+
+
+def _get_json_object_type() -> "type[Any]":
+    global _JSON_OBJECT_TYPE
+    if _JSON_OBJECT_TYPE is None:
+        from google.cloud.spanner_v1 import JsonObject
+
+        _JSON_OBJECT_TYPE = JsonObject
+    return _JSON_OBJECT_TYPE
 
 
 class SpannerOutputConverter(CachedOutputConverter):
@@ -124,10 +142,11 @@ def _json_param_type() -> Any:
     Returns:
         JSON param type or STRING as fallback.
     """
+    param_types = _get_param_types()
     try:
-        return SPANNER_PARAM_TYPES.JSON
+        return param_types.JSON
     except AttributeError:
-        return SPANNER_PARAM_TYPES.STRING
+        return param_types.STRING
 
 
 def bytes_to_spanner(value: "bytes | None") -> "bytes | None":
@@ -209,9 +228,10 @@ def spanner_json(value: Any) -> Any:
     Returns:
         JsonObject wrapper when available, otherwise the original value.
     """
-    if isinstance(value, JsonObject):
+    json_type = _get_json_object_type()
+    if isinstance(value, json_type):
         return value
-    return JsonObject(value)  # type: ignore[no-untyped-call]
+    return json_type(value)  # type: ignore[no-untyped-call]
 
 
 def coerce_params_for_spanner(
@@ -236,7 +256,8 @@ def coerce_params_for_spanner(
     if params is None:
         return None
 
-    coerced: dict[str, Any] = {}
+    json_object_type = _get_json_object_type()
+    coerced: "dict[str", Any] = {}
     for key, value in params.items():
         if isinstance(value, UUID):
             coerced[key] = bytes_to_spanner(uuid_to_spanner(value))
@@ -244,7 +265,7 @@ def coerce_params_for_spanner(
             coerced[key] = bytes_to_spanner(value)
         elif isinstance(value, datetime) and value.tzinfo is None:
             coerced[key] = value.replace(tzinfo=timezone.utc)
-        elif isinstance(value, JsonObject):
+        elif isinstance(value, json_object_type):
             coerced[key] = value
         elif isinstance(value, dict):
             coerced[key] = spanner_json(value)
@@ -270,24 +291,26 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
     if not params:
         return {}
 
-    types: dict[str, Any] = {}
+    param_types = _get_param_types()
+    json_object_type = _get_json_object_type()
+    types: "dict[str", Any] = {}
     json_type = _json_param_type()
     for key, value in params.items():
         if isinstance(value, bool):
-            types[key] = SPANNER_PARAM_TYPES.BOOL
+            types[key] = param_types.BOOL
         elif isinstance(value, int):
-            types[key] = SPANNER_PARAM_TYPES.INT64
+            types[key] = param_types.INT64
         elif isinstance(value, float):
-            types[key] = SPANNER_PARAM_TYPES.FLOAT64
+            types[key] = param_types.FLOAT64
         elif isinstance(value, str):
-            types[key] = SPANNER_PARAM_TYPES.STRING
+            types[key] = param_types.STRING
         elif isinstance(value, bytes):
-            types[key] = SPANNER_PARAM_TYPES.BYTES
+            types[key] = param_types.BYTES
         elif isinstance(value, datetime):
-            types[key] = SPANNER_PARAM_TYPES.TIMESTAMP
+            types[key] = param_types.TIMESTAMP
         elif isinstance(value, date):
-            types[key] = SPANNER_PARAM_TYPES.DATE
-        elif isinstance(value, (dict, JsonObject)):
+            types[key] = param_types.DATE
+        elif isinstance(value, (dict, json_object_type)):
             types[key] = json_type
         elif isinstance(value, (list, tuple)):
             if should_json_encode_sequence(value):
@@ -298,11 +321,11 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
                 continue
             first = sequence[0]
             if isinstance(first, int):
-                types[key] = SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.INT64)
+                types[key] = param_types.Array(param_types.INT64)
             elif isinstance(first, str):
-                types[key] = SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.STRING)
+                types[key] = param_types.Array(param_types.STRING)
             elif isinstance(first, float):
-                types[key] = SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.FLOAT64)
+                types[key] = param_types.Array(param_types.FLOAT64)
             elif isinstance(first, bool):
-                types[key] = SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.BOOL)
+                types[key] = param_types.Array(param_types.BOOL)
     return types

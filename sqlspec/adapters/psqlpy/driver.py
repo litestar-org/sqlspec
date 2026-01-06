@@ -309,7 +309,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Parameters with cast-aware type coercion applied
         """
         if isinstance(parameters, (list, tuple)):
-            result: list[Any] = []
+            result: "list[Any]"= []
             serializer = statement_config.parameter_config.json_serializer or to_json
             type_map = statement_config.parameter_config.type_coercion_map
             for idx, param in enumerate(parameters, start=1):
@@ -431,7 +431,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             query_result = await cursor.fetch(sql, effective_parameters or [])
-            dict_rows: list[dict[str, Any]] = query_result.result() if query_result else []
+            dict_rows: "list[dict[str", Any]] = query_result.result() if query_result else []
 
             return self.create_execution_result(
                 cursor,
@@ -531,7 +531,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if records:
             schema_name, table_name = split_schema_and_table(table)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
-                copy_kwargs: dict[str, Any] = {"columns": columns}
+                copy_kwargs: "dict[str", Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
                 try:
@@ -618,7 +618,7 @@ _PSQLPY_PROFILE = build_psqlpy_profile()
 register_driver_profile("psqlpy", _PSQLPY_PROFILE)
 
 
-def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> "ParameterStyleConfig":
     base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=serializer).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
@@ -629,16 +629,10 @@ def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> Param
     return base_config.replace(type_coercion_map=updated_type_map)
 
 
-def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> StatementConfig:
+def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> "StatementConfig":
     parameter_config = _create_psqlpy_parameter_config(json_serializer)
-    return StatementConfig(
-        dialect="postgres",
-        parameter_config=parameter_config,
-        enable_parsing=True,
-        enable_validation=True,
-        enable_caching=True,
-        enable_parameter_type_wrapping=True,
-    )
+    base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=json_serializer)
+    return base_config.replace(parameter_config=parameter_config)
 
 
 psqlpy_statement_config = build_psqlpy_statement_config()

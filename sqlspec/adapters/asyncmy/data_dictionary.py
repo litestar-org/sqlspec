@@ -7,8 +7,6 @@ from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, Fore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
 
 logger = get_logger("adapters.asyncmy.data_dictionary")
@@ -71,21 +69,25 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks: dict[str, Callable[..., bool]] = {
-            "supports_json": lambda v: v >= VersionInfo(5, 7, 8),
-            "supports_cte": lambda v: v >= VersionInfo(8, 0, 1),
-            "supports_window_functions": lambda v: v >= VersionInfo(8, 0, 2),
-            "supports_returning": lambda _: False,  # MySQL doesn't have RETURNING
-            "supports_upsert": lambda _: True,  # ON DUPLICATE KEY UPDATE available
-            "supports_transactions": lambda _: True,
-            "supports_prepared_statements": lambda _: True,
-            "supports_schemas": lambda _: True,  # MySQL calls them databases
-            "supports_arrays": lambda _: False,  # No array types
-            "supports_uuid": lambda _: False,  # No native UUID, use VARCHAR(36)
+        feature_versions: "dict[str", VersionInfo] = {
+            "supports_json": VersionInfo(5, 7, 8),
+            "supports_cte": VersionInfo(8, 0, 1),
+            "supports_window_functions": VersionInfo(8, 0, 2),
+        }
+        feature_flags: "dict[str", bool] = {
+            "supports_returning": False,
+            "supports_upsert": True,
+            "supports_transactions": True,
+            "supports_prepared_statements": True,
+            "supports_schemas": True,
+            "supports_arrays": False,
+            "supports_uuid": False,
         }
 
-        if feature in feature_checks:
-            return bool(feature_checks[feature](version_info))
+        if feature in feature_versions:
+            return bool(version_info >= feature_versions[feature])
+        if feature in feature_flags:
+            return feature_flags[feature]
 
         return False
 
@@ -217,7 +219,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
 
         result = await asyncmy_driver.execute(sql)
         # Parse SHOW INDEX output
-        indexes: dict[str, dict[str, Any]] = {}
+        indexes: "dict[str", dict[str, Any]] = {}
         for row in result.data:
             idx_name = row["Key_name"]
             if idx_name not in indexes:

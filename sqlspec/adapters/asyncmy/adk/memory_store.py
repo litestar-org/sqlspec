@@ -126,7 +126,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
                 content_json = json.dumps(entry["content_json"])
                 metadata_json = json.dumps(entry["metadata_json"]) if entry["metadata_json"] is not None else None
 
-                params: tuple[Any, ...]
+                params: "tuple[Any", ...]
                 if self._owner_id_column_name:
                     params = (
                         entry["id"],

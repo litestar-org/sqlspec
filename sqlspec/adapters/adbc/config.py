@@ -121,11 +121,11 @@ class AdbcDriverFeatures(TypedDict):
             When True, detects SQL casts (e.g., ::JSONB) and applies appropriate
             serialization. Currently used for PostgreSQL JSONB handling.
             Default: True
-        strict_type_coercion: Enforce strict type coercion rules.
+        enable_strict_type_coercion: Enforce strict type coercion rules.
             When True, raises errors for unsupported type conversions.
             When False, attempts best-effort conversion.
             Default: False
-        arrow_extension_types: Enable PyArrow extension type support.
+        enable_arrow_extension_types: Enable PyArrow extension type support.
             When True, preserves Arrow extension type metadata when reading data.
             When False, falls back to storage types.
             Default: True
@@ -141,8 +141,10 @@ class AdbcDriverFeatures(TypedDict):
 
     json_serializer: "NotRequired[Callable[[Any], str]]"
     enable_cast_detection: NotRequired[bool]
-    strict_type_coercion: NotRequired[bool]
-    arrow_extension_types: NotRequired[bool]
+    enable_strict_type_coercion: NotRequired[bool]
+    enable_arrow_extension_types: NotRequired[bool]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
@@ -192,9 +194,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     def __init__(
         self,
         *,
-        connection_config: AdbcConnectionParams | dict[str, Any] | None = None,
+        connection_config: "AdbcConnectionParams | dict[str, Any] | None" = None,
         connection_instance: "Any" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str, Any] | None" = None,
         statement_config: StatementConfig | None = None,
         driver_features: "AdbcDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
@@ -222,10 +224,28 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config = get_adbc_statement_config(detected_dialect)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        if "strict_type_coercion" in processed_driver_features and "enable_strict_type_coercion" not in (
+            processed_driver_features
+        ):
+            processed_driver_features["enable_strict_type_coercion"] = processed_driver_features.pop(
+                "strict_type_coercion"
+            )
+        else:
+            processed_driver_features.pop("strict_type_coercion", None)
+
+        if "arrow_extension_types" in processed_driver_features and "enable_arrow_extension_types" not in (
+            processed_driver_features
+        ):
+            processed_driver_features["enable_arrow_extension_types"] = processed_driver_features.pop(
+                "arrow_extension_types"
+            )
+        else:
+            processed_driver_features.pop("arrow_extension_types", None)
+
         json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
         processed_driver_features.setdefault("enable_cast_detection", True)
-        processed_driver_features.setdefault("strict_type_coercion", False)
-        processed_driver_features.setdefault("arrow_extension_types", True)
+        processed_driver_features.setdefault("enable_strict_type_coercion", False)
+        processed_driver_features.setdefault("enable_arrow_extension_types", True)
 
         if json_serializer is not None:
             statement_config = _apply_json_serializer_to_statement_config(statement_config, json_serializer)
@@ -299,7 +319,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 return dialect
         return None
 
-    def _get_parameter_styles(self) -> tuple[tuple[str, ...], str]:
+    def _get_parameter_styles(self) -> "tuple[tuple[str, ...], str]":
         """Get parameter styles based on the underlying driver.
 
         Returns:
@@ -383,7 +403,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             prepare_driver=self._prepare_driver,
         )
 
-    def _get_connection_config_dict(self) -> dict[str, Any]:
+    def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get the connection configuration dictionary.
 
         Returns:

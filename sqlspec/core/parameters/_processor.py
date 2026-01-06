@@ -1,6 +1,7 @@
 """Parameter processing pipeline orchestrator."""
 
 import hashlib
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -22,6 +23,10 @@ from sqlspec.core.parameters._validator import ParameterValidator
 __all__ = ("ParameterProcessor",)
 
 
+def _mapping_item_sort_key(item: "tuple[Any, Any]") -> str:
+    return repr(item[0])
+
+
 def _fingerprint_parameters(parameters: Any) -> str:
     """Return a stable fingerprint for caching parameter payloads.
 
@@ -36,7 +41,7 @@ def _fingerprint_parameters(parameters: Any) -> str:
 
     if isinstance(parameters, Mapping):
         try:
-            items = sorted(parameters.items(), key=lambda item: repr(item[0]))
+            items = sorted(parameters.items(), key=_mapping_item_sort_key)
         except Exception:
             items = list(parameters.items())
         data = repr(tuple(items))
@@ -53,7 +58,7 @@ def _fingerprint_parameters(parameters: Any) -> str:
 class ParameterProcessor:
     """Parameter processing engine coordinating conversion phases."""
 
-    __slots__ = ("_cache", "_cache_size", "_converter", "_validator")
+    __slots__ = ("_cache", "_cache_max_size", "_converter", "_validator")
 
     DEFAULT_CACHE_SIZE = 1000
 
@@ -62,11 +67,20 @@ class ParameterProcessor:
         *,
         converter: "ParameterConverter | None" = None,
         validator: "ParameterValidator | None" = None,
+        cache_max_size: int | None = None,
+        validator_cache_max_size: int | None = None,
     ) -> None:
-        self._cache: dict[str, ParameterProcessingResult] = {}
-        self._cache_size = 0
+        self._cache: OrderedDict[str, ParameterProcessingResult] = OrderedDict()
+        if cache_max_size is None:
+            cache_max_size = self.DEFAULT_CACHE_SIZE
+        self._cache_max_size = max(cache_max_size, 0)
         if converter is None:
-            self._validator = validator or ParameterValidator()
+            if validator is None:
+                validator_cache = validator_cache_max_size
+                if validator_cache is None:
+                    validator_cache = self._cache_max_size
+                validator = ParameterValidator(cache_max_size=validator_cache)
+            self._validator = validator
             self._converter = ParameterConverter(self._validator)
         else:
             self._converter = converter
@@ -75,29 +89,23 @@ class ParameterProcessor:
             else:
                 self._validator = validator
                 self._converter.validator = validator
+            if validator_cache_max_size is not None and isinstance(self._validator, ParameterValidator):
+                self._validator.set_cache_max_size(validator_cache_max_size)
 
-    def _handle_static_embedding(
+    def _compile_static_script(
         self, sql: str, parameters: Any, config: "ParameterStyleConfig", is_many: bool, cache_key: str
     ) -> "ParameterProcessingResult":
         coerced_params = parameters
         if config.type_coercion_map and parameters:
-            coerced_params = self._apply_type_coercions(parameters, config.type_coercion_map, is_many)
+            coerced_params = self._coerce_parameter_types(parameters, config.type_coercion_map, is_many)
 
         static_sql, static_params = self._converter.convert_placeholder_style(
             sql, coerced_params, ParameterStyle.STATIC, is_many
         )
-        result = ParameterProcessingResult(
-            static_sql,
-            static_params,
-            ParameterProfile.empty(),
-            sqlglot_sql=static_sql,
-        )
-        if self._cache_size < self.DEFAULT_CACHE_SIZE:
-            self._cache[cache_key] = result
-            self._cache_size += 1
-        return result
+        result = ParameterProcessingResult(static_sql, static_params, ParameterProfile.empty(), sqlglot_sql=static_sql)
+        return self._store_cached_result(cache_key, result)
 
-    def _determine_target_execution_style(
+    def _select_execution_style(
         self, original_styles: "set[ParameterStyle]", config: "ParameterStyleConfig"
     ) -> "ParameterStyle":
         if len(original_styles) == 1 and config.supported_execution_parameter_styles is not None:
@@ -106,14 +114,14 @@ class ParameterProcessor:
                 return original_style
         return config.default_execution_parameter_style or config.default_parameter_style
 
-    def _apply_type_wrapping(self, parameters: Any) -> Any:
+    def _wrap_parameter_types(self, parameters: Any) -> Any:
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             return [wrap_with_type(p) for p in parameters]
         if isinstance(parameters, Mapping):
             return {k: wrap_with_type(v) for k, v in parameters.items()}
         return wrap_with_type(parameters)
 
-    def _apply_type_coercions(
+    def _coerce_parameter_types(
         self, parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool = False
     ) -> Any:
         def coerce_value(value: Any) -> Any:
@@ -160,13 +168,63 @@ class ParameterProcessor:
             return {k: coerce_value(v) for k, v in parameters.items()}
         return coerce_value(parameters)
 
-    def _generate_processor_cache_key(
-        self, sql: str, parameters: Any, config: "ParameterStyleConfig", is_many: bool, dialect: str | None
+    def _store_cached_result(self, cache_key: str, result: "ParameterProcessingResult") -> "ParameterProcessingResult":
+        if self._cache_max_size <= 0:
+            return result
+        self._cache[cache_key] = result
+        self._cache.move_to_end(cache_key)
+        if len(self._cache) > self._cache_max_size:
+            self._cache.popitem(last=False)
+        return result
+
+    def _needs_mapping_normalization(self, payload: Any, param_info: "list[ParameterInfo]", is_many: bool) -> bool:
+        if not payload or not param_info:
+            return False
+
+        has_named_placeholders = any(
+            param.style
+            in {
+                ParameterStyle.NAMED_COLON,
+                ParameterStyle.NAMED_AT,
+                ParameterStyle.NAMED_DOLLAR,
+                ParameterStyle.NAMED_PYFORMAT,
+            }
+            for param in param_info
+        )
+        if has_named_placeholders:
+            return False
+
+        looks_many = is_many or looks_like_execute_many(payload)
+        if not looks_many:
+            return False
+
+        if isinstance(payload, Mapping):
+            return True
+
+        if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+            return any(isinstance(item, Mapping) for item in payload)
+
+        return False
+
+    def _normalize_sql_for_parsing(self, sql: str, param_info: "list[ParameterInfo]", dialect: str | None) -> str:
+        if not self._needs_parse_normalization(param_info, dialect):
+            return sql
+        normalized_sql, _ = self._converter.normalize_sql_for_parsing(sql, dialect, param_info=param_info)
+        return normalized_sql
+
+    def _make_processor_cache_key(
+        self,
+        sql: str,
+        parameters: Any,
+        config: "ParameterStyleConfig",
+        is_many: bool,
+        dialect: str | None,
+        wrap_types: bool,
     ) -> str:
         param_fingerprint = _fingerprint_parameters(parameters)
         dialect_marker = dialect or "default"
         default_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
-        return f"{sql}:{param_fingerprint}:{default_style}:{is_many}:{dialect_marker}"
+        return f"{sql}:{param_fingerprint}:{default_style}:{is_many}:{dialect_marker}:{wrap_types}"
 
     def process(
         self,
@@ -177,100 +235,49 @@ class ParameterProcessor:
         is_many: bool = False,
         wrap_types: bool = True,
     ) -> "ParameterProcessingResult":
-        cache_key = self._generate_processor_cache_key(sql, parameters, config, is_many, dialect)
-        cached_result = self._cache.get(cache_key)
-        if cached_result is not None:
-            return cached_result
+        cache_key = self._make_processor_cache_key(sql, parameters, config, is_many, dialect, wrap_types)
+        if self._cache_max_size > 0:
+            cached_result = self._cache.get(cache_key)
+            if cached_result is not None:
+                self._cache.move_to_end(cache_key)
+                return cached_result
 
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
-        needs_sqlglot_normalization = self._needs_sqlglot_normalization(param_info, dialect)
-        sqlglot_sql = sql
-        if needs_sqlglot_normalization:
-            sqlglot_sql, _ = self._converter.normalize_sql_for_parsing(
-                sql, dialect, param_info=param_info
-            )
-        needs_execution_conversion = self._needs_execution_conversion(param_info, config)
+        needs_execution_conversion = self._needs_execution_placeholder_conversion(param_info, config)
 
-        needs_static_embedding = config.needs_static_script_compilation and param_info and parameters and not is_many
+        if config.needs_static_script_compilation and param_info and parameters and not is_many:
+            return self._compile_static_script(sql, parameters, config, is_many, cache_key)
 
-        def _requires_mapping_normalization(payload: Any) -> bool:
-            if not payload or not param_info:
-                return False
-
-            has_named_placeholders = any(
-                param.style
-                in {
-                    ParameterStyle.NAMED_COLON,
-                    ParameterStyle.NAMED_AT,
-                    ParameterStyle.NAMED_DOLLAR,
-                    ParameterStyle.NAMED_PYFORMAT,
-                }
-                for param in param_info
-            )
-            if has_named_placeholders:
-                return False
-
-            looks_many = is_many or looks_like_execute_many(payload)
-            if not looks_many:
-                return False
-
-            if isinstance(payload, Mapping):
-                return True
-
-            if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
-                return any(isinstance(item, Mapping) for item in payload)
-
-            return False
-
-        if needs_static_embedding:
-            return self._handle_static_embedding(sql, parameters, config, is_many, cache_key)
-
+        requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
         if (
-            not needs_sqlglot_normalization
-            and not needs_execution_conversion
+            not needs_execution_conversion
             and not config.type_coercion_map
             and not config.output_transformer
-            and not _requires_mapping_normalization(parameters)
+            and not requires_mapping
         ):
+            normalized_sql = self._normalize_sql_for_parsing(sql, param_info, dialect)
             result = ParameterProcessingResult(
-                sql,
-                parameters,
-                ParameterProfile(param_info),
-                sqlglot_sql=sqlglot_sql,
+                sql, parameters, ParameterProfile(param_info), sqlglot_sql=normalized_sql
             )
-            if self._cache_size < self.DEFAULT_CACHE_SIZE:
-                self._cache[cache_key] = result
-                self._cache_size += 1
-            return result
+            return self._store_cached_result(cache_key, result)
 
         processed_sql, processed_parameters = sql, parameters
 
-        if _requires_mapping_normalization(processed_parameters):
-            target_style = self._determine_target_execution_style(original_styles, config)
+        if requires_mapping:
+            target_style = self._select_execution_style(original_styles, config)
             processed_sql, processed_parameters = self._converter.convert_placeholder_style(
                 processed_sql, processed_parameters, target_style, is_many
             )
 
         if processed_parameters and wrap_types:
-            processed_parameters = self._apply_type_wrapping(processed_parameters)
-
-        if needs_sqlglot_normalization:
-            processed_sql, _ = self._converter.normalize_sql_for_parsing(
-                processed_sql, dialect, param_info=None
-            )
+            processed_parameters = self._wrap_parameter_types(processed_parameters)
 
         if config.type_coercion_map and processed_parameters:
-            processed_parameters = self._apply_type_coercions(processed_parameters, config.type_coercion_map, is_many)
+            processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
 
-        processed_sql, processed_parameters = self._process_parameters_conversion(
-            processed_sql,
-            processed_parameters,
-            config,
-            original_styles,
-            needs_execution_conversion,
-            needs_sqlglot_normalization,
-            is_many,
+        processed_sql, processed_parameters = self._convert_placeholders_for_execution(
+            processed_sql, processed_parameters, config, original_styles, needs_execution_conversion, is_many
         )
 
         if config.output_transformer:
@@ -278,44 +285,14 @@ class ParameterProcessor:
 
         final_param_info = self._validator.extract_parameters(processed_sql)
         final_profile = ParameterProfile(final_param_info)
-        result = ParameterProcessingResult(
-            processed_sql,
-            processed_parameters,
-            final_profile,
-            sqlglot_sql=sqlglot_sql,
-        )
+        sqlglot_sql = self._normalize_sql_for_parsing(processed_sql, final_param_info, dialect)
+        result = ParameterProcessingResult(processed_sql, processed_parameters, final_profile, sqlglot_sql=sqlglot_sql)
 
-        if self._cache_size < self.DEFAULT_CACHE_SIZE:
-            self._cache[cache_key] = result
-            self._cache_size += 1
-        return result
+        return self._store_cached_result(cache_key, result)
 
-    def get_sqlglot_compatible_sql(
-        self, sql: str, parameters: Any, config: "ParameterStyleConfig", dialect: str | None = None
-    ) -> "tuple[str, Any]":
-        """Normalize SQL for parsing without altering execution format.
-
-        Args:
-            sql: Raw SQL text.
-            parameters: Parameter payload supplied by the caller.
-            config: Parameter style configuration.
-            dialect: Optional SQL dialect for compatibility checks.
-
-        Returns:
-            Tuple of normalized SQL and the original parameter payload.
-        """
-
-        param_info = self._validator.extract_parameters(sql)
-
-        if self._needs_sqlglot_normalization(param_info, dialect):
-            normalized_sql, _ = self._converter.normalize_sql_for_parsing(
-                sql, dialect, param_info=param_info
-            )
-            return normalized_sql, parameters
-
-        return sql, parameters
-
-    def _needs_execution_conversion(self, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig") -> bool:
+    def _needs_execution_placeholder_conversion(
+        self, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig"
+    ) -> bool:
         """Determine whether execution placeholder conversion is required."""
         if config.needs_static_script_compilation:
             return True
@@ -353,27 +330,26 @@ class ParameterProcessor:
 
         return True
 
-    def _needs_sqlglot_normalization(self, param_info: "list[ParameterInfo]", dialect: str | None = None) -> bool:
+    def _needs_parse_normalization(self, param_info: "list[ParameterInfo]", dialect: str | None = None) -> bool:
         incompatible_styles = self._validator.get_sqlglot_incompatible_styles(dialect)
         return any(p.style in incompatible_styles for p in param_info)
 
-    def _process_parameters_conversion(
+    def _convert_placeholders_for_execution(
         self,
         sql: str,
         parameters: Any,
         config: "ParameterStyleConfig",
         original_styles: "set[ParameterStyle]",
         needs_execution_conversion: bool,
-        needs_sqlglot_normalization: bool,
         is_many: bool,
     ) -> "tuple[str, Any]":
-        if not (needs_execution_conversion or needs_sqlglot_normalization):
+        if not needs_execution_conversion:
             return sql, parameters
 
         if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
-            target_style = self._determine_target_execution_style(original_styles, config)
+            target_style = self._select_execution_style(original_styles, config)
             processed_sql, _ = self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
             return processed_sql, parameters
 
-        target_style = self._determine_target_execution_style(original_styles, config)
+        target_style = self._select_execution_style(original_styles, config)
         return self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)

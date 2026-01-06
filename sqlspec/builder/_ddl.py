@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Union
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._select import Select
 from sqlspec.core import SQL, SQLResult
 from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
@@ -185,7 +185,7 @@ class DDLBuilder(QueryBuilder):
     def _expected_result_type(self) -> "type[SQLResult]":
         return SQLResult
 
-    def build(self, dialect: "DialectType" = None) -> "SafeQuery":
+    def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
         if self._expression is None:
             self._expression = self._create_base_expression()
         return super().build(dialect=dialect)

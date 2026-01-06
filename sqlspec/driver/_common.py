@@ -6,20 +6,7 @@ import logging
 import re
 from contextlib import suppress
 from time import perf_counter
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Final,
-    Literal,
-    NamedTuple,
-    NoReturn,
-    Optional,
-    Protocol,
-    TypeVar,
-    cast,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, TypeVar, cast, overload
 
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
@@ -84,6 +71,32 @@ __all__ = (
     "hash_stack_operations",
     "make_cache_key_hashable",
 )
+
+
+def _parameter_sort_key(item: "tuple[str, Any]") -> float:
+    key = item[0]
+    if key.isdigit():
+        return float(int(key))
+    if key.startswith("param_"):
+        suffix = key[6:]
+        if suffix.isdigit():
+            return float(int(suffix))
+    return float("inf")
+
+
+def _select_dominant_style(
+    style_counts: "dict[ParameterStyle, int]", precedence: "dict[ParameterStyle, int]"
+) -> "ParameterStyle":
+    best_style: ParameterStyle | None = None
+    best_count = -1
+    best_precedence = 100
+    for style, count in style_counts.items():
+        current_precedence = precedence.get(style, 99)
+        if count > best_count or (count == best_count and current_precedence < best_precedence):
+            best_style = style
+            best_count = count
+            best_precedence = current_precedence
+    return cast("ParameterStyle", best_style)
 
 
 class SyncExceptionHandler(Protocol):
@@ -252,7 +265,7 @@ class IndexMetadata:
     __slots__ = ("columns", "name", "primary", "table_name", "unique")
 
     def __init__(
-        self, name: str, table_name: str, columns: list[str], unique: bool = False, primary: bool = False
+        self, name: str, table_name: str, columns: "list[str]", unique: bool = False, primary: bool = False
     ) -> None:
         self.name = name
         self.table_name = table_name
@@ -401,6 +414,22 @@ def make_cache_key_hashable(obj: Any) -> Any:
         parent[idx] = current_obj
 
     return root[0]
+
+
+def _callable_cache_key(func: Any) -> Any:
+    """Return a stable cache key component for callables.
+
+    Args:
+        func: Callable or None.
+
+    Returns:
+        Tuple identifying the callable, or None for missing callables.
+    """
+    if func is None:
+        return None
+    module = getattr(func, "__module__", None)
+    qualname = getattr(func, "__qualname__", type(func).__name__)
+    return (module, qualname, id(func))
 
 
 def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
@@ -745,8 +774,8 @@ class ExecutionResult(NamedTuple):
     cursor_result: Any
     rowcount_override: int | None
     special_data: Any
-    selected_data: Optional["list[dict[str, Any]]"]
-    column_names: Optional["list[str]"]
+    selected_data: "list[dict[str, Any]] | None"
+    column_names: "list[str] | None"
     data_row_count: int | None
     statement_count: int | None
     successful_statements: int | None
@@ -916,8 +945,8 @@ class CommonDriverAttributesMixin:
         *,
         rowcount_override: int | None = None,
         special_data: Any = None,
-        selected_data: Optional["list[dict[str, Any]]"] = None,
-        column_names: Optional["list[str]"] = None,
+        selected_data: "list[dict[str, Any]] | None" = None,
+        column_names: "list[str] | None" = None,
         data_row_count: int | None = None,
         statement_count: int | None = None,
         successful_statements: int | None = None,
@@ -1150,7 +1179,7 @@ class CommonDriverAttributesMixin:
 
     def split_script_statements(
         self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
-    ) -> list[str]:
+    ) -> "list[str]":
         """Split a SQL script into individual statements.
 
         Uses a lexer-driven state machine to handle multi-statement scripts,
@@ -1279,16 +1308,7 @@ class CommonDriverAttributesMixin:
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
             }:
-                sorted_items = sorted(
-                    parameters.items(),
-                    key=lambda item: (
-                        int(item[0])
-                        if item[0].isdigit()
-                        else (
-                            int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")
-                        )
-                    ),
-                )
+                sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
                 return [self._apply_coercion(value, statement_config) for _, value in sorted_items]
 
             return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
@@ -1300,7 +1320,7 @@ class CommonDriverAttributesMixin:
 
     def _get_compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
-    ) -> tuple[str, Any]:
+    ) -> "tuple[str, Any]":
         """Get compiled SQL with parameter style conversion and caching.
 
         Compiles the SQL statement and applies parameter style conversion.
@@ -1320,9 +1340,7 @@ class CommonDriverAttributesMixin:
         if cache_config.compiled_cache_enabled and statement_config.enable_caching:
             cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
-            cached_result = cache.get_statement(
-                cache_key, str(statement.dialect) if statement.dialect else None
-            )
+            cached_result = cache.get_statement(cache_key, str(statement.dialect) if statement.dialect else None)
             if cached_result is not None and isinstance(cached_result, CachedStatement):
                 return cached_result.compiled_sql, cached_result.parameters
 
@@ -1353,9 +1371,7 @@ class CommonDriverAttributesMixin:
                 ),
                 expression=prepared_statement.expression,
             )
-            cache.put_statement(
-                cache_key, cached_statement, str(statement.dialect) if statement.dialect else None
-            )
+            cache.put_statement(cache_key, cached_statement, str(statement.dialect) if statement.dialect else None)
 
         return compiled_sql, prepared_parameters
 
@@ -1367,14 +1383,21 @@ class CommonDriverAttributesMixin:
         Creates a deterministic cache key that includes all factors that affect SQL compilation,
         preventing cache contamination between different compilation contexts.
         """
+        statement_transformers = (
+            tuple(_callable_cache_key(transformer) for transformer in config.statement_transformers)
+            if config.statement_transformers
+            else ()
+        )
         context_hash = hash((
             config.parameter_config.hash(),
             config.dialect,
             statement.is_script,
             statement.is_many,
             flatten_single_parameters,
-            bool(config.parameter_config.output_transformer),
-            bool(config.parameter_config.ast_transformer),
+            _callable_cache_key(config.output_transformer),
+            statement_transformers,
+            _callable_cache_key(config.parameter_config.output_transformer),
+            _callable_cache_key(config.parameter_config.ast_transformer),
             bool(config.parameter_config.needs_static_script_compilation),
         ))
 
@@ -1437,7 +1460,7 @@ class CommonDriverAttributesMixin:
             ParameterStyle.NAMED_PYFORMAT: 8,
         }
 
-        return max(style_counts.keys(), key=lambda style: (style_counts[style], -precedence.get(style, 99)))
+        return _select_dominant_style(style_counts, precedence)
 
     @staticmethod
     def find_filter(

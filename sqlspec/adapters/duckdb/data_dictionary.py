@@ -7,8 +7,6 @@ from sqlspec.driver import ForeignKeyMetadata, SyncDataDictionaryBase, SyncDrive
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
 
 logger = get_logger("adapters.duckdb.data_dictionary")
@@ -71,23 +69,27 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks: dict[str, Callable[..., bool]] = {
-            "supports_json": lambda _: True,  # DuckDB has excellent JSON support
-            "supports_arrays": lambda _: True,  # LIST type
-            "supports_maps": lambda _: True,  # MAP type
-            "supports_structs": lambda _: True,  # STRUCT type
-            "supports_returning": lambda v: v >= VersionInfo(0, 8, 0),
-            "supports_upsert": lambda v: v >= VersionInfo(0, 8, 0),
-            "supports_window_functions": lambda _: True,
-            "supports_cte": lambda _: True,
-            "supports_transactions": lambda _: True,
-            "supports_prepared_statements": lambda _: True,
-            "supports_schemas": lambda _: True,
-            "supports_uuid": lambda _: True,
+        feature_versions: "dict[str", VersionInfo] = {
+            "supports_returning": VersionInfo(0, 8, 0),
+            "supports_upsert": VersionInfo(0, 8, 0),
+        }
+        feature_flags: "dict[str", bool] = {
+            "supports_json": True,
+            "supports_arrays": True,
+            "supports_maps": True,
+            "supports_structs": True,
+            "supports_window_functions": True,
+            "supports_cte": True,
+            "supports_transactions": True,
+            "supports_prepared_statements": True,
+            "supports_schemas": True,
+            "supports_uuid": True,
         }
 
-        if feature in feature_checks:
-            return bool(feature_checks[feature](version_info))
+        if feature in feature_versions:
+            return bool(version_info >= feature_versions[feature])
+        if feature in feature_flags:
+            return feature_flags[feature]
 
         return False
 

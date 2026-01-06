@@ -21,7 +21,7 @@ def apply_pool_deprecations(
     connection_instance: "Any | None",
     version: str = "0.33.0",
     removal_in: str = "0.34.0",
-) -> tuple["Any | None", "Any | None"]:
+) -> "tuple[Any | None, Any | None]":
     """Apply legacy pool_config/pool_instance aliases.
 
     Several adapters historically accepted ``pool_config`` and ``pool_instance``. SQLSpec standardized
@@ -55,7 +55,7 @@ def apply_pool_deprecations(
 
 def normalize_connection_config(
     connection_config: "Mapping[str, Any] | None", *, extra_key: str = "extra"
-) -> dict[str, Any]:
+) -> "dict[str, Any]":
     """Normalize an adapter connection_config dictionary.
 
     This function:

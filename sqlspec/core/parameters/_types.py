@@ -396,11 +396,7 @@ class ParameterProcessingResult:
     __slots__ = ("parameter_profile", "parameters", "sql", "sqlglot_sql")
 
     def __init__(
-        self,
-        sql: str,
-        parameters: Any,
-        parameter_profile: "ParameterProfile",
-        sqlglot_sql: str | None = None,
+        self, sql: str, parameters: Any, parameter_profile: "ParameterProfile", sqlglot_sql: str | None = None
     ) -> None:
         self.sql = sql
         self.parameters = parameters

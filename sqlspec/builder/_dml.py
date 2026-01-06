@@ -7,7 +7,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
@@ -296,7 +296,7 @@ class UpdateSetClauseMixin:
             return val
         if has_parameter_builder(val):
             subquery = val.build()
-            sql_text = subquery.sql if isinstance(subquery, SafeQuery) else str(subquery)
+            sql_text = subquery.sql if isinstance(subquery, BuiltQuery) else str(subquery)
             query_builder = cast("QueryBuilder", self)
             value_expr = exp.paren(exp.maybe_parse(sql_text, dialect=query_builder.dialect))
             for p_name, p_value in val.parameters.items():

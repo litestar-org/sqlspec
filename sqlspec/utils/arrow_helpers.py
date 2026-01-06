@@ -6,7 +6,7 @@ format, handling empty results, NULL values, and type inference.
 
 from typing import TYPE_CHECKING, Any, Literal, overload
 
-from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.arrow_impl import convert_dict_to_arrow as _convert_dict_to_arrow
 
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable
@@ -73,36 +73,4 @@ def convert_dict_to_arrow(
         2
     """
 
-    ensure_pyarrow()
-
-    import pyarrow as pa
-
-    if not data:
-        empty_schema = pa.schema([])
-        empty_table = pa.Table.from_pydict({}, schema=empty_schema)
-
-        if return_format == "reader":
-            return pa.RecordBatchReader.from_batches(empty_table.schema, empty_table.to_batches())
-
-        if return_format in {"batch", "batches"}:
-            batches = empty_table.to_batches(max_chunksize=batch_size)
-            return batches[0] if batches else pa.RecordBatch.from_pydict({})
-
-        return empty_table
-
-    columns: dict[str, list[Any]] = {key: [row.get(key) for row in data] for key in data[0]}
-
-    arrow_table = pa.Table.from_pydict(columns)
-
-    if return_format == "reader":
-        batches = arrow_table.to_batches(max_chunksize=batch_size)
-        return pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
-
-    if return_format == "batches":
-        return arrow_table.to_batches(max_chunksize=batch_size)
-
-    if return_format == "batch":
-        batches = arrow_table.to_batches(max_chunksize=batch_size)
-        return batches[0] if batches else pa.RecordBatch.from_pydict({})
-
-    return arrow_table
+    return _convert_dict_to_arrow(data, return_format=return_format, batch_size=batch_size)

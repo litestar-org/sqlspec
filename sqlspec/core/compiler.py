@@ -9,7 +9,7 @@ Components:
 import hashlib
 from collections import OrderedDict
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -174,10 +174,10 @@ class CompiledSQL:
         compiled_sql: str,
         execution_parameters: Any,
         operation_type: "OperationType",
-        expression: Optional["exp.Expression"] = None,
+        expression: "exp.Expression | None" = None,
         parameter_style: str | None = None,
         supports_many: bool = False,
-        parameter_casts: Optional["dict[int, str]"] = None,
+        parameter_casts: "dict[int, str] | None" = None,
         parameter_profile: "ParameterProfile | None" = None,
         operation_profile: "OperationProfile | None" = None,
     ) -> None:
@@ -241,38 +241,83 @@ class SQLProcessor:
     to avoid re-processing identical statements.
     """
 
-    __slots__ = ("_cache", "_cache_hits", "_cache_misses", "_config", "_max_cache_size", "_parameter_processor")
+    __slots__ = (
+        "_cache",
+        "_cache_enabled",
+        "_cache_hits",
+        "_cache_misses",
+        "_config",
+        "_max_cache_size",
+        "_parameter_processor",
+        "_parse_cache",
+        "_parse_cache_hits",
+        "_parse_cache_max_size",
+        "_parse_cache_misses",
+    )
 
-    def __init__(self, config: "StatementConfig", max_cache_size: int = 1000) -> None:
+    def __init__(
+        self,
+        config: "StatementConfig",
+        max_cache_size: int = 1000,
+        parse_cache_size: int | None = None,
+        parameter_cache_size: int | None = None,
+        validator_cache_size: int | None = None,
+        cache_enabled: bool = True,
+    ) -> None:
         """Initialize processor.
 
         Args:
             config: Statement configuration
             max_cache_size: Maximum number of compilation results to cache
+            parse_cache_size: Maximum number of parsed expressions to cache
+            parameter_cache_size: Maximum parameter conversion cache entries
+            validator_cache_size: Maximum cached parameter metadata entries
+            cache_enabled: Toggle compiled SQL caching (parse/parameter caches remain size-driven)
         """
         self._config = config
         self._cache: OrderedDict[str, CompiledSQL] = OrderedDict()
+        self._max_cache_size = max(max_cache_size, 0)
+        compiled_cache_active = cache_enabled and config.enable_caching and self._max_cache_size > 0
+        self._cache_enabled = compiled_cache_active
+        parse_cache_max_size = self._max_cache_size if parse_cache_size is None else parse_cache_size
+        self._parse_cache_max_size = max(parse_cache_max_size, 0)
+        if not config.enable_caching:
+            self._parse_cache_max_size = 0
+        parameter_cache = parameter_cache_size if parameter_cache_size is not None else self._parse_cache_max_size
+        validator_cache = validator_cache_size if validator_cache_size is not None else parameter_cache
+        if not config.enable_caching:
+            parameter_cache = 0
+            validator_cache = 0
         self._parameter_processor = ParameterProcessor(
             converter=config.parameter_converter,
             validator=config.parameter_validator,
+            cache_max_size=parameter_cache,
+            validator_cache_max_size=validator_cache,
         )
-        self._max_cache_size = max_cache_size
         self._cache_hits = 0
         self._cache_misses = 0
+        self._parse_cache: OrderedDict[
+            str, tuple[exp.Expression | None, OperationType, dict[int, str], tuple[bool, bool]]
+        ] = OrderedDict()
+        self._parse_cache_hits = 0
+        self._parse_cache_misses = 0
 
-    def compile(self, sql: str, parameters: Any = None, is_many: bool = False) -> CompiledSQL:
+    def compile(
+        self, sql: str, parameters: Any = None, is_many: bool = False, expression: "exp.Expression | None" = None
+    ) -> CompiledSQL:
         """Compile SQL statement.
 
         Args:
             sql: SQL string for compilation
             parameters: Parameter values for substitution
             is_many: Whether this is for execute_many operation
+            expression: Pre-parsed SQLGlot expression to reuse
 
         Returns:
             CompiledSQL with execution information
         """
-        if not self._config.enable_caching:
-            return self._compile_uncached(sql, parameters, is_many)
+        if not self._config.enable_caching or not self._cache_enabled:
+            return self._compile_uncached(sql, parameters, is_many, expression)
 
         cache_key = self._make_cache_key(sql, parameters, is_many)
 
@@ -284,7 +329,7 @@ class SQLProcessor:
             return result
 
         self._cache_misses += 1
-        result = self._compile_uncached(sql, parameters, is_many)
+        result = self._compile_uncached(sql, parameters, is_many, expression)
 
         if len(self._cache) >= self._max_cache_size:
             self._cache.popitem(last=False)
@@ -292,13 +337,16 @@ class SQLProcessor:
         self._cache[cache_key] = result
         return result
 
-    def _compile_uncached(self, sql: str, parameters: Any, is_many: bool = False) -> CompiledSQL:
+    def _compile_uncached(
+        self, sql: str, parameters: Any, is_many: bool = False, expression_override: "exp.Expression | None" = None
+    ) -> CompiledSQL:
         """Compile SQL without caching.
 
         Args:
             sql: SQL string
             parameters: Parameter values
             is_many: Whether this is for execute_many operation
+            expression_override: Pre-parsed SQLGlot expression to reuse
 
         Returns:
             CompiledSQL result
@@ -332,22 +380,70 @@ class SQLProcessor:
             parameter_casts: dict[int, str] = {}
 
             if self._config.enable_parsing:
-                try:
-                    expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
-                    operation_type = self._detect_operation_type(expression)
-                    parameter_casts = self._detect_parameter_casts(expression)
-                    operation_profile = self._build_operation_profile(expression, operation_type)
+                parse_cache_key = None
+                parse_cache_entry = None
+                if self._config.enable_caching and self._parse_cache_max_size > 0:
+                    parse_cache_key = self._make_parse_cache_key(sqlglot_sql, dialect_str)
+                    parse_cache_entry = self._parse_cache.get(parse_cache_key)
+                    if parse_cache_entry is not None:
+                        self._parse_cache_hits += 1
+                        self._parse_cache.move_to_end(parse_cache_key)
+                if parse_cache_entry is None:
+                    self._parse_cache_misses += 1
+                    try:
+                        if expression_override is not None:
+                            expression = expression_override
+                        else:
+                            expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
+                        operation_type = self._detect_operation_type(expression)
+                        parameter_casts = self._detect_parameter_casts(expression)
+                        operation_profile = self._build_operation_profile(expression, operation_type)
+                    except ParseError:
+                        expression = None
+                        operation_type = "EXECUTE"
+                        parameter_casts = {}
+                        operation_profile = OperationProfile.empty()
 
-                    ast_transformer = self._config.parameter_config.ast_transformer
-                    if ast_transformer:
-                        expression, final_parameters = ast_transformer(expression, processed_params)
+                    if parse_cache_key is not None:
+                        if len(self._parse_cache) >= self._parse_cache_max_size:
+                            self._parse_cache.popitem(last=False)
+                        cache_expression = expression.copy() if expression is not None else None
+                        self._parse_cache[parse_cache_key] = (
+                            cache_expression,
+                            operation_type,
+                            parameter_casts,
+                            (operation_profile.returns_rows, operation_profile.modifies_rows),
+                        )
+                else:
+                    cached_expression, cached_operation, cached_casts, cached_profile = parse_cache_entry
+                    expression = cached_expression.copy() if cached_expression is not None else None
+                    operation_type = cached_operation
+                    parameter_casts = dict(cached_casts)
+                    operation_profile = OperationProfile(
+                        returns_rows=cached_profile[0], modifies_rows=cached_profile[1]
+                    )
+
+                statement_transformers = self._config.statement_transformers
+                ast_transformer = self._config.parameter_config.ast_transformer
+                if expression is not None and (statement_transformers or ast_transformer):
+                    should_copy = False
+                    if parse_cache_key is not None and parse_cache_entry is None:
+                        should_copy = True
+                    if expression_override is not None and expression is expression_override:
+                        should_copy = True
+                    if should_copy:
+                        expression = expression.copy()
+                    if statement_transformers:
+                        for transformer in statement_transformers:
+                            expression, final_parameters = transformer(expression, final_parameters)
                         ast_was_transformed = True
-
-                except ParseError:
-                    expression = None
-                    operation_type = "EXECUTE"
-                    parameter_casts = {}
-                    operation_profile = OperationProfile.empty()
+                    if ast_transformer:
+                        expression, final_parameters = ast_transformer(expression, final_parameters)
+                        ast_was_transformed = True
+                    if ast_was_transformed:
+                        operation_type = self._detect_operation_type(expression)
+                        parameter_casts = self._detect_parameter_casts(expression)
+                        operation_profile = self._build_operation_profile(expression, operation_type)
 
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
@@ -459,7 +555,7 @@ class SQLProcessor:
 
         return "UNKNOWN"
 
-    def _detect_parameter_casts(self, expression: Optional["exp.Expression"]) -> "dict[int, str]":
+    def _detect_parameter_casts(self, expression: "exp.Expression | None") -> "dict[int, str]":
         """Detect explicit type casts on parameters in the AST.
 
         Args:
@@ -584,6 +680,14 @@ class SQLProcessor:
         self._cache.clear()
         self._cache_hits = 0
         self._cache_misses = 0
+        self._parse_cache.clear()
+        self._parse_cache_hits = 0
+        self._parse_cache_misses = 0
+
+    def _make_parse_cache_key(self, sql: str, dialect: "str | None") -> str:
+        dialect_marker = dialect or "default"
+        hash_str = hashlib.sha256(f"{dialect_marker}:{sql}".encode()).hexdigest()[:16]
+        return f"parse_{hash_str}"
 
     @property
     def cache_stats(self) -> "dict[str, int]":
@@ -594,6 +698,8 @@ class SQLProcessor:
         """
         total_requests = self._cache_hits + self._cache_misses
         hit_rate_pct = int((self._cache_hits / total_requests) * 100) if total_requests > 0 else 0
+        parse_total = self._parse_cache_hits + self._parse_cache_misses
+        parse_hit_rate_pct = int((self._parse_cache_hits / parse_total) * 100) if parse_total > 0 else 0
 
         return {
             "hits": self._cache_hits,
@@ -601,4 +707,9 @@ class SQLProcessor:
             "size": len(self._cache),
             "max_size": self._max_cache_size,
             "hit_rate_percent": hit_rate_pct,
+            "parse_hits": self._parse_cache_hits,
+            "parse_misses": self._parse_cache_misses,
+            "parse_size": len(self._parse_cache),
+            "parse_max_size": self._parse_cache_max_size,
+            "parse_hit_rate_percent": parse_hit_rate_pct,
         }

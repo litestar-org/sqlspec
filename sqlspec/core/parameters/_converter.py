@@ -11,6 +11,38 @@ from sqlspec.core.parameters._validator import ParameterValidator
 __all__ = ("ParameterConverter",)
 
 
+def _placeholder_qmark(_: Any) -> str:
+    return "?"
+
+
+def _placeholder_numeric(index: Any) -> str:
+    return f"${int(index) + 1}"
+
+
+def _placeholder_named_colon(name: Any) -> str:
+    return f":{name}"
+
+
+def _placeholder_positional_colon(index: Any) -> str:
+    return f":{int(index) + 1}"
+
+
+def _placeholder_named_at(name: Any) -> str:
+    return f"@{name}"
+
+
+def _placeholder_named_dollar(name: Any) -> str:
+    return f"${name}"
+
+
+def _placeholder_named_pyformat(name: Any) -> str:
+    return f"%({name})s"
+
+
+def _placeholder_positional_pyformat(_: Any) -> str:
+    return "%s"
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterConverter:
     """Parameter style conversion helper."""
@@ -32,14 +64,14 @@ class ParameterConverter:
         }
 
         self._placeholder_generators: dict[ParameterStyle, Callable[[Any], str]] = {
-            ParameterStyle.QMARK: lambda _: "?",
-            ParameterStyle.NUMERIC: lambda i: f"${int(i) + 1}",
-            ParameterStyle.NAMED_COLON: lambda name: f":{name}",
-            ParameterStyle.POSITIONAL_COLON: lambda i: f":{int(i) + 1}",
-            ParameterStyle.NAMED_AT: lambda name: f"@{name}",
-            ParameterStyle.NAMED_DOLLAR: lambda name: f"${name}",
-            ParameterStyle.NAMED_PYFORMAT: lambda name: f"%({name})s",
-            ParameterStyle.POSITIONAL_PYFORMAT: lambda _: "%s",
+            ParameterStyle.QMARK: _placeholder_qmark,
+            ParameterStyle.NUMERIC: _placeholder_numeric,
+            ParameterStyle.NAMED_COLON: _placeholder_named_colon,
+            ParameterStyle.POSITIONAL_COLON: _placeholder_positional_colon,
+            ParameterStyle.NAMED_AT: _placeholder_named_at,
+            ParameterStyle.NAMED_DOLLAR: _placeholder_named_dollar,
+            ParameterStyle.NAMED_PYFORMAT: _placeholder_named_pyformat,
+            ParameterStyle.POSITIONAL_PYFORMAT: _placeholder_positional_pyformat,
         }
 
     def normalize_sql_for_parsing(
@@ -62,7 +94,21 @@ class ParameterConverter:
         converted_sql = sql
         for param in reversed(param_info):
             if param.style in incompatible_styles:
-                canonical_placeholder = f":param_{param.ordinal}"
+                if (
+                    param.style
+                    in {
+                        ParameterStyle.NAMED_COLON,
+                        ParameterStyle.NAMED_AT,
+                        ParameterStyle.NAMED_DOLLAR,
+                        ParameterStyle.NAMED_PYFORMAT,
+                    }
+                    and param.name
+                    and param.name.isidentifier()
+                ):
+                    placeholder_name = param.name
+                else:
+                    placeholder_name = f"param_{param.ordinal}"
+                canonical_placeholder = f":{placeholder_name}"
                 converted_sql = (
                     converted_sql[: param.position]
                     + canonical_placeholder
@@ -72,7 +118,7 @@ class ParameterConverter:
 
     def convert_placeholder_style(
         self, sql: str, parameters: Any, target_style: ParameterStyle, is_many: bool = False
-    ) -> tuple[str, Any]:
+    ) -> "tuple[str, Any]":
         param_info = self.validator.extract_parameters(sql)
 
         if target_style == ParameterStyle.STATIC:
@@ -209,7 +255,7 @@ class ParameterConverter:
 
         return None, False
 
-    def _preserve_original_format(self, param_values: list[Any], original_parameters: Any) -> Any:
+    def _preserve_original_format(self, param_values: "list[Any]", original_parameters: Any) -> Any:
         if isinstance(original_parameters, tuple):
             return tuple(param_values)
         if isinstance(original_parameters, list):

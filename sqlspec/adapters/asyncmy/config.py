@@ -54,7 +54,7 @@ class AsyncmyConnectionParams(TypedDict):
     sql_mode: NotRequired[str]
     init_command: NotRequired[str]
     cursor_class: NotRequired[type["Cursor"] | type["DictCursor"]]
-    extra: NotRequired[dict[str, Any]]
+    extra: "NotRequired[dict[str", Any]]
 
 
 class AsyncmyPoolParams(AsyncmyConnectionParams):
@@ -90,6 +90,8 @@ class AsyncmyDriverFeatures(TypedDict):
 
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 class AsyncmyConnectionContext:
@@ -134,7 +136,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         *,
         connection_config: "AsyncmyPoolParams | dict[str, Any] | None" = None,
         connection_instance: "AsyncmyPool | None" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str", Any] | None = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncmyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -164,7 +166,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         processed_connection_config.setdefault("host", "localhost")
         processed_connection_config.setdefault("port", 3306)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        processed_driver_features: "dict[str", Any] = dict(driver_features) if driver_features else {}
         serializer = processed_driver_features.setdefault("json_serializer", to_json)
         deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
 
@@ -240,7 +242,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         Returns:
             An Asyncmy driver session context manager.
         """
-        acquire_ctx_holder: dict[str, Any] = {}
+        acquire_ctx_holder: "dict[str", Any] = {}
 
         async def acquire_connection() -> AsyncmyConnection:
             pool = self.connection_instance

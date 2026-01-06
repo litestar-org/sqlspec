@@ -10,7 +10,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import parse_table_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_and_sql, has_parameter_builder
@@ -57,7 +57,7 @@ def _handle_query_builder_table(table: Any, alias: str | None, builder: "SQLBuil
         subquery_expression = table._build_final_expression(copy=True)
     else:
         subquery_result = builder_table.build()
-        sql_text = subquery_result.sql if isinstance(subquery_result, SafeQuery) else str(subquery_result)
+        sql_text = subquery_result.sql if isinstance(subquery_result, BuiltQuery) else str(subquery_result)
         subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
 
     if parameters:

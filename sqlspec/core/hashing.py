@@ -26,7 +26,7 @@ __all__ = (
 )
 
 
-def hash_expression(expr: exp.Expression | None, _seen: set[int] | None = None) -> int:
+def hash_expression(expr: "exp.Expression | None", _seen: "set[int] | None" = None) -> int:
     """Generate hash from AST structure.
 
     Args:
@@ -56,7 +56,7 @@ def hash_expression(expr: exp.Expression | None, _seen: set[int] | None = None) 
     return hash(tuple(components))
 
 
-def _hash_value(value: Any, _seen: set[int]) -> int:
+def _hash_value(value: Any, _seen: "set[int]") -> int:
     """Hash different value types.
 
     Args:
@@ -80,8 +80,8 @@ def _hash_value(value: Any, _seen: set[int]) -> int:
 
 
 def hash_parameters(
-    positional_parameters: list[Any] | None = None,
-    named_parameters: dict[str, Any] | None = None,
+    positional_parameters: "list[Any] | None" = None,
+    named_parameters: "dict[str, Any] | None" = None,
     original_parameters: Any | None = None,
 ) -> int:
     """Generate hash for SQL parameters.
@@ -223,8 +223,8 @@ def hash_expression_node(node: exp.Expression, include_children: bool = True, di
 def hash_optimized_expression(
     expr: exp.Expression,
     dialect: str,
-    schema: dict[str, Any] | None = None,
-    optimizer_settings: dict[str, Any] | None = None,
+    schema: "dict[str, Any] | None" = None,
+    optimizer_settings: "dict[str, Any] | None" = None,
 ) -> str:
     """Generate cache key for optimized expressions.
 

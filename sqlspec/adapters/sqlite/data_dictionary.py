@@ -7,8 +7,6 @@ from sqlspec.driver import ForeignKeyMetadata, SyncDataDictionaryBase, SyncDrive
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.sqlite.driver import SqliteDriver
 
 logger = get_logger("adapters.sqlite.data_dictionary")
@@ -71,21 +69,25 @@ class SqliteSyncDataDictionary(SyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks: dict[str, Callable[[VersionInfo], bool]] = {
-            "supports_json": lambda v: v >= VersionInfo(3, 38, 0),
-            "supports_returning": lambda v: v >= VersionInfo(3, 35, 0),
-            "supports_upsert": lambda v: v >= VersionInfo(3, 24, 0),
-            "supports_window_functions": lambda v: v >= VersionInfo(3, 25, 0),
-            "supports_cte": lambda v: v >= VersionInfo(3, 8, 3),
-            "supports_transactions": lambda _: True,
-            "supports_prepared_statements": lambda _: True,
-            "supports_schemas": lambda _: False,  # SQLite has ATTACH but not schemas
-            "supports_arrays": lambda _: False,
-            "supports_uuid": lambda _: False,
+        feature_versions: "dict[str", VersionInfo] = {
+            "supports_json": VersionInfo(3, 38, 0),
+            "supports_returning": VersionInfo(3, 35, 0),
+            "supports_upsert": VersionInfo(3, 24, 0),
+            "supports_window_functions": VersionInfo(3, 25, 0),
+            "supports_cte": VersionInfo(3, 8, 3),
+        }
+        feature_flags: "dict[str", bool] = {
+            "supports_transactions": True,
+            "supports_prepared_statements": True,
+            "supports_schemas": False,
+            "supports_arrays": False,
+            "supports_uuid": False,
         }
 
-        if feature in feature_checks:
-            return bool(feature_checks[feature](version_info))
+        if feature in feature_versions:
+            return bool(version_info >= feature_versions[feature])
+        if feature in feature_flags:
+            return feature_flags[feature]
 
         return False
 

@@ -246,35 +246,25 @@ exp.func("COALESCE", exp.column("email"), exp.Literal.string(""))
 
 ## SQLSpec Integration
 
-### Current Pipeline (via SQLTransformContext)
+### Current Pipeline (via SQLProcessor)
 
-SQLSpec uses `SQLTransformContext` for systematic SQL transformation:
+SQLSpec uses `SQLProcessor` for single-pass compilation:
 
 ```python
-from sqlspec.statement.pipeline import SQLTransformContext
+from sqlspec.core import SQLProcessor, StatementConfig
 
-# SQLTransformContext wraps an expression and tracks transformations
-context = SQLTransformContext(expression=parsed_ast, original_sql=raw_sql)
+processor = SQLProcessor(StatementConfig(dialect="postgres"))
+result = processor.compile(raw_sql, parameters)
 
-# Transform pipeline
-context = (
-    context
-    .apply_security_rules()      # Remove dangerous patterns
-    .convert_parameters()         # Convert :name to $1
-    .optimize_for_dialect()       # Dialect-specific optimizations
-    .validate_syntax()            # Final validation
-)
-
-# Single call to .sql() at the end
-final_sql = context.expression.sql(dialect=target_dialect)
+final_sql = result.compiled_sql
+expression = result.expression
 ```
 
 **Key benefits**:
 
-- Parse once (in SQLTransformContext creation)
-- Chain transformations on AST
+- Parse once and reuse cached expressions
+- Apply AST transforms without re-parsing
 - Convert to SQL once at the end
-- Track transformation history for debugging
 
 ### Parameter Style Conversion
 
@@ -391,8 +381,7 @@ def has_dangerous_patterns(sql: str) -> bool:
     return False
 
 # Usage in SQLSpec pipeline
-context = SQLTransformContext(expression=ast, original_sql=sql)
-if has_dangerous_patterns(context.original_sql):
+if has_dangerous_patterns(sql):
     raise SecurityError("Dangerous SQL pattern detected")
 ```
 

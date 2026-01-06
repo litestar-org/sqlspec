@@ -366,8 +366,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             SQLResult if special handling was applied, None otherwise
         """
 
-        statement.compile()
-
         if is_copy_operation(statement.operation_type):
             return self._handle_copy_operation(cursor, statement)
 
@@ -384,7 +382,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             SQLResult with COPY operation results
         """
 
-        sql = statement.sql
+        sql, _ = statement.compile()
         operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
@@ -915,8 +913,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             SQLResult if special handling was applied, None otherwise
         """
 
-        statement.compile()
-
         if is_copy_operation(statement.operation_type):
             return await self._handle_copy_operation_async(cursor, statement)
 
@@ -933,7 +929,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             SQLResult with COPY operation results
         """
 
-        sql = statement.sql
+        sql, _ = statement.compile()
         sql_upper = sql.upper()
         operation_type = statement.operation_type
         copy_data = statement.parameters
@@ -1250,7 +1246,7 @@ _PSYCOPG_PROFILE = build_psycopg_profile()
 register_driver_profile("psycopg", _PSYCOPG_PROFILE)
 
 
-def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> "ParameterStyleConfig":
     """Construct parameter configuration with shared JSON serializer support."""
 
     base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
@@ -1262,21 +1258,12 @@ def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> Para
     return base_config.replace(type_coercion_map=updated_type_map)
 
 
-def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> StatementConfig:
+def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> "StatementConfig":
     """Construct the psycopg statement configuration with optional JSON codecs."""
 
     parameter_config = _create_psycopg_parameter_config(json_serializer)
-    return StatementConfig(
-        dialect="postgres",
-        pre_process_steps=None,
-        post_process_steps=None,
-        enable_parsing=True,
-        enable_transformations=True,
-        enable_validation=True,
-        enable_caching=True,
-        enable_parameter_type_wrapping=True,
-        parameter_config=parameter_config,
-    )
+    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=json_serializer)
+    return base_config.replace(parameter_config=parameter_config)
 
 
 psycopg_statement_config = build_psycopg_statement_config()

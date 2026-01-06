@@ -18,7 +18,7 @@ def test_basic_statement_config() -> None:
         enable_parsing=True,  # Parse SQL into AST
         enable_validation=True,  # Run security/performance validators
         enable_transformations=True,  # Apply AST transformations
-        enable_caching=True,  # Enable multi-tier caching
+        enable_caching=True,  # Enable namespaced caching
     )
 
     # Apply to adapter

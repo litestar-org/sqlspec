@@ -9,18 +9,9 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
+from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("postgres")
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _async
-
-        return hasattr(_async, "__file__") and (_async.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
 
 
 @pytest.fixture
@@ -183,9 +174,7 @@ async def test_psycopg_async_statement_stack_pipeline(psycopg_async_session: Psy
     assert verify.data[0]["total"] == 2
 
 
-@pytest.mark.skipif(
-    _is_compiled(), reason="mypyc-compiled driver modules have exception capture issues in continue_on_error mode"
-)
+@requires_interpreted
 async def test_psycopg_async_statement_stack_continue_on_error(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Ensure async pipeline honors continue-on-error semantics."""
 

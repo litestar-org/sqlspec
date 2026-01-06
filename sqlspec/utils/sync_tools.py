@@ -100,6 +100,10 @@ class CapacityLimiter:
 _default_limiter = CapacityLimiter(1000)
 
 
+def _return_value(value: Any) -> Any:
+    return value
+
+
 def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> "Callable[ParamSpecT, ReturnT]":
     """Convert an async function to a blocking function using asyncio.run().
 
@@ -226,7 +230,7 @@ def ensure_async_(
         result = function(*args, **kwargs)
         if inspect.isawaitable(result):
             return await result
-        return await async_(lambda: result)()
+        return await async_(functools.partial(_return_value, result))()
 
     return wrapper
 

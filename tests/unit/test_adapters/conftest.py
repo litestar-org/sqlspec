@@ -15,6 +15,7 @@ from sqlspec.driver import (
     VersionInfo,
 )
 from sqlspec.exceptions import SQLSpecError
+from tests.conftest import is_compiled
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
@@ -80,16 +81,6 @@ __all__ = (
     "sample_sql_statement",
     "sample_statement_config",
 )
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
 
 
 class MockSyncConnection:
@@ -525,7 +516,7 @@ def mock_async_connection() -> MockAsyncConnection:
 @pytest.fixture
 def mock_sync_driver(mock_sync_connection: MockSyncConnection) -> MockSyncDriver:
     """Fixture for mock sync driver."""
-    if _is_compiled():
+    if is_compiled():
         pytest.skip("Mock driver fixtures require interpreted driver base classes when compiled.")
     return MockSyncDriver(mock_sync_connection)
 
@@ -533,7 +524,7 @@ def mock_sync_driver(mock_sync_connection: MockSyncConnection) -> MockSyncDriver
 @pytest.fixture
 def mock_async_driver(mock_async_connection: MockAsyncConnection) -> MockAsyncDriver:
     """Fixture for mock async driver."""
-    if _is_compiled():
+    if is_compiled():
         pytest.skip("Mock driver fixtures require interpreted driver base classes when compiled.")
     return MockAsyncDriver(mock_async_connection)
 

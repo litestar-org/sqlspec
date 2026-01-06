@@ -234,7 +234,11 @@ def attrs_asdict_stub(*args: Any, **kwargs: Any) -> "dict[str, Any]":  # noqa: A
 
 def attrs_define_stub(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
     """Placeholder implementation"""
-    return lambda cls: cls  # pyright: ignore[reportUnknownVariableType,reportUnknownLambdaType]
+    return _attrs_define_identity
+
+
+def _attrs_define_identity(cls: Any) -> Any:
+    return cls
 
 
 def attrs_field_stub(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001

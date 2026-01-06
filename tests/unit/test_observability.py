@@ -5,8 +5,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, cast
 
-import pytest
-
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
@@ -26,6 +24,7 @@ from sqlspec.storage.pipeline import (
     reset_storage_bridge_metrics,
 )
 from sqlspec.utils.correlation import CorrelationContext
+from tests.conftest import requires_interpreted
 
 
 class _NoOpExceptionHandler:
@@ -44,21 +43,6 @@ class _NoOpExceptionHandler:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
         return False
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-requires_interpreted = pytest.mark.skipif(
-    _is_compiled(), reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)"
-)
 
 
 def _lifecycle_config(hooks: dict[str, list[Any]]) -> "LifecycleConfig":

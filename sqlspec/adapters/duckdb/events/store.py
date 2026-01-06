@@ -48,7 +48,7 @@ class DuckDBEventQueueStore(BaseEventQueueStore[DuckDBConfig]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return DuckDB-optimized column types.
 
         Returns:

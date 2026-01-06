@@ -7,8 +7,6 @@ from sqlspec.driver import ForeignKeyMetadata, SyncDataDictionaryBase, SyncDrive
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.adbc.driver import AdbcDriver
 
 logger = get_logger("adapters.adbc.data_dictionary")
@@ -291,83 +289,95 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         dialect = self._get_dialect(driver)
         version_info = self.get_version(driver)
 
+        feature_versions: "dict[str", VersionInfo] = {}
+        feature_flags: "dict[str", bool] = {}
+
         if dialect == "postgres":
-            feature_checks: dict[str, Callable[..., bool]] = {
-                "supports_json": lambda v: v and v >= VersionInfo(9, 2, 0),
-                "supports_jsonb": lambda v: v and v >= VersionInfo(9, 4, 0),
-                "supports_uuid": lambda _: True,
-                "supports_arrays": lambda _: True,
-                "supports_returning": lambda v: v and v >= VersionInfo(8, 2, 0),
-                "supports_upsert": lambda v: v and v >= VersionInfo(9, 5, 0),
-                "supports_window_functions": lambda v: v and v >= VersionInfo(8, 4, 0),
-                "supports_cte": lambda v: v and v >= VersionInfo(8, 4, 0),
-                "supports_transactions": lambda _: True,
-                "supports_prepared_statements": lambda _: True,
-                "supports_schemas": lambda _: True,
+            feature_versions = {
+                "supports_json": VersionInfo(9, 2, 0),
+                "supports_jsonb": VersionInfo(9, 4, 0),
+                "supports_returning": VersionInfo(8, 2, 0),
+                "supports_upsert": VersionInfo(9, 5, 0),
+                "supports_window_functions": VersionInfo(8, 4, 0),
+                "supports_cte": VersionInfo(8, 4, 0),
+            }
+            feature_flags = {
+                "supports_uuid": True,
+                "supports_arrays": True,
+                "supports_transactions": True,
+                "supports_prepared_statements": True,
+                "supports_schemas": True,
             }
         elif dialect == "sqlite":
-            feature_checks = {
-                "supports_json": lambda v: v and v >= VersionInfo(3, 38, 0),
-                "supports_returning": lambda v: v and v >= VersionInfo(3, 35, 0),
-                "supports_upsert": lambda v: v and v >= VersionInfo(3, 24, 0),
-                "supports_window_functions": lambda v: v and v >= VersionInfo(3, 25, 0),
-                "supports_cte": lambda v: v and v >= VersionInfo(3, 8, 3),
-                "supports_transactions": lambda _: True,
-                "supports_prepared_statements": lambda _: True,
-                "supports_schemas": lambda _: False,
-                "supports_arrays": lambda _: False,
-                "supports_uuid": lambda _: False,
+            feature_versions = {
+                "supports_json": VersionInfo(3, 38, 0),
+                "supports_returning": VersionInfo(3, 35, 0),
+                "supports_upsert": VersionInfo(3, 24, 0),
+                "supports_window_functions": VersionInfo(3, 25, 0),
+                "supports_cte": VersionInfo(3, 8, 3),
+            }
+            feature_flags = {
+                "supports_transactions": True,
+                "supports_prepared_statements": True,
+                "supports_schemas": False,
+                "supports_arrays": False,
+                "supports_uuid": False,
             }
         elif dialect == "duckdb":
-            feature_checks = {
-                "supports_json": lambda _: True,
-                "supports_arrays": lambda _: True,
-                "supports_uuid": lambda _: True,
-                "supports_returning": lambda v: v and v >= VersionInfo(0, 8, 0),
-                "supports_upsert": lambda v: v and v >= VersionInfo(0, 8, 0),
-                "supports_window_functions": lambda _: True,
-                "supports_cte": lambda _: True,
-                "supports_transactions": lambda _: True,
-                "supports_prepared_statements": lambda _: True,
-                "supports_schemas": lambda _: True,
+            feature_versions = {"supports_returning": VersionInfo(0, 8, 0), "supports_upsert": VersionInfo(0, 8, 0)}
+            feature_flags = {
+                "supports_json": True,
+                "supports_arrays": True,
+                "supports_uuid": True,
+                "supports_window_functions": True,
+                "supports_cte": True,
+                "supports_transactions": True,
+                "supports_prepared_statements": True,
+                "supports_schemas": True,
             }
         elif dialect == "mysql":
-            feature_checks = {
-                "supports_json": lambda v: v and v >= VersionInfo(5, 7, 8),
-                "supports_cte": lambda v: v and v >= VersionInfo(8, 0, 1),
-                "supports_returning": lambda _: False,
-                "supports_upsert": lambda _: True,
-                "supports_window_functions": lambda v: v and v >= VersionInfo(8, 0, 2),
-                "supports_transactions": lambda _: True,
-                "supports_prepared_statements": lambda _: True,
-                "supports_schemas": lambda _: True,
-                "supports_uuid": lambda _: False,
-                "supports_arrays": lambda _: False,
+            feature_versions = {
+                "supports_json": VersionInfo(5, 7, 8),
+                "supports_cte": VersionInfo(8, 0, 1),
+                "supports_window_functions": VersionInfo(8, 0, 2),
+            }
+            feature_flags = {
+                "supports_returning": False,
+                "supports_upsert": True,
+                "supports_transactions": True,
+                "supports_prepared_statements": True,
+                "supports_schemas": True,
+                "supports_uuid": False,
+                "supports_arrays": False,
             }
         elif dialect == "bigquery":
-            feature_checks = {
-                "supports_json": lambda _: True,
-                "supports_arrays": lambda _: True,
-                "supports_structs": lambda _: True,
-                "supports_returning": lambda _: False,
-                "supports_upsert": lambda _: True,
-                "supports_window_functions": lambda _: True,
-                "supports_cte": lambda _: True,
-                "supports_transactions": lambda _: False,
-                "supports_prepared_statements": lambda _: True,
-                "supports_schemas": lambda _: True,
-                "supports_uuid": lambda _: False,
+            feature_flags = {
+                "supports_json": True,
+                "supports_arrays": True,
+                "supports_structs": True,
+                "supports_returning": False,
+                "supports_upsert": True,
+                "supports_window_functions": True,
+                "supports_cte": True,
+                "supports_transactions": False,
+                "supports_prepared_statements": True,
+                "supports_schemas": True,
+                "supports_uuid": False,
             }
         else:
-            feature_checks = {
-                "supports_transactions": lambda _: True,
-                "supports_prepared_statements": lambda _: True,
-                "supports_window_functions": lambda _: True,
-                "supports_cte": lambda _: True,
+            feature_flags = {
+                "supports_transactions": True,
+                "supports_prepared_statements": True,
+                "supports_window_functions": True,
+                "supports_cte": True,
             }
 
-        if feature in feature_checks:
-            return bool(feature_checks[feature](version_info))
+        if feature in feature_versions:
+            if not version_info:
+                return False
+            return bool(version_info >= feature_versions[feature])
+        if feature in feature_flags:
+            return feature_flags[feature]
 
         return False
 

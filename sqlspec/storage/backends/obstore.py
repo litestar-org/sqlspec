@@ -110,7 +110,7 @@ class ObStoreBackend:
         return self._is_local_store
 
     @classmethod
-    def from_config(cls, config: dict[str, Any]) -> "ObStoreBackend":
+    def from_config(cls, config: "dict[str, Any]") -> "ObStoreBackend":
         """Create backend from configuration dictionary."""
         store_uri = config["store_uri"]
         base_path = config.get("base_path", "")
@@ -158,7 +158,7 @@ class ObStoreBackend:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         execute_sync_storage_operation(
-            lambda: self.store.put(resolved_path, data),
+            partial(self.store.put, resolved_path, data),
             backend=self.backend_type,
             operation="write_bytes",
             path=resolved_path,
@@ -172,7 +172,7 @@ class ObStoreBackend:
         """Write text using obstore."""
         self.write_bytes(path, data.encode(encoding), **kwargs)
 
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:  # pyright: ignore[reportUnusedParameter]
+    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects using obstore."""
         resolved_prefix = (
             resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
@@ -198,7 +198,7 @@ class ObStoreBackend:
         """Delete object using obstore."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         execute_sync_storage_operation(
-            lambda: self.store.delete(resolved_path), backend=self.backend_type, operation="delete", path=resolved_path
+            partial(self.store.delete, resolved_path), backend=self.backend_type, operation="delete", path=resolved_path
         )
 
     def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
@@ -206,7 +206,7 @@ class ObStoreBackend:
         source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
         dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
         execute_sync_storage_operation(
-            lambda: self.store.copy(source_path, dest_path),
+            partial(self.store.copy, source_path, dest_path),
             backend=self.backend_type,
             operation="copy",
             path=f"{source_path}->{dest_path}",
@@ -217,13 +217,13 @@ class ObStoreBackend:
         source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
         dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
         execute_sync_storage_operation(
-            lambda: self.store.rename(source_path, dest_path),
+            partial(self.store.rename, source_path, dest_path),
             backend=self.backend_type,
             operation="move",
             path=f"{source_path}->{dest_path}",
         )
 
-    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
+    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching pattern.
 
         Lists all objects and filters them client-side using the pattern.
@@ -251,7 +251,7 @@ class ObStoreBackend:
             return matching_objects
         return [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:  # pyright: ignore[reportUnusedParameter]
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
@@ -313,7 +313,7 @@ class ObStoreBackend:
         return cast(
             "ArrowTable",
             execute_sync_storage_operation(
-                lambda: pq.read_table(io.BytesIO(data), **kwargs),
+                partial(pq.read_table, io.BytesIO(data), **kwargs),
                 backend=self.backend_type,
                 operation="read_arrow",
                 path=resolved_path,
@@ -343,7 +343,7 @@ class ObStoreBackend:
 
         buffer = io.BytesIO()
         execute_sync_storage_operation(
-            lambda: pq.write_table(table, buffer, **kwargs),
+            partial(pq.write_table, table, buffer, **kwargs),
             backend=self.backend_type,
             operation="write_arrow",
             path=resolved_path,
@@ -391,7 +391,7 @@ class ObStoreBackend:
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
 
     @overload
-    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+    def sign_sync(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
 
     def sign_sync(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
@@ -469,7 +469,7 @@ class ObStoreBackend:
 
         await self.store.put_async(resolved_path, data)
 
-    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:  # pyright: ignore[reportUnusedParameter]
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""
         resolved_prefix = (
             resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
@@ -541,7 +541,7 @@ class ObStoreBackend:
 
         await self.store.rename_async(source_path, dest_path)
 
-    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:  # pyright: ignore[reportUnusedParameter]
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
         """Get object metadata from storage asynchronously."""
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
@@ -602,7 +602,7 @@ class ObStoreBackend:
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
 
     @overload
-    async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+    async def sign_async(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
 
     async def sign_async(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False

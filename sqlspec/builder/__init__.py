@@ -4,7 +4,7 @@ Provides fluent interfaces for building SQL queries with
 parameter binding and validation.
 """
 
-from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._base import BuiltQuery, ExpressionBuilder, QueryBuilder
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._ddl import (
     AlterTable,
@@ -82,6 +82,7 @@ from sqlspec.exceptions import SQLBuilderError
 __all__ = (
     "AggregateExpression",
     "AlterTable",
+    "BuiltQuery",
     "Case",
     "CaseBuilder",
     "Column",
@@ -104,6 +105,7 @@ __all__ = (
     "DropView",
     "Explain",
     "ExplainMixin",
+    "ExpressionBuilder",
     "FunctionColumn",
     "FunctionExpression",
     "HavingClauseMixin",
@@ -122,7 +124,6 @@ __all__ = (
     "ReturningClauseMixin",
     "SQLBuilderError",
     "SQLFactory",
-    "SafeQuery",
     "Select",
     "SelectClauseMixin",
     "SetOperationMixin",

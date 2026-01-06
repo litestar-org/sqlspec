@@ -7,20 +7,11 @@ import pytest
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
+from tests.conftest import requires_interpreted
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
 pytestmark = pytest.mark.xdist_group("postgres")
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
 
 
 @pytest.fixture
@@ -231,9 +222,7 @@ def test_psycopg_statement_stack_pipeline(psycopg_session: PsycopgSyncDriver) ->
     assert total_result.data[0]["total"] == 2
 
 
-@pytest.mark.skipif(
-    _is_compiled(), reason="mypyc-compiled driver modules have exception capture issues in continue_on_error mode"
-)
+@requires_interpreted
 def test_psycopg_statement_stack_continue_on_error(psycopg_session: PsycopgSyncDriver) -> None:
     """Pipeline execution should continue when instructed to handle errors."""
 

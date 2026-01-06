@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage.registry import StorageRegistry
 
-__all__ = ("CachedSQLFile", "NamedStatement", "SQLFile", "SQLFileLoader")
+__all__ = ("NamedStatement", "SQLFile", "SQLFileCacheEntry", "SQLFileLoader")
 
 logger = get_logger("loader")
 
@@ -134,7 +134,7 @@ class SQLFile:
         self.checksum = hashlib.md5(self.content.encode(), usedforsecurity=False).hexdigest()
 
 
-class CachedSQLFile:
+class SQLFileCacheEntry:
     """Cached SQL file with parsed statements.
 
     Stored in the file cache to avoid re-parsing SQL files when their
@@ -236,7 +236,7 @@ class SQLFileLoader:
         except Exception as e:
             raise SQLFileParseError(str(path), str(path), e) from e
 
-    def _is_file_unchanged(self, path: str | Path, cached_file: CachedSQLFile) -> bool:
+    def _is_file_unchanged(self, path: str | Path, cached_file: SQLFileCacheEntry) -> bool:
         """Check if file has changed since caching.
 
         Args:
@@ -471,7 +471,7 @@ class SQLFileLoader:
 
         if (
             cached_file is not None
-            and isinstance(cached_file, CachedSQLFile)
+            and isinstance(cached_file, SQLFileCacheEntry)
             and self._is_file_unchanged(file_path, cached_file)
         ):
             self._files[path_str] = cached_file.sql_file
@@ -503,7 +503,7 @@ class SQLFileLoader:
                         stored_name = query_name[len(namespace) + 1 :]
                     file_statements[stored_name] = self._queries[query_name]
 
-            cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
+            cached_file_data = SQLFileCacheEntry(sql_file=sql_file, parsed_statements=file_statements)
             cache.put_file(cache_key_str, cached_file_data)
             if runtime is not None:
                 runtime.increment_metric("loader.cache.miss")

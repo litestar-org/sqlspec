@@ -52,15 +52,15 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
 
     def _build_params(
         self, key: str, expires_at: "datetime | None" = None, data: "bytes | None" = None
-    ) -> dict[str, Any]:
+    ) -> "dict[str, Any]":
         return {
             "session_id": key,
             "data": bytes_to_spanner(data),
             "expires_at": self._datetime_to_timestamp(expires_at),
         }
 
-    def _get_param_types(self, session_id: bool = True, expires_at: bool = False, data: bool = False) -> dict[str, Any]:
-        types: dict[str, Any] = {}
+def _get_param_types(self, session_id: bool = True, expires_at: bool = False, data: bool = False) -> "dict[str, Any]":
+        types: "dict[str", Any] = {}
         if session_id:
             types["session_id"] = param_types.STRING
         if expires_at:
@@ -214,7 +214,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         DELETE FROM {self._table_name}
         WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP()
         """
-        deleted_count: list[int] = [0]
+        deleted_count: "list[int]"= [0]
 
         def _delete_expired_txn(transaction: "Transaction") -> None:
             row_ct = transaction.execute_update(sql)  # type: ignore[no-untyped-call]

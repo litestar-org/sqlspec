@@ -1,5 +1,6 @@
 # pyright: reportPrivateUsage=false
 from collections.abc import AsyncIterator, Iterator
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, overload
 from urllib.parse import urlparse
@@ -86,7 +87,7 @@ class FSSpecBackend:
         return cast(
             "bytes",
             execute_sync_storage_operation(
-                lambda: self.fs.cat(resolved_path, **kwargs),
+                partial(self.fs.cat, resolved_path, **kwargs),
                 backend=self.backend_type,
                 operation="read_bytes",
                 path=resolved_path,
@@ -126,7 +127,7 @@ class FSSpecBackend:
         """Delete an object."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         execute_sync_storage_operation(
-            lambda: self.fs.rm(resolved_path, **kwargs),
+            partial(self.fs.rm, resolved_path, **kwargs),
             backend=self.backend_type,
             operation="delete",
             path=resolved_path,
@@ -137,7 +138,7 @@ class FSSpecBackend:
         source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=False)
         dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=False)
         execute_sync_storage_operation(
-            lambda: self.fs.copy(source_path, dest_path, **kwargs),
+            partial(self.fs.copy, source_path, dest_path, **kwargs),
             backend=self.backend_type,
             operation="copy",
             path=f"{source_path}->{dest_path}",
@@ -148,7 +149,7 @@ class FSSpecBackend:
         source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=False)
         dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=False)
         execute_sync_storage_operation(
-            lambda: self.fs.mv(source_path, dest_path, **kwargs),
+            partial(self.fs.mv, source_path, dest_path, **kwargs),
             backend=self.backend_type,
             operation="move",
             path=f"{source_path}->{dest_path}",
@@ -162,7 +163,7 @@ class FSSpecBackend:
         return cast(
             "ArrowTable",
             execute_sync_storage_operation(
-                lambda: self._read_arrow(resolved_path, pq, kwargs),
+                partial(self._read_arrow, resolved_path, pq, kwargs),
                 backend=self.backend_type,
                 operation="read_arrow",
                 path=resolved_path,
@@ -185,14 +186,14 @@ class FSSpecBackend:
         with self.fs.open(resolved_path, mode="rb", **options) as file_obj:
             return pq.read_table(file_obj)
 
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects with optional prefix."""
         resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=False)
         if recursive:
             return sorted(self.fs.find(resolved_prefix, **kwargs))
         return sorted(self.fs.ls(resolved_prefix, detail=False, **kwargs))
 
-    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
+    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching a glob pattern."""
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
         return sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
@@ -207,7 +208,7 @@ class FSSpecBackend:
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return self.fs.isdir(resolved_path)  # type: ignore[no-any-return]
 
-    def get_metadata(self, path: str | Path, **kwargs: Any) -> dict[str, object]:
+    def get_metadata(self, path: str | Path, **kwargs: Any) -> "dict[str, object]":
         """Get object metadata."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         try:
@@ -247,7 +248,7 @@ class FSSpecBackend:
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
 
     @overload
-    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+    def sign_sync(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
 
     def sign_sync(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
@@ -277,14 +278,14 @@ class FSSpecBackend:
         pq = import_pyarrow_parquet()
         for obj_path in self.glob(pattern, **kwargs):
             file_handle = execute_sync_storage_operation(
-                lambda path=obj_path: self.fs.open(path, mode="rb"),  # type: ignore[misc]
+                partial(self.fs.open, obj_path, mode="rb"),
                 backend=self.backend_type,
                 operation="stream_open",
                 path=str(obj_path),
             )
             with file_handle as stream:
                 parquet_file = execute_sync_storage_operation(
-                    lambda: pq.ParquetFile(stream),
+                    partial(pq.ParquetFile, stream),
                     backend=self.backend_type,
                     operation="stream_arrow",
                     path=str(obj_path),
@@ -321,7 +322,7 @@ class FSSpecBackend:
         """Write text to storage asynchronously."""
         await async_(self.write_text)(path, data, encoding, **kwargs)
 
-    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in storage asynchronously."""
         return await async_(self.list_objects)(prefix, recursive, **kwargs)
 
@@ -341,7 +342,7 @@ class FSSpecBackend:
         """Move object in storage asynchronously."""
         await async_(self.move)(source, destination, **kwargs)
 
-    async def get_metadata_async(self, path: str | Path, **kwargs: Any) -> dict[str, object]:
+    async def get_metadata_async(self, path: str | Path, **kwargs: Any) -> "dict[str, object]":
         """Get object metadata from storage asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
@@ -349,7 +350,7 @@ class FSSpecBackend:
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
 
     @overload
-    async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+    async def sign_async(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
 
     async def sign_async(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False

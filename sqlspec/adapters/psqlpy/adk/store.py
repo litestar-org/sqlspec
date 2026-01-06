@@ -249,7 +249,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
                 result = await conn.fetch(sql, [session_id])
-                rows: list[dict[str, Any]] = result.result() if result else []
+                rows: "list[dict[str", Any]] = result.result() if result else []
 
                 if not rows:
                     return None
@@ -338,7 +338,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
                 result = await conn.fetch(sql, params)
-                rows: list[dict[str, Any]] = result.result() if result else []
+                rows: "list[dict[str", Any]] = result.result() if result else []
 
                 return [
                     SessionRecord(
@@ -427,7 +427,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             Returns empty list if table doesn't exist.
         """
         where_clauses = ["session_id = $1"]
-        params: list[Any] = [session_id]
+        params: "list[Any]"= [session_id]
 
         if after_timestamp is not None:
             where_clauses.append(f"timestamp > ${len(params) + 1}")
@@ -451,7 +451,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
                 result = await conn.fetch(sql, params)
-                rows: list[dict[str, Any]] = result.result() if result else []
+                rows: "list[dict[str", Any]] = result.result() if result else []
 
                 return [
                     EventRecord(
