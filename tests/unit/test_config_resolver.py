@@ -14,9 +14,7 @@ from sqlspec.utils.config_resolver import (
 
 
 def _create_mock_config(
-    database_url: str = "sqlite:///test.db",
-    bind_key: str = "test",
-    migration_config: dict[str, Any] | None = None,
+    database_url: str = "sqlite:///test.db", bind_key: str = "test", migration_config: dict[str, Any] | None = None
 ) -> NonCallableMock:
     """Create a non-callable mock config with required attributes.
 
