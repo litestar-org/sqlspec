@@ -13,7 +13,7 @@ Available integrations:
 
 **AI & ML:**
 
-- **Google ADK** - Session and event storage for Google Agent Development Kit
+- **Google ADK** - Session, event, and memory storage for Google Agent Development Kit
 
 **Web Frameworks:**
 
@@ -40,12 +40,13 @@ Google ADK Integration
 
 .. currentmodule:: sqlspec.extensions.adk
 
-The ADK extension provides persistent session and event storage for the Google Agent Development Kit (ADK), enabling stateful AI agent applications with database-backed conversation history.
+The ADK extension provides persistent session, event, and memory storage for the Google Agent Development Kit (ADK), enabling stateful AI agent applications with database-backed conversation history and recall.
 
 **Features:**
 
 - Session state persistence across multiple database backends
 - Event history storage with full ADK event model support
+- Searchable memory entries extracted from completed sessions
 - Multi-tenant support with customizable table names
 - Type-safe storage with TypedDicts
 - Production-ready for PostgreSQL, MySQL, SQLite, Oracle
@@ -80,6 +81,15 @@ See :doc:`/extensions/adk/index` for comprehensive documentation including:
        state={"context": "initial"}
    )
 
+   # Memory service (optional)
+   from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+   from sqlspec.extensions.adk.memory import SQLSpecMemoryService
+
+   memory_store = AsyncpgADKMemoryStore(config)
+   await memory_store.create_tables()
+   memory_service = SQLSpecMemoryService(memory_store)
+   await memory_service.add_session_to_memory(session)
+
 Base Store Classes
 ------------------
 
@@ -99,6 +109,22 @@ Base Store Classes
 
    Abstract base class for sync ADK session stores. See :doc:`/extensions/adk/api` for details.
 
+.. autoclass:: BaseAsyncADKMemoryStore
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+   Abstract base class for async ADK memory stores. See :doc:`/extensions/adk/api` for details.
+
+.. autoclass:: BaseSyncADKMemoryStore
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+   Abstract base class for sync ADK memory stores. See :doc:`/extensions/adk/api` for details.
+
 Session Service
 ---------------
 
@@ -109,6 +135,17 @@ Session Service
    :no-index:
 
    SQLSpec-backed implementation of Google ADK's BaseSessionService. See :doc:`/extensions/adk/api` for details.
+
+Memory Service
+--------------
+
+.. autoclass:: sqlspec.extensions.adk.memory.SQLSpecMemoryService
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+   SQLSpec-backed implementation of Google ADK's BaseMemoryService. See :doc:`/extensions/adk/api` for details.
 
 Litestar Integration
 ====================

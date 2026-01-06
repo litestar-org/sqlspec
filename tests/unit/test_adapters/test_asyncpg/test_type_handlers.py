@@ -2,7 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlspec.adapters.asyncpg._type_handlers import register_json_codecs, register_pgvector_support
+from sqlspec.adapters.asyncpg.config import register_json_codecs, register_pgvector_support
 
 
 async def test_register_json_codecs_success() -> None:
@@ -36,7 +36,7 @@ async def test_register_json_codecs_handles_exception() -> None:
     connection.set_type_codec.assert_called_once()
 
 
-@patch("sqlspec.adapters.asyncpg._type_handlers.PGVECTOR_INSTALLED", False)
+@patch("sqlspec.adapters.asyncpg.config.PGVECTOR_INSTALLED", False)
 async def test_register_pgvector_support_not_installed() -> None:
     """Test pgvector registration when library not installed."""
     connection = AsyncMock()
@@ -46,7 +46,7 @@ async def test_register_pgvector_support_not_installed() -> None:
     connection.assert_not_called()
 
 
-@patch("sqlspec.adapters.asyncpg._type_handlers.PGVECTOR_INSTALLED", True)
+@patch("sqlspec.adapters.asyncpg.config.PGVECTOR_INSTALLED", True)
 async def test_register_pgvector_support_success() -> None:
     """Test successful pgvector registration."""
     connection = AsyncMock()
@@ -56,7 +56,7 @@ async def test_register_pgvector_support_success() -> None:
         mock_register.assert_called_once_with(connection)
 
 
-@patch("sqlspec.adapters.asyncpg._type_handlers.PGVECTOR_INSTALLED", True)
+@patch("sqlspec.adapters.asyncpg.config.PGVECTOR_INSTALLED", True)
 async def test_register_pgvector_support_handles_exception() -> None:
     """Test that pgvector registration handles exceptions gracefully."""
     connection = AsyncMock()

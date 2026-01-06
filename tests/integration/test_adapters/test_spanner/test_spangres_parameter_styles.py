@@ -10,6 +10,8 @@ To run these tests, you need:
 
 import pytest
 
+from sqlspec.core import ParameterStyle
+
 pytestmark = [
     pytest.mark.spanner,
     pytest.mark.spangres,
@@ -63,6 +65,5 @@ def test_spangres_parameter_style_differs_from_googlesql() -> None:
     This is a documentation test to confirm the parameter style difference.
     """
     from sqlspec.adapters.spanner.driver import _SPANNER_PROFILE  # pyright: ignore[reportPrivateUsage]
-    from sqlspec.core import ParameterStyle
 
     assert _SPANNER_PROFILE.default_style == ParameterStyle.NAMED_AT

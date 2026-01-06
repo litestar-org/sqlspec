@@ -10,6 +10,8 @@ from typing import Any, cast
 
 from sqlglot import exp
 
+from sqlspec.builder._vector_expressions import VectorDistance
+
 __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 
 
@@ -336,8 +338,6 @@ class Column:
                 ...     )
                 ... )
         """
-        from sqlspec.builder._vector_expressions import VectorDistance
-
         normalized_metric = self._normalize_metric(metric)
         vec_expr = self._convert_vector_value(other_vector)
         distance_expr = VectorDistance(this=self._expression, expression=vec_expr, metric=normalized_metric)

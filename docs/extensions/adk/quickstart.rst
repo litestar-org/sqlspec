@@ -100,6 +100,21 @@ Create the session service that implements ADK's ``BaseSessionService`` protocol
        service = SQLSpecSessionService(store)
        return service
 
+Optional: Initialize Memory Service
+===================================
+
+If you want long-term memory search, create a memory store and service alongside the session service:
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+   from sqlspec.extensions.adk.memory import SQLSpecMemoryService
+
+   async def create_memory_service(config):
+       memory_store = AsyncpgADKMemoryStore(config)
+       await memory_store.create_tables()
+       return SQLSpecMemoryService(memory_store)
+
 Step 5: Create a Session
 =========================
 

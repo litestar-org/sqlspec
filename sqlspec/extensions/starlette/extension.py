@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
-from sqlspec.extensions.starlette._utils import get_or_create_session
+from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
 from sqlspec.utils.logging import get_logger
 
@@ -235,7 +235,7 @@ class SQLSpecPlugin:
         """
         config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
 
-        return getattr(request.state, config_state.connection_key)
+        return get_state_value(request.state, config_state.connection_key)
 
     def _get_config_state_by_key(self, key: str) -> SQLSpecConfigState:
         """Get configuration state by session key.

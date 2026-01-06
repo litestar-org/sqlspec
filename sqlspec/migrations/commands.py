@@ -20,7 +20,7 @@ from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version
+from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version, parse_version
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -56,7 +56,7 @@ def _with_command_span(
         signature = inspect.signature(func)
 
         def _prepare(self: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, bool, Any]:
-            runtime = getattr(self, "_runtime", None)
+            runtime = self._runtime
             metadata_args = _bind_arguments(signature, args, kwargs)
             dry_run = False
             if dry_run_param is not None:
@@ -82,10 +82,10 @@ def _with_command_span(
             recorded_error: bool,
             dry_run: bool,
         ) -> None:
-            command_error = getattr(self, "_last_command_error", None)
-            setattr(self, "_last_command_error", None)
-            command_metrics = getattr(self, "_last_command_metrics", None)
-            setattr(self, "_last_command_metrics", None)
+            command_error = self._last_command_error
+            self._last_command_error = None
+            command_metrics = self._last_command_metrics
+            self._last_command_metrics = None
             if runtime is None:
                 return
             if command_error is not None and not recorded_error:
@@ -369,8 +369,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     if revision == "head":
                         pending.append((version, file_path))
                     else:
-                        from sqlspec.utils.version import parse_version
-
                         parsed_version = parse_version(version)
                         parsed_revision = parse_version(revision)
                         if parsed_version <= parsed_revision:
@@ -389,7 +387,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 return
             pending_versions = [v for v, _ in pending]
 
-            migration_config = getattr(self.config, "migration_config", {}) or {}
+            migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
             strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
 
             validate_migration_order(pending_versions, applied_versions, strict_ordering)
@@ -458,8 +456,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             elif revision == "base":
                 to_revert = list(reversed(applied))
             else:
-                from sqlspec.utils.version import parse_version
-
                 parsed_revision = parse_version(revision)
                 for migration in reversed(applied):
                     parsed_migration_version = parse_version(migration["version_num"])
@@ -833,7 +829,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             await self.tracker.ensure_tracking_table(driver)
 
             if auto_sync:
-                migration_config = getattr(self.config, "migration_config", {}) or {}
+                migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
                 config_auto_sync = migration_config.get("auto_sync", True)
                 if config_auto_sync:
                     await self._synchronize_version_records(driver)
@@ -852,8 +848,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     if revision == "head":
                         pending.append((version, file_path))
                     else:
-                        from sqlspec.utils.version import parse_version
-
                         parsed_version = parse_version(version)
                         parsed_revision = parse_version(revision)
                         if parsed_version <= parsed_revision:
@@ -872,7 +866,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return
             pending_versions = [v for v, _ in pending]
 
-            migration_config = getattr(self.config, "migration_config", {}) or {}
+            migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
             strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
 
             validate_migration_order(pending_versions, applied_versions, strict_ordering)
@@ -939,8 +933,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             elif revision == "base":
                 to_revert = list(reversed(applied))
             else:
-                from sqlspec.utils.version import parse_version
-
                 parsed_revision = parse_version(revision)
                 for migration in reversed(applied):
                     parsed_migration_version = parse_version(migration["version_num"])

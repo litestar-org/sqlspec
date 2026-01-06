@@ -4,23 +4,31 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
-import datetime
-import decimal
 import inspect
-import io
 import re
-import uuid
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import psqlpy.exceptions
-from psqlpy.extra_types import JSONB
 
+from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
+from sqlspec.adapters.psqlpy.core import (
+    build_psqlpy_insert_statement,
+    build_psqlpy_profile,
+    coerce_numeric_for_write,
+    coerce_parameter_for_cast,
+    coerce_records_for_execute_many,
+    encode_records_for_binary_copy,
+    format_table_identifier,
+    normalize_scalar_parameter,
+    prepare_dict_parameter,
+    prepare_list_parameter,
+    prepare_tuple_parameter,
+    split_schema_and_table,
+)
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
-from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
+from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import (
     SQL,
-    DriverParameterProfile,
-    ParameterStyle,
     ParameterStyleConfig,
     StatementConfig,
     build_statement_config_from_profile,
@@ -44,48 +52,31 @@ from sqlspec.exceptions import (
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_nested_decimal_normalizer
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager
 
-    from sqlspec.adapters.psqlpy._types import PsqlpyConnection
-    from sqlspec.core import ArrowResult, SQLResult
+    from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
+    from sqlspec.core import ArrowResult
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
     "PsqlpyCursor",
     "PsqlpyDriver",
     "PsqlpyExceptionHandler",
+    "PsqlpySessionContext",
     "build_psqlpy_statement_config",
     "psqlpy_statement_config",
 )
 
 logger = get_logger("adapters.psqlpy")
 
-_type_converter = PostgreSQLTypeConverter()
+_type_converter = PostgreSQLOutputConverter()
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
-
-_JSON_CASTS: Final[frozenset[str]] = frozenset({"JSON", "JSONB"})
-_TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
-    "TIMESTAMP",
-    "TIMESTAMPTZ",
-    "TIMESTAMP WITH TIME ZONE",
-    "TIMESTAMP WITHOUT TIME ZONE",
-})
-_UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
-_DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 
 
 class PsqlpyCursor:
@@ -130,18 +121,30 @@ class PsqlpyExceptionHandler:
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __aexit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    async def __aenter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aenter__(self) -> "PsqlpyExceptionHandler":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_type is None:
-            return
+            return False
         if issubclass(exc_type, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error)):
-            self._map_postgres_exception(exc_val)
+            try:
+                self._map_postgres_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_postgres_exception(self, e: Any) -> None:
         """Map PostgreSQL exception to SQLSpec exception.
@@ -274,7 +277,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             prepared = tuple(prepared)
 
         if not is_many and isinstance(prepared, tuple):
-            return tuple(_normalize_scalar_parameter(item) for item in prepared)
+            return tuple(normalize_scalar_parameter(item) for item in prepared)
 
         return prepared
 
@@ -318,7 +321,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                             prepared_value = converter(prepared_value)
                             break
                 if cast_type:
-                    prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
+                    prepared_value = coerce_parameter_for_cast(prepared_value, cast_type, serializer)
                 result.append(prepared_value)
             return tuple(result) if isinstance(parameters, tuple) else result
         return parameters
@@ -334,26 +337,13 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """
         return PsqlpyCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "PsqlpyExceptionHandler":
         """Handle database-specific exceptions.
 
         Returns:
             Exception handler context manager
         """
         return PsqlpyExceptionHandler()
-
-    async def _try_special_handling(self, cursor: "PsqlpyConnection", statement: SQL) -> "SQLResult | None":
-        """Hook for psqlpy-specific special operations.
-
-        Args:
-            cursor: Psqlpy connection object
-            statement: SQL statement to analyze
-
-        Returns:
-            SQLResult if special handling applied, None otherwise
-        """
-        _ = (cursor, statement)
-        return None
 
     async def _execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting.
@@ -412,7 +402,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             values = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
 
             if should_coerce:
-                values = list(_coerce_numeric_for_write(values))
+                values = list(coerce_numeric_for_write(values))
 
             formatted_parameters.append(values)
 
@@ -437,7 +427,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         driver_parameters = prepared_parameters
         operation_type = statement.operation_type
         should_coerce = operation_type != "SELECT"
-        effective_parameters = _coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
+        effective_parameters = coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
 
         if statement.returns_rows():
             query_result = await cursor.fetch(sql, effective_parameters or [])
@@ -505,7 +495,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -514,7 +504,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_result_to_storage_async(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
@@ -526,7 +516,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -539,20 +529,20 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            schema_name, table_name = _split_schema_and_table(table)
+            schema_name, table_name = split_schema_and_table(table)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
                 try:
-                    copy_payload = _encode_records_for_binary_copy(records)
+                    copy_payload = encode_records_for_binary_copy(records)
                     copy_operation = cursor.binary_copy_to_table(copy_payload, table_name, **copy_kwargs)
                     if inspect.isawaitable(copy_operation):
                         await copy_operation
                 except (TypeError, psqlpy.exceptions.DatabaseError) as exc:
                     logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
-                    insert_sql = _build_psqlpy_insert_statement(table, columns)
-                    formatted_records = _coerce_records_for_execute_many(records)
+                    insert_sql = build_psqlpy_insert_statement(table, columns)
+                    formatted_records = coerce_records_for_execute_many(records)
                     insert_operation = cursor.execute_many(insert_sql, formatted_records)
                     if inspect.isawaitable(insert_operation):
                         await insert_operation
@@ -568,7 +558,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage using the storage bridge pipeline."""
@@ -603,7 +593,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def _truncate_table_async(self, table: str) -> None:
-        qualified = _format_table_identifier(table)
+        qualified = format_table_identifier(table)
         async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             await cursor.execute(f"TRUNCATE TABLE {qualified}")
 
@@ -623,251 +613,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
-    """Serialize JSON parameters according to the detected cast type.
-
-    Args:
-        value: Parameter value supplied by the caller.
-        cast_type: Uppercase cast identifier detected in SQL.
-        serializer: JSON serialization callable from statement config.
-
-    Returns:
-        Serialized parameter suitable for driver execution.
-
-    Raises:
-        SQLSpecError: If serialization fails for JSON payloads.
-    """
-
-    if value is None:
-        return None
-    if cast_type == "JSONB":
-        if isinstance(value, JSONB):
-            return value
-        if isinstance(value, dict):
-            return JSONB(value)
-        if isinstance(value, (list, tuple)):
-            return JSONB(list(value))
-    if isinstance(value, tuple):
-        return list(value)
-    if isinstance(value, (dict, list, str, JSONB)):
-        return value
-    try:
-        serialized_value = serializer(value)
-    except Exception as error:
-        msg = "Failed to serialize JSON parameter for psqlpy."
-        raise SQLSpecError(msg) from error
-    return serialized_value
-
-
-def _coerce_uuid_parameter(value: Any) -> Any:
-    """Convert UUID-compatible parameters to ``uuid.UUID`` instances.
-
-    Args:
-        value: Parameter value supplied by the caller.
-
-    Returns:
-        ``uuid.UUID`` instance when input is coercible, otherwise original value.
-
-    Raises:
-        SQLSpecError: If the value cannot be converted to ``uuid.UUID``.
-    """
-
-    if isinstance(value, uuid.UUID):
-        return value
-    if isinstance(value, str):
-        try:
-            return uuid.UUID(value)
-        except ValueError as error:
-            msg = "Invalid UUID parameter for psqlpy."
-            raise SQLSpecError(msg) from error
-    return value
-
-
-def _coerce_timestamp_parameter(value: Any) -> Any:
-    """Convert ISO-formatted timestamp strings to ``datetime.datetime``.
-
-    Args:
-        value: Parameter value supplied by the caller.
-
-    Returns:
-        ``datetime.datetime`` instance when conversion succeeds, otherwise original value.
-
-    Raises:
-        SQLSpecError: If the value cannot be parsed as an ISO timestamp.
-    """
-
-    if isinstance(value, datetime.datetime):
-        return value
-    if isinstance(value, str):
-        normalized_value = value[:-1] + "+00:00" if value.endswith("Z") else value
-        try:
-            return datetime.datetime.fromisoformat(normalized_value)
-        except ValueError as error:
-            msg = "Invalid ISO timestamp parameter for psqlpy."
-            raise SQLSpecError(msg) from error
-    return value
-
-
-def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
-    """Apply cast-aware coercion for psqlpy parameters.
-
-    Args:
-        value: Parameter value supplied by the caller.
-        cast_type: Uppercase cast identifier detected in SQL.
-        serializer: JSON serialization callable from statement config.
-
-    Returns:
-        Coerced value appropriate for the specified cast, or the original value.
-    """
-
-    upper_cast = cast_type.upper()
-    if upper_cast in _JSON_CASTS:
-        return _coerce_json_parameter(value, upper_cast, serializer)
-    if upper_cast in _UUID_CASTS:
-        return _coerce_uuid_parameter(value)
-    if upper_cast in _TIMESTAMP_CASTS:
-        return _coerce_timestamp_parameter(value)
-    return value
-
-
-def _prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
-    normalized = _DECIMAL_NORMALIZER(value)
-    return normalized if isinstance(normalized, dict) else value
-
-
-def _prepare_list_parameter(value: "list[Any]") -> list[Any]:
-    return [_DECIMAL_NORMALIZER(item) for item in value]
-
-
-def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
-    return tuple(_DECIMAL_NORMALIZER(item) for item in value)
-
-
-def _normalize_scalar_parameter(value: Any) -> Any:
-    return value
-
-
-def _coerce_numeric_for_write(value: Any) -> Any:
-    if isinstance(value, float):
-        return decimal.Decimal(str(value))
-    if isinstance(value, decimal.Decimal):
-        return value
-    if isinstance(value, list):
-        return [_coerce_numeric_for_write(item) for item in value]
-    if isinstance(value, tuple):
-        coerced = [_coerce_numeric_for_write(item) for item in value]
-        return tuple(coerced)
-    if isinstance(value, dict):
-        return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
-    return value
-
-
-def _escape_copy_text(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
-
-
-def _format_copy_value(value: Any) -> str:
-    if value is None:
-        return r"\N"
-    if isinstance(value, bool):
-        return "t" if value else "f"
-    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
-        return value.isoformat()
-    if isinstance(value, (list, tuple, dict)):
-        return to_json(value)
-    if isinstance(value, (bytes, bytearray)):
-        return value.decode("utf-8")
-    return str(_coerce_numeric_for_write(value))
-
-
-def _encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
-    """Encode row tuples into a bytes payload compatible with binary_copy_to_table.
-
-    Args:
-        records: Sequence of row tuples extracted from the Arrow table.
-
-    Returns:
-        UTF-8 encoded bytes buffer representing the COPY payload.
-    """
-
-    buffer = io.StringIO()
-    for record in records:
-        encoded_columns = [_escape_copy_text(_format_copy_value(value)) for value in record]
-        buffer.write("\t".join(encoded_columns))
-        buffer.write("\n")
-    return buffer.getvalue().encode("utf-8")
-
-
-def _split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
-    cleaned = identifier.strip()
-    if not cleaned:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    if "." not in cleaned:
-        return None, cleaned.strip('"')
-    parts = [part for part in cleaned.split(".") if part]
-    if len(parts) == 1:
-        return None, parts[0].strip('"')
-    schema_name = ".".join(parts[:-1]).strip('"')
-    table_name = parts[-1].strip('"')
-    if not table_name:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    return schema_name or None, table_name
-
-
-def _quote_identifier(identifier: str) -> str:
-    normalized = identifier.replace('"', '""')
-    return f'"{normalized}"'
-
-
-def _format_table_identifier(identifier: str) -> str:
-    schema_name, table_name = _split_schema_and_table(identifier)
-    if schema_name:
-        return f"{_quote_identifier(schema_name)}.{_quote_identifier(table_name)}"
-    return _quote_identifier(table_name)
-
-
-def _build_psqlpy_insert_statement(table: str, columns: "list[str]") -> str:
-    column_clause = ", ".join(_quote_identifier(column) for column in columns)
-    placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
-    return f"INSERT INTO {_format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
-
-
-def _coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[list[Any]]":
-    formatted_records: list[list[Any]] = []
-    for record in records:
-        coerced = _coerce_numeric_for_write(record)
-        if isinstance(coerced, tuple):
-            formatted_records.append(list(coerced))
-        elif isinstance(coerced, list):
-            formatted_records.append(coerced)
-        else:
-            formatted_records.append([coerced])
-    return formatted_records
-
-
-def _build_psqlpy_profile() -> DriverParameterProfile:
-    """Create the psqlpy driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="Psqlpy",
-        default_style=ParameterStyle.NUMERIC,
-        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
-        default_execution_style=ParameterStyle.NUMERIC,
-        supported_execution_styles={ParameterStyle.NUMERIC},
-        has_native_list_expansion=False,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={decimal.Decimal: float},
-        default_dialect="postgres",
-    )
-
-
-_PSQLPY_PROFILE = _build_psqlpy_profile()
+_PSQLPY_PROFILE = build_psqlpy_profile()
 
 register_driver_profile("psqlpy", _PSQLPY_PROFILE)
 
@@ -876,9 +622,9 @@ def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> Param
     base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=serializer).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[dict] = _prepare_dict_parameter
-    updated_type_map[list] = _prepare_list_parameter
-    updated_type_map[tuple] = _prepare_tuple_parameter
+    updated_type_map[dict] = prepare_dict_parameter
+    updated_type_map[list] = prepare_list_parameter
+    updated_type_map[tuple] = prepare_tuple_parameter
 
     return base_config.replace(type_coercion_map=updated_type_map)
 

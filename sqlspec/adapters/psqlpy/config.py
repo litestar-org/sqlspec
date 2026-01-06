@@ -1,18 +1,19 @@
 """Psqlpy database configuration."""
 
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
+from mypy_extensions import mypyc_attr
 from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psqlpy._types import PsqlpyConnection
+from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
 from sqlspec.adapters.psqlpy.driver import (
     PsqlpyCursor,
     PsqlpyDriver,
     PsqlpyExceptionHandler,
+    PsqlpySessionContext,
     build_psqlpy_statement_config,
+    psqlpy_statement_config,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import StatementConfig
@@ -107,6 +108,31 @@ class PsqlpyDriverFeatures(TypedDict):
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
 
 
+class PsqlpyConnectionContext:
+    """Async context manager for Psqlpy connections."""
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "PsqlpyConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    async def __aenter__(self) -> PsqlpyConnection:
+        if self._config.connection_instance is None:
+            self._config.connection_instance = await self._config._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+        self._ctx = self._config.connection_instance.acquire()
+        return await self._ctx.__aenter__()  # type: ignore[no-any-return]
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._ctx:
+            return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+        return None
+
+
+@mypyc_attr(native_class=False)
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
     """Configuration for Psqlpy asynchronous database connections."""
 
@@ -200,44 +226,52 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
         return await self.connection_instance.connection()
 
-    @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyConnection, None]:
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "PsqlpyConnectionContext":
         """Provide an async connection context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
-        Yields:
-            A psqlpy Connection instance.
+        Returns:
+            A psqlpy Connection context manager.
         """
-        if not self.connection_instance:
-            self.connection_instance = await self._create_pool()
+        return PsqlpyConnectionContext(self)
 
-        async with self.connection_instance.acquire() as conn:
-            yield conn
-
-    @asynccontextmanager
-    async def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> AsyncGenerator[PsqlpyDriver, None]:
+    def provide_session(
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "PsqlpySessionContext":
         """Provide an async driver session context manager.
 
         Args:
-            *args: Additional arguments.
+            *_args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments.
+            **_kwargs: Additional keyword arguments.
 
-        Yields:
-            A PsqlpyDriver instance.
+        Returns:
+            A PsqlpyDriver session context manager.
         """
-        async with self.provide_connection(*args, **kwargs) as conn:
-            driver = self.driver_type(
-                connection=conn,
-                statement_config=statement_config or self.statement_config,
-                driver_features=self.driver_features,
-            )
-            yield self._prepare_driver(driver)
+        acquire_ctx_holder: dict[str, Any] = {}
+
+        async def acquire_connection() -> PsqlpyConnection:
+            if self.connection_instance is None:
+                self.connection_instance = await self._create_pool()
+            ctx = self.connection_instance.acquire()
+            acquire_ctx_holder["ctx"] = ctx
+            return await ctx.__aenter__()
+
+        async def release_connection(_conn: PsqlpyConnection) -> None:
+            if "ctx" in acquire_ctx_holder:
+                await acquire_ctx_holder["ctx"].__aexit__(None, None, None)
+                acquire_ctx_holder.clear()
+
+        return PsqlpySessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or psqlpy_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
         """Provide async pool instance.
@@ -257,12 +291,15 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         """
         namespace = super().get_signature_namespace()
         namespace.update({
+            "PsqlpyConnectionContext": PsqlpyConnectionContext,
             "PsqlpyConnection": PsqlpyConnection,
             "PsqlpyConnectionParams": PsqlpyConnectionParams,
             "PsqlpyCursor": PsqlpyCursor,
             "PsqlpyDriver": PsqlpyDriver,
+            "PsqlpyDriverFeatures": PsqlpyDriverFeatures,
             "PsqlpyExceptionHandler": PsqlpyExceptionHandler,
             "PsqlpyPoolParams": PsqlpyPoolParams,
+            "PsqlpySessionContext": PsqlpySessionContext,
         })
         return namespace
 

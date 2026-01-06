@@ -18,6 +18,7 @@ import string
 import pytest
 
 from sqlspec import sql
+from sqlspec.builder._parsing_utils import parse_condition_expression
 
 pytestmark = pytest.mark.xdist_group("builder")
 
@@ -376,8 +377,6 @@ def test_where_string_condition_with_dollar_sign_parameters() -> None:
 def test_where_string_condition_parameter_parsing() -> None:
     """Test that WHERE string conditions parse parameters correctly through _parsing_utils."""
 
-    from sqlspec.builder._parsing_utils import parse_condition_expression
-
     expr1 = parse_condition_expression("category = $1")
     assert expr1 is not None
 
@@ -447,8 +446,6 @@ def test_querybuilder_parameter_regression_test() -> None:
 
 def test_parameter_style_conversion_in_parsing_utils() -> None:
     """Test that _parsing_utils correctly converts parameter styles."""
-
-    from sqlspec.builder._parsing_utils import parse_condition_expression
 
     condition_expr = parse_condition_expression("category = $1")
     assert condition_expr is not None

@@ -177,7 +177,7 @@ async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.Mon
     assert dummy_connection.copy_calls[0]["table"] == "delta_load"
     assert dummy_connection.copy_calls[0]["columns"] == ["id", "name"]
     assert job.telemetry["destination"] == "public.delta_load"
-    assert job.telemetry["extra"]["source"]["destination"] == "s3://bucket/part-2.parquet"
+    assert job.telemetry["extra"]["source"]["destination"] == "s3://bucket/part-2.parquet"  # type: ignore[index]
 
 
 @pytest.mark.asyncio
@@ -230,7 +230,7 @@ async def test_aiosqlite_load_from_storage_includes_source(monkeypatch: pytest.M
         async with connection.execute("SELECT id, label FROM raw_data") as cursor:
             rows = await cursor.fetchall()
         assert rows == [(5, "gamma")]  # type: ignore[comparison-overlap]
-        assert job.telemetry["extra"]["source"]["destination"] == "file:///tmp/chunk.parquet"
+        assert job.telemetry["extra"]["source"]["destination"] == "file:///tmp/chunk.parquet"  # type: ignore[index]
     finally:
         await connection.close()
 
@@ -280,7 +280,7 @@ def test_sqlite_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch)
         rows = connection.execute("SELECT val FROM metrics").fetchall()
         normalized_rows = [tuple(row) for row in rows]
         assert normalized_rows == [(99,)]
-        assert job.telemetry["extra"]["source"]["destination"] == "s3://bucket/segment.parquet"
+        assert job.telemetry["extra"]["source"]["destination"] == "s3://bucket/segment.parquet"  # type: ignore[index]
     finally:
         connection.close()
 
@@ -319,7 +319,7 @@ async def test_asyncmy_load_from_storage_merges_source(monkeypatch: pytest.Monke
 
     job = await driver.load_from_storage("analytics.scores", "s3://bucket/segment.parquet", file_format="parquet")
 
-    assert job.telemetry["extra"]["source"]["backend"] == "fsspec"
+    assert job.telemetry["extra"]["source"]["backend"] == "fsspec"  # type: ignore[index]
 
 
 def test_sync_pipeline_write_rows_includes_backend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -336,7 +336,9 @@ def test_sync_pipeline_write_rows_includes_backend(monkeypatch: pytest.MonkeyPat
 
     backend = _Backend()
 
-    def _fake_resolve(self: SyncStoragePipeline, destination: "StorageDestination", **_: Any) -> tuple[_Backend, str]:
+    def _fake_resolve(
+        self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
+    ) -> tuple[_Backend, str]:
         return backend, "objects/data.jsonl"
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)

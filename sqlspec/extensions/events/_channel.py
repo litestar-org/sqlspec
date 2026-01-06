@@ -11,19 +11,16 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
+from sqlspec.extensions.events._protocols import AsyncEventBackendProtocol, SyncEventBackendProtocol
 from sqlspec.extensions.events._queue import build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_span_attribute
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-    from sqlspec.extensions.events._protocols import (
-        AsyncEventBackendProtocol,
-        AsyncEventHandler,
-        SyncEventBackendProtocol,
-        SyncEventHandler,
-    )
+    from sqlspec.extensions.events._protocols import AsyncEventHandler, SyncEventHandler
     from sqlspec.observability import ObservabilityRuntime
 
 logger = get_logger("events.channel")
@@ -105,8 +102,9 @@ def _load_native_backend(config: Any, backend_name: str | None, extension_settin
         logger.warning("Failed to import %s: %s", backend_module_name, error)
         return None
 
-    factory = getattr(backend_module, "create_event_backend", None)
-    if factory is None:
+    try:
+        factory = backend_module.create_event_backend
+    except AttributeError:
         logger.debug("Adapter %s missing create_event_backend()", adapter_name)
         return None
     try:
@@ -129,7 +127,7 @@ def _start_event_span(
     mode: str = "sync",
 ) -> Any:
     """Start an observability span for event operations."""
-    if not getattr(runtime.span_manager, "is_enabled", False):
+    if not runtime.span_manager.is_enabled:
         return None
     attributes: dict[str, Any] = {
         "sqlspec.events.operation": operation,
@@ -149,10 +147,8 @@ def _end_event_span(
     """End an observability span."""
     if span is None:
         return
-    if result is not None:
-        setter = getattr(span, "set_attribute", None)
-        if setter is not None:
-            setter("sqlspec.events.result", result)
+    if result is not None and has_span_attribute(span):
+        span.set_attribute("sqlspec.events.result", result)
     runtime.end_span(span, error=error)
 
 
@@ -189,7 +185,10 @@ class SyncEventChannel:
             backend_label = "table_queue"
         else:
             self._backend = cast("SyncEventBackendProtocol", native_backend)
-            backend_label = getattr(native_backend, "backend_name", backend_name or "table_queue")
+            if isinstance(native_backend, SyncEventBackendProtocol):
+                backend_label = native_backend.backend_name
+            else:
+                backend_label = backend_name or "table_queue"
         self._config = config
         self._backend_name = backend_label
         self._runtime = config.get_observability_runtime()
@@ -364,7 +363,10 @@ class AsyncEventChannel:
             backend_label = "table_queue"
         else:
             self._backend = cast("AsyncEventBackendProtocol", native_backend)
-            backend_label = getattr(native_backend, "backend_name", backend_name or "table_queue")
+            if isinstance(native_backend, AsyncEventBackendProtocol):
+                backend_label = native_backend.backend_name
+            else:
+                backend_label = backend_name or "table_queue"
         self._config = config
         self._backend_name = backend_label
         self._runtime = config.get_observability_runtime()

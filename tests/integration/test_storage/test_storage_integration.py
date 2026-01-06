@@ -11,6 +11,7 @@ import pytest
 from minio import Minio
 from pytest_databases.docker.minio import MinioService
 
+from sqlspec.exceptions import FileNotFoundInStorageError
 from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage.registry import storage_registry
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED, PYARROW_INSTALLED
@@ -589,7 +590,6 @@ def test_fsspec_s3_error_handling(
 ) -> None:
     """Test FSSpec S3 backend error handling."""
     _ = minio_client  # Ensures bucket is created
-    from sqlspec.exceptions import FileNotFoundInStorageError
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     backend = FSSpecBackend.from_config({

@@ -9,6 +9,7 @@ Notes:
     OLTP-optimized databases.
 """
 
+from sqlspec.adapters.duckdb.adk.memory_store import DuckdbADKMemoryStore
 from sqlspec.adapters.duckdb.adk.store import DuckdbADKStore
 
-__all__ = ("DuckdbADKStore",)
+__all__ = ("DuckdbADKMemoryStore", "DuckdbADKStore")

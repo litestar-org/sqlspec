@@ -1,31 +1,31 @@
 """Aiosqlite database configuration."""
 
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
+from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 from sqlspec.adapters.aiosqlite.driver import (
     AiosqliteCursor,
     AiosqliteDriver,
     AiosqliteExceptionHandler,
+    AiosqliteSessionContext,
     aiosqlite_statement_config,
 )
 from sqlspec.adapters.aiosqlite.pool import (
     AiosqliteConnectionPool,
-    AiosqliteConnectTimeoutError,
-    AiosqlitePoolClosedError,
     AiosqlitePoolConnection,
+    AiosqlitePoolConnectionContext,
 )
-from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
+from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import Callable
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -84,6 +84,30 @@ class AiosqliteDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
 
 
+class AiosqliteConnectionContext:
+    """Async context manager for AioSQLite connections."""
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "AiosqliteConfig") -> None:
+        self._config = config
+        self._ctx: AiosqlitePoolConnectionContext | None = None
+
+    async def __aenter__(self) -> AiosqliteConnection:
+        if self._config.connection_instance is None:
+            self._config.connection_instance = await self._config._create_pool()  # pyright: ignore[reportPrivateUsage]
+        self._ctx = self._config.connection_instance.get_connection()
+        return await self._ctx.__aenter__()
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._ctx:
+            return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)
+        return None
+
+
+@mypyc_attr(native_class=False)
 class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnectionPool, AiosqliteDriver]):
     """Database configuration for AioSQLite engine."""
 
@@ -120,6 +144,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
+
         """
         config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
 
@@ -167,6 +192,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         Returns:
             Dictionary with pool parameters, filtering out None values.
+
         """
         return {k: v for k, v in self.connection_config.items() if v is not None}
 
@@ -175,8 +201,8 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         Returns:
             Dictionary with connection parameters for creating connections.
-        """
 
+        """
         excluded_keys = {
             "pool_size",
             "connect_timeout",
@@ -190,26 +216,22 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         }
         return {k: v for k, v in self.connection_config.items() if k not in excluded_keys}
 
-    @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AiosqliteConnection, None]":
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "AiosqliteConnectionContext":
         """Provide an async connection context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
-        Yields:
-            An aiosqlite connection instance.
-        """
-        if self.connection_instance is None:
-            self.connection_instance = await self._create_pool()
-        async with self.connection_instance.get_connection() as connection:
-            yield connection
+        Returns:
+            An aiosqlite connection context manager.
 
-    @asynccontextmanager
-    async def provide_session(
+        """
+        return AiosqliteConnectionContext(self)
+
+    def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "AsyncGenerator[AiosqliteDriver, None]":
+    ) -> "AiosqliteSessionContext":
         """Provide an async driver session context manager.
 
         Args:
@@ -217,22 +239,38 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             statement_config: Optional statement configuration override.
             **_kwargs: Additional keyword arguments.
 
-        Yields:
-            An AiosqliteDriver instance.
+        Returns:
+            An AiosqliteDriver session context manager.
+
         """
-        async with self.provide_connection(*_args, **_kwargs) as connection:
-            driver = self.driver_type(
-                connection=connection,
-                statement_config=statement_config or self.statement_config,
-                driver_features=self.driver_features,
-            )
-            yield self._prepare_driver(driver)
+        pool_conn_holder: dict[str, AiosqlitePoolConnection] = {}
+
+        async def acquire_connection() -> AiosqliteConnection:
+            if self.connection_instance is None:
+                self.connection_instance = await self._create_pool()
+            pool_conn = await self.connection_instance.acquire()
+            pool_conn_holder["conn"] = pool_conn
+            return pool_conn.connection
+
+        async def release_connection(_conn: AiosqliteConnection) -> None:
+            if "conn" in pool_conn_holder and self.connection_instance is not None:
+                await self.connection_instance.release(pool_conn_holder["conn"])
+                pool_conn_holder.clear()
+
+        return AiosqliteSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or aiosqlite_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     async def _create_pool(self) -> AiosqliteConnectionPool:
         """Create the connection pool instance.
 
         Returns:
             AiosqliteConnectionPool: The connection pool instance.
+
         """
         config = self._get_pool_config_dict()
         pool_size = config.pop("pool_size", 5)
@@ -258,15 +296,33 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         Called once during pool creation if enable_custom_adapters is True.
         Registers JSON serialization handlers if configured.
-
-        Note: aiosqlite uses the same sqlite3 module type registration as the
-        sync adapter, so this shares the implementation.
         """
         if self.driver_features.get("enable_custom_adapters", False):
             register_type_handlers(
                 json_serializer=self.driver_features.get("json_serializer"),
                 json_deserializer=self.driver_features.get("json_deserializer"),
             )
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for AiosqliteConfig types.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "AiosqliteConnectionContext": AiosqliteConnectionContext,
+            "AiosqliteConnection": AiosqliteConnection,
+            "AiosqliteConnectionParams": AiosqliteConnectionParams,
+            "AiosqliteConnectionPool": AiosqliteConnectionPool,
+            "AiosqliteCursor": AiosqliteCursor,
+            "AiosqliteDriver": AiosqliteDriver,
+            "AiosqliteDriverFeatures": AiosqliteDriverFeatures,
+            "AiosqliteExceptionHandler": AiosqliteExceptionHandler,
+            "AiosqlitePoolParams": AiosqlitePoolParams,
+            "AiosqliteSessionContext": AiosqliteSessionContext,
+        })
+        return namespace
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
@@ -278,6 +334,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         Returns:
             An aiosqlite connection instance.
+
         """
         if self.connection_instance is None:
             self.connection_instance = await self._create_pool()
@@ -289,32 +346,11 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         Returns:
             The async connection pool.
+
         """
         if not self.connection_instance:
             self.connection_instance = await self.create_pool()
         return self.connection_instance
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for aiosqlite types.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "AiosqliteConnection": AiosqliteConnection,
-            "AiosqliteConnectionParams": AiosqliteConnectionParams,
-            "AiosqliteConnectionPool": AiosqliteConnectionPool,
-            "AiosqliteConnectTimeoutError": AiosqliteConnectTimeoutError,
-            "AiosqliteCursor": AiosqliteCursor,
-            "AiosqliteDriver": AiosqliteDriver,
-            "AiosqliteDriverFeatures": AiosqliteDriverFeatures,
-            "AiosqliteExceptionHandler": AiosqliteExceptionHandler,
-            "AiosqlitePoolClosedError": AiosqlitePoolClosedError,
-            "AiosqlitePoolConnection": AiosqlitePoolConnection,
-            "AiosqlitePoolParams": AiosqlitePoolParams,
-        })
-        return namespace
 
     async def _close_pool(self) -> None:
         """Close the connection pool."""

@@ -14,6 +14,12 @@ Database-backed session stores enable:
 - **Security**: Server-side storage prevents tampering
 - **Scalability**: Handle millions of sessions efficiently
 
+.. note::
+
+   SQLSpec also provides Google ADK session and memory services, which are
+   separate from Litestar's session store. See :doc:`/extensions/adk/index`
+   for ADK storage and memory search.
+
 Available Stores
 ================
 

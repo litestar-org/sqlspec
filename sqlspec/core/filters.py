@@ -26,8 +26,11 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
+
+from sqlspec.utils.type_guards import has_field_name
 
 if TYPE_CHECKING:
     from sqlglot.expressions import Condition
@@ -62,6 +65,7 @@ T = TypeVar("T")
 FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class StatementFilter(ABC):
     """Abstract base class for filters that can be appended to a statement."""
 
@@ -925,6 +929,13 @@ def create_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter",
     return tuple(filters)
 
 
+def _filter_sort_key(f: "StatementFilter") -> tuple[str, str]:
+    """Sort key for canonicalizing filters by type and field_name."""
+    class_name = type(f).__name__
+    field_name = str(f.field_name) if has_field_name(f) else ""
+    return (class_name, field_name)
+
+
 def canonicalize_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter", ...]:
     """Sort filters by type and field_name for consistent hashing.
 
@@ -934,10 +945,4 @@ def canonicalize_filters(filters: "list[StatementFilter]") -> tuple["StatementFi
     Returns:
         Canonically sorted tuple of filters
     """
-
-    def sort_key(f: "StatementFilter") -> tuple[str, str]:
-        class_name = type(f).__name__
-        field_name = getattr(f, "field_name", "")
-        return (class_name, str(field_name))
-
-    return tuple(sorted(filters, key=sort_key))
+    return tuple(sorted(filters, key=_filter_sort_key))

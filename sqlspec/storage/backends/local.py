@@ -4,6 +4,7 @@ A simple, zero-dependency implementation for local file operations.
 No external dependencies like fsspec or obstore required.
 """
 
+import asyncio
 import shutil
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
@@ -24,27 +25,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("LocalStore",)
-
-
-class _LocalArrowIterator:
-    """Async iterator for LocalStore Arrow streaming."""
-
-    __slots__ = ("_sync_iter",)
-
-    def __init__(self, sync_iter: "Iterator[ArrowRecordBatch]") -> None:
-        self._sync_iter = sync_iter
-
-    def __aiter__(self) -> "_LocalArrowIterator":
-        return self
-
-    async def __anext__(self) -> "ArrowRecordBatch":
-        def _safe_next() -> "ArrowRecordBatch":
-            try:
-                return next(self._sync_iter)
-            except StopIteration as e:
-                raise StopAsyncIteration from e
-
-        return await async_(_safe_next)()
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -228,7 +208,7 @@ class LocalStore:
 
         return sorted(results)
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
         """Get file metadata."""
         resolved = self._resolve_path(path)
         return execute_sync_storage_operation(
@@ -238,7 +218,7 @@ class LocalStore:
             path=str(resolved),
         )
 
-    def _collect_metadata(self, resolved: "Path") -> dict[str, Any]:
+    def _collect_metadata(self, resolved: "Path") -> dict[str, object]:
         if not resolved.exists():
             return {}
 
@@ -302,7 +282,7 @@ class LocalStore:
                 operation="stream_arrow",
                 path=resolved_str,
             )
-            yield from parquet_file.iter_batches()  # pyright: ignore
+            yield from parquet_file.iter_batches()  # pyright: ignore[reportUnknownMemberType]
 
     @property
     def supports_signing(self) -> bool:
@@ -371,32 +351,31 @@ class LocalStore:
         """Move file asynchronously."""
         await async_(self.move)(source, destination, **kwargs)
 
-    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
         """Get file metadata asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
     async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table asynchronously."""
-        return await async_(self.read_arrow)(path, **kwargs)
+        return self.read_arrow(path, **kwargs)
 
     async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table asynchronously."""
-        await async_(self.write_arrow)(path, table, **kwargs)
+        self.write_arrow(path, table, **kwargs)
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches asynchronously.
-
-        Offloads blocking file I/O operations to thread pool for
-        non-blocking event loop execution.
 
         Args:
             pattern: Glob pattern to match files.
             **kwargs: Additional arguments passed to stream_arrow().
 
         Returns:
-            Arrow record batches from matching files.
+            AsyncIterator yielding Arrow record batches.
         """
-        return _LocalArrowIterator(self.stream_arrow(pattern, **kwargs))
+        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
+
+        return AsyncArrowBatchIterator(self.stream_arrow(pattern, **kwargs))
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...

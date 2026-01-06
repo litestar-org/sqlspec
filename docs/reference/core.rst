@@ -17,6 +17,7 @@ Core components:
 - **Compiler** (``compiler.py``) - SQL compilation and validation using sqlglot
 - **Cache** (``cache.py``) - Statement caching for performance
 - **Filters** (``filters.py``) - SQL transformation filters
+- **Explain** (``explain.py``) - EXPLAIN plan options and format configuration
 
 SQL Statement
 =============
@@ -376,7 +377,7 @@ Filters can be composed and chained:
 Type Conversions
 ================
 
-.. currentmodule:: sqlspec.core.type_conversion
+.. currentmodule:: sqlspec.core.type_converter
 
 .. autoclass:: BaseTypeConverter
    :members:
@@ -473,6 +474,65 @@ Performance Tips
 
       # Named parameters (requires parsing)
       stmt = SQL("SELECT * FROM users WHERE id = :id", id=123)
+
+EXPLAIN Plan Support
+====================
+
+.. currentmodule:: sqlspec.core.explain
+
+.. autoclass:: ExplainOptions
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Configuration options for EXPLAIN statements.
+
+   **Options:**
+
+   - ``analyze`` - Execute the statement and show actual runtime statistics
+   - ``verbose`` - Show additional information
+   - ``costs`` - Include estimated costs (default: True)
+   - ``buffers`` - Show buffer usage (requires analyze)
+   - ``timing`` - Show timing information (requires analyze)
+   - ``summary`` - Show summary information
+   - ``format`` - Output format (TEXT, JSON, XML, YAML, TREE)
+
+.. autoclass:: ExplainFormat
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Enum for EXPLAIN output formats.
+
+   **Formats:**
+
+   - ``TEXT`` - Plain text output (default)
+   - ``JSON`` - JSON structured output
+   - ``XML`` - XML output (PostgreSQL)
+   - ``YAML`` - YAML output (PostgreSQL)
+   - ``TREE`` - Tree format (MySQL 8.0+)
+   - ``TRADITIONAL`` - Traditional tabular format (MySQL)
+
+**Usage:**
+
+.. code-block:: python
+
+   from sqlspec.builder import Explain
+
+   # Basic EXPLAIN
+   explain = Explain("SELECT * FROM users", dialect="postgres")
+   result = await session.execute(explain.build())
+
+   # With options
+   explain = (
+       Explain("SELECT * FROM users", dialect="postgres")
+       .analyze()
+       .verbose()
+       .format("json")
+   )
+   result = await session.execute(explain.build())
+
+For detailed usage, see :doc:`/guides/builder/explain`.
 
 See Also
 ========

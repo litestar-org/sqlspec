@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
@@ -15,6 +16,33 @@ logger = get_logger("adapters.oracledb.litestar.store")
 ORACLE_SMALL_BLOB_LIMIT = 32000
 
 __all__ = ("OracleAsyncStore", "OracleSyncStore")
+
+
+def _coerce_bytes_payload(value: object) -> bytes:
+    """Coerce a payload into bytes for session storage."""
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    return str(value).encode("utf-8")
+
+
+async def _read_blob_async(value: object) -> bytes:
+    """Read LOB values from async connections into bytes."""
+    if is_async_readable(value):
+        return _coerce_bytes_payload(await value.read())
+    if is_readable(value):
+        return _coerce_bytes_payload(value.read())
+    return _coerce_bytes_payload(value)
+
+
+def _read_blob_sync(value: object) -> bytes:
+    """Read LOB values from sync connections into bytes."""
+    if is_readable(value):
+        return _coerce_bytes_payload(value.read())
+    return _coerce_bytes_payload(value)
 
 
 class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
@@ -199,11 +227,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                     await cursor.execute(update_sql, {"expires_at": new_expires_at, "session_id": key})
                     await conn.commit()
 
-            try:
-                blob_data = await data_blob.read()
-                return bytes(blob_data) if blob_data is not None else bytes(data_blob)
-            except AttributeError:
-                return bytes(data_blob)
+            return await _read_blob_async(data_blob)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -562,13 +586,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                     cursor.execute(update_sql, {"expires_at": new_expires_at, "session_id": key})
                     conn.commit()
 
-            try:
-                if hasattr(data_blob, "read"):
-                    blob_data = data_blob.read()
-                    return bytes(blob_data) if blob_data is not None else bytes(data_blob)
-                return bytes(data_blob)
-            except AttributeError:
-                return bytes(data_blob)
+            return _read_blob_sync(data_blob)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.

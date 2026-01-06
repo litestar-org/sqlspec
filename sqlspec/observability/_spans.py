@@ -7,6 +7,7 @@ from sqlspec.exceptions import MissingDependencyError
 from sqlspec.observability._config import TelemetryConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_opentelemetry
+from sqlspec.utils.type_guards import has_tracer_provider
 
 logger = get_logger("sqlspec.observability.spans")
 
@@ -172,7 +173,7 @@ class SpanManager:
                 provider = self._provider_factory()
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.debug("Tracer provider factory failed: %s", exc)
-        if provider and hasattr(provider, "get_tracer"):
+        if provider and has_tracer_provider(provider):
             self._tracer = provider.get_tracer("sqlspec.observability")
         else:
             self._tracer = trace.get_tracer("sqlspec.observability")

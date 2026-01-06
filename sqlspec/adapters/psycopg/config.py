@@ -1,33 +1,35 @@
 """Psycopg database configuration with direct field-based configuration."""
 
-import contextlib
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
+from mypy_extensions import mypyc_attr
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psycopg._type_handlers import register_pgvector_async, register_pgvector_sync
-from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
+    PsycopgAsyncSessionContext,
     PsycopgSyncCursor,
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
+    PsycopgSyncSessionContext,
     build_psycopg_statement_config,
     psycopg_statement_config,
 )
+from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Generator
+    from collections.abc import Callable
 
     from sqlspec.core import StatementConfig
 
@@ -105,6 +107,33 @@ __all__ = (
     "PsycopgSyncConfig",
     "PsycopgSyncCursor",
 )
+
+
+class PsycopgSyncConnectionContext:
+    """Context manager for Psycopg connections."""
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "PsycopgSyncConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    def __enter__(self) -> "PsycopgSyncConnection":
+        if self._config.connection_instance:
+            self._ctx = self._config.connection_instance.connection()
+            return self._ctx.__enter__()  # type: ignore[no-any-return]
+        # Fallback for no pool
+        self._ctx = self._config.create_connection()
+        return self._ctx  # type: ignore[no-any-return]
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._config.connection_instance and self._ctx:
+            return self._ctx.__exit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+        if self._ctx:
+            self._ctx.close()
+        return None
 
 
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
@@ -222,47 +251,57 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self.connection_instance = self.create_pool()
         return cast("PsycopgSyncConnection", self.connection_instance.getconn())  # pyright: ignore
 
-    @contextlib.contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[PsycopgSyncConnection, None, None]":
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "PsycopgSyncConnectionContext":
         """Provide a connection context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
-        Yields:
-            A psycopg Connection instance.
+        Returns:
+            A psycopg Connection context manager.
         """
-        if self.connection_instance:
-            with self.connection_instance.connection() as conn:
-                yield conn  # type: ignore[misc]
-        else:
-            conn = self.create_connection()  # type: ignore[assignment]
-            try:
-                yield conn  # type: ignore[misc]
-            finally:
-                conn.close()
+        return PsycopgSyncConnectionContext(self)
 
-    @contextlib.contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> "Generator[PsycopgSyncDriver, None, None]":
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "PsycopgSyncSessionContext":
         """Provide a driver session context manager.
 
         Args:
-            *args: Additional arguments.
+            *_args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments.
+            **_kwargs: Additional keyword arguments.
 
-        Yields:
-            A PsycopgSyncDriver instance.
+        Returns:
+            A PsycopgSyncDriver session context manager.
         """
-        with self.provide_connection(*args, **kwargs) as conn:
-            final_statement_config = statement_config or self.statement_config
-            driver = self.driver_type(
-                connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
-            )
-            yield self._prepare_driver(driver)
+        conn_ctx_holder: dict[str, Any] = {}
+
+        def acquire_connection() -> PsycopgSyncConnection:
+            if self.connection_instance:
+                ctx = self.connection_instance.connection()
+                conn_ctx_holder["ctx"] = ctx
+                return ctx.__enter__()  # type: ignore[return-value]
+            conn = self.create_connection()
+            conn_ctx_holder["conn"] = conn
+            return conn
+
+        def release_connection(_conn: PsycopgSyncConnection) -> None:
+            if "ctx" in conn_ctx_holder:
+                conn_ctx_holder["ctx"].__exit__(None, None, None)
+                conn_ctx_holder.clear()
+            elif "conn" in conn_ctx_holder:
+                conn_ctx_holder["conn"].close()
+                conn_ctx_holder.clear()
+
+        return PsycopgSyncSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or psycopg_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -287,10 +326,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         namespace.update({
             "PsycopgConnectionParams": PsycopgConnectionParams,
             "PsycopgPoolParams": PsycopgPoolParams,
+            "PsycopgSyncConnectionContext": PsycopgSyncConnectionContext,
             "PsycopgSyncConnection": PsycopgSyncConnection,
             "PsycopgSyncCursor": PsycopgSyncCursor,
             "PsycopgSyncDriver": PsycopgSyncDriver,
             "PsycopgSyncExceptionHandler": PsycopgSyncExceptionHandler,
+            "PsycopgSyncSessionContext": PsycopgSyncSessionContext,
         })
         return namespace
 
@@ -300,6 +341,34 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
 
+class PsycopgAsyncConnectionContext:
+    """Async context manager for Psycopg connections."""
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "PsycopgAsyncConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    async def __aenter__(self) -> "PsycopgAsyncConnection":
+        if self._config.connection_instance is None:
+            self._config.connection_instance = await self._config.create_pool()
+        # pool.connection() returns an async context manager
+        if self._config.connection_instance:
+            self._ctx = self._config.connection_instance.connection()
+            return await self._ctx.__aenter__()  # type: ignore[no-any-return]
+        msg = "Connection pool not initialized"
+        raise ImproperConfigurationError(msg)
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._ctx:
+            return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+        return None
+
+
+@mypyc_attr(native_class=False)
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
 
@@ -420,47 +489,71 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             self.connection_instance = await self.create_pool()
         return cast("PsycopgAsyncConnection", await self.connection_instance.getconn())  # pyright: ignore
 
-    @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncConnection, None]":  # pyright: ignore
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "PsycopgAsyncConnectionContext":  # pyright: ignore
         """Provide an async connection context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
-        Yields:
-            A psycopg AsyncConnection instance.
+        Returns:
+            A psycopg AsyncConnection context manager.
         """
-        if self.connection_instance:
-            async with self.connection_instance.connection() as conn:
-                yield conn  # type: ignore[misc]
-        else:
-            conn = await self.create_connection()  # type: ignore[assignment]
-            try:
-                yield conn  # type: ignore[misc]
-            finally:
-                await conn.close()
+        return PsycopgAsyncConnectionContext(self)
 
-    @asynccontextmanager
-    async def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> "AsyncGenerator[PsycopgAsyncDriver, None]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for PsycopgAsyncConfig types.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "PsycopgAsyncConnectionContext": PsycopgAsyncConnectionContext,
+            "PsycopgAsyncConnection": PsycopgAsyncConnection,
+            "PsycopgAsyncCursor": PsycopgAsyncCursor,
+            "PsycopgAsyncDriver": PsycopgAsyncDriver,
+            "PsycopgAsyncExceptionHandler": PsycopgAsyncExceptionHandler,
+            "PsycopgAsyncSessionContext": PsycopgAsyncSessionContext,
+            "PsycopgConnectionParams": PsycopgConnectionParams,
+            "PsycopgPoolParams": PsycopgPoolParams,
+        })
+        return namespace
+
+    def provide_session(
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "PsycopgAsyncSessionContext":
         """Provide an async driver session context manager.
 
         Args:
-            *args: Additional arguments.
+            *_args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments.
+            **_kwargs: Additional keyword arguments.
 
-        Yields:
-            A PsycopgAsyncDriver instance.
+        Returns:
+            A PsycopgAsyncDriver session context manager.
         """
-        async with self.provide_connection(*args, **kwargs) as conn:
-            final_statement_config = statement_config or psycopg_statement_config
-            driver = self.driver_type(
-                connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
-            )
-            yield self._prepare_driver(driver)
+        conn_ctx_holder: dict[str, Any] = {}
+
+        async def acquire_connection() -> PsycopgAsyncConnection:
+            if self.connection_instance is None:
+                self.connection_instance = await self.create_pool()
+            ctx = self.connection_instance.connection()
+            conn_ctx_holder["ctx"] = ctx
+            return await ctx.__aenter__()  # type: ignore[return-value]
+
+        async def release_connection(_conn: PsycopgAsyncConnection) -> None:
+            if "ctx" in conn_ctx_holder:
+                await conn_ctx_holder["ctx"].__aexit__(None, None, None)
+                conn_ctx_holder.clear()
+
+        return PsycopgAsyncSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or psycopg_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.
@@ -471,26 +564,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if not self.connection_instance:
             self.connection_instance = await self.create_pool()
         return self.connection_instance
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for Psycopg async types.
-
-        This provides all Psycopg async-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "PsycopgAsyncConnection": PsycopgAsyncConnection,
-            "PsycopgAsyncCursor": PsycopgAsyncCursor,
-            "PsycopgAsyncDriver": PsycopgAsyncDriver,
-            "PsycopgAsyncExceptionHandler": PsycopgAsyncExceptionHandler,
-            "PsycopgConnectionParams": PsycopgConnectionParams,
-            "PsycopgPoolParams": PsycopgPoolParams,
-        })
-        return namespace
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return polling defaults for PostgreSQL queue fallback."""

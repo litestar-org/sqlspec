@@ -23,16 +23,17 @@ from sqlspec.core import (
     update_cache_config,
 )
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 from sqlspec.loader import SQLFileLoader
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
 from sqlspec.typing import ConnectionT
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlspec.core import SQL
-    from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
     from sqlspec.typing import PoolT
 
 
@@ -42,11 +43,7 @@ logger = get_logger()
 
 
 def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager[Any]]:
-    return hasattr(obj, "__aenter__")
-
-
-def _is_sync_context_manager(obj: Any) -> TypeGuard[AbstractContextManager[Any]]:
-    return hasattr(obj, "__enter__")
+    return isinstance(obj, AbstractAsyncContextManager)
 
 
 class SQLSpec:
@@ -69,7 +66,11 @@ class SQLSpec:
     @staticmethod
     def _get_config_name(obj: Any) -> str:
         """Get display name for configuration object."""
-        return getattr(obj, "__name__", str(obj))
+        if isinstance(obj, str):
+            return obj
+        if has_name(obj):
+            return obj.__name__
+        return type(obj).__name__
 
     def _cleanup_sync_pools(self) -> None:
         """Clean up only synchronous connection pools at exit."""
@@ -92,7 +93,7 @@ class SQLSpec:
         This method should be called before application shutdown for proper cleanup.
         """
         cleanup_tasks = []
-        sync_configs = []
+        sync_configs: list[DatabaseConfigProtocol[Any, Any, Any]] = []
 
         for config in self._configs.values():
             if config.supports_connection_pooling:
@@ -100,24 +101,24 @@ class SQLSpec:
                     if config.is_async:
                         close_pool_awaitable = config.close_pool()
                         if close_pool_awaitable is not None:
-                            cleanup_tasks.append(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                            cleanup_tasks.append(cast("Coroutine[Any, Any, None]", close_pool_awaitable))  # pyright: ignore
                     else:
-                        sync_configs.append(config)
+                        sync_configs.append(config)  # pyright: ignore
                 except Exception as e:
                     logger.debug("Failed to prepare cleanup for config %s: %s", config.__class__.__name__, e)
 
         if cleanup_tasks:
             try:
-                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
-                logger.debug("Async pool cleanup completed. Cleaned %d pools.", len(cleanup_tasks))
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)  # pyright: ignore
+                logger.debug("Async pool cleanup completed. Cleaned %d pools.", len(cleanup_tasks))  # pyright: ignore
             except Exception as e:
                 logger.debug("Failed to complete async pool cleanup: %s", e)
 
-        for config in sync_configs:
-            config.close_pool()
+        for config in sync_configs:  # pyright: ignore
+            config.close_pool()  # pyright: ignore
 
         if sync_configs:
-            logger.debug("Sync pool cleanup completed. Cleaned %d pools.", len(sync_configs))
+            logger.debug("Sync pool cleanup completed. Cleaned %d pools.", len(sync_configs))  # pyright: ignore
 
     async def __aenter__(self) -> "SQLSpec":
         """Async context manager entry."""
@@ -145,8 +146,7 @@ class SQLSpec:
         config_id = id(config)
         if config_id in self._configs:
             logger.debug("Configuration for %s already exists. Overwriting.", config.__class__.__name__)
-        if hasattr(config, "attach_observability"):
-            config.attach_observability(self._observability_config)
+        config.attach_observability(self._observability_config)
         self._configs[config_id] = config
         return config
 
@@ -189,8 +189,6 @@ class SQLSpec:
         Returns:
             The appropriate event channel type for the configuration.
         """
-        from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
-
         if isinstance(config, type):
             config_obj: DatabaseConfigProtocol[Any, Any, Any] | None = None
             for registered_config in self._configs.values():
@@ -430,7 +428,7 @@ class SQLSpec:
                 try:
                     async with async_session as session:
                         driver = config._prepare_driver(session)  # pyright: ignore
-                        connection = getattr(driver, "connection", None)
+                        connection = driver.connection
                         if connection is not None:
                             runtime.emit_connection_create(connection)
                         runtime.emit_session_start(driver)
@@ -438,7 +436,7 @@ class SQLSpec:
                 finally:
                     if driver is not None:
                         runtime.emit_session_end(driver)
-                        connection = getattr(driver, "connection", None)
+                        connection = driver.connection
                         if connection is not None:
                             runtime.emit_connection_destroy(connection)
 
@@ -452,7 +450,7 @@ class SQLSpec:
             try:
                 with sync_session as session:
                     driver = config._prepare_driver(session)  # pyright: ignore
-                    connection = getattr(driver, "connection", None)
+                    connection = driver.connection
                     if connection is not None:
                         runtime.emit_connection_create(connection)
                     runtime.emit_session_start(driver)
@@ -460,7 +458,7 @@ class SQLSpec:
             finally:
                 if driver is not None:
                     runtime.emit_session_end(driver)
-                    connection = getattr(driver, "connection", None)
+                    connection = driver.connection
                     if connection is not None:
                         runtime.emit_connection_destroy(connection)
 

@@ -1,8 +1,8 @@
 ADK + Litestar Endpoint
 =======================
 
-Initialize ``SQLSpecSessionService`` inside Litestar and expose a ``/sessions`` endpoint backed by
-AioSQLite.
+Initialize ``SQLSpecSessionService`` and ``SQLSpecMemoryService`` inside Litestar and expose
+``/sessions`` plus ``/memories`` endpoints backed by AioSQLite.
 
 .. code-block:: console
 

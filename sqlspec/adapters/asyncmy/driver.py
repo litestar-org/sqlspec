@@ -4,20 +4,15 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import asyncmy.errors  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
-from sqlspec.core import (
-    ArrowResult,
-    DriverParameterProfile,
-    ParameterStyle,
-    build_statement_config_from_profile,
-    get_cache_config,
-    register_driver_profile,
-)
+from sqlspec.adapters.asyncmy.core import build_asyncmy_insert_statement, build_asyncmy_profile, format_mysql_identifier
+from sqlspec.adapters.asyncmy.data_dictionary import MySQLAsyncDataDictionary
+from sqlspec.core import ArrowResult, build_statement_config_from_profile, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -33,26 +28,31 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_guards import (
+    has_cursor_metadata,
+    has_lastrowid,
+    has_rowcount,
+    has_sqlstate,
+    has_type_code,
+    supports_json_type,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager
 
-    from sqlspec.adapters.asyncmy._types import AsyncmyConnection
-    from sqlspec.core import SQL, SQLResult, StatementConfig
+    from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
+    from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+
+from sqlspec.adapters.asyncmy._typing import AsyncmySessionContext
+
 __all__ = (
     "AsyncmyCursor",
     "AsyncmyDriver",
     "AsyncmyExceptionHandler",
+    "AsyncmySessionContext",
     "asyncmy_statement_config",
     "build_asyncmy_statement_config",
 )
@@ -60,7 +60,7 @@ __all__ = (
 logger = get_logger(__name__)
 
 json_type_value = (
-    ASYNC_MY_FIELD_TYPE.JSON if ASYNC_MY_FIELD_TYPE is not None and hasattr(ASYNC_MY_FIELD_TYPE, "JSON") else None
+    ASYNC_MY_FIELD_TYPE.JSON if ASYNC_MY_FIELD_TYPE is not None and supports_json_type(ASYNC_MY_FIELD_TYPE) else None
 )
 ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 MYSQL_ER_DUP_ENTRY = 1062
@@ -94,19 +94,32 @@ class AsyncmyExceptionHandler:
 
     Maps MySQL error codes and SQLSTATE to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __aexit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    async def __aenter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "bool | None":
+    async def __aenter__(self) -> "AsyncmyExceptionHandler":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_type is None:
-            return None
+            return False
         if issubclass(exc_type, asyncmy.errors.Error):
-            return self._map_mysql_exception(exc_val)
-        return None
+            try:
+                result = self._map_mysql_exception(exc_val)
+                if result is True:
+                    return True
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_mysql_exception(self, e: Any) -> "bool | None":
         """Map MySQL exception to SQLSpec exception.
@@ -123,10 +136,10 @@ class AsyncmyExceptionHandler:
         error_code = None
         sqlstate = None
 
-        if hasattr(e, "args") and len(e.args) >= 1 and isinstance(e.args[0], int):
+        if len(e.args) >= 1 and isinstance(e.args[0], int):
             error_code = e.args[0]
 
-        sqlstate = getattr(e, "sqlstate", None)
+        sqlstate = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if error_code in {1061, 1091}:
             logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", e)
@@ -258,26 +271,13 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         return AsyncmyCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "AsyncmyExceptionHandler":
         """Provide exception handling context manager.
 
         Returns:
-            AbstractAsyncContextManager[None]: Context manager for AsyncMy exception handling
+            AsyncmyExceptionHandler: Context manager for AsyncMy exception handling
         """
         return AsyncmyExceptionHandler()
-
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
-        """Handle AsyncMy-specific operations before standard execution.
-
-        Args:
-            cursor: AsyncMy cursor object
-            statement: SQL statement to analyze
-
-        Returns:
-            Optional[SQLResult]: None, always proceeds with standard execution
-        """
-        _ = (cursor, statement)
-        return None
 
     def _detect_json_columns(self, cursor: Any) -> "list[int]":
         """Identify JSON column indexes from cursor metadata.
@@ -289,15 +289,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             List of index positions where JSON values are present.
         """
 
-        description = getattr(cursor, "description", None)
+        if not has_cursor_metadata(cursor):
+            return []
+        description = cursor.description
         if not description or not ASYNCMY_JSON_TYPE_CODES:
             return []
 
         json_indexes: list[int] = []
         for index, column in enumerate(description):
-            type_code = getattr(column, "type_code", None)
-            if type_code is None and isinstance(column, (tuple, list)) and len(column) > 1:
+            if has_type_code(column):
+                type_code = column.type_code
+            elif isinstance(column, (tuple, list)) and len(column) > 1:
                 type_code = column[1]
+            else:
+                type_code = None
             if type_code in ASYNCMY_JSON_TYPE_CODES:
                 json_indexes.append(index)
         return json_indexes
@@ -437,7 +442,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             )
 
         affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
-        last_id = getattr(cursor, "lastrowid", None) if cursor.rowcount and cursor.rowcount > 0 else None
+        last_id = None
+        if has_rowcount(cursor) and cursor.rowcount and cursor.rowcount > 0 and has_lastrowid(cursor):
+            last_id = cursor.lastrowid
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     async def select_to_storage(
@@ -447,7 +454,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -456,7 +463,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_result_to_storage_async(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
@@ -468,7 +475,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -481,7 +488,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = _build_asyncmy_insert_statement(table, columns)
+            insert_sql = build_asyncmy_insert_statement(table, columns)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 await cursor.executemany(insert_sql, records)
 
@@ -496,7 +503,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into MySQL."""
@@ -546,7 +553,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def _truncate_table_async(self, table: str) -> None:
-        statement = f"TRUNCATE TABLE {_format_mysql_identifier(table)}"
+        statement = f"TRUNCATE TABLE {format_mysql_identifier(table)}"
         async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
             await cursor.execute(statement)
 
@@ -568,58 +575,11 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.asyncmy.data_dictionary import MySQLAsyncDataDictionary
-
             self._data_dictionary = MySQLAsyncDataDictionary()
         return self._data_dictionary
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-def _quote_mysql_identifier(identifier: str) -> str:
-    normalized = identifier.replace("`", "``")
-    return f"`{normalized}`"
-
-
-def _format_mysql_identifier(identifier: str) -> str:
-    cleaned = identifier.strip()
-    if not cleaned:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    parts = [part for part in cleaned.split(".") if part]
-    formatted = ".".join(_quote_mysql_identifier(part) for part in parts)
-    return formatted or _quote_mysql_identifier(cleaned)
-
-
-def _build_asyncmy_insert_statement(table: str, columns: "list[str]") -> str:
-    column_clause = ", ".join(_quote_mysql_identifier(column) for column in columns)
-    placeholders = ", ".join("%s" for _ in columns)
-    return f"INSERT INTO {_format_mysql_identifier(table)} ({column_clause}) VALUES ({placeholders})"
-
-
-def _build_asyncmy_profile() -> DriverParameterProfile:
-    """Create the AsyncMy driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="AsyncMy",
-        default_style=ParameterStyle.QMARK,
-        supported_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
-        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        has_native_list_expansion=False,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=True,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={bool: _bool_to_int},
-        default_dialect="mysql",
-    )
-
-
-_ASYNCMY_PROFILE = _build_asyncmy_profile()
+_ASYNCMY_PROFILE = build_asyncmy_profile()
 
 register_driver_profile("asyncmy", _ASYNCMY_PROFILE)
 

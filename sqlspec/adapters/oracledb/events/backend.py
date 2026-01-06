@@ -23,6 +23,37 @@ logger = get_logger("events.oracle")
 __all__ = ("OracleAsyncAQEventBackend", "OracleSyncAQEventBackend", "create_event_backend")
 
 _DEFAULT_QUEUE_NAME = "SQLSPEC_EVENTS_QUEUE"
+_DEFAULT_VISIBILITY: int | None
+_VISIBILITY_LOOKUP: dict[str, int]
+
+if oracledb is None:
+    _DEFAULT_VISIBILITY = None
+    _VISIBILITY_LOOKUP = {}
+else:
+    try:
+        _DEFAULT_VISIBILITY = oracledb.AQMSG_VISIBLE  # type: ignore[attr-defined]
+    except AttributeError:
+        _DEFAULT_VISIBILITY = None
+    _VISIBILITY_LOOKUP = {}
+    if _DEFAULT_VISIBILITY is not None:
+        _VISIBILITY_LOOKUP["AQMSG_VISIBLE"] = _DEFAULT_VISIBILITY
+    with contextlib.suppress(AttributeError):
+        _VISIBILITY_LOOKUP["AQMSG_INVISIBLE"] = oracledb.AQMSG_INVISIBLE  # type: ignore[attr-defined]
+
+
+def _resolve_visibility_setting(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if not isinstance(value, str):
+        msg = f"Invalid aq_visibility value: {value!r}. Expected int or AQMSG_* string."
+        raise ImproperConfigurationError(msg)
+    visibility = _VISIBILITY_LOOKUP.get(value)
+    if visibility is None:
+        msg = f"Invalid aq_visibility value: {value!r}. Expected one of: {sorted(_VISIBILITY_LOOKUP)}"
+        raise ImproperConfigurationError(msg)
+    return visibility
 
 
 class OracleSyncAQEventBackend:
@@ -48,7 +79,7 @@ class OracleSyncAQEventBackend:
         self._runtime = config.get_observability_runtime()
         settings = settings or {}
         self._queue_name = settings.get("aq_queue", _DEFAULT_QUEUE_NAME)
-        self._visibility: str | None = settings.get("aq_visibility")
+        self._visibility: int | None = _resolve_visibility_setting(settings.get("aq_visibility"))
         self._wait_seconds: int = int(settings.get("aq_wait_seconds", 5))
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
@@ -56,7 +87,7 @@ class OracleSyncAQEventBackend:
         envelope = _build_envelope(channel, event_id, payload, metadata)
         session_cm = self._config.provide_session()
         with session_cm as driver:
-            connection = getattr(driver, "connection", None)
+            connection = driver.connection
             if connection is None:
                 msg = "Oracle driver does not expose a raw connection"
                 raise EventChannelError(msg)
@@ -69,16 +100,17 @@ class OracleSyncAQEventBackend:
     def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         session_cm = self._config.provide_session()
         with session_cm as driver:
-            connection = getattr(driver, "connection", None)
+            connection = driver.connection
             if connection is None:
                 msg = "Oracle driver does not expose a raw connection"
                 raise EventChannelError(msg)
             queue = _get_queue(connection, channel, self._queue_name)
             options = oracledb.AQDequeueOptions()  # type: ignore[attr-defined]
             options.wait = max(int(self._wait_seconds), 0)
-            if self._visibility:
-                default_visibility = getattr(oracledb, "AQMSG_VISIBLE", None)
-                options.visibility = getattr(oracledb, self._visibility, None) or default_visibility
+            if self._visibility is not None:
+                options.visibility = self._visibility
+            elif _DEFAULT_VISIBILITY is not None:
+                options.visibility = _DEFAULT_VISIBILITY
             try:
                 message = queue.deqone(options=options)
             except Exception as error:  # pragma: no cover - driver surfaced runtime
@@ -135,7 +167,7 @@ class OracleAsyncAQEventBackend:
         self._runtime = config.get_observability_runtime()
         settings = settings or {}
         self._queue_name = settings.get("aq_queue", _DEFAULT_QUEUE_NAME)
-        self._visibility: str | None = settings.get("aq_visibility")
+        self._visibility: int | None = _resolve_visibility_setting(settings.get("aq_visibility"))
         self._wait_seconds: int = int(settings.get("aq_wait_seconds", 5))
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
@@ -143,7 +175,7 @@ class OracleAsyncAQEventBackend:
         envelope = _build_envelope(channel, event_id, payload, metadata)
         session_cm = self._config.provide_session()
         async with session_cm as driver:
-            connection = getattr(driver, "connection", None)
+            connection = driver.connection
             if connection is None:
                 msg = "Oracle driver does not expose a raw connection"
                 raise EventChannelError(msg)
@@ -156,16 +188,17 @@ class OracleAsyncAQEventBackend:
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         session_cm = self._config.provide_session()
         async with session_cm as driver:
-            connection = getattr(driver, "connection", None)
+            connection = driver.connection
             if connection is None:
                 msg = "Oracle driver does not expose a raw connection"
                 raise EventChannelError(msg)
             queue = _get_queue(connection, channel, self._queue_name)
             options = oracledb.AQDequeueOptions()  # type: ignore[attr-defined]
             options.wait = max(int(self._wait_seconds), 0)
-            if self._visibility:
-                default_visibility = getattr(oracledb, "AQMSG_VISIBLE", None)
-                options.visibility = getattr(oracledb, self._visibility, None) or default_visibility
+            if self._visibility is not None:
+                options.visibility = self._visibility
+            elif _DEFAULT_VISIBILITY is not None:
+                options.visibility = _DEFAULT_VISIBILITY
             try:
                 message = await queue.deqone(options=options)
             except Exception as error:  # pragma: no cover - driver surfaced runtime
@@ -201,12 +234,21 @@ class OracleAsyncAQEventBackend:
 
 def _get_queue(connection: Any, channel: str, queue_name: str) -> Any:
     """Get Oracle AQ queue handle."""
+    if oracledb is None:
+        msg = "oracledb"
+        raise MissingDependencyError(msg, install_package="oracledb")
     if isinstance(queue_name, str) and "{" in queue_name:
         with contextlib.suppress(Exception):
             queue_name = queue_name.format(channel=channel.upper())
-    payload_type = getattr(oracledb, "DB_TYPE_JSON", None)
+    try:
+        payload_type = oracledb.DB_TYPE_JSON
+    except AttributeError:
+        payload_type = None
     if payload_type is None:
-        payload_type = getattr(oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
+        try:
+            payload_type = oracledb.AQMSG_PAYLOAD_TYPE_JSON  # type: ignore[attr-defined]
+        except AttributeError:
+            payload_type = None
     return connection.queue(queue_name, payload_type=payload_type)
 
 

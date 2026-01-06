@@ -1,23 +1,29 @@
 """PostgreSQL psycopg driver implementation."""
 
-import datetime
-import io
 from contextlib import AsyncExitStack, ExitStack
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import psycopg
-from psycopg import sql as psycopg_sql
 
-from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg._typing import (
+    PsycopgAsyncConnection,
+    PsycopgAsyncSessionContext,
+    PsycopgSyncConnection,
+    PsycopgSyncSessionContext,
+)
+from sqlspec.adapters.psycopg.core import (
+    build_copy_from_command,
+    build_psycopg_profile,
+    build_truncate_command,
+    psycopg_pipeline_supported,
+)
+from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.core import (
     SQL,
-    DriverParameterProfile,
-    ParameterStyle,
     ParameterStyleConfig,
     SQLResult,
     StackOperation,
     StackResult,
-    Statement,
     StatementConfig,
     StatementStack,
     build_statement_config_from_profile,
@@ -46,64 +52,33 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
+from sqlspec.utils.type_guards import has_sqlstate, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
-    from sqlspec.builder import QueryBuilder
+    from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
-
-    class _PipelineDriver(Protocol):
-        statement_config: StatementConfig
-
-        def prepare_statement(
-            self,
-            statement: "SQL | Statement | QueryBuilder",
-            parameters: Any,
-            *,
-            statement_config: StatementConfig,
-            kwargs: dict[str, Any],
-        ) -> SQL: ...
-
-        def _get_compiled_sql(self, statement: SQL, statement_config: StatementConfig) -> tuple[str, Any]: ...
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 
 __all__ = (
     "PsycopgAsyncCursor",
     "PsycopgAsyncDriver",
     "PsycopgAsyncExceptionHandler",
+    "PsycopgAsyncSessionContext",
     "PsycopgSyncCursor",
     "PsycopgSyncDriver",
     "PsycopgSyncExceptionHandler",
+    "PsycopgSyncSessionContext",
     "build_psycopg_statement_config",
     "psycopg_statement_config",
 )
 
 logger = get_logger("adapters.psycopg")
-
-
-def _psycopg_pipeline_supported() -> bool:
-    """Return True when libpq pipeline support is available."""
-
-    capabilities = getattr(psycopg, "capabilities", None)
-    if capabilities is None:
-        return False
-    try:
-        return bool(capabilities.has_pipeline())
-    except Exception:  # pragma: no cover - defensive guard for unexpected capability implementations
-        return False
 
 
 class _PreparedStackOperation(NamedTuple):
@@ -145,7 +120,7 @@ class PsycopgPipelineMixin:
 
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
         statement_config = kwargs.pop("statement_config", None)
-        driver = cast("_PipelineDriver", self)
+        driver = cast("PsycopgPipelineDriver", self)
         config = statement_config or driver.statement_config
 
         sql_statement = driver.prepare_statement(
@@ -174,25 +149,6 @@ TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
 
 
-def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
-    parts = [part for part in table.split(".") if part]
-    if not parts:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    identifiers = [psycopg_sql.Identifier(part) for part in parts]
-    return psycopg_sql.SQL(".").join(identifiers)
-
-
-def _build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
-    table_identifier = _compose_table_identifier(table)
-    column_sql = psycopg_sql.SQL(", ").join(psycopg_sql.Identifier(column) for column in columns)
-    return psycopg_sql.SQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
-
-
-def _build_truncate_command(table: str) -> "psycopg_sql.Composed":
-    return psycopg_sql.SQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
-
-
 class PsycopgSyncCursor:
     """Context manager for PostgreSQL psycopg cursor management."""
 
@@ -216,18 +172,30 @@ class PsycopgSyncExceptionHandler:
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __exit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    def __enter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __enter__(self) -> "PsycopgSyncExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_type is None:
-            return
+            return False
         if issubclass(exc_type, psycopg.Error):
-            self._map_postgres_exception(exc_val)
+            try:
+                self._map_postgres_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_postgres_exception(self, e: Any) -> None:
         """Map PostgreSQL exception to SQLSpec exception.
@@ -238,7 +206,7 @@ class PsycopgSyncExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
             self._raise_generic_error(e, None)
@@ -351,9 +319,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         try:
-            if hasattr(self.connection, "autocommit") and not self.connection.autocommit:
-                pass
-            else:
+            if self.connection.autocommit:
                 self.connection.autocommit = False
         except Exception as e:
             msg = f"Failed to begin transaction: {e}"
@@ -375,19 +341,17 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+    def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgSyncExceptionHandler()
 
     def _handle_transaction_error_cleanup(self) -> None:
         """Handle transaction cleanup after database errors."""
         try:
-            if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
-                status = self.connection.info.transaction_status
-
-                if status == TRANSACTION_STATUS_INERROR:
-                    logger.debug("Connection in aborted transaction state, performing rollback")
-                    self.connection.rollback()
+            status = self.connection.info.transaction_status
+            if status == TRANSACTION_STATUS_INERROR:
+                logger.debug("Connection in aborted transaction state, performing rollback")
+                self.connection.rollback()
         except Exception as cleanup_error:
             logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
@@ -428,16 +392,16 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         if is_copy_from_operation(operation_type):
             if isinstance(copy_data, (str, bytes)):
-                data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
-            elif hasattr(copy_data, "read"):
-                data_file = copy_data
+                data_to_write = copy_data
+            elif is_readable(copy_data):
+                data_to_write = copy_data.read()
             else:
-                data_file = io.StringIO(str(copy_data))
+                data_to_write = str(copy_data)
+
+            if isinstance(data_to_write, str):
+                data_to_write = data_to_write.encode()
 
             with cursor.copy(sql) as copy_ctx:
-                data_to_write = data_file.read() if hasattr(data_file, "read") else str(copy_data)  # pyright: ignore
-                if isinstance(data_to_write, str):
-                    data_to_write = data_to_write.encode()
                 copy_ctx.write(data_to_write)
 
             rows_affected = max(cursor.rowcount, 0)
@@ -501,7 +465,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             not isinstance(stack, StatementStack)
             or not stack
             or self.stack_native_disabled
-            or not _psycopg_pipeline_supported()
+            or not psycopg_pipeline_supported()
             or continue_on_error
         ):
             return super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -647,7 +611,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -656,7 +620,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_result_to_storage_sync(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
@@ -668,7 +632,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -680,7 +644,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             self._truncate_table_sync(table)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            copy_sql = _build_copy_from_command(table, columns)
+            copy_sql = build_copy_from_command(table, columns)
             with ExitStack() as stack:
                 stack.enter_context(self.handle_database_exceptions())
                 cursor = stack.enter_context(self.with_cursor(self.connection))
@@ -698,7 +662,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts into PostgreSQL via COPY."""
@@ -714,13 +678,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.psycopg.data_dictionary import PostgresSyncDataDictionary
-
             self._data_dictionary = PostgresSyncDataDictionary()
         return self._data_dictionary
 
     def _truncate_table_sync(self, table: str) -> None:
-        truncate_sql = _build_truncate_command(table)
+        truncate_sql = build_truncate_command(table)
         with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             cursor.execute(truncate_sql)
 
@@ -753,18 +715,30 @@ class PsycopgAsyncExceptionHandler:
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
     for better error handling in application code.
+
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __aexit__
+    to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
+    __slots__ = ("pending_exception",)
 
-    async def __aenter__(self) -> None:
-        return None
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aenter__(self) -> "PsycopgAsyncExceptionHandler":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_type is None:
-            return
+            return False
         if issubclass(exc_type, psycopg.Error):
-            self._map_postgres_exception(exc_val)
+            try:
+                self._map_postgres_exception(exc_val)
+            except Exception as mapped:
+                self.pending_exception = mapped
+                return True
+        return False
 
     def _map_postgres_exception(self, e: Any) -> None:
         """Map PostgreSQL exception to SQLSpec exception.
@@ -775,7 +749,7 @@ class PsycopgAsyncExceptionHandler:
         Raises:
             Specific SQLSpec exception based on SQLSTATE code
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
 
         if not error_code:
             self._raise_generic_error(e, None)
@@ -889,7 +863,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         try:
-            autocommit_flag = getattr(self.connection, "autocommit", None)
+            try:
+                autocommit_flag = self.connection.autocommit
+            except AttributeError:
+                autocommit_flag = None
             if isinstance(autocommit_flag, bool) and not autocommit_flag:
                 return
             await self.connection.set_autocommit(False)
@@ -913,19 +890,17 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgAsyncExceptionHandler()
 
     async def _handle_transaction_error_cleanup_async(self) -> None:
         """Handle async transaction cleanup after database errors."""
         try:
-            if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
-                status = self.connection.info.transaction_status
-
-                if status == TRANSACTION_STATUS_INERROR:
-                    logger.debug("Connection in aborted transaction state, performing async rollback")
-                    await self.connection.rollback()
+            status = self.connection.info.transaction_status
+            if status == TRANSACTION_STATUS_INERROR:
+                logger.debug("Connection in aborted transaction state, performing async rollback")
+                await self.connection.rollback()
         except Exception as cleanup_error:
             logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
@@ -967,16 +942,16 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         if is_copy_from_operation(operation_type) and "FROM STDIN" in sql_upper:
             if isinstance(copy_data, (str, bytes)):
-                data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
-            elif hasattr(copy_data, "read"):
-                data_file = copy_data
+                data_to_write = copy_data
+            elif is_readable(copy_data):
+                data_to_write = copy_data.read()
             else:
-                data_file = io.StringIO(str(copy_data))
+                data_to_write = str(copy_data)
+
+            if isinstance(data_to_write, str):
+                data_to_write = data_to_write.encode()
 
             async with cursor.copy(sql) as copy_ctx:
-                data_to_write = data_file.read() if hasattr(data_file, "read") else str(copy_data)  # pyright: ignore
-                if isinstance(data_to_write, str):
-                    data_to_write = data_to_write.encode()
                 await copy_ctx.write(data_to_write)
 
             rows_affected = max(cursor.rowcount, 0)
@@ -1042,7 +1017,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             not isinstance(stack, StatementStack)
             or not stack
             or self.stack_native_disabled
-            or not _psycopg_pipeline_supported()
+            or not psycopg_pipeline_supported()
             or continue_on_error
         ):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -1188,7 +1163,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         /,
         *parameters: Any,
         statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         format_hint: "StorageFormat | None" = None,
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
@@ -1197,7 +1172,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_result_to_storage_async(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
@@ -1209,7 +1184,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
@@ -1221,7 +1196,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             await self._truncate_table_async(table)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            copy_sql = _build_copy_from_command(table, columns)
+            copy_sql = build_copy_from_command(table, columns)
             async with AsyncExitStack() as stack:
                 await stack.enter_async_context(self.handle_database_exceptions())
                 cursor = await stack.enter_async_context(self.with_cursor(self.connection))
@@ -1239,7 +1214,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         source: "StorageDestination",
         *,
         file_format: "StorageFormat",
-        partitioner: "dict[str, Any] | None" = None,
+        partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts asynchronously."""
@@ -1257,13 +1232,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary
-
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
 
     async def _truncate_table_async(self, table: str) -> None:
-        truncate_sql = _build_truncate_command(table)
+        truncate_sql = build_truncate_command(table)
         async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             await cursor.execute(truncate_sql)
 
@@ -1272,42 +1245,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
 
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _build_psycopg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
-    """Return custom type coercions for psycopg."""
-
-    return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}
-
-
-def _build_psycopg_profile() -> DriverParameterProfile:
-    """Create the psycopg driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="Psycopg",
-        default_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-            ParameterStyle.QMARK,
-        },
-        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
-        has_native_list_expansion=True,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions=_build_psycopg_custom_type_coercions(),
-        default_dialect="postgres",
-    )
-
-
-_PSYCOPG_PROFILE = _build_psycopg_profile()
+_PSYCOPG_PROFILE = build_psycopg_profile()
 
 register_driver_profile("psycopg", _PSYCOPG_PROFILE)
 

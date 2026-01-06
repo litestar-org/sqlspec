@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from enum import Enum
 from functools import lru_cache, partial
 from pathlib import Path, PurePath
-from typing import Any, Final, TypeGuard, overload
+from typing import Any, Final, TypeGuard, cast, overload
 from uuid import UUID
 
 from typing_extensions import TypeVar
@@ -26,6 +26,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
     get_msgspec_rename_config,
+    is_attrs_instance,
     is_attrs_schema,
     is_dataclass,
     is_dict,
@@ -37,6 +38,7 @@ from sqlspec.utils.type_guards import (
 __all__ = (
     "_DEFAULT_TYPE_DECODERS",
     "DataT",
+    "_convert_numpy_recursive",
     "_convert_numpy_to_list",
     "_default_msgspec_deserializer",
     "_is_list_type_target",
@@ -48,14 +50,16 @@ DataT = TypeVar("DataT", default=dict[str, Any])
 logger = get_logger(__name__)
 
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
+_DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
 
 
 def _is_list_type_target(target_type: Any) -> TypeGuard[list[object]]:
     """Check if target type is a list type (e.g., list[float])."""
     try:
-        return hasattr(target_type, "__origin__") and target_type.__origin__ is list
+        origin = target_type.__origin__
     except (AttributeError, TypeError):
         return False
+    return origin is list
 
 
 def _convert_numpy_to_list(target_type: Any, value: Any) -> Any:
@@ -108,12 +112,51 @@ def _convert_dataclass(data: Any, schema_type: Any) -> Any:
     return schema_type(**dict(data)) if is_dict(data) else (schema_type(**data) if isinstance(data, dict) else data)
 
 
+class _IsTypePredicate:
+    """Callable predicate to check if a type matches a target type."""
+
+    __slots__ = ("_type",)
+
+    def __init__(self, target_type: type) -> None:
+        self._type = target_type
+
+    def __call__(self, x: Any) -> bool:
+        return x is self._type
+
+
+class _UUIDDecoder:
+    """Decoder for UUID types."""
+
+    __slots__ = ()
+
+    def __call__(self, t: type, v: Any) -> Any:
+        return t(v.hex)
+
+
+class _ISOFormatDecoder:
+    """Decoder for types with isoformat() method (datetime, date, time)."""
+
+    __slots__ = ()
+
+    def __call__(self, t: type, v: Any) -> Any:
+        return t(v.isoformat())
+
+
+class _EnumDecoder:
+    """Decoder for Enum types."""
+
+    __slots__ = ()
+
+    def __call__(self, t: type, v: Any) -> Any:
+        return t(v.value)
+
+
 _DEFAULT_TYPE_DECODERS: Final["list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]"] = [
-    (lambda x: x is UUID, lambda t, v: t(v.hex)),
-    (lambda x: x is datetime.datetime, lambda t, v: t(v.isoformat())),
-    (lambda x: x is datetime.date, lambda t, v: t(v.isoformat())),
-    (lambda x: x is datetime.time, lambda t, v: t(v.isoformat())),
-    (lambda x: x is Enum, lambda t, v: t(v.value)),
+    (_IsTypePredicate(UUID), _UUIDDecoder()),
+    (_IsTypePredicate(datetime.datetime), _ISOFormatDecoder()),
+    (_IsTypePredicate(datetime.date), _ISOFormatDecoder()),
+    (_IsTypePredicate(datetime.time), _ISOFormatDecoder()),
+    (_IsTypePredicate(Enum), _EnumDecoder()),
     (_is_list_type_target, _convert_numpy_to_list),
 ]
 
@@ -145,8 +188,9 @@ def _default_msgspec_deserializer(
     if target_type is UUID and isinstance(value, UUID):
         return value.hex
 
-    if target_type in _DATETIME_TYPES and hasattr(value, "isoformat"):
-        return value.isoformat()  # pyright: ignore
+    if target_type in _DATETIME_TYPES and isinstance(value, _DATETIME_TYPE_TUPLE):
+        datetime_value = cast("datetime.datetime | datetime.date | datetime.time", value)
+        return datetime_value.isoformat()
 
     if isinstance(target_type, type) and issubclass(target_type, Enum) and isinstance(value, Enum):
         return value.value
@@ -165,6 +209,33 @@ def _default_msgspec_deserializer(
             pass
 
     return value
+
+
+def _convert_numpy_recursive(obj: Any) -> Any:
+    """Recursively convert numpy arrays to lists.
+
+    This is a module-level function to avoid nested function definitions
+    which are problematic for mypyc compilation.
+
+    Args:
+        obj: Object to convert (may contain numpy arrays nested in dicts/lists)
+
+    Returns:
+        Object with all numpy arrays converted to lists
+    """
+    if not NUMPY_INSTALLED:
+        return obj
+
+    import numpy as np
+
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: _convert_numpy_recursive(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        converted = [_convert_numpy_recursive(item) for item in obj]
+        return type(obj)(converted)
+    return obj
 
 
 def _convert_msgspec(data: Any, schema_type: Any) -> Any:
@@ -187,23 +258,7 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
             logger.debug("Field name transformation failed for msgspec schema: %s", e)
 
     if NUMPY_INSTALLED:
-        try:
-            import numpy as np
-
-            def _convert_numpy(obj: Any) -> Any:
-                return (
-                    obj.tolist()
-                    if isinstance(obj, np.ndarray)
-                    else {k: _convert_numpy(v) for k, v in obj.items()}
-                    if isinstance(obj, dict)
-                    else type(obj)(_convert_numpy(item) for item in obj)
-                    if isinstance(obj, (list, tuple))
-                    else obj
-                )
-
-            transformed_data = _convert_numpy(transformed_data)
-        except ImportError:
-            pass
+        transformed_data = _convert_numpy_recursive(transformed_data)
 
     return convert(
         obj=transformed_data,
@@ -225,17 +280,12 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
     if CATTRS_INSTALLED:
         if isinstance(data, Sequence):
             return cattrs_structure(data, list[schema_type])
-        return cattrs_structure(cattrs_unstructure(data) if hasattr(data, "__attrs_attrs__") else data, schema_type)
+        structured = cattrs_unstructure(data) if is_attrs_instance(data) else data
+        return cattrs_structure(structured, schema_type)
 
     if isinstance(data, list):
-        return [
-            schema_type(**dict(item)) if hasattr(item, "keys") else schema_type(**attrs_asdict(item)) for item in data
-        ]
-    return (
-        schema_type(**dict(data))
-        if hasattr(data, "keys")
-        else (schema_type(**data) if isinstance(data, dict) else data)
-    )
+        return [schema_type(**dict(item)) if is_dict(item) else schema_type(**attrs_asdict(item)) for item in data]
+    return schema_type(**dict(data)) if is_dict(data) else data
 
 
 _SCHEMA_CONVERTERS: "dict[str, Callable[[Any, Any], Any]]" = {

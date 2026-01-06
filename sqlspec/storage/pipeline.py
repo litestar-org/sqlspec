@@ -16,6 +16,7 @@ from sqlspec.storage.errors import execute_async_storage_operation, execute_sync
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import from_json, get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.type_guards import supports_async_delete, supports_async_read_bytes, supports_async_write_bytes
 
 if TYPE_CHECKING:
     from sqlspec.protocols import ObjectStoreProtocol
@@ -100,7 +101,7 @@ class StorageTelemetry(TypedDict, total=False):
     partitions_created: int
     duration_s: float
     format: str
-    extra: "dict[str, Any]"
+    extra: "dict[str, object]"
     backend: str
     correlation_id: str
     config: str
@@ -285,7 +286,7 @@ class SyncStoragePipeline:
         return self._write_bytes(
             payload,
             destination,
-            rows=int(getattr(table, "num_rows", 0)),
+            rows=int(table.num_rows),
             format_label=format_choice,
             storage_options=storage_options or {},
         )
@@ -295,16 +296,17 @@ class SyncStoragePipeline:
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         """Read an artifact from storage and decode it into an Arrow table."""
 
-        backend, path = self._resolve_backend(source, **(storage_options or {}))
-        backend_name = getattr(backend, "backend_type", "storage")
+        backend, path = self._resolve_backend(source, storage_options)
+        backend_name = backend.backend_type
         payload = execute_sync_storage_operation(
             partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
         )
         table = _decode_arrow_payload(payload, file_format)
+        rows_processed = int(table.num_rows)
         telemetry: StorageTelemetry = {
             "destination": path,
             "bytes_processed": len(payload),
-            "rows_processed": int(getattr(table, "num_rows", 0)),
+            "rows_processed": rows_processed,
             "format": file_format,
             "backend": backend_name,
         }
@@ -335,13 +337,10 @@ class SyncStoragePipeline:
         """Delete staged artifacts best-effort."""
 
         for artifact in artifacts:
-            backend, path = self._resolve_backend(artifact["uri"])
+            backend, path = self._resolve_backend(artifact["uri"], None)
             try:
                 execute_sync_storage_operation(
-                    partial(backend.delete, path),
-                    backend=getattr(backend, "backend_type", "storage"),
-                    operation="delete",
-                    path=path,
+                    partial(backend.delete, path), backend=backend.backend_type, operation="delete", path=path
                 )
             except Exception:
                 if not ignore_errors:
@@ -356,8 +355,8 @@ class SyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = self._resolve_backend(destination, **storage_options)
-        backend_name = getattr(backend, "backend_type", "storage")
+        backend, path = self._resolve_backend(destination, storage_options)
+        backend_name = backend.backend_type
         start = perf_counter()
         execute_sync_storage_operation(
             partial(backend.write_bytes, path, payload), backend=backend_name, operation="write_bytes", path=path
@@ -376,13 +375,14 @@ class SyncStoragePipeline:
         return telemetry
 
     def _resolve_backend(
-        self, destination: StorageDestination, **backend_options: Any
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
     ) -> "tuple[ObjectStoreProtocol, str]":
         destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-        alias_resolution = self._resolve_alias_destination(destination_str, backend_options)
+        options = backend_options or {}
+        alias_resolution = self._resolve_alias_destination(destination_str, options)
         if alias_resolution is not None:
             return alias_resolution
-        backend = self.registry.get(destination_str, **backend_options)
+        backend = self.registry.get(destination_str, **options)
         normalized_path = self._normalize_path_for_backend(destination_str)
         return backend, normalized_path
 
@@ -455,20 +455,19 @@ class AsyncStoragePipeline:
         return await self._write_bytes_async(
             payload,
             destination,
-            rows=int(getattr(table, "num_rows", 0)),
+            rows=int(table.num_rows),
             format_label=format_choice,
             storage_options=storage_options or {},
         )
 
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
         for artifact in artifacts:
-            backend, path = self._resolve_backend(artifact["uri"])
-            backend_name = getattr(backend, "backend_type", "storage")
-            delete_async = getattr(backend, "delete_async", None)
-            if delete_async is not None:
+            backend, path = self._resolve_backend(artifact["uri"], None)
+            backend_name = backend.backend_type
+            if supports_async_delete(backend):
                 try:
                     await execute_async_storage_operation(
-                        partial(delete_async, path), backend=backend_name, operation="delete", path=path
+                        partial(backend.delete_async, path), backend=backend_name, operation="delete", path=path
                     )
                 except Exception:
                     if not ignore_errors:
@@ -497,13 +496,15 @@ class AsyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = self._resolve_backend(destination, **storage_options)
-        backend_name = getattr(backend, "backend_type", "storage")
-        writer = getattr(backend, "write_bytes_async", None)
+        backend, path = self._resolve_backend(destination, storage_options)
+        backend_name = backend.backend_type
         start = perf_counter()
-        if writer is not None:
+        if supports_async_write_bytes(backend):
             await execute_async_storage_operation(
-                partial(writer, path, payload), backend=backend_name, operation="write_bytes", path=path
+                partial(backend.write_bytes_async, path, payload),
+                backend=backend_name,
+                operation="write_bytes",
+                path=path,
             )
         else:
 
@@ -538,12 +539,11 @@ class AsyncStoragePipeline:
     async def read_arrow_async(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
-        backend, path = self._resolve_backend(source, **(storage_options or {}))
-        backend_name = getattr(backend, "backend_type", "storage")
-        reader = getattr(backend, "read_bytes_async", None)
-        if reader is not None:
+        backend, path = self._resolve_backend(source, storage_options)
+        backend_name = backend.backend_type
+        if supports_async_read_bytes(backend):
             payload = await execute_async_storage_operation(
-                partial(reader, path), backend=backend_name, operation="read_bytes", path=path
+                partial(backend.read_bytes_async, path), backend=backend_name, operation="read_bytes", path=path
             )
         else:
 
@@ -557,23 +557,25 @@ class AsyncStoragePipeline:
             payload = await async_(_read_sync)()
 
         table = _decode_arrow_payload(payload, file_format)
+        rows_processed = int(table.num_rows)
         telemetry: StorageTelemetry = {
             "destination": path,
             "bytes_processed": len(payload),
-            "rows_processed": int(getattr(table, "num_rows", 0)),
+            "rows_processed": rows_processed,
             "format": file_format,
             "backend": backend_name,
         }
         return table, telemetry
 
     def _resolve_backend(
-        self, destination: StorageDestination, **backend_options: Any
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
     ) -> "tuple[ObjectStoreProtocol, str]":
         destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-        alias_resolution = self._resolve_alias_destination(destination_str, backend_options)
+        options = backend_options or {}
+        alias_resolution = self._resolve_alias_destination(destination_str, options)
         if alias_resolution is not None:
             return alias_resolution
-        backend = self.registry.get(destination_str, **backend_options)
+        backend = self.registry.get(destination_str, **options)
         normalized_path = self._normalize_path_for_backend(destination_str)
         return backend, normalized_path
 

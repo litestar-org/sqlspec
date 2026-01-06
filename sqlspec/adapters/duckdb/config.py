@@ -1,17 +1,18 @@
 """DuckDB database configuration with connection pooling."""
 
 from collections.abc import Callable, Sequence
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.duckdb._types import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.adapters.duckdb.driver import (
     DuckDBCursor,
     DuckDBDriver,
     DuckDBExceptionHandler,
+    DuckDBSessionContext,
     build_duckdb_statement_config,
+    duckdb_statement_config,
 )
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
@@ -21,7 +22,7 @@ from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable
 
     from sqlspec.core import StatementConfig
 __all__ = (
@@ -95,6 +96,7 @@ class DuckDBPoolParams(DuckDBConnectionParams):
     pool_max_size: NotRequired[int]
     pool_timeout: NotRequired[float]
     pool_recycle_seconds: NotRequired[int]
+    health_check_interval: NotRequired[float]
 
 
 class DuckDBExtensionConfig(TypedDict):
@@ -159,6 +161,28 @@ class DuckDBDriverFeatures(TypedDict):
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
     extension_flags: NotRequired[dict[str, Any]]
+
+
+class DuckDBConnectionContext:
+    """Context manager for DuckDB connections."""
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "DuckDBConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    def __enter__(self) -> DuckDBConnection:
+        pool = self._config.provide_pool()
+        self._ctx = pool.get_connection()
+        return self._ctx.__enter__()  # type: ignore[no-any-return]
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._ctx:
+            return self._ctx.__exit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+        return None
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
@@ -294,12 +318,15 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
-        return {
-            k: v
-            for k, v in self.connection_config.items()
-            if v is not None
-            and k not in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
+        excluded_keys = {
+            "pool_min_size",
+            "pool_max_size",
+            "pool_timeout",
+            "pool_recycle_seconds",
+            "health_check_interval",
+            "extra",
         }
+        return {k: v for k, v in self.connection_config.items() if v is not None and k not in excluded_keys}
 
     def _create_pool(self) -> DuckDBConnectionPool:
         """Create connection pool from configuration."""
@@ -312,12 +339,20 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
         extension_flags_dict = dict(extension_flags) if extension_flags else None
 
+        pool_recycle_seconds = self.connection_config.get("pool_recycle_seconds")
+        health_check_interval = self.connection_config.get("health_check_interval")
+        pool_kwargs: dict[str, Any] = {}
+        if pool_recycle_seconds is not None:
+            pool_kwargs["pool_recycle_seconds"] = pool_recycle_seconds
+        if health_check_interval is not None:
+            pool_kwargs["health_check_interval"] = health_check_interval
+
         return DuckDBConnectionPool(
             connection_config=connection_config,
             extensions=extensions_dicts,
             extension_flags=extension_flags_dict,
             secrets=secrets_dicts,
-            **self.connection_config,
+            **pool_kwargs,
         )
 
     def _close_pool(self) -> None:
@@ -345,42 +380,51 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         return pool.acquire()
 
-    @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBConnection, None, None]":
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "DuckDBConnectionContext":
         """Provide a pooled DuckDB connection context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
-        Yields:
-            A DuckDB connection instance.
+        Returns:
+            A DuckDB connection context manager.
         """
-        pool = self.provide_pool()
-        with pool.get_connection() as connection:
-            yield connection
+        return DuckDBConnectionContext(self)
 
-    @contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> "Generator[DuckDBDriver, None, None]":
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "DuckDBSessionContext":
         """Provide a DuckDB driver session context manager.
 
         Args:
-            *args: Additional arguments.
+            *_args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments.
+            **_kwargs: Additional keyword arguments.
 
-        Yields:
-            A context manager that yields a DuckDBDriver instance.
+        Returns:
+            A DuckDB driver session context manager.
         """
-        with self.provide_connection(*args, **kwargs) as connection:
-            driver = self.driver_type(
-                connection=connection,
-                statement_config=statement_config or self.statement_config,
-                driver_features=self.driver_features,
-            )
-            yield self._prepare_driver(driver)
+        conn_ctx_holder: dict[str, Any] = {}
+
+        def acquire_connection() -> DuckDBConnection:
+            pool = self.provide_pool()
+            ctx = pool.get_connection()
+            conn_ctx_holder["ctx"] = ctx
+            return ctx.__enter__()
+
+        def release_connection(_conn: DuckDBConnection) -> None:
+            if "ctx" in conn_ctx_holder:
+                conn_ctx_holder["ctx"].__exit__(None, None, None)
+                conn_ctx_holder.clear()
+
+        return DuckDBSessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or duckdb_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for DuckDB types.
@@ -394,6 +438,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         namespace = super().get_signature_namespace()
         namespace.update({
+            "DuckDBConnectionContext": DuckDBConnectionContext,
             "DuckDBConnection": DuckDBConnection,
             "DuckDBConnectionParams": DuckDBConnectionParams,
             "DuckDBConnectionPool": DuckDBConnectionPool,
@@ -404,6 +449,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             "DuckDBExtensionConfig": DuckDBExtensionConfig,
             "DuckDBPoolParams": DuckDBPoolParams,
             "DuckDBSecretConfig": DuckDBSecretConfig,
+            "DuckDBSessionContext": DuckDBSessionContext,
         })
         return namespace
 

@@ -743,6 +743,86 @@ Implement automatic cleanup for old sessions:
    DELETE FROM adk_sessions
    WHERE update_time < CURRENT_TIMESTAMP - INTERVAL '90 days'
 
+Memory Table
+============
+
+The memory table stores searchable entries extracted from completed sessions. It is used by
+``SQLSpecMemoryService`` to support long-term recall.
+
+Table Name
+----------
+
+**Default:** ``adk_memory_entries``
+
+**Customizable:** Yes, via ``extension_config["adk"]["memory_table"]``
+
+Field Definitions
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 15 10 55
+
+   * - Field
+     - Type
+     - Nullable
+     - Description
+   * - ``id``
+     - VARCHAR(128)
+     - No
+     - Unique memory identifier (UUID). Primary key.
+   * - ``session_id``
+     - VARCHAR(128)
+     - No
+     - Session identifier for traceability.
+   * - ``app_name``
+     - VARCHAR(128)
+     - No
+     - Application name for filtering.
+   * - ``user_id``
+     - VARCHAR(128)
+     - No
+     - User identifier for filtering.
+   * - ``event_id``
+     - VARCHAR(128)
+     - No
+     - Event identifier used for deduplication (unique).
+   * - ``author``
+     - VARCHAR(256)
+     - Yes
+     - Event author (user/assistant/system).
+   * - ``timestamp``
+     - TIMESTAMP
+     - No
+     - Original event timestamp (UTC).
+   * - ``content_json``
+     - JSON/JSONB
+     - No
+     - Original ADK content payload.
+   * - ``content_text``
+     - TEXT
+     - No
+     - Extracted plain text for search.
+   * - ``metadata_json``
+     - JSON/JSONB
+     - Yes
+     - Optional custom metadata.
+   * - ``inserted_at``
+     - TIMESTAMP
+     - No
+     - Insertion timestamp (UTC).
+   * - ``<owner_id_column>``
+     - (Configurable)
+     - Depends
+     - Optional FK column for multi-tenant isolation (if configured).
+
+Indexes and FTS
+--------------
+
+- Composite index on ``(app_name, user_id, timestamp DESC)``
+- Index on ``session_id`` for deletion by session
+- Optional full-text search indexes/virtual tables when ``memory_use_fts=True``
+
 See Also
 ========
 

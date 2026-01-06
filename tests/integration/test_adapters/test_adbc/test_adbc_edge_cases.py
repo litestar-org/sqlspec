@@ -160,7 +160,6 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
 
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
-@pytest.mark.xfail(reason="ADBC PostgreSQL driver cannot handle multi-statement prepared statements")
 def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     """Test execute_script edge cases with ADBC."""
 

@@ -12,6 +12,12 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.exceptions import ConfigResolverError
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import async_, await_
+from sqlspec.utils.type_guards import (
+    has_config_attribute,
+    has_connection_config,
+    has_database_url_and_bind_key,
+    has_migration_config,
+)
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -21,7 +27,7 @@ __all__ = ("resolve_config_async", "resolve_config_sync")
 
 async def resolve_config_async(
     config_path: str,
-) -> "list[AsyncDatabaseConfig | SyncDatabaseConfig] | AsyncDatabaseConfig | SyncDatabaseConfig":
+) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
     """Resolve config from dotted path, handling callables and direct instances.
 
     This is the async-first version that handles both sync and async callables efficiently.
@@ -58,7 +64,7 @@ async def resolve_config_async(
 
 def resolve_config_sync(
     config_path: str,
-) -> "list[AsyncDatabaseConfig | SyncDatabaseConfig] | AsyncDatabaseConfig | SyncDatabaseConfig":
+) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
     """Synchronous wrapper for resolve_config.
 
     Args:
@@ -90,7 +96,7 @@ def resolve_config_sync(
 
 def _validate_config_result(
     config_result: Any, config_path: str
-) -> "list[AsyncDatabaseConfig | SyncDatabaseConfig] | AsyncDatabaseConfig | SyncDatabaseConfig":
+) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
     """Validate that the config result is a valid config or list of configs.
 
     Args:
@@ -112,18 +118,18 @@ def _validate_config_result(
             msg = f"Config '{config_path}' resolved to empty list. Expected at least one config."
             raise ConfigResolverError(msg)
 
-        for i, config in enumerate(config_result):
+        for i, config in enumerate(config_result):  # pyright: ignore
             if not _is_valid_config(config):
                 msg = f"Config '{config_path}' returned invalid config at index {i}. Expected database config instance."
                 raise ConfigResolverError(msg)
 
-        return cast("list[AsyncDatabaseConfig | SyncDatabaseConfig]", list(config_result))
+        return cast("list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]", list(config_result))  # pyright: ignore
 
     if not _is_valid_config(config_result):
         msg = f"Config '{config_path}' returned invalid type '{type(config_result).__name__}'. Expected database config instance or list."
         raise ConfigResolverError(msg)
 
-    return cast("AsyncDatabaseConfig | SyncDatabaseConfig", config_result)
+    return cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config_result)
 
 
 def _is_valid_config(config: Any) -> bool:
@@ -139,15 +145,15 @@ def _is_valid_config(config: Any) -> bool:
     if isinstance(config, type):
         return False
 
-    nested_config = getattr(config, "config", None)
-    if nested_config is not None and hasattr(nested_config, "migration_config"):
-        return True
-
-    migration_config = getattr(config, "migration_config", None)
-    if migration_config is not None:
-        if hasattr(config, "connection_config"):
+    if has_config_attribute(config):
+        nested_config = config.config
+        if has_migration_config(nested_config):
             return True
-        if hasattr(config, "database_url") and hasattr(config, "bind_key"):
+
+    if has_migration_config(config) and config.migration_config is not None:
+        if has_connection_config(config):
+            return True
+        if has_database_url_and_bind_key(config):
             return True
 
     return False

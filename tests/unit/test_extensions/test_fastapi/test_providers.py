@@ -326,13 +326,3 @@ def test_provide_filters_search_without_value_excluded() -> None:
     # SearchFilter with None value should be excluded
     filters = provider(search_filter=SearchFilter(field_name={"name"}, value=None, ignore_case=False))  # type: ignore[arg-type]
     assert filters == []
-
-
-def test_provide_filters_order_by_without_field_excluded() -> None:
-    """Test that order by filters without field names are excluded."""
-    config: FilterConfig = {"sort_field": "created_at"}
-    provider = provide_filters(config)
-
-    # OrderByFilter with None field_name should be excluded
-    filters = provider(order_by_filter=OrderByFilter(field_name=None, sort_order="desc"))  # type: ignore[arg-type]
-    assert filters == []

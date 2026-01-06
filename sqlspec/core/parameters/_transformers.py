@@ -4,6 +4,8 @@ import bisect
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from sqlglot import exp as _exp
+
 from sqlspec.core.parameters._alignment import (
     collect_null_parameter_ordinals,
     looks_like_execute_many,
@@ -12,6 +14,7 @@ from sqlspec.core.parameters._alignment import (
 )
 from sqlspec.core.parameters._types import ParameterProfile
 from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.utils.type_guards import get_value_attribute
 
 __all__ = (
     "build_literal_inlining_transform",
@@ -77,21 +80,19 @@ def replace_null_parameters_with_literals(
 
     sorted_null_positions = sorted(null_positions)
 
-    from sqlglot import exp as _exp  # Imported lazily to avoid module-level dependency
-
     qmark_position = 0
 
     def transform_node(node: Any) -> Any:
         nonlocal qmark_position
 
-        if isinstance(node, _exp.Placeholder) and getattr(node, "this", None) is None:
+        if isinstance(node, _exp.Placeholder) and node.this is None:
             current_position = qmark_position
             qmark_position += 1
             if current_position in null_positions:
                 return _exp.Null()
             return node
 
-        if isinstance(node, _exp.Placeholder) and getattr(node, "this", None) is not None:
+        if isinstance(node, _exp.Placeholder) and node.this is not None:
             placeholder_text = str(node.this)
             normalized_text = placeholder_text.lstrip("$")
             if normalized_text.isdigit():
@@ -103,7 +104,7 @@ def replace_null_parameters_with_literals(
                 return _exp.Placeholder(this=f"${new_param_num}")
             return node
 
-        if isinstance(node, _exp.Parameter) and getattr(node, "this", None) is not None:
+        if isinstance(node, _exp.Parameter) and node.this is not None:
             parameter_text = str(node.this)
             if parameter_text.isdigit():
                 param_index = int(parameter_text) - 1
@@ -142,8 +143,6 @@ def replace_null_parameters_with_literals(
 
 def _create_literal_expression(value: Any, json_serializer: "Callable[[Any], str]") -> Any:
     """Create a SQLGlot literal expression for the given value."""
-    from sqlglot import exp as _exp
-
     if value is None:
         return _exp.Null()
     if isinstance(value, bool):
@@ -168,18 +167,16 @@ def replace_placeholders_with_literals(
     if not parameters:
         return expression
 
-    from sqlglot import exp as _exp
-
     placeholder_counter = {"index": 0}
 
     def resolve_mapping_value(param_name: str, payload: Mapping[str, Any]) -> Any | None:
         candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
         for candidate in candidate_names:
             if candidate in payload:
-                return getattr(payload[candidate], "value", payload[candidate])
+                return get_value_attribute(payload[candidate])
         normalized = param_name.lstrip("@:$")
         if normalized in payload:
-            return getattr(payload[normalized], "value", payload[normalized])
+            return get_value_attribute(payload[normalized])
         return None
 
     def transform(node: Any) -> Any:
@@ -191,12 +188,12 @@ def replace_placeholders_with_literals(
             current_index = placeholder_counter["index"]
             placeholder_counter["index"] += 1
             if current_index < len(parameters):
-                literal_value = getattr(parameters[current_index], "value", parameters[current_index])
+                literal_value = get_value_attribute(parameters[current_index])
                 return _create_literal_expression(literal_value, json_serializer)
             return node
 
         if isinstance(node, _exp.Parameter):
-            param_name = str(node.this) if getattr(node, "this", None) is not None else ""
+            param_name = str(node.this) if node.this is not None else ""
 
             if isinstance(parameters, Mapping):
                 resolved_value = resolve_mapping_value(param_name, parameters)
@@ -210,12 +207,12 @@ def replace_placeholders_with_literals(
                     if name.startswith("param_"):
                         index_value = int(name[6:])
                         if 0 <= index_value < len(parameters):
-                            literal_value = getattr(parameters[index_value], "value", parameters[index_value])
+                            literal_value = get_value_attribute(parameters[index_value])
                             return _create_literal_expression(literal_value, json_serializer)
                     if name.isdigit():
                         index_value = int(name)
                         if 0 <= index_value < len(parameters):
-                            literal_value = getattr(parameters[index_value], "value", parameters[index_value])
+                            literal_value = get_value_attribute(parameters[index_value])
                             return _create_literal_expression(literal_value, json_serializer)
                 except (ValueError, AttributeError):
                     return node

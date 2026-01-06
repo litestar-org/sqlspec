@@ -8,10 +8,13 @@ module paths to filesystem paths, and ensuring optional dependencies are install
 import importlib
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.dependencies import module_available
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 __all__ = (
     "ensure_aiosql",
@@ -48,6 +51,23 @@ def _require_dependency(
     raise MissingDependencyError(package=package, install_package=install)
 
 
+def _raise_import_error(msg: str, exc: "Exception | None" = None) -> None:
+    """Raise an ImportError with optional exception chaining."""
+    if exc is not None:
+        raise ImportError(msg) from exc
+    raise ImportError(msg)
+
+
+def _resolve_import_attr(obj: Any, attr: str, module: "ModuleType | None", dotted_path: str) -> Any:
+    """Resolve a dotted attribute path segment on a module or object."""
+    try:
+        return obj.__getattribute__(attr)
+    except AttributeError as exc:
+        module_name = module.__name__ if module is not None else "unknown"
+        _raise_import_error(f"Module '{module_name}' has no attribute '{attr}' in '{dotted_path}'", exc)
+        raise
+
+
 def module_to_os_path(dotted_path: str = "app") -> "Path":
     """Convert a module dotted path to filesystem path.
 
@@ -82,11 +102,6 @@ def import_string(dotted_path: str) -> "Any":
         The imported object.
     """
 
-    def _raise_import_error(msg: str, exc: "Exception | None" = None) -> None:
-        if exc is not None:
-            raise ImportError(msg) from exc
-        raise ImportError(msg)
-
     obj: Any = None
     try:
         parts = dotted_path.split(".")
@@ -115,15 +130,11 @@ def import_string(dotted_path: str) -> "Any":
                 parent_module = importlib.import_module(parent_module_path)
             except Exception:
                 return obj
-            if not hasattr(parent_module, attr):
+            if attr not in parent_module.__dict__:
                 _raise_import_error(f"Module '{parent_module_path}' has no attribute '{attr}' in '{dotted_path}'")
 
         for attr in attrs:
-            if not hasattr(obj, attr):
-                _raise_import_error(
-                    f"Module '{module.__name__ if module is not None else 'unknown'}' has no attribute '{attr}' in '{dotted_path}'"
-                )
-            obj = getattr(obj, attr)
+            obj = _resolve_import_attr(obj, attr, module, dotted_path)
     except Exception as e:  # pylint: disable=broad-exception-caught
         _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
     return obj

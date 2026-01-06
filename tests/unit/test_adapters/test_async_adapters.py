@@ -50,13 +50,26 @@ async def test_async_driver_with_cursor(mock_async_driver: MockAsyncDriver) -> N
 
 
 async def test_async_driver_database_exception_handling(mock_async_driver: MockAsyncDriver) -> None:
-    """Test async database exception handling context manager."""
-    async with mock_async_driver.handle_database_exceptions():
+    """Test async database exception handling with deferred exception pattern.
+
+    The deferred pattern stores exceptions in `pending_exception` instead of
+    raising from `__aexit__`, allowing compiled code to raise safely.
+    """
+    exc_handler = mock_async_driver.handle_database_exceptions()
+    async with exc_handler:
         pass
+    assert exc_handler.pending_exception is None
+
+    exc_handler = mock_async_driver.handle_database_exceptions()
+    async with exc_handler:
+        raise ValueError("Test async error")
+
+    assert exc_handler.pending_exception is not None
+    assert isinstance(exc_handler.pending_exception, SQLSpecError)
+    assert "Mock async database error" in str(exc_handler.pending_exception)
 
     with pytest.raises(SQLSpecError, match="Mock async database error"):
-        async with mock_async_driver.handle_database_exceptions():
-            raise ValueError("Test async error")
+        raise exc_handler.pending_exception
 
 
 async def test_async_driver_execute_statement_select(mock_async_driver: MockAsyncDriver) -> None:
@@ -496,6 +509,7 @@ async def test_async_driver_context_manager_integration(mock_async_driver: MockA
 
         with patch.object(mock_async_driver, "handle_database_exceptions") as mock_handle_exceptions:
             mock_context = AsyncMock()
+            mock_context.pending_exception = None
             mock_handle_exceptions.return_value = mock_context
 
             result = await mock_async_driver.dispatch_statement_execution(statement, mock_async_driver.connection)

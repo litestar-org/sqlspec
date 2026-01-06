@@ -1,4 +1,4 @@
-from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
+from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
     OracleConnectionParams,

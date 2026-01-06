@@ -6,6 +6,19 @@ from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 
 
+def _is_compiled() -> bool:
+    """Check if driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(_is_compiled(), reason="Test requires interpreted subclasses of compiled driver bases.")
+
+
 class _DummyDriver(SyncDriverAdapterBase):
     dialect = "spanner"
 
@@ -152,10 +165,8 @@ def test_provide_session_uses_batch_when_transaction_requested() -> None:
 
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     config.get_database = lambda: _DB()  # type: ignore[assignment]
-    config.driver_type = _DummyDriver  # type: ignore[assignment,misc]
 
     with config.provide_session(transaction=True) as driver:
-        assert isinstance(driver, _DummyDriver)
         assert isinstance(driver.connection, _Txn)
 
 

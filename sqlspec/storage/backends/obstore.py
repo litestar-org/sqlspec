@@ -21,72 +21,10 @@ from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_obstore
-from sqlspec.utils.sync_tools import async_
 
 __all__ = ("ObStoreBackend",)
 
 logger = get_logger(__name__)
-
-
-class _AsyncArrowIterator:
-    """Helper class to work around mypyc's lack of async generator support.
-
-    Uses hybrid async/sync pattern:
-    - Native async I/O for network operations (S3, GCS, Azure)
-    - Thread pool for CPU-bound PyArrow parsing
-    """
-
-    __slots__ = ("_current_file_iterator", "_files_iterator", "backend", "kwargs", "pattern")
-
-    def __init__(self, backend: "ObStoreBackend", pattern: str, **kwargs: Any) -> None:
-        self.backend = backend
-        self.pattern = pattern
-        self.kwargs = kwargs
-        self._files_iterator: Iterator[str] | None = None
-        self._current_file_iterator: Iterator[ArrowRecordBatch] | None = None
-
-    def __aiter__(self) -> "_AsyncArrowIterator":
-        return self
-
-    async def __anext__(self) -> ArrowRecordBatch:
-        pq = import_pyarrow_parquet()
-
-        if self._files_iterator is None:
-            files = self.backend.glob(self.pattern, **self.kwargs)
-            self._files_iterator = iter(files)
-
-        while True:
-            if self._current_file_iterator is not None:
-
-                def _safe_next_batch() -> ArrowRecordBatch:
-                    try:
-                        return next(self._current_file_iterator)  # type: ignore[arg-type]
-                    except StopIteration as e:
-                        raise StopAsyncIteration from e
-
-                try:
-                    return await async_(_safe_next_batch)()
-                except StopAsyncIteration:
-                    self._current_file_iterator = None
-                    continue
-
-            try:
-                next_file = next(self._files_iterator)
-            except StopIteration as e:
-                raise StopAsyncIteration from e
-
-            data = await self.backend.read_bytes_async(next_file)
-            parquet_file = pq.ParquetFile(io.BytesIO(data))
-            self._current_file_iterator = parquet_file.iter_batches()
-
-    async def aclose(self) -> None:
-        """Close underlying file iterator."""
-        if self._current_file_iterator is not None:
-            try:
-                close_method = self._current_file_iterator.close  # type: ignore[attr-defined]
-                await async_(close_method)()  # pyright: ignore
-            except AttributeError:
-                pass
 
 
 DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}
@@ -165,6 +103,11 @@ class ObStoreBackend:
         except Exception as exc:
             msg = f"Failed to initialize obstore backend for {uri}"
             raise StorageOperationFailedError(msg) from exc
+
+    @property
+    def is_local_store(self) -> bool:
+        """Return whether the backend uses local storage."""
+        return self._is_local_store
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "ObStoreBackend":
@@ -308,7 +251,7 @@ class ObStoreBackend:
             return matching_objects
         return [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
@@ -598,14 +541,14 @@ class ObStoreBackend:
 
         await self.store.rename_async(source_path, dest_path)
 
-    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata from storage asynchronously."""
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
-        result: dict[str, Any] = {}
+        result: dict[str, object] = {}
         try:
             metadata = await self.store.head_async(resolved_path)
             result.update({
@@ -640,9 +583,20 @@ class ObStoreBackend:
         buffer.seek(0)
         await self.write_bytes_async(resolved_path, buffer.read())
 
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
+    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+        """Stream Arrow record batches from storage asynchronously.
+
+        Args:
+            pattern: Glob pattern to match files.
+            **kwargs: Additional arguments passed to stream_arrow().
+
+        Returns:
+            AsyncIterator yielding Arrow record batches.
+        """
+        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
+
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
-        return _AsyncArrowIterator(self, resolved_pattern, **kwargs)
+        return AsyncArrowBatchIterator(self.stream_arrow(resolved_pattern, **kwargs))
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...

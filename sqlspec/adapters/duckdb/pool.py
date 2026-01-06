@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import duckdb
 
-from sqlspec.adapters.duckdb._types import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -59,7 +59,6 @@ class DuckDBConnectionPool:
         extension_flags: "dict[str, Any] | None" = None,
         secrets: "list[dict[str, Any]] | None" = None,
         on_connection_create: "Callable[[DuckDBConnection], None] | None" = None,
-        **kwargs: Any,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -71,7 +70,6 @@ class DuckDBConnectionPool:
             extension_flags: Connection-level SET statements applied after creation
             secrets: List of secrets to create
             on_connection_create: Callback executed when connection is created
-            **kwargs: Additional parameters ignored for compatibility
         """
         self._connection_config = connection_config
         self._recycle = pool_recycle_seconds
@@ -193,7 +191,8 @@ class DuckDBConnectionPool:
         Each thread gets its own dedicated DuckDB connection to prevent
         thread-safety issues with concurrent cursor operations.
         """
-        if not hasattr(self._thread_local, "connection"):
+        thread_state = self._thread_local.__dict__
+        if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
             self._thread_local.last_used = time.time()
@@ -207,7 +206,7 @@ class DuckDBConnectionPool:
             self._thread_local.last_used = time.time()
             return cast("DuckDBConnection", self._thread_local.connection)
 
-        idle_time = time.time() - getattr(self._thread_local, "last_used", 0)
+        idle_time = time.time() - thread_state.get("last_used", 0)
         if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
             logger.debug("DuckDB connection failed health check after %.1fs idle, recreating", idle_time)
             with suppress(Exception):
@@ -220,13 +219,14 @@ class DuckDBConnectionPool:
 
     def _close_thread_connection(self) -> None:
         """Close the connection for the current thread."""
-        if hasattr(self._thread_local, "connection"):
+        thread_state = self._thread_local.__dict__
+        if "connection" in thread_state:
             with suppress(Exception):
                 self._thread_local.connection.close()
             del self._thread_local.connection
-            if hasattr(self._thread_local, "created_at"):
+            if "created_at" in thread_state:
                 del self._thread_local.created_at
-            if hasattr(self._thread_local, "last_used"):
+            if "last_used" in thread_state:
                 del self._thread_local.last_used
 
     def _is_connection_alive(self, connection: DuckDBConnection) -> bool:
@@ -268,7 +268,7 @@ class DuckDBConnectionPool:
 
     def size(self) -> int:
         """Get current pool size (always 1 for thread-local)."""
-        return 1 if hasattr(self._thread_local, "connection") else 0
+        return 1 if "connection" in self._thread_local.__dict__ else 0
 
     def checked_out(self) -> int:
         """Get number of checked out connections (always 0 for thread-local)."""

@@ -1,14 +1,43 @@
 from __future__ import annotations
 
-from collections.abc import Generator
-from pathlib import Path
-from typing import TYPE_CHECKING
+import warnings
 
-import pytest
-from minio import Minio
+warnings.filterwarnings(
+    "ignore", message="You are using a Python version.*which Google will stop supporting", category=FutureWarning
+)
+
+from collections.abc import Generator  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import TYPE_CHECKING  # noqa: E402
+
+import pytest  # noqa: E402
+from minio import Minio  # noqa: E402
 
 if TYPE_CHECKING:
     from pytest_databases.docker.minio import MinioService
+
+
+def is_compiled() -> bool:
+    """Detect if sqlspec driver modules are mypyc-compiled.
+
+    Returns:
+        True when the driver modules have been compiled with mypyc.
+    """
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+# Marker for tests incompatible with mypyc-compiled base classes.
+# These tests create interpreted subclasses of compiled bases, which
+# can trigger GC conflicts during pytest error reporting.
+requires_interpreted = pytest.mark.skipif(
+    is_compiled(), reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)"
+)
+
 
 pytest_plugins = [
     "pytest_databases.docker.postgres",
@@ -49,6 +78,32 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Run BigQuery ADBC tests (requires valid GCP credentials)",
     )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip ADBC-marked tests when running against compiled modules."""
+    if not is_compiled():
+        return
+
+    skip_adbc = pytest.mark.skip(reason="Skip ADBC tests when running against mypyc-compiled modules.")
+    skip_compiled = pytest.mark.skip(
+        reason="Skip tests that rely on interpreted subclasses or mocks of compiled driver bases."
+    )
+    for item in items:
+        item_path = str(getattr(item, "path", getattr(item, "fspath", "")))
+        if item.get_closest_marker("adbc") is not None or "tests/integration/test_adapters/test_adbc" in item_path:
+            item.add_marker(skip_adbc)
+            continue
+        if (
+            "tests/unit/test_adapters/" in item_path
+            or "tests/unit/test_driver/" in item_path
+            or item_path.endswith("tests/unit/test_config/test_storage_capabilities.py")
+            or item_path.endswith("tests/unit/test_observability.py")
+        ):
+            item.add_marker(skip_compiled)
+            continue
+        if {"mock_sync_driver", "mock_async_driver"} & set(getattr(item, "fixturenames", ())):
+            item.add_marker(skip_compiled)
 
 
 @pytest.fixture

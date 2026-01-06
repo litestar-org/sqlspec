@@ -4,7 +4,24 @@ import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyDriver
 
-pytestmark = [pytest.mark.xdist_group("mysql")]
+
+def _is_compiled() -> bool:
+    """Check if driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _async
+
+        return hasattr(_async, "__file__") and (_async.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+pytestmark = [
+    pytest.mark.xdist_group("mysql"),
+    pytest.mark.skipif(
+        _is_compiled(),
+        reason="mypyc-compiled driver modules have exception propagation issues across method boundaries",
+    ),
+]
 
 
 async def test_select_to_arrow_basic(asyncmy_driver: AsyncmyDriver) -> None:

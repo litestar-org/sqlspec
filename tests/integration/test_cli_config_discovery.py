@@ -33,6 +33,7 @@ def get_test_config():
     config = Mock()
     config.bind_key = "test"
     config.migration_config = {"enabled": True, "script_location": "migrations"}
+    config.connection_config = {}  # Required for protocol validation
     config.is_async = False
     return config
 """)
@@ -187,11 +188,13 @@ def get_multiple_configs():
     config1 = Mock()
     config1.bind_key = "primary"
     config1.migration_config = {"enabled": True, "script_location": "migrations"}
+    config1.connection_config = {}
     config1.is_async = False
 
     config2 = Mock()
     config2.bind_key = "secondary"
     config2.migration_config = {"enabled": True, "script_location": "migrations"}
+    config2.connection_config = {}
     config2.is_async = False
 
     return [config1, config2]
@@ -319,11 +322,13 @@ def get_multiple_configs():
     config1 = Mock()
     config1.bind_key = "primary"
     config1.migration_config = {"enabled": True, "script_location": "migrations"}
+    config1.connection_config = {}
     config1.is_async = False
 
     config2 = Mock()
     config2.bind_key = "secondary"
     config2.migration_config = {"enabled": True, "script_location": "migrations"}
+    config2.connection_config = {}
     config2.is_async = False
 
     return [config1, config2]
@@ -419,6 +424,7 @@ def get_primary():
     config = Mock()
     config.bind_key = "primary"
     config.migration_config = {"enabled": True, "script_location": "migrations"}
+    config.connection_config = {}
     config.is_async = False
     return config
 
@@ -426,6 +432,7 @@ def get_secondary():
     config = Mock()
     config.bind_key = "secondary"
     config.migration_config = {"enabled": True, "script_location": "migrations"}
+    config.connection_config = {}
     config.is_async = False
     return config
 """)
@@ -478,6 +485,7 @@ def get_config_v1():
     config = Mock()
     config.bind_key = "main"
     config.migration_config = {"enabled": True, "script_location": "migrations_v1"}
+    config.connection_config = {}
     config.is_async = False
     config.version = "v1"
     return config
@@ -486,6 +494,7 @@ def get_config_v2():
     config = Mock()
     config.bind_key = "main"  # Same bind_key!
     config.migration_config = {"enabled": True, "script_location": "migrations_v2"}
+    config.connection_config = {}
     config.is_async = False
     config.version = "v2"
     return config
@@ -532,6 +541,7 @@ def get_db1():
     config = Mock()
     config.bind_key = "db1"
     config.migration_config = {"enabled": True, "script_location": "migrations"}
+    config.connection_config = {}
     config.is_async = False
     return config
 
@@ -539,6 +549,7 @@ def get_db2():
     config = Mock()
     config.bind_key = "db2"
     config.migration_config = {"enabled": True, "script_location": "migrations"}
+    config.connection_config = {}
     config.is_async = True
     return config
 """)

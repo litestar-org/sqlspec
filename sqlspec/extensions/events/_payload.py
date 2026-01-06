@@ -4,6 +4,7 @@ import contextlib
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
@@ -19,8 +20,6 @@ def encode_notify_payload(event_id: str, payload: "dict[str, Any]", metadata: "d
     Raises:
         EventChannelError: If the encoded payload exceeds PostgreSQL's 8KB limit.
     """
-    from sqlspec.exceptions import EventChannelError
-
     encoded = to_json(
         {
             "event_id": event_id,

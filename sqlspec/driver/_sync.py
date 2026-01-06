@@ -2,33 +2,47 @@
 
 from abc import abstractmethod
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
-from sqlspec.core import SQL, StackResult, create_arrow_result
+from mypy_extensions import mypyc_attr
+
+from sqlspec.core import SQL, ProcessedState, StackResult, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryMixin,
     ExecutionResult,
     StackExecutionObserver,
+    SyncExceptionHandler,
     VersionInfo,
     describe_stack_statement,
     handle_single_row_error,
 )
-from sqlspec.driver.mixins import SQLTranslatorMixin, StorageDriverMixin
+from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
+from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
+from sqlspec.driver._storage_helpers import (
+    arrow_table_to_rows,
+    attach_partition_telemetry,
+    build_ingest_telemetry,
+    coerce_arrow_table,
+    create_storage_job,
+    stringify_storage_target,
+)
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
+from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from contextlib import AbstractContextManager
+
+    from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.driver._common import ForeignKeyMetadata
-    from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, ArrowTable, SchemaT, StatementParameters
 
 _LOGGER_NAME: Final[str] = "sqlspec"
 logger = get_logger(_LOGGER_NAME)
@@ -41,11 +55,18 @@ EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 SyncDriverT = TypeVar("SyncDriverT", bound="SyncDriverAdapterBase")
 
 
-class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, StorageDriverMixin):
-    """Base class for synchronous database drivers."""
+@mypyc_attr(allow_interpreted_subclasses=True)
+class SyncDriverAdapterBase(CommonDriverAttributesMixin):
+    """Base class for synchronous database drivers.
+
+    This class includes flattened storage and SQL translation methods that were
+    previously in StorageDriverMixin and SQLTranslatorMixin. The flattening
+    eliminates cross-trait attribute access that caused mypyc segmentation faults.
+    """
 
     __slots__ = ()
-    is_async: bool = False
+
+    dialect: "DialectType | None" = None
 
     @property
     @abstractmethod
@@ -54,6 +75,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             Data dictionary instance for metadata queries
+
         """
 
     def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
@@ -65,11 +87,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             The result of the SQL execution
+
         """
         runtime = self.observability
         compiled_sql, execution_parameters = statement.compile()
-        processed_state = statement.get_processed_state()
-        operation = getattr(processed_state, "operation_type", statement.operation_type)
+        _ = cast("ProcessedState", statement.get_processed_state())
+        operation = statement.operation_type
         query_context = {
             "sql": compiled_sql,
             "parameters": execution_parameters,
@@ -82,8 +105,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
         started = perf_counter()
 
+        result: SQLResult | None = None
+        exc_handler = self.handle_database_exceptions()
         try:
-            with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
+            with exc_handler, self.with_cursor(connection) as cursor:
                 special_result = self._try_special_handling(cursor, statement)
                 if special_result is not None:
                     result = special_result
@@ -97,9 +122,22 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
                     execution_result = self._execute_statement(cursor, statement)
                     result = self.build_statement_result(statement, execution_result)
         except Exception as exc:  # pragma: no cover - instrumentation path
+            if exc_handler.pending_exception is not None:
+                mapped_exc = exc_handler.pending_exception
+                runtime.span_manager.end_span(span, error=mapped_exc)
+                runtime.emit_error(mapped_exc, **query_context)
+                raise mapped_exc from exc
             runtime.span_manager.end_span(span, error=exc)
             runtime.emit_error(exc, **query_context)
             raise
+
+        if exc_handler.pending_exception is not None:
+            mapped_exc = exc_handler.pending_exception
+            runtime.span_manager.end_span(span, error=mapped_exc)
+            runtime.emit_error(mapped_exc, **query_context)
+            raise mapped_exc from None
+
+        assert result is not None  # Guaranteed: no exception means result was assigned
 
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
@@ -114,10 +152,23 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
             is_script=statement.is_script,
             rows_affected=result.rows_affected,
             duration_s=duration,
-            storage_backend=(result.metadata or {}).get("storage_backend") if hasattr(result, "metadata") else None,
+            storage_backend=(result.metadata or {}).get("storage_backend"),
             started_at=started,
         )
         return result
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if the connection is inside a transaction.
+
+        Each adapter MUST override this method with direct attribute access
+        for optimal mypyc performance. Do not use getattr chains.
+
+        Raises:
+            NotImplementedError: Always - subclasses must override.
+
+        """
+        msg = "Adapters must override _connection_in_transaction()"
+        raise NotImplementedError(msg)
 
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:
@@ -128,11 +179,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         """
 
     @abstractmethod
-    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+    def handle_database_exceptions(self) -> "SyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
-            ContextManager that can be used in with statements
+            Exception handler with deferred exception pattern for mypyc compatibility.
+            The handler stores mapped exceptions in pending_exception rather than
+            raising from __exit__ to avoid ABI boundary violations.
+
         """
 
     @abstractmethod
@@ -147,7 +201,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
     def commit(self) -> None:
         """Commit the current transaction on the current connection."""
 
-    @abstractmethod
     def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
 
@@ -161,7 +214,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         Returns:
             SQLResult if the special operation was handled and completed,
             None if standard execution should proceed
+
         """
+        _ = (cursor, statement)
+        return None
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a SQL script containing multiple statements.
@@ -175,6 +231,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             ExecutionResult with script execution data including statement counts
+
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
@@ -193,7 +250,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack sequentially using the adapter's primitives."""
-
         if not isinstance(stack, StatementStack):
             msg = "execute_stack expects a StatementStack instance"
             raise TypeError(msg)
@@ -258,7 +314,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
     def _rollback_after_stack_error(self) -> None:
         """Attempt to rollback after a stack operation error to clear connection state."""
-
         try:
             self.rollback()
         except Exception as rollback_error:  # pragma: no cover - driver-specific cleanup
@@ -266,7 +321,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
     def _commit_after_stack_operation(self) -> None:
         """Attempt to commit after a successful stack operation when not batching."""
-
         try:
             self.commit()
         except Exception as commit_error:  # pragma: no cover - driver-specific cleanup
@@ -284,6 +338,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             ExecutionResult with execution data for the many operation
+
         """
 
     @abstractmethod
@@ -298,6 +353,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         Returns:
             ExecutionResult with execution data
+
         """
 
     def execute(
@@ -436,6 +492,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_one(): Primary method with identical behavior
+
         """
         return self.select_one(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -521,6 +578,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_one_or_none(): Primary method with identical behavior
+
         """
         return self.select_one_or_none(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -599,6 +657,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select(): Primary method with identical behavior
+
         """
         return self.select(statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs)
 
@@ -648,6 +707,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
             >>> result = driver.select_to_arrow(
             ...     "SELECT * FROM users", native_only=True
             ... )
+
         """
         ensure_pyarrow()
 
@@ -700,6 +760,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_to_arrow(): Primary method with identical behavior and full documentation
+
         """
         return self.select_to_arrow(
             statement,
@@ -749,6 +810,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_value(): Primary method with identical behavior
+
         """
         return self.select_value(statement, *parameters, statement_config=statement_config, **kwargs)
 
@@ -788,6 +850,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_value_or_none(): Primary method with identical behavior
+
         """
         return self.select_value_or_none(statement, *parameters, statement_config=statement_config, **kwargs)
 
@@ -838,6 +901,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
             A tuple containing:
             - List of data rows (transformed by schema_type if provided)
             - Total count of rows matching the query (ignoring LIMIT/OFFSET)
+
         """
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
@@ -888,6 +952,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
         See Also:
             select_with_total(): Primary method with identical behavior and full documentation
+
         """
         return self.select_with_total(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
@@ -916,7 +981,300 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         msg = f"Unsupported stack operation method: {operation.method}"
         raise ValueError(msg)
 
+    def convert_to_dialect(
+        self, statement: "Statement", to_dialect: "DialectType | None" = None, pretty: bool = DEFAULT_PRETTY
+    ) -> str:
+        """Convert a statement to a target SQL dialect.
 
+        Args:
+            statement: SQL statement to convert.
+            to_dialect: Target dialect (defaults to current dialect).
+            pretty: Whether to format the output SQL.
+
+        Returns:
+            SQL string in target dialect.
+
+        """
+        return _convert_to_dialect_impl(statement, self.dialect, to_dialect, pretty)
+
+    def _storage_pipeline(self) -> "SyncStoragePipeline":
+        """Get or create a sync storage pipeline.
+
+        Returns:
+            SyncStoragePipeline instance.
+
+        """
+        factory = self.storage_pipeline_factory
+        if factory is None:
+            return SyncStoragePipeline()
+        return cast("SyncStoragePipeline", factory())
+
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Stream a SELECT statement directly into storage.
+
+        Args:
+            statement: SQL statement to execute.
+            destination: Storage destination path.
+            parameters: Query parameters.
+            statement_config: Optional statement configuration.
+            partitioner: Optional partitioner configuration.
+            format_hint: Optional format hint for storage.
+            telemetry: Optional telemetry dict to merge.
+
+        Returns:
+            StorageBridgeJob with execution telemetry.
+
+        Raises:
+            StorageCapabilityError: If not implemented.
+
+        """
+        self._raise_storage_not_implemented("select_to_storage")
+        raise NotImplementedError
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into the target table.
+
+        Args:
+            table: Target table name.
+            source: Arrow data source.
+            partitioner: Optional partitioner configuration.
+            overwrite: Whether to overwrite existing data.
+
+        Returns:
+            StorageBridgeJob with execution telemetry.
+
+        Raises:
+            StorageCapabilityError: If not implemented.
+
+        """
+        self._raise_storage_not_implemented("load_from_arrow")
+        raise NotImplementedError
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load artifacts from storage into the target table.
+
+        Args:
+            table: Target table name.
+            source: Storage source path.
+            file_format: File format of source.
+            partitioner: Optional partitioner configuration.
+            overwrite: Whether to overwrite existing data.
+
+        Returns:
+            StorageBridgeJob with execution telemetry.
+
+        Raises:
+            StorageCapabilityError: If not implemented.
+
+        """
+        self._raise_storage_not_implemented("load_from_storage")
+        raise NotImplementedError
+
+    def stage_artifact(self, request: "dict[str, Any]") -> "dict[str, Any]":
+        """Provision staging metadata for adapters that require remote URIs.
+
+        Args:
+            request: Staging request configuration.
+
+        Returns:
+            Staging metadata dict.
+
+        Raises:
+            StorageCapabilityError: If not implemented.
+
+        """
+        self._raise_storage_not_implemented("stage_artifact")
+        raise NotImplementedError
+
+    def flush_staging_artifacts(self, artifacts: "list[dict[str, Any]]", *, error: Exception | None = None) -> None:
+        """Clean up staged artifacts after a job completes.
+
+        Args:
+            artifacts: List of staging artifacts to clean up.
+            error: Optional error that triggered cleanup.
+
+        """
+        if artifacts:
+            self._raise_storage_not_implemented("flush_staging_artifacts")
+
+    def get_storage_job(self, job_id: str) -> "StorageBridgeJob | None":
+        """Fetch a previously created job handle.
+
+        Args:
+            job_id: Job identifier.
+
+        Returns:
+            StorageBridgeJob if found, None otherwise.
+
+        """
+        return None
+
+    def _write_result_to_storage_sync(
+        self,
+        result: "ArrowResult",
+        destination: "StorageDestination",
+        *,
+        format_hint: "StorageFormat | None" = None,
+        storage_options: "dict[str, Any] | None" = None,
+        pipeline: "SyncStoragePipeline | None" = None,
+    ) -> "StorageTelemetry":
+        """Write Arrow result to storage with telemetry.
+
+        Args:
+            result: Arrow result to write.
+            destination: Storage destination.
+            format_hint: Optional format hint.
+            storage_options: Optional storage options.
+            pipeline: Optional storage pipeline.
+
+        Returns:
+            StorageTelemetry with write metrics.
+
+        """
+        runtime = self.observability
+        span = runtime.start_storage_span(
+            "write", destination=stringify_storage_target(destination), format_label=format_hint
+        )
+        try:
+            telemetry = result.write_to_storage_sync(
+                destination, format_hint=format_hint, storage_options=storage_options, pipeline=pipeline
+            )
+        except Exception as exc:
+            runtime.end_storage_span(span, error=exc)
+            raise
+        telemetry = runtime.annotate_storage_telemetry(telemetry)
+        runtime.end_storage_span(span, telemetry=telemetry)
+        return telemetry
+
+    def _read_arrow_from_storage_sync(
+        self,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "tuple[ArrowTable, StorageTelemetry]":
+        """Read Arrow table from storage with telemetry.
+
+        Args:
+            source: Storage source path.
+            file_format: File format to read.
+            storage_options: Optional storage options.
+
+        Returns:
+            Tuple of (ArrowTable, StorageTelemetry).
+
+        """
+        runtime = self.observability
+        span = runtime.start_storage_span(
+            "read", destination=stringify_storage_target(source), format_label=file_format
+        )
+        pipeline = self._storage_pipeline()
+        try:
+            table, telemetry = pipeline.read_arrow(source, file_format=file_format, storage_options=storage_options)
+        except Exception as exc:
+            runtime.end_storage_span(span, error=exc)
+            raise
+        telemetry = runtime.annotate_storage_telemetry(telemetry)
+        runtime.end_storage_span(span, telemetry=telemetry)
+        return table, telemetry
+
+    def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
+        """Coerce various sources to a PyArrow Table.
+
+        Args:
+            source: ArrowResult, PyArrow Table, RecordBatch, or iterable of dicts.
+
+        Returns:
+            PyArrow Table.
+
+        """
+        return coerce_arrow_table(source)
+
+    @staticmethod
+    def _arrow_table_to_rows(
+        table: "ArrowTable", columns: "list[str] | None" = None
+    ) -> "tuple[list[str], list[tuple[Any, ...]]]":
+        """Convert Arrow table to column names and row tuples.
+
+        Args:
+            table: Arrow table to convert.
+            columns: Optional list of columns to extract.
+
+        Returns:
+            Tuple of (column_names, list of row tuples).
+
+        """
+        return arrow_table_to_rows(table, columns)
+
+    @staticmethod
+    def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
+        """Build telemetry dict from Arrow table statistics.
+
+        Args:
+            table: Arrow table to extract statistics from.
+            format_label: Format label for telemetry.
+
+        Returns:
+            StorageTelemetry dict with row/byte counts.
+
+        """
+        return build_ingest_telemetry(table, format_label=format_label)
+
+    def _attach_partition_telemetry(
+        self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"
+    ) -> None:
+        """Attach partitioner info to telemetry dict.
+
+        Args:
+            telemetry: Telemetry dict to update.
+            partitioner: Partitioner configuration or None.
+
+        """
+        attach_partition_telemetry(telemetry, partitioner)
+
+    def _create_storage_job(
+        self, produced: "StorageTelemetry", provided: "StorageTelemetry | None" = None, *, status: str = "completed"
+    ) -> "StorageBridgeJob":
+        """Create a StorageBridgeJob from telemetry data.
+
+        Args:
+            produced: Telemetry from the production side of the operation.
+            provided: Optional telemetry from the source side.
+            status: Job status string.
+
+        Returns:
+            StorageBridgeJob instance.
+
+        """
+        return create_storage_job(produced, provided, status=status)
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SyncDataDictionaryBase(DataDictionaryMixin):
     """Base class for synchronous data dictionary implementations."""
 
@@ -929,6 +1287,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             Version information or None if detection fails
+
         """
 
     @abstractmethod
@@ -941,6 +1300,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             True if feature is supported, False otherwise
+
         """
 
     @abstractmethod
@@ -953,6 +1313,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             Database-specific type name
+
         """
 
     def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
@@ -964,6 +1325,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of table names
+
         """
         _ = driver, schema
         return []
@@ -980,6 +1342,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of column metadata dictionaries
+
         """
         _ = driver, table, schema
         return []
@@ -996,6 +1359,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of index metadata dictionaries
+
         """
         _ = driver, table, schema
         return []
@@ -1012,6 +1376,7 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of foreign key metadata
+
         """
         _ = driver, table, schema
         return []
@@ -1021,5 +1386,6 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of feature names this data dictionary supports
+
         """
         return self.get_default_features()

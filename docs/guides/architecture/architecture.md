@@ -210,6 +210,16 @@ def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
     """Execute multi-statement script"""
 ```
 
+### Compiled Driver Layer
+
+The core driver base classes and mixins are compiled with mypyc to reduce dispatch overhead in the execution pipeline. Adapters remain interpreted because they depend on third-party drivers.
+
+**Key practices:**
+
+- Use `@mypyc_attr(allow_interpreted_subclasses=True)` on driver base classes and mixins to allow interpreted adapter subclasses.
+- Avoid `getattr()`/`hasattr()` in driver code paths; prefer protocol-based access and explicit type guards.
+- Keep driver classes `__slots__`-only with explicit attributes to maximize mypyc optimization.
+
 ---
 
 ## Parameter Handling

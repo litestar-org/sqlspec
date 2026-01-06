@@ -27,10 +27,10 @@ def get_runtime_hints(adapter: "str | None", config: "Any" = None) -> "EventRunt
     """Return runtime hints provided by the adapter configuration."""
     if config is None:
         return _DEFAULT_HINTS
-    provider = getattr(config, "get_event_runtime_hints", None)
-    if provider is None:
+    try:
+        hints = config.get_event_runtime_hints()
+    except AttributeError:
         return _DEFAULT_HINTS
-    hints = provider()
     if isinstance(hints, EventRuntimeHints):
         return hints
     return _DEFAULT_HINTS

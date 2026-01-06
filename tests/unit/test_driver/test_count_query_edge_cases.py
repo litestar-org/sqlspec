@@ -4,13 +4,26 @@ This module tests COUNT query generation validation, particularly for edge cases
 where SELECT statements are missing required clauses (FROM, etc.).
 """
 
-# pyright: reportPrivateUsage=false
-
 import pytest
 
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
+
+# pyright: reportPrivateUsage=false
+
+
+def _is_compiled() -> bool:
+    """Check if driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(_is_compiled(), reason="Test requires interpreted subclasses of compiled driver bases.")
 
 
 class MockSyncDriver(SyncDriverAdapterBase):

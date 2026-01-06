@@ -1,15 +1,30 @@
 """PostgreSQL-specific type conversion for psqlpy adapter.
 
-Provides specialized type handling for PostgreSQL databases, including
-PostgreSQL-specific types like intervals and arrays while preserving
-backward compatibility.
+Combines output conversion (database results → Python) and input conversion
+(Python params → PostgreSQL format) in a single module. Designed for mypyc
+compilation with no nested functions.
+
+Output conversion handles:
+- PostgreSQL-specific types like intervals and arrays
+- Standard type detection (UUID, JSON, datetime, etc.)
+
+Input conversion handles:
+- pgvector type handlers (placeholder for future support)
 """
 
 import re
-from functools import lru_cache
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.core import BaseTypeConverter
+from sqlspec.core.type_converter import CachedOutputConverter
+from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from psqlpy import Connection
+
+__all__ = ("PG_SPECIAL_CHARS", "PG_SPECIFIC_REGEX", "PostgreSQLOutputConverter", "register_pgvector")
+
+logger = get_logger(__name__)
 
 PG_SPECIFIC_REGEX: Final[re.Pattern[str]] = re.compile(
     r"^(?:"
@@ -22,47 +37,41 @@ PG_SPECIFIC_REGEX: Final[re.Pattern[str]] = re.compile(
 PG_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "-", ":", "T", ".", "P", "[", "Y", "M", "D", "H", "S"})
 
 
-class PostgreSQLTypeConverter(BaseTypeConverter):
-    """PostgreSQL-specific type converter with interval and array support.
+class PostgreSQLOutputConverter(CachedOutputConverter):
+    """PostgreSQL-specific output conversion with interval and array support.
 
-    Extends the base BaseTypeConverter with PostgreSQL-specific functionality
-    while maintaining backward compatibility for interval and array types.
-    Includes per-instance LRU cache for improved performance.
+    Extends CachedOutputConverter with PostgreSQL-specific functionality
+    for interval and array type handling.
     """
 
-    __slots__ = ("_convert_cache",)
+    __slots__ = ()
 
     def __init__(self, cache_size: int = 5000) -> None:
-        """Initialize converter with per-instance conversion cache.
+        """Initialize converter with PostgreSQL-specific options.
 
         Args:
             cache_size: Maximum number of string values to cache (default: 5000)
         """
-        super().__init__()
+        super().__init__(special_chars=PG_SPECIAL_CHARS, cache_size=cache_size)
 
-        @lru_cache(maxsize=cache_size)
-        def _cached_convert(value: str) -> Any:
-            if not value or not any(c in value for c in PG_SPECIAL_CHARS):
-                return value
-            detected_type = self.detect_type(value)
-            return self.convert_value(value, detected_type) if detected_type else value
-
-        self._convert_cache = _cached_convert
-
-    def convert_if_detected(self, value: Any) -> Any:
-        """Convert string if special type detected (cached).
+    def _convert_detected(self, value: str, detected_type: str) -> Any:
+        """Convert value with PostgreSQL-specific handling.
 
         Args:
-            value: Value to potentially convert
+            value: String value to convert.
+            detected_type: Detected type name.
 
         Returns:
-            Converted value or original value
+            Converted value or original for PostgreSQL-specific types.
         """
-        if not isinstance(value, str):
+        if detected_type in {"interval", "pg_array"}:
             return value
-        return self._convert_cache(value)
+        try:
+            return self.convert_value(value, detected_type)
+        except Exception:
+            return value
 
-    def detect_type(self, value: str) -> str | None:
+    def detect_type(self, value: str) -> "str | None":
         """Detect types including PostgreSQL-specific types.
 
         Args:
@@ -83,20 +92,25 @@ class PostgreSQLTypeConverter(BaseTypeConverter):
 
         return None
 
-    def convert_value(self, value: str, detected_type: str) -> Any:
-        """Convert value with PostgreSQL-specific handling.
 
-        Args:
-            value: String value to convert.
-            detected_type: Detected type name.
+def register_pgvector(connection: "Connection") -> None:
+    """Register pgvector type handlers on psqlpy connection.
 
-        Returns:
-            Converted value or original string for PostgreSQL-specific types.
-        """
-        if detected_type in {"interval", "pg_array"}:
-            return value
+    Currently a placeholder for future implementation. The psqlpy library
+    does not yet expose a type handler registration API compatible with
+    pgvector's automatic conversion system.
 
-        return super().convert_value(value, detected_type)
+    Args:
+        connection: Psqlpy connection instance.
 
+    Note:
+        When psqlpy adds type handler support, this function will:
+        - Register pgvector extension on the connection
+        - Enable automatic NumPy array <-> PostgreSQL vector conversion
+        - Support vector similarity search operations
+    """
+    if not PGVECTOR_INSTALLED:
+        logger.debug("pgvector not installed - skipping vector type handlers")
+        return
 
-__all__ = ("PG_SPECIAL_CHARS", "PG_SPECIFIC_REGEX", "PostgreSQLTypeConverter")
+    logger.debug("pgvector registration for psqlpy is not yet implemented")

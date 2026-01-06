@@ -103,7 +103,7 @@ def test_sqlite_connection_instance_with_pre_created_pool(tmp_path: Path) -> Non
     db_path = tmp_path / "test.db"
 
     # Create pool manually
-    pool = SqliteConnectionPool(connection_parameters={"database": str(db_path)}, pool_min_size=1, pool_max_size=2)
+    pool = SqliteConnectionPool(connection_parameters={"database": str(db_path)})
 
     try:
         # Inject pool into config
@@ -299,7 +299,7 @@ def test_sqlite_connection_instance_after_close_pool() -> None:
     """Test that connection_instance is set to None after close_pool()."""
     from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 
-    pool = SqliteConnectionPool(connection_parameters={"database": ":memory:"}, pool_min_size=1, pool_max_size=2)
+    pool = SqliteConnectionPool(connection_parameters={"database": ":memory:"})
 
     config = SqliteConfig(connection_config={"database": ":memory:"}, connection_instance=pool)
 

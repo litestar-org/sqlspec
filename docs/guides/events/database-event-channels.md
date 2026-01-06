@@ -72,7 +72,7 @@ Optional ``extension_config["events"]`` keys:
 
 - ``aq_queue``: AQ queue name (default ``SQLSPEC_EVENTS_QUEUE``)
 - ``aq_wait_seconds``: dequeue wait timeout (default 5 seconds)
-- ``aq_visibility``: visibility constant (e.g., ``AQMSG_VISIBLE``)
+- ``aq_visibility``: visibility constant (``AQMSG_VISIBLE`` or ``AQMSG_INVISIBLE``) or the integer value.
 
 If AQ is not configured or the Python driver lacks the feature, SQLSpec logs a warning
 and transparently falls back to the table-backed queue backend.

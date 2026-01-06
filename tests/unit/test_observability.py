@@ -1,9 +1,11 @@
 """Unit tests for observability helpers."""
 
 from collections.abc import Iterable
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
+
+import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -24,6 +26,39 @@ from sqlspec.storage.pipeline import (
     reset_storage_bridge_metrics,
 )
 from sqlspec.utils.correlation import CorrelationContext
+
+
+class _NoOpExceptionHandler:
+    """No-op exception handler for testing.
+
+    Implements the SyncExceptionHandler protocol but never maps exceptions.
+    """
+
+    __slots__ = ("pending_exception",)
+
+    def __init__(self) -> None:
+        self.pending_exception: Exception | None = None
+
+    def __enter__(self) -> "_NoOpExceptionHandler":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
+        return False
+
+
+def _is_compiled() -> bool:
+    """Check if driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+requires_interpreted = pytest.mark.skipif(
+    _is_compiled(), reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)"
+)
 
 
 def _lifecycle_config(hooks: dict[str, list[Any]]) -> "LifecycleConfig":
@@ -142,8 +177,8 @@ class _DummyDriver(SyncDriverAdapterBase):
 
         return _cursor()
 
-    def handle_database_exceptions(self):
-        return nullcontext()
+    def handle_database_exceptions(self) -> "_NoOpExceptionHandler":
+        return _NoOpExceptionHandler()
 
     def begin(self) -> None:  # pragma: no cover - unused in tests
         return None
@@ -320,6 +355,7 @@ def test_lifecycle_spans_emit_even_without_hooks() -> None:
     assert "sqlspec.lifecycle.connection.destroy" in span_names
 
 
+@requires_interpreted
 def test_driver_dispatch_records_query_span() -> None:
     """Driver dispatch should start and finish query spans."""
 
@@ -385,6 +421,7 @@ def test_storage_span_records_telemetry_attributes() -> None:
     assert span_manager.finished[0].attributes["sqlspec.storage.backend"] == "s3"
 
 
+@requires_interpreted
 def test_write_storage_helper_emits_span() -> None:
     """Storage driver helper should wrap sync writes with spans."""
 
@@ -405,6 +442,7 @@ def test_write_storage_helper_emits_span() -> None:
     assert any(span.name == "sqlspec.storage.write" for span in span_manager.finished)
 
 
+@requires_interpreted
 def test_read_storage_helper_emits_span() -> None:
     """Reading from storage via helper should emit spans and return telemetry."""
 
@@ -414,7 +452,7 @@ def test_read_storage_helper_emits_span() -> None:
     statement_config = StatementConfig()
     driver = _DummyDriver(connection=object(), statement_config=statement_config, observability=runtime)
     pipeline = _FakeSyncPipeline()
-    driver.storage_pipeline_factory = lambda: pipeline  # type: ignore[assignment]
+    driver.storage_pipeline_factory = lambda: pipeline  # type: ignore[misc,assignment]
 
     with CorrelationContext.context("read-correlation"):
         _table, telemetry = driver._read_arrow_from_storage_sync(  # pyright: ignore[reportPrivateUsage]
@@ -466,6 +504,7 @@ def test_telemetry_snapshot_includes_loader_metrics(tmp_path: "Path") -> None:
     assert snapshot["SQLFileLoader.loader.files.loaded"] >= 1
 
 
+@requires_interpreted
 def test_disabled_runtime_avoids_lifecycle_counters() -> None:
     """Drivers should skip lifecycle hooks entirely when none are registered."""
 
@@ -480,6 +519,7 @@ def test_disabled_runtime_avoids_lifecycle_counters() -> None:
     assert all(value == 0 for value in snapshot.values())
 
 
+@requires_interpreted
 def test_runtime_with_lifecycle_hooks_records_counters() -> None:
     """Lifecycle counters should increment when hooks are configured."""
 

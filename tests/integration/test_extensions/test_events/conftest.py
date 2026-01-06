@@ -2,12 +2,13 @@
 
 import pytest
 
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+
 
 @pytest.fixture
 def sqlite_events_config(tmp_path):
     """Create SQLite config with events extension configured."""
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.migrations.commands import SyncMigrationCommands
 
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
@@ -28,7 +29,6 @@ def sqlite_events_config(tmp_path):
 async def aiosqlite_events_config(tmp_path):
     """Create AioSQLite config with events extension configured."""
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.migrations.commands import AsyncMigrationCommands
 
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()

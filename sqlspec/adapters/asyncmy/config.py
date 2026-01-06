@@ -1,19 +1,19 @@
 """Asyncmy database configuration."""
 
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 import asyncmy
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
+from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy._types import AsyncmyConnection
+from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
 from sqlspec.adapters.asyncmy.driver import (
     AsyncmyCursor,
     AsyncmyDriver,
     AsyncmyExceptionHandler,
+    AsyncmySessionContext,
     asyncmy_statement_config,
     build_asyncmy_statement_config,
 )
@@ -92,6 +92,32 @@ class AsyncmyDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
 
 
+class AsyncmyConnectionContext:
+    """Async context manager for Asyncmy connections."""
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "AsyncmyConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    async def __aenter__(self) -> AsyncmyConnection:  # pyright: ignore
+        if self._config.connection_instance is None:
+            self._config.connection_instance = await self._config.create_pool()
+        # asyncmy pool.acquire() returns a context manager that is also awaitable?
+        # Based on existing code: async with ...acquire() as connection:
+        self._ctx = self._config.connection_instance.acquire()  # pyright: ignore
+        return await self._ctx.__aenter__()
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> bool | None:
+        if self._ctx:
+            return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+        return None
+
+
+@mypyc_attr(native_class=False)
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):  # pyright: ignore
     """Configuration for Asyncmy database connections."""
 
@@ -189,42 +215,54 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             self.connection_instance = await self.create_pool()
         return await self.connection_instance.acquire()  # pyright: ignore
 
-    @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncmyConnection, None]:  # pyright: ignore
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncmyConnectionContext":
         """Provide an async connection context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
-        Yields:
-            An Asyncmy connection instance.
+        Returns:
+            An Asyncmy connection context manager.
         """
-        if self.connection_instance is None:
-            self.connection_instance = await self.create_pool()
-        async with self.connection_instance.acquire() as connection:  # pyright: ignore
-            yield connection
+        return AsyncmyConnectionContext(self)
 
-    @asynccontextmanager
-    async def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> AsyncGenerator[AsyncmyDriver, None]:
+    def provide_session(
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "AsyncmySessionContext":
         """Provide an async driver session context manager.
 
         Args:
-            *args: Additional arguments.
+            *_args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments.
+            **_kwargs: Additional keyword arguments.
 
-        Yields:
-            An AsyncmyDriver instance.
+        Returns:
+            An Asyncmy driver session context manager.
         """
-        async with self.provide_connection(*args, **kwargs) as connection:
-            final_statement_config = statement_config or self.statement_config or asyncmy_statement_config
-            driver = self.driver_type(
-                connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
-            )
-            yield self._prepare_driver(driver)
+        acquire_ctx_holder: dict[str, Any] = {}
+
+        async def acquire_connection() -> AsyncmyConnection:
+            pool = self.connection_instance
+            if pool is None:
+                pool = await self.create_pool()
+                self.connection_instance = pool
+            ctx = pool.acquire()
+            acquire_ctx_holder["ctx"] = ctx
+            return await ctx.__aenter__()
+
+        async def release_connection(_conn: AsyncmyConnection) -> None:
+            if "ctx" in acquire_ctx_holder:
+                await acquire_ctx_holder["ctx"].__aexit__(None, None, None)
+                acquire_ctx_holder.clear()
+
+        return AsyncmySessionContext(
+            acquire_connection=acquire_connection,
+            release_connection=release_connection,
+            statement_config=statement_config or self.statement_config or asyncmy_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore
         """Provide async pool instance.
@@ -245,6 +283,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         namespace = super().get_signature_namespace()
         namespace.update({
+            "AsyncmyConnectionContext": AsyncmyConnectionContext,
             "AsyncmyConnection": AsyncmyConnection,
             "AsyncmyConnectionParams": AsyncmyConnectionParams,
             "AsyncmyCursor": AsyncmyCursor,
@@ -253,6 +292,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             "AsyncmyExceptionHandler": AsyncmyExceptionHandler,
             "AsyncmyPool": AsyncmyPool,
             "AsyncmyPoolParams": AsyncmyPoolParams,
+            "AsyncmySessionContext": AsyncmySessionContext,
         })
         return namespace
 

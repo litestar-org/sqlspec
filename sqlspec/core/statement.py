@@ -8,7 +8,10 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
+from sqlspec.core import pipeline
+from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
+from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.parameters import (
     ParameterConverter,
     ParameterProfile,
@@ -16,7 +19,6 @@ from sqlspec.core.parameters import (
     ParameterStyleConfig,
     ParameterValidator,
 )
-from sqlspec.core.pipeline import compile_with_shared_pipeline
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -26,7 +28,6 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.core.cache import FiltersView
     from sqlspec.core.filters import StatementFilter
 
 
@@ -42,6 +43,7 @@ logger = get_logger("sqlspec.core.statement")
 
 RETURNS_ROWS_OPERATIONS: Final = {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA"}
 MODIFYING_OPERATIONS: Final = {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"}
+
 
 SQL_CONFIG_SLOTS: Final = (
     "pre_process_steps",
@@ -344,8 +346,6 @@ class SQL:
         Returns:
             Read-only view of filters without copying
         """
-        from sqlspec.core.cache import FiltersView
-
         return FiltersView(self._filters)
 
     @property
@@ -411,8 +411,8 @@ class SQL:
             if self._processed_state is Empty:
                 return False
 
-        profile = getattr(self._processed_state, "operation_profile", None)
-        if profile and profile.returns_rows:
+        profile = self._processed_state.operation_profile
+        if profile.returns_rows:
             return True
 
         op_type = self._processed_state.operation_type
@@ -435,8 +435,8 @@ class SQL:
         if self._processed_state is Empty:
             return False
 
-        profile = getattr(self._processed_state, "operation_profile", None)
-        if profile and profile.modifies_rows:
+        profile = self._processed_state.operation_profile
+        if profile.modifies_rows:
             return True
 
         op_type = self._processed_state.operation_type
@@ -460,7 +460,7 @@ class SQL:
                 raw_sql = self._raw_sql
                 params = self._named_parameters or self._positional_parameters
                 is_many = self._is_many
-                compiled_result = compile_with_shared_pipeline(config, raw_sql, params, is_many=is_many)
+                compiled_result = pipeline.compile_with_shared_pipeline(config, raw_sql, params, is_many=is_many)
 
                 self._processed_state = ProcessedState(
                     compiled_sql=compiled_result.compiled_sql,
@@ -616,7 +616,6 @@ class SQL:
                 explain_stmt = stmt.explain(analyze=True, format="json")
         """
         from sqlspec.builder._explain import Explain
-        from sqlspec.core.explain import ExplainFormat, ExplainOptions
 
         fmt = None
         if format is not None:

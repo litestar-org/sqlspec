@@ -5,10 +5,11 @@ import re
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.observability._config import ObservabilityConfig
-from sqlspec.observability._dispatcher import LifecycleDispatcher
+from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
 from sqlspec.observability._observer import StatementObserver, create_event, default_statement_observer
 from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.type_guards import has_span_attribute
 
 _LITERAL_PATTERN = re.compile(r"'(?:''|[^'])*'")
 
@@ -32,6 +33,9 @@ class ObservabilityRuntime:
         "span_manager",
     )
 
+    # Allow test injection with fake span managers (mypyc strict typing workaround)
+    span_manager: "Any"
+
     def __init__(
         self, config: ObservabilityConfig | None = None, *, bind_key: str | None = None, config_name: str | None = None
     ) -> None:
@@ -39,7 +43,7 @@ class ObservabilityRuntime:
         self.config = config
         self.bind_key = bind_key
         self.config_name = config_name or "SQLSpecConfig"
-        lifecycle_config = cast("dict[str, Iterable[Any]] | None", config.lifecycle)
+        lifecycle_config = cast("dict[str, Iterable[LifecycleHook]] | None", config.lifecycle)
         self.lifecycle = LifecycleDispatcher(lifecycle_config)
         self.span_manager = SpanManager(config.telemetry)
         observers: list[StatementObserver] = []
@@ -109,7 +113,7 @@ class ObservabilityRuntime:
     ) -> Any:
         """Start a migration span when telemetry is enabled."""
 
-        if not getattr(self.span_manager, "is_enabled", False):
+        if not self.span_manager.is_enabled:
             return None
         attributes: dict[str, Any] = {"sqlspec.migration.event": event, "sqlspec.config": self.config_name}
         if self.bind_key:
@@ -132,15 +136,14 @@ class ObservabilityRuntime:
 
         if span is None:
             return
-        setter = getattr(span, "set_attribute", None)
-        if setter is not None and duration_ms is not None:
-            setter("sqlspec.migration.duration_ms", duration_ms)
+        if duration_ms is not None and has_span_attribute(span):
+            span.set_attribute("sqlspec.migration.duration_ms", duration_ms)
         self.span_manager.end_span(span, error=error)
 
     def emit_pool_create(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.create", subject=pool)
         try:
-            if getattr(self.lifecycle, "has_pool_create", False):
+            if self.lifecycle.has_pool_create:
                 self.lifecycle.emit_pool_create(self._build_context(pool=pool))
         finally:
             self.span_manager.end_span(span)
@@ -148,7 +151,7 @@ class ObservabilityRuntime:
     def emit_pool_destroy(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.destroy", subject=pool)
         try:
-            if getattr(self.lifecycle, "has_pool_destroy", False):
+            if self.lifecycle.has_pool_destroy:
                 self.lifecycle.emit_pool_destroy(self._build_context(pool=pool))
         finally:
             self.span_manager.end_span(span)
@@ -156,7 +159,7 @@ class ObservabilityRuntime:
     def emit_connection_create(self, connection: Any) -> None:
         span = self._start_lifecycle_span("connection.create", subject=connection)
         try:
-            if getattr(self.lifecycle, "has_connection_create", False):
+            if self.lifecycle.has_connection_create:
                 self.lifecycle.emit_connection_create(self._build_context(connection=connection))
         finally:
             self.span_manager.end_span(span)
@@ -164,7 +167,7 @@ class ObservabilityRuntime:
     def emit_connection_destroy(self, connection: Any) -> None:
         span = self._start_lifecycle_span("connection.destroy", subject=connection)
         try:
-            if getattr(self.lifecycle, "has_connection_destroy", False):
+            if self.lifecycle.has_connection_destroy:
                 self.lifecycle.emit_connection_destroy(self._build_context(connection=connection))
         finally:
             self.span_manager.end_span(span)
@@ -172,7 +175,7 @@ class ObservabilityRuntime:
     def emit_session_start(self, session: Any) -> None:
         span = self._start_lifecycle_span("session.start", subject=session)
         try:
-            if getattr(self.lifecycle, "has_session_start", False):
+            if self.lifecycle.has_session_start:
                 self.lifecycle.emit_session_start(self._build_context(session=session))
         finally:
             self.span_manager.end_span(span)
@@ -180,21 +183,21 @@ class ObservabilityRuntime:
     def emit_session_end(self, session: Any) -> None:
         span = self._start_lifecycle_span("session.end", subject=session)
         try:
-            if getattr(self.lifecycle, "has_session_end", False):
+            if self.lifecycle.has_session_end:
                 self.lifecycle.emit_session_end(self._build_context(session=session))
         finally:
             self.span_manager.end_span(span)
 
     def emit_query_start(self, **extras: Any) -> None:
-        if getattr(self.lifecycle, "has_query_start", False):
+        if self.lifecycle.has_query_start:
             self.lifecycle.emit_query_start(self._build_context(**extras))
 
     def emit_query_complete(self, **extras: Any) -> None:
-        if getattr(self.lifecycle, "has_query_complete", False):
+        if self.lifecycle.has_query_complete:
             self.lifecycle.emit_query_complete(self._build_context(**extras))
 
     def emit_error(self, exception: Exception, **extras: Any) -> None:
-        if getattr(self.lifecycle, "has_error", False):
+        if self.lifecycle.has_error:
             payload = self._build_context(exception=exception)
             payload.update({key: value for key, value in extras.items() if value is not None})
             self.lifecycle.emit_error(payload)
@@ -269,7 +272,7 @@ class ObservabilityRuntime:
     ) -> Any:
         """Start a storage bridge span for read/write operations."""
 
-        if not getattr(self.span_manager, "is_enabled", False):
+        if not self.span_manager.is_enabled:
             return None
         attributes: dict[str, Any] = {"sqlspec.storage.operation": operation, "sqlspec.config": self.config_name}
         if self.bind_key:
@@ -286,7 +289,7 @@ class ObservabilityRuntime:
     def start_span(self, name: str, *, attributes: dict[str, Any] | None = None) -> Any:
         """Start a custom span enriched with configuration context."""
 
-        if not getattr(self.span_manager, "is_enabled", False):
+        if not self.span_manager.is_enabled:
             return None
         merged: dict[str, Any] = attributes.copy() if attributes else {}
         merged.setdefault("sqlspec.config", self.config_name)
@@ -328,7 +331,7 @@ class ObservabilityRuntime:
         return annotated
 
     def _start_lifecycle_span(self, event: str, subject: Any | None = None) -> Any:
-        if not getattr(self.span_manager, "is_enabled", False):
+        if not self.span_manager.is_enabled:
             return None
         attributes: dict[str, Any] = {"sqlspec.lifecycle.event": event, "sqlspec.config": self.config_name}
         if self.bind_key:
@@ -341,23 +344,22 @@ class ObservabilityRuntime:
         return self.span_manager.start_span(f"sqlspec.lifecycle.{event}", attributes)
 
     def _attach_storage_telemetry(self, span: Any, telemetry: "StorageTelemetry") -> None:
-        setter = getattr(span, "set_attribute", None)
-        if setter is None:
+        if not has_span_attribute(span):
             return
         if "backend" in telemetry and telemetry["backend"] is not None:
-            setter("sqlspec.storage.backend", telemetry["backend"])
+            span.set_attribute("sqlspec.storage.backend", telemetry["backend"])
         if "bytes_processed" in telemetry and telemetry["bytes_processed"] is not None:
-            setter("sqlspec.storage.bytes_processed", telemetry["bytes_processed"])
+            span.set_attribute("sqlspec.storage.bytes_processed", telemetry["bytes_processed"])
         if "rows_processed" in telemetry and telemetry["rows_processed"] is not None:
-            setter("sqlspec.storage.rows_processed", telemetry["rows_processed"])
+            span.set_attribute("sqlspec.storage.rows_processed", telemetry["rows_processed"])
         if "destination" in telemetry and telemetry["destination"] is not None:
-            setter("sqlspec.storage.destination", telemetry["destination"])
+            span.set_attribute("sqlspec.storage.destination", telemetry["destination"])
         if "format" in telemetry and telemetry["format"] is not None:
-            setter("sqlspec.storage.format", telemetry["format"])
+            span.set_attribute("sqlspec.storage.format", telemetry["format"])
         if "duration_s" in telemetry and telemetry["duration_s"] is not None:
-            setter("sqlspec.storage.duration_s", telemetry["duration_s"])
+            span.set_attribute("sqlspec.storage.duration_s", telemetry["duration_s"])
         if "correlation_id" in telemetry and telemetry["correlation_id"] is not None:
-            setter("sqlspec.correlation_id", telemetry["correlation_id"])
+            span.set_attribute("sqlspec.correlation_id", telemetry["correlation_id"])
 
     def _redact_sql(self, sql: str) -> str:
         config = self._redaction

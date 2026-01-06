@@ -4,37 +4,69 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
-from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, overload, runtime_checkable
 
 from typing_extensions import Self
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
     from pathlib import Path
 
     from sqlglot import exp
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
+    "ArrowTableStatsProtocol",
+    "AsyncConnectionProtocol",
+    "AsyncCursorProtocol",
+    "AsyncDeleteProtocol",
+    "AsyncReadBytesProtocol",
+    "AsyncReadableProtocol",
+    "AsyncWriteBytesProtocol",
+    "ConnectionProtocol",
     "ConnectionStateProtocol",
     "CursorMetadataProtocol",
+    "CursorProtocol",
     "DictProtocol",
+    "HasAddListenerProtocol",
+    "HasArrowStoreProtocol",
+    "HasBindKeyProtocol",
+    "HasConfigProtocol",
+    "HasConnectionConfigProtocol",
+    "HasDatabaseUrlAndBindKeyProtocol",
+    "HasErrorsProtocol",
     "HasExpressionAndParametersProtocol",
     "HasExpressionAndSQLProtocol",
     "HasExpressionProtocol",
+    "HasExtensionConfigProtocol",
+    "HasFieldNameProtocol",
+    "HasFilterAttributesProtocol",
+    "HasGetDataProtocol",
+    "HasLastRowIdProtocol",
     "HasMigrationConfigProtocol",
+    "HasNameProtocol",
+    "HasNotifiesProtocol",
     "HasParameterBuilderProtocol",
+    "HasReadArrowProtocol",
+    "HasRowcountProtocol",
     "HasSQLGlotExpressionProtocol",
     "HasSQLMethodProtocol",
+    "HasSqlStateProtocol",
+    "HasSqliteErrorProtocol",
     "HasStatementConfigFactoryProtocol",
     "HasStatementConfigProtocol",
+    "HasStatementTypeProtocol",
     "HasToStatementProtocol",
+    "HasTracerProviderProtocol",
+    "HasTypeCodeProtocol",
+    "HasTypecodeProtocol",
+    "HasTypecodeSizedProtocol",
+    "HasValueProtocol",
     "HasWhereProtocol",
-    "IterableParameters",
     "MigrationModuleProtocol",
     "NotificationProtocol",
     "ObjectStoreItemProtocol",
@@ -43,10 +75,14 @@ __all__ = (
     "QueryResultProtocol",
     "ReadableProtocol",
     "SQLBuilderProtocol",
-    "SelectBuilderProtocol",
-    "StackResultProtocol",
+    "SpanAttributeProtocol",
+    "SpannerParamTypesProtocol",
+    "StatementProtocol",
     "SupportsArrayProtocol",
     "SupportsArrowResults",
+    "SupportsCloseProtocol",
+    "SupportsDtypeStrProtocol",
+    "SupportsJsonTypeProtocol",
     "ToSchemaProtocol",
     "WithMethodProtocol",
 )
@@ -56,7 +92,16 @@ __all__ = (
 class ReadableProtocol(Protocol):
     """Protocol for objects that have a read method (e.g., LOBs)."""
 
-    def read(self) -> "bytes | str":
+    def read(self, size: "int | None" = None) -> "bytes | str":
+        """Read content from the object."""
+        ...
+
+
+@runtime_checkable
+class AsyncReadableProtocol(Protocol):
+    """Protocol for objects that have an async read method."""
+
+    async def read(self, size: "int | None" = None) -> "bytes | str":
         """Read content from the object."""
         ...
 
@@ -120,16 +165,271 @@ class ConnectionStateProtocol(Protocol):
 
 
 @runtime_checkable
-class IterableParameters(Protocol):
-    """Protocol for parameter sequences."""
+class HasStatementTypeProtocol(Protocol):
+    """Protocol for cursors exposing statement_type metadata."""
 
-    def __iter__(self) -> Any:
-        """Iterate over parameters."""
-        ...
+    statement_type: "str | None"
+
+
+@runtime_checkable
+class HasTypecodeProtocol(Protocol):
+    """Protocol for array-like objects exposing typecode."""
+
+    typecode: Any
+
+
+@runtime_checkable
+class HasTypecodeSizedProtocol(Protocol):
+    """Protocol for array-like objects exposing typecode and length."""
+
+    typecode: Any
 
     def __len__(self) -> int:
-        """Get number of parameters."""
+        """Return the length of the array-like object."""
         ...
+
+
+@runtime_checkable
+class HasTypeCodeProtocol(Protocol):
+    """Protocol for objects exposing type_code metadata."""
+
+    type_code: Any
+
+
+@runtime_checkable
+class HasRowcountProtocol(Protocol):
+    """Protocol for cursors exposing rowcount metadata."""
+
+    rowcount: int
+
+
+@runtime_checkable
+class HasLastRowIdProtocol(Protocol):
+    """Protocol for cursors exposing lastrowid metadata."""
+
+    lastrowid: int | None
+
+
+@runtime_checkable
+class HasSqlStateProtocol(Protocol):
+    """Protocol for exceptions exposing sqlstate."""
+
+    sqlstate: "str | None"
+
+
+@runtime_checkable
+class HasSqliteErrorProtocol(Protocol):
+    """Protocol for sqlite errors exposing sqlite error details."""
+
+    sqlite_errorcode: "int | None"
+    sqlite_errorname: "str | None"
+
+
+@runtime_checkable
+class HasValueProtocol(Protocol):
+    """Protocol for wrapper objects exposing a value attribute."""
+
+    value: Any
+
+
+@runtime_checkable
+class HasErrorsProtocol(Protocol):
+    """Protocol for exceptions exposing structured errors."""
+
+    errors: "list[dict[str, Any]] | None"
+
+
+@runtime_checkable
+class HasNameProtocol(Protocol):
+    """Protocol for objects exposing a __name__ attribute."""
+
+    __name__: str
+
+
+@runtime_checkable
+class HasNotifiesProtocol(Protocol):
+    """Protocol for asyncpg-like connections exposing notifications."""
+
+    notifies: Any
+
+    async def execute(self, query: str, *args: Any, **kwargs: Any) -> Any:
+        """Execute a SQL command on the connection."""
+        ...
+
+
+@runtime_checkable
+class HasAddListenerProtocol(Protocol):
+    """Protocol for asyncpg-like connections exposing add_listener."""
+
+    def add_listener(self, channel: str, callback: Any) -> Any: ...
+
+
+@runtime_checkable
+class SupportsJsonTypeProtocol(Protocol):
+    """Protocol for parameter type modules exposing JSON."""
+
+    JSON: Any
+
+
+@runtime_checkable
+class SpannerParamTypesProtocol(SupportsJsonTypeProtocol, Protocol):
+    """Protocol for Google Spanner param_types module."""
+
+    BOOL: Any
+    INT64: Any
+    FLOAT64: Any
+    STRING: Any
+    BYTES: Any
+    TIMESTAMP: Any
+    DATE: Any
+    Array: "Callable[[Any], Any]"
+
+
+@runtime_checkable
+class SupportsCloseProtocol(Protocol):
+    """Protocol for objects exposing close()."""
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class SupportsDtypeStrProtocol(Protocol):
+    """Protocol for dtype objects exposing string descriptor."""
+
+    str: str
+
+
+@runtime_checkable
+class ArrowTableStatsProtocol(Protocol):
+    """Protocol for Arrow objects exposing row and byte counts."""
+
+    num_rows: int
+    nbytes: int
+
+
+@runtime_checkable
+class SpanAttributeProtocol(Protocol):
+    """Protocol for span objects supporting attribute mutation."""
+
+    def set_attribute(self, key: str, value: Any) -> None: ...
+
+
+@runtime_checkable
+class HasTracerProviderProtocol(Protocol):
+    """Protocol for tracer providers exposing get_tracer."""
+
+    def get_tracer(self, name: str) -> Any: ...
+
+
+@runtime_checkable
+class AsyncReadBytesProtocol(Protocol):
+    """Protocol for async read_bytes support."""
+
+    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes: ...
+
+
+@runtime_checkable
+class AsyncWriteBytesProtocol(Protocol):
+    """Protocol for async write_bytes support."""
+
+    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None: ...
+
+
+@runtime_checkable
+class AsyncDeleteProtocol(Protocol):
+    """Protocol for async delete support."""
+
+    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None: ...
+
+
+@runtime_checkable
+class CursorProtocol(Protocol):
+    """Protocol for DB-API 2.0 cursor operations."""
+
+    def execute(self, sql: str, parameters: Any = None) -> Any: ...
+
+    def executemany(self, sql: str, parameters: Any) -> Any: ...
+
+    def fetchall(self) -> Any: ...
+
+    def fetchone(self) -> Any: ...
+
+    @property
+    def description(self) -> "Sequence[Any] | None": ...
+
+    @property
+    def rowcount(self) -> int: ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class AsyncCursorProtocol(Protocol):
+    """Protocol for async cursor operations."""
+
+    async def execute(self, sql: str, parameters: Any = None) -> Any: ...
+
+    async def executemany(self, sql: str, parameters: Any) -> Any: ...
+
+    async def fetchall(self) -> Any: ...
+
+    async def fetchone(self) -> Any: ...
+
+    @property
+    def description(self) -> "Sequence[Any] | None": ...
+
+    @property
+    def rowcount(self) -> int: ...
+
+    async def close(self) -> None: ...
+
+
+@runtime_checkable
+class ConnectionProtocol(Protocol):
+    """Protocol for connection lifecycle and transaction state."""
+
+    def cursor(self) -> Any: ...
+
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
+
+    def close(self) -> None: ...
+
+    in_transaction: "bool | None"
+    transaction_status: "str | None"
+
+    def is_in_transaction(self) -> bool: ...
+
+
+@runtime_checkable
+class AsyncConnectionProtocol(Protocol):
+    """Protocol for async connection lifecycle and transaction state."""
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    in_transaction: "bool | None"
+    transaction_status: "str | None"
+
+    async def is_in_transaction(self) -> bool: ...
+
+
+@runtime_checkable
+class StatementProtocol(Protocol):
+    """Protocol for statement attribute access."""
+
+    @property
+    def raw_sql(self) -> "str | None": ...
+
+    @property
+    def sql(self) -> str: ...
+
+    @property
+    def operation_type(self) -> str: ...
 
 
 @runtime_checkable
@@ -167,11 +467,87 @@ class DictProtocol(Protocol):
 
 
 @runtime_checkable
+class HasConfigProtocol(Protocol):
+    """Protocol for wrapper objects exposing a config attribute."""
+
+    config: Any
+
+
+@runtime_checkable
+class HasConnectionConfigProtocol(Protocol):
+    """Protocol for configs exposing connection_config mapping."""
+
+    connection_config: "Mapping[str, Any]"
+
+
+@runtime_checkable
+class HasBindKeyProtocol(Protocol):
+    """Protocol for configs exposing bind_key."""
+
+    bind_key: "str | None"
+
+
+@runtime_checkable
+class HasDatabaseUrlAndBindKeyProtocol(Protocol):
+    """Protocol for configs exposing database_url and bind_key."""
+
+    database_url: str
+    bind_key: "str | None"
+
+
+@runtime_checkable
+class HasExtensionConfigProtocol(Protocol):
+    """Protocol for configs exposing extension_config mapping."""
+
+    @property
+    def extension_config(self) -> "ExtensionConfigs":
+        """Return extension configuration mapping."""
+        ...
+
+
+@runtime_checkable
+class HasFieldNameProtocol(Protocol):
+    """Protocol for objects exposing field_name attribute."""
+
+    field_name: Any
+
+
+@runtime_checkable
+class HasFilterAttributesProtocol(Protocol):
+    """Protocol for filter-like objects exposing field attributes."""
+
+    field_name: Any
+    operation: Any
+    value: Any
+
+
+@runtime_checkable
+class HasGetDataProtocol(Protocol):
+    """Protocol for results exposing get_data()."""
+
+    def get_data(self) -> Any: ...
+
+
+@runtime_checkable
 class ObjectStoreItemProtocol(Protocol):
     """Protocol for object store items with path/key attributes."""
 
     path: str
     key: "str | None"
+
+
+@runtime_checkable
+class HasReadArrowProtocol(Protocol):
+    """Protocol for stores exposing native Arrow read support."""
+
+    def read_arrow(self, path: "str | Path", **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class HasArrowStoreProtocol(Protocol):
+    """Protocol for backends exposing a store with Arrow support."""
+
+    store: "HasReadArrowProtocol"
 
 
 @runtime_checkable
@@ -232,7 +608,7 @@ class ObjectStoreProtocol(Protocol):
         """Check if path points to a prefix (directory-like)."""
         return False
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
         """Get object metadata."""
         return {}
 
@@ -296,7 +672,7 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)
 
-    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
         """Async get object metadata."""
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)
@@ -449,6 +825,10 @@ class SQLBuilderProtocol(Protocol):
         """Public access to query parameters."""
         ...
 
+    def get_expression(self) -> "exp.Expression | None":
+        """Return the current SQLGlot expression."""
+        ...
+
     def add_parameter(self, value: Any, name: "str | None" = None) -> tuple[Any, str]:
         """Add a parameter to the builder."""
         ...
@@ -485,10 +865,6 @@ class SQLBuilderProtocol(Protocol):
         """Create a new builder with matching configuration."""
         ...
 
-    def get_expression(self) -> "exp.Expression | None":
-        """Return the underlying SQLGlot expression."""
-        ...
-
     def set_expression(self, expression: "exp.Expression") -> None:
         """Replace the underlying SQLGlot expression."""
         ...
@@ -509,14 +885,6 @@ class SQLBuilderProtocol(Protocol):
         dialect: "DialectType | None" = None,
     ) -> Any:
         """Compile a pre-built expression with optional caching and parameters."""
-        ...
-
-
-class SelectBuilderProtocol(SQLBuilderProtocol, Protocol):
-    """Protocol for SELECT query builders."""
-
-    def select(self, *columns: "str | exp.Expression") -> Self:
-        """Add SELECT columns to the query."""
         ...
 
 
@@ -557,29 +925,6 @@ class SupportsArrowResults(Protocol):
             ArrowResult containing Arrow data.
         """
         ...
-
-
-@runtime_checkable
-class StackResultProtocol(Protocol):
-    """Protocol describing stack execution results."""
-
-    result: Any
-    rows_affected: int
-    error: Exception | None
-    warning: Any | None
-    metadata: Mapping[str, Any] | None
-    result_type: str
-
-    @property
-    def rows(self) -> Sequence[Any]: ...
-
-    def is_error(self) -> bool: ...
-
-    def is_sql_result(self) -> bool: ...
-
-    def is_arrow_result(self) -> bool: ...
-
-    def get_result(self) -> Any: ...
 
 
 @runtime_checkable

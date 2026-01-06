@@ -279,6 +279,29 @@ class ExtensibleBase:
         self._data = data
 ```
 
+## Driver Layer Compilation
+
+SQLSpec compiles the driver base classes and mixins to reduce dispatch overhead while leaving adapters interpreted.
+
+```python
+from mypy_extensions import mypyc_attr
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class CommonDriverAttributesMixin:
+    __slots__ = ("connection", "dialect")
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
+    __slots__ = ()
+    is_async: bool = True
+```
+
+**Guidelines:**
+
+- Avoid `getattr()`/`hasattr()` in compiled driver code paths; use protocols and type guards.
+- Keep driver classes `__slots__`-only and explicitly typed.
+- Compile the driver layer by including `sqlspec/driver/*.py` in mypyc build config.
+
 ## Performance Patterns
 
 ### Early Binding with Final
@@ -508,8 +531,9 @@ exclude = [
     "sqlspec/typing.py",                 # Type aliases
     "sqlspec/_typing.py",                # Type aliases
     "sqlspec/adapters/*/config.py",      # Configuration classes
-    "sqlspec/adapters/*/_types.py",      # Types classes Often not found during mypy checks
+    "sqlspec/adapters/*/_typing.py",     # Type classes often not found during mypy checks
     "sqlspec/config.py",                 # Main config
+    "sqlspec/adapters/spanner/dialect/*.py", # Spanner dialect (dynamic attributes)
     "sqlspec/**/__init__.py",            # Init files (usually just imports)
 ]
 include = [
@@ -716,16 +740,17 @@ def process_query(sql: str) -> SQLResult:
 ### Adapter Pattern
 
 ```python
-# ✅ DO: Inherit from typed mixins
-from sqlspec.driver.mixins import SyncStorageMixin
+# ✅ DO: Inherit from base driver classes
+from sqlspec.driver import SyncDriverAdapterBase
 
-class SQLiteDriver(SyncStorageMixin["sqlite3.Connection", "sqlite3.Row"]):
-    def _execute(self, statement: SQL, connection: "sqlite3.Connection") -> SQLResult:
-        cursor = connection.execute(statement.sql)
+class SQLiteDriver(SyncDriverAdapterBase):
+    def _execute_statement(self, cursor: Any, statement: SQL) -> ExecutionResult:
+        cursor.execute(statement.sql)
         # Use cast for type safety without conversion
-        return SQLResult(
-            data=cast("list[dict[str, Any]]", cursor.fetchall()),
-            statement=statement
+        return self.create_execution_result(
+            cursor_result=cursor,
+            selected_data=cast("list[dict[str, Any]]", cursor.fetchall()),
+            is_select_result=True,
         )
 ```
 

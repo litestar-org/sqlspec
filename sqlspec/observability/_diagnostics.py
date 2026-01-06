@@ -1,9 +1,15 @@
 """Diagnostics aggregation utilities for observability exports."""
 
 from collections.abc import Iterable
-from typing import Any
 
-from sqlspec.storage.pipeline import StorageDiagnostics, get_recent_storage_events, get_storage_bridge_diagnostics
+from sqlspec.storage.pipeline import (
+    StorageDiagnostics,
+    StorageTelemetry,
+    get_recent_storage_events,
+    get_storage_bridge_diagnostics,
+)
+
+DiagnosticsPayload = dict[str, float | list[StorageTelemetry]]
 
 
 class TelemetryDiagnostics:
@@ -32,7 +38,7 @@ class TelemetryDiagnostics:
             else:
                 self._metrics[key] = value
 
-    def snapshot(self) -> "dict[str, Any]":
+    def snapshot(self) -> "DiagnosticsPayload":
         """Return aggregated diagnostics payload."""
 
         numeric_payload: dict[str, float] = {}
@@ -48,14 +54,14 @@ class TelemetryDiagnostics:
         for metric, value in self._metrics.items():
             _increment(metric, float(value))
 
-        payload: dict[str, Any] = dict(numeric_payload)
+        payload: DiagnosticsPayload = dict(numeric_payload)
         recent_jobs = get_recent_storage_events()
         if recent_jobs:
             payload["storage_bridge.recent_jobs"] = recent_jobs
         return payload
 
 
-def collect_diagnostics(sections: Iterable[tuple[str, dict[str, int]]]) -> dict[str, Any]:
+def collect_diagnostics(sections: Iterable[tuple[str, dict[str, int]]]) -> DiagnosticsPayload:
     """Convenience helper for aggregating sections without constructing a class."""
 
     diag = TelemetryDiagnostics()
@@ -64,4 +70,4 @@ def collect_diagnostics(sections: Iterable[tuple[str, dict[str, int]]]) -> dict[
     return diag.snapshot()
 
 
-__all__ = ("TelemetryDiagnostics", "collect_diagnostics")
+__all__ = ("DiagnosticsPayload", "TelemetryDiagnostics", "collect_diagnostics")

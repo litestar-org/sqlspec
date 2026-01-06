@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Union, cast, overload
 
 from sqlspec.core import SQL
+from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
@@ -20,6 +21,7 @@ from sqlspec.utils.version import parse_version
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
 
+    from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.observability import ObservabilityRuntime
 
@@ -76,8 +78,6 @@ class BaseMigrationRunner(ABC):
         """
         self.migrations_path = migrations_path
         self.extension_migrations = extension_migrations or {}
-        from sqlspec.loader import SQLFileLoader
-
         self.runtime = runtime
         self.loader = SQLFileLoader(runtime=runtime)
         self.project_root: Path | None = None
@@ -424,7 +424,9 @@ class BaseMigrationRunner(ABC):
 
         return context_to_use
 
-    def should_use_transaction(self, migration: "dict[str, Any]", config: Any) -> bool:
+    def should_use_transaction(
+        self, migration: "dict[str, Any]", config: "DatabaseConfigProtocol[Any, Any, Any]"
+    ) -> bool:
         """Determine if migration should run in a transaction.
 
         Args:
@@ -440,7 +442,7 @@ class BaseMigrationRunner(ABC):
         if migration.get("transactional") is not None:
             return bool(migration["transactional"])
 
-        migration_config = getattr(config, "migration_config", {}) or {}
+        migration_config = cast("dict[str, Any]", config.migration_config) or {}
         return bool(migration_config.get("transactional", True))
 
 

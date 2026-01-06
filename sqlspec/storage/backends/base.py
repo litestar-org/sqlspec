@@ -8,7 +8,46 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
-__all__ = ("ObjectStoreBase",)
+__all__ = ("AsyncArrowBatchIterator", "ObjectStoreBase")
+
+
+class AsyncArrowBatchIterator:
+    """Async iterator wrapper for sync Arrow batch iterators.
+
+    This class implements the async iterator protocol without using async generators,
+    allowing it to be compiled by mypyc (which doesn't support async generators).
+
+    The class wraps a synchronous iterator and exposes it as an async iterator,
+    enabling usage with `async for` syntax.
+    """
+
+    __slots__ = ("_sync_iter",)
+
+    def __init__(self, sync_iterator: "Iterator[ArrowRecordBatch]") -> None:
+        """Initialize the async iterator wrapper.
+
+        Args:
+            sync_iterator: The synchronous iterator to wrap.
+        """
+        self._sync_iter = sync_iterator
+
+    def __aiter__(self) -> "AsyncArrowBatchIterator":
+        """Return self as the async iterator."""
+        return self
+
+    async def __anext__(self) -> "ArrowRecordBatch":
+        """Get the next item from the iterator asynchronously.
+
+        Returns:
+            The next Arrow record batch.
+
+        Raises:
+            StopAsyncIteration: When the iterator is exhausted.
+        """
+        try:
+            return next(self._sync_iter)
+        except StopIteration:
+            raise StopAsyncIteration from None
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -68,7 +107,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, object]:
         """Get object metadata from storage."""
         raise NotImplementedError
 
@@ -143,7 +182,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, object]:
         """Get object metadata from storage asynchronously."""
         raise NotImplementedError
 

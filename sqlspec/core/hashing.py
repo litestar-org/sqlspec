@@ -8,9 +8,12 @@ from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 
-from sqlspec.utils.type_guards import is_typed_parameter
+from sqlspec.core.parameters import TypedParameter
+from sqlspec.utils.type_guards import is_expression, is_typed_parameter
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.core.filters import StatementFilter
     from sqlspec.core.statement import SQL
 
@@ -94,8 +97,6 @@ def hash_parameters(
     param_hash = 0
 
     if positional_parameters:
-        from sqlspec.core.parameters import TypedParameter
-
         hashable_parameters: list[tuple[Any, Any]] = []
         for param in positional_parameters:
             if isinstance(param, TypedParameter):
@@ -148,7 +149,7 @@ def _hash_filter_value(value: Any) -> int:
         return hash(repr(value))
 
 
-def hash_filters(filters: list["StatementFilter"] | None = None) -> int:
+def hash_filters(filters: "Sequence[StatementFilter] | None" = None) -> int:
     """Generate hash for statement filters.
 
     Args:
@@ -164,9 +165,9 @@ def hash_filters(filters: list["StatementFilter"] | None = None) -> int:
     for f in filters:
         components: list[Any] = [f.__class__.__name__]
 
-        filter_dict = getattr(f, "__dict__", None)
-        if filter_dict is not None:
-            for key, value in sorted(filter_dict.items()):
+        dict_attr = getattr(f, "__dict__", None)
+        if isinstance(dict_attr, dict):
+            for key, value in sorted(dict_attr.items()):
                 components.append((key, _hash_filter_value(value)))
 
         filter_components.append(tuple(components))
@@ -183,8 +184,6 @@ def hash_sql_statement(statement: "SQL") -> str:
     Returns:
         Cache key string
     """
-    from sqlspec.utils.type_guards import is_expression
-
     stmt_expr = statement.statement_expression
     expr_hash = hash_expression(stmt_expr) if is_expression(stmt_expr) else hash(statement.raw_sql)
 
