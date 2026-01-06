@@ -57,11 +57,24 @@ class ParameterProcessor:
 
     DEFAULT_CACHE_SIZE = 1000
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        converter: "ParameterConverter | None" = None,
+        validator: "ParameterValidator | None" = None,
+    ) -> None:
         self._cache: dict[str, ParameterProcessingResult] = {}
         self._cache_size = 0
-        self._validator = ParameterValidator()
-        self._converter = ParameterConverter()
+        if converter is None:
+            self._validator = validator or ParameterValidator()
+            self._converter = ParameterConverter(self._validator)
+        else:
+            self._converter = converter
+            if validator is None:
+                self._validator = converter.validator
+            else:
+                self._validator = validator
+                self._converter.validator = validator
 
     def _handle_static_embedding(
         self, sql: str, parameters: Any, config: "ParameterStyleConfig", is_many: bool, cache_key: str
@@ -73,7 +86,12 @@ class ParameterProcessor:
         static_sql, static_params = self._converter.convert_placeholder_style(
             sql, coerced_params, ParameterStyle.STATIC, is_many
         )
-        result = ParameterProcessingResult(static_sql, static_params, ParameterProfile.empty())
+        result = ParameterProcessingResult(
+            static_sql,
+            static_params,
+            ParameterProfile.empty(),
+            sqlglot_sql=static_sql,
+        )
         if self._cache_size < self.DEFAULT_CACHE_SIZE:
             self._cache[cache_key] = result
             self._cache_size += 1
@@ -157,6 +175,7 @@ class ParameterProcessor:
         config: "ParameterStyleConfig",
         dialect: str | None = None,
         is_many: bool = False,
+        wrap_types: bool = True,
     ) -> "ParameterProcessingResult":
         cache_key = self._generate_processor_cache_key(sql, parameters, config, is_many, dialect)
         cached_result = self._cache.get(cache_key)
@@ -166,6 +185,11 @@ class ParameterProcessor:
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
         needs_sqlglot_normalization = self._needs_sqlglot_normalization(param_info, dialect)
+        sqlglot_sql = sql
+        if needs_sqlglot_normalization:
+            sqlglot_sql, _ = self._converter.normalize_sql_for_parsing(
+                sql, dialect, param_info=param_info
+            )
         needs_execution_conversion = self._needs_execution_conversion(param_info, config)
 
         needs_static_embedding = config.needs_static_script_compilation and param_info and parameters and not is_many
@@ -209,7 +233,12 @@ class ParameterProcessor:
             and not config.output_transformer
             and not _requires_mapping_normalization(parameters)
         ):
-            result = ParameterProcessingResult(sql, parameters, ParameterProfile(param_info))
+            result = ParameterProcessingResult(
+                sql,
+                parameters,
+                ParameterProfile(param_info),
+                sqlglot_sql=sqlglot_sql,
+            )
             if self._cache_size < self.DEFAULT_CACHE_SIZE:
                 self._cache[cache_key] = result
                 self._cache_size += 1
@@ -223,11 +252,13 @@ class ParameterProcessor:
                 processed_sql, processed_parameters, target_style, is_many
             )
 
-        if processed_parameters:
+        if processed_parameters and wrap_types:
             processed_parameters = self._apply_type_wrapping(processed_parameters)
 
         if needs_sqlglot_normalization:
-            processed_sql, _ = self._converter.normalize_sql_for_parsing(processed_sql, dialect)
+            processed_sql, _ = self._converter.normalize_sql_for_parsing(
+                processed_sql, dialect, param_info=None
+            )
 
         if config.type_coercion_map and processed_parameters:
             processed_parameters = self._apply_type_coercions(processed_parameters, config.type_coercion_map, is_many)
@@ -247,7 +278,12 @@ class ParameterProcessor:
 
         final_param_info = self._validator.extract_parameters(processed_sql)
         final_profile = ParameterProfile(final_param_info)
-        result = ParameterProcessingResult(processed_sql, processed_parameters, final_profile)
+        result = ParameterProcessingResult(
+            processed_sql,
+            processed_parameters,
+            final_profile,
+            sqlglot_sql=sqlglot_sql,
+        )
 
         if self._cache_size < self.DEFAULT_CACHE_SIZE:
             self._cache[cache_key] = result
@@ -272,7 +308,9 @@ class ParameterProcessor:
         param_info = self._validator.extract_parameters(sql)
 
         if self._needs_sqlglot_normalization(param_info, dialect):
-            normalized_sql, _ = self._converter.normalize_sql_for_parsing(sql, dialect)
+            normalized_sql, _ = self._converter.normalize_sql_for_parsing(
+                sql, dialect, param_info=param_info
+            )
             return normalized_sql, parameters
 
         return sql, parameters

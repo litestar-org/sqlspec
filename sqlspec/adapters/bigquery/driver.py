@@ -486,34 +486,36 @@ class BigQueryDriver(SyncDriverAdapterBase):
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    def _is_simple_insert_operation(self, sql: str) -> bool:
+    def _is_simple_insert_operation(self, sql: str, expression: "exp.Expression | None" = None) -> bool:
         """Check if SQL is a simple INSERT VALUES statement.
 
         Args:
             sql: SQL string to analyze
+            expression: Optional parsed expression to reuse
 
         Returns:
             True if this is a simple INSERT with VALUES, False otherwise
         """
         try:
-            parsed = sqlglot.parse_one(sql, dialect="bigquery")
+            parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
             if not isinstance(parsed, exp.Insert):
                 return False
             return parsed.expression is not None or parsed.find(exp.Values) is not None
         except Exception:
             return False
 
-    def _extract_table_from_insert(self, sql: str) -> str | None:
+    def _extract_table_from_insert(self, sql: str, expression: "exp.Expression | None" = None) -> str | None:
         """Extract table name from INSERT statement using sqlglot.
 
         Args:
             sql: INSERT SQL statement
+            expression: Optional parsed expression to reuse
 
         Returns:
             Fully qualified table name or None if extraction fails
         """
         try:
-            parsed = sqlglot.parse_one(sql, dialect="bigquery")
+            parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
             if isinstance(parsed, exp.Insert):
                 table = parsed.find(exp.Table)
                 if table:
@@ -528,7 +530,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
             logger.debug("Failed to extract table name from INSERT statement")
         return None
 
-    def _execute_bulk_insert(self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]") -> ExecutionResult | None:
+    def _execute_bulk_insert(
+        self,
+        cursor: Any,
+        sql: str,
+        parameters: "list[dict[str, Any]]",
+        expression: "exp.Expression | None" = None,
+    ) -> ExecutionResult | None:
         """Execute INSERT using Parquet bulk load.
 
         Leverages existing storage bridge infrastructure for optimized bulk inserts.
@@ -537,11 +545,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
             cursor: BigQuery cursor object
             sql: INSERT SQL statement
             parameters: List of parameter dictionaries
+            expression: Optional parsed expression to reuse
 
         Returns:
             ExecutionResult if successful, None to fall back to literal inlining
         """
-        table_name = self._extract_table_from_insert(sql)
+        table_name = self._extract_table_from_insert(sql, expression)
         if not table_name:
             return None
 
@@ -567,7 +576,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
             logger.debug("Bulk insert failed, falling back to literal inlining: %s", e)
             return None
 
-    def _execute_many_with_inlining(self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]") -> ExecutionResult:
+    def _execute_many_with_inlining(
+        self,
+        cursor: Any,
+        sql: str,
+        parameters: "list[dict[str, Any]]",
+        expression: "exp.Expression | None" = None,
+    ) -> ExecutionResult:
         """Execute many using literal inlining.
 
         Fallback path for UPDATE/DELETE or when bulk insert unavailable.
@@ -576,14 +591,18 @@ class BigQueryDriver(SyncDriverAdapterBase):
             cursor: BigQuery cursor object
             sql: SQL statement
             parameters: List of parameter dictionaries
+            expression: Optional parsed expression to reuse
 
         Returns:
             ExecutionResult with batch execution details
         """
-        try:
-            parsed_expression = sqlglot.parse_one(sql, dialect="bigquery")
-        except sqlglot.ParseError:
-            parsed_expression = None
+        if expression is not None:
+            parsed_expression = expression
+        else:
+            try:
+                parsed_expression = sqlglot.parse_one(sql, dialect="bigquery")
+            except sqlglot.ParseError:
+                parsed_expression = None
 
         script_statements = []
         for param_set in parameters:
@@ -618,16 +637,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        parsed_expression = statement.statement_expression
 
         if not prepared_parameters or not isinstance(prepared_parameters, list):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        if self._is_simple_insert_operation(sql):
-            result = self._execute_bulk_insert(cursor, sql, prepared_parameters)
+        if self._is_simple_insert_operation(sql, parsed_expression):
+            result = self._execute_bulk_insert(cursor, sql, prepared_parameters, parsed_expression)
             if result is not None:
                 return result
 
-        return self._execute_many_with_inlining(cursor, sql, prepared_parameters)
+        return self._execute_many_with_inlining(cursor, sql, prepared_parameters, parsed_expression)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.

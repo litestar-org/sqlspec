@@ -252,7 +252,10 @@ class SQLProcessor:
         """
         self._config = config
         self._cache: OrderedDict[str, CompiledSQL] = OrderedDict()
-        self._parameter_processor = ParameterProcessor()
+        self._parameter_processor = ParameterProcessor(
+            converter=config.parameter_converter,
+            validator=config.parameter_validator,
+        )
         self._max_cache_size = max_cache_size
         self._cache_hits = 0
         self._cache_misses = 0
@@ -314,17 +317,13 @@ class SQLProcessor:
                 config=self._config.parameter_config,
                 dialect=dialect_str,
                 is_many=is_many,
+                wrap_types=self._config.enable_parameter_type_wrapping,
             )
             processed_sql = process_result.sql
             processed_params = process_result.parameters
             parameter_profile = process_result.parameter_profile
 
-            if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
-                sqlglot_sql = processed_sql
-            else:
-                sqlglot_sql, _ = self._parameter_processor.get_sqlglot_compatible_sql(
-                    sql, parameters, self._config.parameter_config, dialect_str
-                )
+            sqlglot_sql = process_result.sqlglot_sql
 
             final_parameters = processed_params
             ast_was_transformed = False
@@ -359,6 +358,7 @@ class SQLProcessor:
                     config=self._config.parameter_config,
                     dialect=dialect_str,
                     is_many=is_many,
+                    wrap_types=self._config.enable_parameter_type_wrapping,
                 )
                 final_sql = transformed_result.sql
                 final_params = transformed_result.parameters

@@ -161,18 +161,7 @@ def hash_filters(filters: "Sequence[StatementFilter] | None" = None) -> int:
     if not filters:
         return 0
 
-    filter_components = []
-    for f in filters:
-        components: list[Any] = [f.__class__.__name__]
-
-        dict_attr = getattr(f, "__dict__", None)
-        if isinstance(dict_attr, dict):
-            for key, value in sorted(dict_attr.items()):
-                components.append((key, _hash_filter_value(value)))
-
-        filter_components.append(tuple(components))
-
-    return hash(tuple(filter_components))
+    return hash(tuple(f.get_cache_key() for f in filters))
 
 
 def hash_sql_statement(statement: "SQL") -> str:

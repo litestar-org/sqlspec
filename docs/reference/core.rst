@@ -245,19 +245,19 @@ Statement Caching
 
 .. currentmodule:: sqlspec.core.cache
 
-.. autoclass:: UnifiedCache
+.. autoclass:: LRUCache
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Unified LRU cache for SQL statements and compilation results.
+   LRU cache for statement processing and compilation results.
 
-.. autoclass:: MultiLevelCache
+.. autoclass:: NamespacedCache
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Multi-level cache system for different caching strategies.
+   Namespace-aware cache wrapper for statement processing.
 
 .. autoclass:: CacheConfig
    :members:

@@ -467,7 +467,7 @@ class SQLFileLoader:
 
         cache_key_str = self._generate_file_cache_key(file_path)
         cache = get_cache()
-        cached_file = cache.get("file", cache_key_str)
+        cached_file = cache.get_file(cache_key_str)
 
         if (
             cached_file is not None
@@ -504,7 +504,7 @@ class SQLFileLoader:
                     file_statements[stored_name] = self._queries[query_name]
 
             cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
-            cache.put("file", cache_key_str, cached_file_data)
+            cache.put_file(cache_key_str, cached_file_data)
             if runtime is not None:
                 runtime.increment_metric("loader.cache.miss")
                 runtime.increment_metric("loader.files.loaded")

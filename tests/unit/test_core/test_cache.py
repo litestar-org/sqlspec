@@ -1,12 +1,12 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for the SQLSpec cache system.
 
-This module tests the unified caching system. Tests cover:
+This module tests the caching system. Tests cover:
 
 1. CacheKey - Immutable cache keys
 2. CacheStats - Cache statistics tracking and monitoring
-3. UnifiedCache - Main LRU cache implementation with TTL support
-4. MultiLevelCache - Namespace-based cache with zero-copy views
+3. LRUCache - Main LRU cache implementation with TTL support
+4. NamespacedCache - Namespace-based cache with zero-copy views
 5. Cache management functions - Global cache management and configuration
 6. Thread safety - Concurrent access and operations
 7. Performance characteristics - O(1) operations and memory efficiency
@@ -26,8 +26,8 @@ from sqlspec.core import (
     CacheConfig,
     CacheKey,
     CacheStats,
-    MultiLevelCache,
-    UnifiedCache,
+    NamespacedCache,
+    LRUCache,
     clear_all_caches,
     get_cache,
     get_cache_config,
@@ -171,18 +171,18 @@ def test_cache_stats_string_representation() -> None:
     assert "misses=1" in repr_str
 
 
-def test_unified_cache_initialization() -> None:
-    """Test UnifiedCache initialization with default parameters."""
-    cache = UnifiedCache()
+def test_lru_cache_initialization() -> None:
+    """Test LRUCache initialization with default parameters."""
+    cache = LRUCache()
 
     assert cache.size() == 0
     assert cache.is_empty() is True
     assert len(cache) == 0
 
 
-def test_unified_cache_basic_operations() -> None:
+def test_lru_cache_basic_operations() -> None:
     """Test basic cache operations - get, put, delete."""
-    cache = UnifiedCache(max_size=3)
+    cache = LRUCache(max_size=3)
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
 
@@ -199,9 +199,9 @@ def test_unified_cache_basic_operations() -> None:
     assert cache.size() == 0
 
 
-def test_unified_cache_lru_eviction() -> None:
+def test_lru_cache_lru_eviction() -> None:
     """Test LRU eviction policy when cache exceeds max size."""
-    cache = UnifiedCache(max_size=2)
+    cache = LRUCache(max_size=2)
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
     key3 = CacheKey(("test", 3))
@@ -217,9 +217,9 @@ def test_unified_cache_lru_eviction() -> None:
     assert cache.get(key3) == "value3"
 
 
-def test_unified_cache_lru_ordering() -> None:
+def test_lru_cache_lru_ordering() -> None:
     """Test that LRU ordering is maintained correctly."""
-    cache = UnifiedCache(max_size=3)
+    cache = LRUCache(max_size=3)
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
     key3 = CacheKey(("test", 3))
@@ -239,9 +239,9 @@ def test_unified_cache_lru_ordering() -> None:
     assert cache.get(key4) == "value4"
 
 
-def test_unified_cache_update_existing_key() -> None:
+def test_lru_cache_update_existing_key() -> None:
     """Test updating value for existing cache key."""
-    cache = UnifiedCache()
+    cache = LRUCache()
     key = CacheKey(("test", "update"))
 
     cache.put(key, "original")
@@ -253,9 +253,9 @@ def test_unified_cache_update_existing_key() -> None:
     assert cache.size() == 1
 
 
-def test_unified_cache_ttl_expiration() -> None:
+def test_lru_cache_ttl_expiration() -> None:
     """Test TTL-based cache expiration."""
-    cache = UnifiedCache(max_size=10, ttl_seconds=1)
+    cache = LRUCache(max_size=10, ttl_seconds=1)
     key = CacheKey(("test", "ttl"))
 
     cache.put(key, "expires_soon")
@@ -268,9 +268,9 @@ def test_unified_cache_ttl_expiration() -> None:
     assert key not in cache
 
 
-def test_unified_cache_contains_operation() -> None:
+def test_lru_cache_contains_operation() -> None:
     """Test __contains__ operation with TTL consideration."""
-    cache = UnifiedCache(ttl_seconds=1)
+    cache = LRUCache(ttl_seconds=1)
     key = CacheKey(("test", "contains"))
 
     assert key not in cache
@@ -282,9 +282,9 @@ def test_unified_cache_contains_operation() -> None:
     assert key not in cache
 
 
-def test_unified_cache_clear_operation() -> None:
+def test_lru_cache_clear_operation() -> None:
     """Test clearing all cache entries."""
-    cache = UnifiedCache()
+    cache = LRUCache()
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
 
@@ -299,9 +299,9 @@ def test_unified_cache_clear_operation() -> None:
     assert cache.get(key2) is None
 
 
-def test_unified_cache_statistics_tracking() -> None:
+def test_lru_cache_statistics_tracking() -> None:
     """Test cache statistics tracking during operations."""
-    cache = UnifiedCache(max_size=2)
+    cache = LRUCache(max_size=2)
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
     key3 = CacheKey(("test", 3))
@@ -327,8 +327,8 @@ def test_unified_cache_statistics_tracking() -> None:
     assert stats.evictions == 1
 
 
-def test_multi_level_cache_statement_operations() -> None:
-    """Test MultiLevelCache statement namespace operations."""
+def test_namespaced_cache_statement_operations() -> None:
+    """Test NamespacedCache statement namespace operations."""
     cache = get_cache()
 
     cache_key = "SELECT * FROM users WHERE id = ?"
@@ -336,19 +336,19 @@ def test_multi_level_cache_statement_operations() -> None:
     parameters = ["param1"]
     cache_value = (compiled_sql, parameters)
 
-    cache.put("statement", cache_key, cache_value)
+    cache.put_statement(cache_key, cache_value)
 
-    result = cache.get("statement", cache_key)
+    result = cache.get_statement(cache_key)
     assert result is not None
     assert result[0] == compiled_sql
     assert result[1] == parameters
 
-    cache.delete("statement", cache_key)
-    assert cache.get("statement", cache_key) is None
+    cache.delete_statement(cache_key)
+    assert cache.get_statement(cache_key) is None
 
 
-def test_multi_level_cache_expression_operations() -> None:
-    """Test MultiLevelCache expression namespace operations."""
+def test_namespaced_cache_expression_operations() -> None:
+    """Test NamespacedCache expression namespace operations."""
     cache = get_cache()
 
     sql = "SELECT * FROM users WHERE id = 1"
@@ -357,17 +357,17 @@ def test_multi_level_cache_expression_operations() -> None:
     mock_expression = MagicMock()
     mock_expression.sql.return_value = sql
 
-    cache.put("expression", cache_key, mock_expression)
+    cache.put_expression(cache_key, mock_expression)
 
-    result = cache.get("expression", cache_key)
+    result = cache.get_expression(cache_key)
     assert result is mock_expression
 
-    result_missing = cache.get("expression", "missing_key")
+    result_missing = cache.get_expression("missing_key")
     assert result_missing is None
 
 
-def test_multi_level_cache_parameter_operations() -> None:
-    """Test MultiLevelCache parameter namespace operations."""
+def test_namespaced_cache_parameter_operations() -> None:
+    """Test NamespacedCache parameter namespace operations."""
     cache = get_cache()
 
     original_params = {"user_id": 1, "name": "John"}
@@ -375,13 +375,13 @@ def test_multi_level_cache_parameter_operations() -> None:
     config_hash = hash("config")
     cache_key = f"{hash(str(original_params))}::{config_hash}"
 
-    cache.put("parameter", cache_key, processed_params)
+    cache.put_parameter(cache_key, processed_params)
 
-    result = cache.get("parameter", cache_key)
+    result = cache.get_parameter(cache_key)
     assert result == processed_params
 
-    cache.delete("parameter", cache_key)
-    assert cache.get("parameter", cache_key) is None
+    cache.delete_parameter(cache_key)
+    assert cache.get_parameter(cache_key) is None
 
 
 def test_get_default_cache_singleton() -> None:
@@ -390,7 +390,7 @@ def test_get_default_cache_singleton() -> None:
     cache2 = get_default_cache()
 
     assert cache1 is cache2
-    assert isinstance(cache1, UnifiedCache)
+    assert isinstance(cache1, LRUCache)
 
 
 def test_get_cache_singleton() -> None:
@@ -399,7 +399,7 @@ def test_get_cache_singleton() -> None:
     cache2 = get_cache()
 
     assert cache1 is cache2
-    assert isinstance(cache1, MultiLevelCache)
+    assert isinstance(cache1, NamespacedCache)
 
 
 def test_clear_all_caches_function() -> None:
@@ -410,15 +410,15 @@ def test_clear_all_caches_function() -> None:
 
     test_key = CacheKey(("test",))
     default_cache.put(test_key, "test_value")
-    multi_cache.put("test", "key1", "value1")
+    multi_cache.put_statement("key1", "value1")
 
     assert default_cache.size() > 0
-    assert multi_cache.get("test", "key1") == "value1"
+    assert multi_cache.get_statement("key1") == "value1"
 
     clear_all_caches()
 
     assert default_cache.size() == 0
-    assert multi_cache.get("test", "key1") is None
+    assert multi_cache.get_statement("key1") is None
 
 
 def test_get_cache_statistics_function() -> None:
@@ -431,7 +431,7 @@ def test_get_cache_statistics_function() -> None:
 
     assert isinstance(stats_dict, dict)
     assert "default" in stats_dict
-    assert "multi_level" in stats_dict
+    assert "namespaced" in stats_dict
 
     for stats in stats_dict.values():
         assert isinstance(stats, CacheStats)
@@ -489,22 +489,22 @@ def test_update_cache_config_function() -> None:
         update_cache_config(original_config)
 
 
-def test_multi_level_cache_namespace_isolation() -> None:
-    """Test that different namespaces in MultiLevelCache are isolated."""
+def test_namespaced_cache_namespace_isolation() -> None:
+    """Test that different namespaces in NamespacedCache are isolated."""
     cache = get_cache()
 
-    cache.put("statement", "key1", "value1")
-    cache.put("expression", "key1", "value2")
-    cache.put("parameter", "key1", "value3")
+    cache.put_statement("key1", "value1")
+    cache.put_expression("key1", "value2")
+    cache.put_parameter("key1", "value3")
 
-    assert cache.get("statement", "key1") == "value1"
-    assert cache.get("expression", "key1") == "value2"
-    assert cache.get("parameter", "key1") == "value3"
+    assert cache.get_statement("key1") == "value1"
+    assert cache.get_expression("key1") == "value2"
+    assert cache.get_parameter("key1") == "value3"
 
-    cache.delete("statement", "key1")
-    assert cache.get("statement", "key1") is None
-    assert cache.get("expression", "key1") == "value2"
-    assert cache.get("parameter", "key1") == "value3"
+    cache.delete_statement("key1")
+    assert cache.get_statement("key1") is None
+    assert cache.get_expression("key1") == "value2"
+    assert cache.get_parameter("key1") == "value3"
 
 
 def test_get_cache_stats_aggregation() -> None:
@@ -514,7 +514,7 @@ def test_get_cache_stats_aggregation() -> None:
     stats = get_cache_stats()
     assert isinstance(stats, dict)
     assert "default" in stats
-    assert "multi_level" in stats
+    assert "namespaced" in stats
 
 
 def test_reset_cache_stats_function() -> None:
@@ -524,7 +524,7 @@ def test_reset_cache_stats_function() -> None:
 
     test_key = CacheKey(("test",))
     default_cache.get(test_key)
-    multi_cache.get("test", "key")
+    multi_cache.get_statement("key")
 
     reset_cache_stats()
 
@@ -549,24 +549,24 @@ def test_log_cache_stats_function() -> None:
         mock_logger.info.assert_called_once()
 
 
-def test_multi_level_cache_interface() -> None:
-    """Test multi-level cache interface."""
+def test_namespaced_cache_interface() -> None:
+    """Test namespaced cache interface."""
     cache = get_cache()
     cache_key = "test_cache_key"
     cache_value = ("SELECT * FROM users WHERE id = $1", [1])
 
-    cache.put("statement", cache_key, cache_value, "postgres")
+    cache.put_statement(cache_key, cache_value, "postgres")
 
-    result = cache.get("statement", cache_key, "postgres")
+    result = cache.get_statement(cache_key, "postgres")
     assert result == cache_value
 
-    result_none = cache.get("statement", "non_existent_key", "postgres")
+    result_none = cache.get_statement("non_existent_key", "postgres")
     assert result_none is None
 
 
-def test_unified_cache_thread_safety() -> None:
-    """Test UnifiedCache thread safety with concurrent operations."""
-    cache = UnifiedCache(max_size=100)
+def test_lru_cache_thread_safety() -> None:
+    """Test LRUCache thread safety with concurrent operations."""
+    cache = LRUCache(max_size=100)
     results = []
     errors = []
 
@@ -595,7 +595,7 @@ def test_unified_cache_thread_safety() -> None:
 
 def test_cache_statistics_thread_safety() -> None:
     """Test cache statistics thread safety."""
-    cache = UnifiedCache()
+    cache = LRUCache()
     errors = []
 
     def stats_worker() -> None:
@@ -634,9 +634,9 @@ def test_cache_key_performance_with_large_data() -> None:
     assert isinstance(hash(cache_key), int)
 
 
-def test_unified_cache_zero_max_size() -> None:
-    """Test UnifiedCache with zero max size (no caching)."""
-    cache = UnifiedCache(max_size=0)
+def test_lru_cache_zero_max_size() -> None:
+    """Test LRUCache with zero max size (no caching)."""
+    cache = LRUCache(max_size=0)
     key = CacheKey(("test",))
 
     cache.put(key, "test_value")
@@ -645,9 +645,9 @@ def test_unified_cache_zero_max_size() -> None:
     assert cache.size() == 0
 
 
-def test_unified_cache_very_short_ttl() -> None:
-    """Test UnifiedCache with very short TTL."""
-    cache = UnifiedCache(ttl_seconds=1)
+def test_lru_cache_very_short_ttl() -> None:
+    """Test LRUCache with very short TTL."""
+    cache = LRUCache(ttl_seconds=1)
     key = CacheKey(("test", "short_ttl"))
 
     cache.put(key, "expires_quickly")
@@ -659,9 +659,9 @@ def test_unified_cache_very_short_ttl() -> None:
 
 
 @pytest.mark.parametrize("cache_size,num_items", [(10, 15), (100, 50), (1, 10)])
-def test_unified_cache_various_sizes(cache_size: int, num_items: int) -> None:
-    """Test UnifiedCache with various size configurations."""
-    cache = UnifiedCache(max_size=cache_size)
+def test_lru_cache_various_sizes(cache_size: int, num_items: int) -> None:
+    """Test LRUCache with various size configurations."""
+    cache = LRUCache(max_size=cache_size)
 
     for i in range(num_items):
         key = CacheKey((i,))
@@ -678,7 +678,7 @@ def test_unified_cache_various_sizes(cache_size: int, num_items: int) -> None:
 
 def test_cache_with_none_values() -> None:
     """Test cache behavior with None values."""
-    cache = UnifiedCache()
+    cache = LRUCache()
     key = CacheKey(("none_test",))
 
     cache.put(key, None)

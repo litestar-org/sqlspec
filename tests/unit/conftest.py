@@ -19,7 +19,7 @@ from sqlspec.core import (
     ParameterStyleConfig,
     StatementConfig,
     TypedParameter,
-    UnifiedCache,
+    LRUCache,
     get_default_cache,
 )
 from sqlspec.driver import (
@@ -105,7 +105,7 @@ __all__ = (
     "mock_sqlite_connection",
     "mock_sync_connection",
     "mock_sync_driver",
-    "mock_unified_cache",
+    "mock_lru_cache",
     "parameter_style_config_advanced",
     "parameter_style_config_basic",
     "performance_timer",
@@ -249,8 +249,8 @@ def cache_config_disabled() -> dict[str, Any]:
 
 
 @pytest.fixture
-def mock_unified_cache() -> UnifiedCache:
-    """Mock unified cache for testing cache behavior."""
+def mock_lru_cache() -> LRUCache:
+    """Mock LRU cache for testing cache behavior."""
 
     return get_default_cache()
 

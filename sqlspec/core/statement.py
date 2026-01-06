@@ -724,8 +724,18 @@ class StatementConfig:
         self.enable_expression_simplification = enable_expression_simplification
         self.enable_parameter_type_wrapping = enable_parameter_type_wrapping
         self.enable_caching = enable_caching
-        self.parameter_converter = parameter_converter or ParameterConverter()
-        self.parameter_validator = parameter_validator or ParameterValidator()
+        if parameter_converter is None:
+            if parameter_validator is None:
+                parameter_validator = ParameterValidator()
+            self.parameter_converter = ParameterConverter(parameter_validator)
+        else:
+            self.parameter_converter = parameter_converter
+
+        if parameter_validator is None:
+            self.parameter_validator = self.parameter_converter.validator
+        else:
+            self.parameter_validator = parameter_validator
+            self.parameter_converter.validator = parameter_validator
         self.parameter_config = parameter_config or ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
         )

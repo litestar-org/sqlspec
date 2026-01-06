@@ -10,7 +10,7 @@ Tests cache integration with architecture including:
 - Memory management and cleanup
 - Multi-loader cache sharing
 
-Uses cache system with UnifiedCache.
+Uses cache system with LRUCache.
 """
 
 import tempfile
@@ -65,7 +65,7 @@ def test_cache_enabled_loading(mock_get_cache: Mock, mock_get_cache_config: Mock
     mock_get_cache_config.return_value = mock_config
 
     mock_cache = Mock()
-    mock_cache.get.return_value = None
+    mock_cache.get_file.return_value = None
     mock_get_cache.return_value = mock_cache
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
@@ -78,9 +78,9 @@ SELECT 'with cache' as message;
         loader = SQLFileLoader()
         loader._load_single_file(tf.name, None)
 
-        mock_cache.get.assert_called_once()
+        mock_cache.get_file.assert_called_once()
 
-        mock_cache.put.assert_called_once()
+        mock_cache.put_file.assert_called_once()
 
         Path(tf.name).unlink()
 
@@ -148,8 +148,8 @@ def mock_cache_setup() -> Generator[tuple[Mock, Mock, SQLFileLoader], None, None
         mock_config.return_value = mock_cache_config
 
         mock_cache = Mock()
-        mock_cache.get = Mock()
-        mock_cache.put = Mock()
+        mock_cache.get_file = Mock()
+        mock_cache.put_file = Mock()
         mock_cache.clear = Mock()
         mock_cache_factory.return_value = mock_cache
 
@@ -174,16 +174,14 @@ SELECT 'from cache' as source;
         statements = {"cached_query": NamedStatement("cached_query", "SELECT 'from cache' as source")}
         cached_file = CachedSQLFile(sql_file, statements)
 
-        mock_cache.get.return_value = cached_file
+        mock_cache.get_file.return_value = cached_file
 
         with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True):
             loader._load_single_file(tf.name, None)
 
-        mock_cache.get.assert_called_once()
-        call_args = mock_cache.get.call_args
-        assert call_args[0][0] == "file"  # First arg should be "file" namespace
+        mock_cache.get_file.assert_called_once()
 
-        mock_cache.put.assert_not_called()
+        mock_cache.put_file.assert_not_called()
 
         assert "cached_query" in loader._queries
         assert loader._queries["cached_query"].sql.strip() == "SELECT 'from cache' as source"
@@ -203,17 +201,13 @@ SELECT 'new content' as source;
         tf.write(content)
         tf.flush()
 
-        mock_cache.get.return_value = None
+        mock_cache.get_file.return_value = None
 
         loader._load_single_file(tf.name, None)
 
-        mock_cache.get.assert_called_once()
-        get_call_args = mock_cache.get.call_args
-        assert get_call_args[0][0] == "file"  # First arg should be "file" namespace
+        mock_cache.get_file.assert_called_once()
 
-        mock_cache.put.assert_called_once()
-        put_call_args = mock_cache.put.call_args
-        assert put_call_args[0][0] == "file"  # First arg should be "file" namespace
+        mock_cache.put_file.assert_called_once()
 
         assert "new_query" in loader._queries
 
@@ -236,14 +230,14 @@ SELECT 'original' as version;
         statements = {"changing_query": NamedStatement("changing_query", "SELECT 'original' as version")}
         cached_file = CachedSQLFile(sql_file, statements)
 
-        mock_cache.get.return_value = cached_file
+        mock_cache.get_file.return_value = cached_file
 
         with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=False):
             loader._load_single_file(tf.name, None)
 
-        mock_cache.get.assert_called_once()
+        mock_cache.get_file.assert_called_once()
 
-        mock_cache.put.assert_called_once()
+        mock_cache.put_file.assert_called_once()
 
         Path(tf.name).unlink()
 
@@ -343,17 +337,16 @@ SELECT COUNT(*) FROM users;
         mock_config.return_value = mock_cache_config
 
         mock_cache = Mock()
-        mock_cache.get.return_value = None
+        mock_cache.get_file.return_value = None
         mock_cache_factory.return_value = mock_cache
 
         loader.load_sql(base_path)
 
         assert "analytics.user_report" in loader._queries
 
-        mock_cache.put.assert_called()
-        cache_call_args = mock_cache.put.call_args[0]
-        assert cache_call_args[0] == "file"  # First arg should be "file" namespace
-        cached_data = cache_call_args[2]  # Third arg is the value in MultiLevelCache.put
+        mock_cache.put_file.assert_called()
+        cache_call_args = mock_cache.put_file.call_args[0]
+        cached_data = cache_call_args[1]
 
         assert isinstance(cached_data, CachedSQLFile)
 
@@ -391,7 +384,7 @@ SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE;
         mock_config.return_value = mock_cache_config
 
         mock_cache = Mock()
-        mock_cache.get.return_value = cached_file
+        mock_cache.get_file.return_value = cached_file
         mock_cache_factory.return_value = mock_cache
 
         loader._load_single_file(sql_file, "reports")
@@ -608,12 +601,12 @@ LIMIT 100;
             mock_cache = Mock()
             mock_cache_factory.return_value = mock_cache
 
-            mock_cache.get.return_value = None
+            mock_cache.get_file.return_value = None
 
             loader._load_single_file(tf.name, None)
 
             assert len(loader._queries) == 100
-            mock_cache.put.assert_called_once()
+            mock_cache.put_file.assert_called_once()
 
             sql_file = SQLFile("dummy content", tf.name)
             cached_statements = {
@@ -622,14 +615,14 @@ LIMIT 100;
             cached_file = CachedSQLFile(sql_file, cached_statements)
 
             loader2 = SQLFileLoader()
-            mock_cache.get.return_value = cached_file
+            mock_cache.get_file.return_value = cached_file
             mock_cache.reset_mock()
 
             with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True):
                 loader2._load_single_file(tf.name, None)
 
             assert len(loader2._queries) == 100
-            mock_cache.get.assert_called_once()
-            mock_cache.put.assert_not_called()
+            mock_cache.get_file.assert_called_once()
+            mock_cache.put_file.assert_not_called()
 
         Path(tf.name).unlink()

@@ -407,11 +407,7 @@ def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":
     """
     from sqlspec.core.filters import StatementFilter as FilterProtocol
 
-    if isinstance(obj, FilterProtocol):
-        return True
-    append_to_statement = getattr(obj, "append_to_statement", None)
-    get_cache_key = getattr(obj, "get_cache_key", None)
-    return callable(append_to_statement) and callable(get_cache_key)
+    return isinstance(obj, FilterProtocol)
 
 
 def is_limit_offset_filter(obj: Any) -> "TypeGuard[LimitOffsetFilter]":
@@ -943,7 +939,7 @@ def has_dict_attribute(obj: Any) -> "TypeGuard[DictProtocol]":
     Returns:
         bool
     """
-    return hasattr(obj, "__dict__")
+    return isinstance(obj, DictProtocol)
 
 
 def extract_dataclass_fields(

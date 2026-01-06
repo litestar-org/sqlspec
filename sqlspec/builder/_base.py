@@ -636,7 +636,7 @@ class QueryBuilder(ABC):
         )
 
         cache = get_cache()
-        cached_optimized = cache.get("optimized", cache_key)
+        cached_optimized = cache.get_optimized(cache_key)
         if cached_optimized:
             return cast("exp.Expression", cached_optimized)
 
@@ -644,7 +644,7 @@ class QueryBuilder(ABC):
             optimized = optimize(
                 expression, schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
-            cache.put("optimized", cache_key, optimized)
+            cache.put_optimized(cache_key, optimized)
         except Exception:
             logger.debug("Expression optimization failed, using original expression")
             return expression
@@ -667,12 +667,12 @@ class QueryBuilder(ABC):
         cache_key_str = self._generate_builder_cache_key(config)
 
         cache = get_cache()
-        cached_sql = cache.get("builder", cache_key_str)
+        cached_sql = cache.get_builder(cache_key_str)
         if cached_sql is not None:
             return cast("SQL", cached_sql)
 
         sql_statement = self._to_statement(config)
-        cache.put("builder", cache_key_str, sql_statement)
+        cache.put_builder(cache_key_str, sql_statement)
 
         return sql_statement
 

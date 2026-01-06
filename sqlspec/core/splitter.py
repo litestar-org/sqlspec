@@ -24,7 +24,7 @@ from typing import Any, Final, TypeAlias, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.cache import CacheKey, UnifiedCache
+from sqlspec.core.cache import CacheKey, LRUCache
 from sqlspec.utils.logging import get_logger
 
 __all__ = (
@@ -616,12 +616,12 @@ class BigQueryDialectConfig(DialectConfig):
         return self._statement_terminators
 
 
-_pattern_cache: UnifiedCache | None = None
-_result_cache: UnifiedCache | None = None
+_pattern_cache: LRUCache | None = None
+_result_cache: LRUCache | None = None
 _cache_lock = threading.Lock()
 
 
-def _get_pattern_cache() -> UnifiedCache:
+def _get_pattern_cache() -> LRUCache:
     """Get or create the global pattern compilation cache.
 
     Returns:
@@ -631,11 +631,11 @@ def _get_pattern_cache() -> UnifiedCache:
     if _pattern_cache is None:
         with _cache_lock:
             if _pattern_cache is None:
-                _pattern_cache = UnifiedCache(max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
+                _pattern_cache = LRUCache(max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
     return _pattern_cache
 
 
-def _get_result_cache() -> UnifiedCache:
+def _get_result_cache() -> LRUCache:
     """Get or create the global result cache.
 
     Returns:
@@ -645,7 +645,7 @@ def _get_result_cache() -> UnifiedCache:
     if _result_cache is None:
         with _cache_lock:
             if _result_cache is None:
-                _result_cache = UnifiedCache(max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
+                _result_cache = LRUCache(max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
     return _result_cache
 
 

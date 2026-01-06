@@ -17,8 +17,8 @@ class ParameterConverter:
 
     __slots__ = ("_format_converters", "_placeholder_generators", "validator")
 
-    def __init__(self) -> None:
-        self.validator = ParameterValidator()
+    def __init__(self, validator: "ParameterValidator | None" = None) -> None:
+        self.validator = validator or ParameterValidator()
 
         self._format_converters = {
             ParameterStyle.POSITIONAL_COLON: self._convert_to_positional_colon_format,
@@ -42,8 +42,10 @@ class ParameterConverter:
             ParameterStyle.POSITIONAL_PYFORMAT: lambda _: "%s",
         }
 
-    def normalize_sql_for_parsing(self, sql: str, dialect: str | None = None) -> "tuple[str, list[ParameterInfo]]":
-        param_info = self.validator.extract_parameters(sql)
+    def normalize_sql_for_parsing(
+        self, sql: str, dialect: str | None = None, param_info: "list[ParameterInfo] | None" = None
+    ) -> "tuple[str, list[ParameterInfo]]":
+        param_info = param_info or self.validator.extract_parameters(sql)
 
         incompatible_styles = self.validator.get_sqlglot_incompatible_styles(dialect)
         needs_conversion = any(p.style in incompatible_styles for p in param_info)

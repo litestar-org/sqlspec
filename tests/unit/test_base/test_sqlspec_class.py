@@ -156,9 +156,9 @@ def test_get_cache_stats_returns_statistics() -> None:
     stats = SQLSpec.get_cache_stats()
 
     assert isinstance(stats, dict)
-    assert "multi_level" in stats
+    assert "namespaced" in stats
 
-    multi_stats = stats["multi_level"]
+    multi_stats = stats["namespaced"]
 
     assert hasattr(multi_stats, "hit_rate")
     assert hasattr(multi_stats, "hits")
@@ -172,7 +172,7 @@ def test_reset_cache_stats_clears_statistics() -> None:
     SQLSpec.reset_cache_stats()
     stats = SQLSpec.get_cache_stats()
 
-    multi_stats = stats["multi_level"]
+    multi_stats = stats["namespaced"]
 
     assert multi_stats.hits == 0
     assert multi_stats.misses == 0
@@ -304,7 +304,7 @@ def test_concurrent_statistics_access_is_thread_safe() -> None:
             for _ in range(50):
                 stats = SQLSpec.get_cache_stats()
                 SQLSpec.reset_cache_stats()
-                multi_stats = stats["multi_level"]
+                multi_stats = stats["namespaced"]
                 total_ops = multi_stats.hits + multi_stats.misses
                 results.append(total_ops)
                 time.sleep(0.001)
@@ -572,8 +572,8 @@ def test_statistics_collection_during_configuration_changes() -> None:
 
             stats = SQLSpec.get_cache_stats()
             assert isinstance(stats, dict)
-            assert "multi_level" in stats
-            multi_stats = stats["multi_level"]
+            assert "namespaced" in stats
+            multi_stats = stats["namespaced"]
             assert hasattr(multi_stats, "hit_rate")
 
             SQLSpec.reset_cache_stats()
