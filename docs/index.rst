@@ -51,6 +51,7 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
     usage/index
     examples/index
     reference/index
+    playground
 
 .. toctree::
     :hidden:
