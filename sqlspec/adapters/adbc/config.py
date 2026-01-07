@@ -172,6 +172,24 @@ class AdbcConnectionContext:
         return None
 
 
+class _AdbcSessionConnectionHandler:
+    __slots__ = ("_config", "_connection")
+
+    def __init__(self, config: "AdbcConfig") -> None:
+        self._config = config
+        self._connection: AdbcConnection | None = None
+
+    def acquire_connection(self) -> "AdbcConnection":
+        self._connection = self._config.create_connection()
+        return self._connection
+
+    def release_connection(self, _conn: "AdbcConnection") -> None:
+        if self._connection is None:
+            return
+        self._connection.close()
+        self._connection = None
+
+
 class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     """ADBC configuration for Arrow Database Connectivity.
 
@@ -383,21 +401,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         final_statement_config = (
             statement_config or self.statement_config or get_adbc_statement_config(str(self._get_dialect() or "sqlite"))
         )
-        conn_holder: dict[str, AdbcConnection] = {}
-
-        def acquire_connection() -> AdbcConnection:
-            conn = self.create_connection()
-            conn_holder["conn"] = conn
-            return conn
-
-        def release_connection(_conn: AdbcConnection) -> None:
-            if "conn" in conn_holder:
-                conn_holder["conn"].close()
-                conn_holder.clear()
+        handler = _AdbcSessionConnectionHandler(self)
 
         return AdbcSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
             statement_config=final_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,

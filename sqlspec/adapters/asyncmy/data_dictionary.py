@@ -20,6 +20,8 @@ __all__ = ("MySQLAsyncDataDictionary",)
 class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
     """MySQL-specific async data dictionary."""
 
+    __slots__ = ()
+
     async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get MySQL database version information.
 

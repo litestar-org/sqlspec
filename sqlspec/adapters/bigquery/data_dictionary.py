@@ -16,6 +16,8 @@ __all__ = ("BigQuerySyncDataDictionary",)
 class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
     """BigQuery-specific sync data dictionary."""
 
+    __slots__ = ()
+
     def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get BigQuery version information.
 

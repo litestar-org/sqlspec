@@ -3,7 +3,7 @@
 import contextlib
 import logging
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, cast
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
@@ -89,8 +89,8 @@ __all__ = (
     "oracledb_statement_config",
 )
 
-PIPELINE_MIN_DRIVER_VERSION: Final[tuple[int, int, int]] = (2, 4, 0)
-PIPELINE_MIN_DATABASE_MAJOR: Final[int] = 23
+PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
+PIPELINE_MIN_DATABASE_MAJOR: int = 23
 
 
 class _CompiledStackOperation(NamedTuple):

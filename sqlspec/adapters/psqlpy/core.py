@@ -3,6 +3,7 @@
 import datetime
 import decimal
 import io
+import re
 import uuid
 from typing import TYPE_CHECKING, Any, Final
 
@@ -23,6 +24,7 @@ __all__ = (
     "encode_records_for_binary_copy",
     "format_table_identifier",
     "normalize_scalar_parameter",
+    "parse_psqlpy_command_tag",
     "prepare_dict_parameter",
     "prepare_list_parameter",
     "prepare_tuple_parameter",
@@ -41,6 +43,7 @@ _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 _JSONB_TYPE: "type[Any] | None" = None
 _JSONB_RESOLVED: bool = False
+PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 
 def _get_jsonb_type() -> "type[Any] | None":
@@ -204,6 +207,28 @@ def split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     return schema_name or None, table_name
+
+
+def parse_psqlpy_command_tag(tag: str) -> int:
+    """Parse PostgreSQL command tag to extract rows affected.
+
+    Args:
+        tag: PostgreSQL command tag string.
+
+    Returns:
+        Number of rows affected, -1 if unable to parse.
+    """
+    if not tag:
+        return -1
+
+    match = PSQLPY_STATUS_REGEX.match(tag.strip())
+    if match:
+        command = match.group(1).upper()
+        if command == "INSERT" and match.group(3):
+            return int(match.group(3))
+        if command in {"UPDATE", "DELETE"} and match.group(3):
+            return int(match.group(3))
+    return -1
 
 
 def _quote_identifier(identifier: str) -> str:

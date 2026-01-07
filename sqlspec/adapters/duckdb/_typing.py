@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from duckdb import DuckDBPyConnection
 
+_DuckDBConnection = DuckDBPyConnection
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
@@ -15,9 +17,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
     from sqlspec.core import StatementConfig
 
-    DuckDBConnection: TypeAlias = DuckDBPyConnection
-else:
-    DuckDBConnection = DuckDBPyConnection
+    DuckDBConnection: TypeAlias = _DuckDBConnection
+
+if not TYPE_CHECKING:
+    DuckDBConnection = _DuckDBConnection
 
 
 class DuckDBSessionContext:

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from asyncmy import Connection  # pyright: ignore
 
+_AsyncmyConnection = Connection
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
@@ -15,9 +17,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
     from sqlspec.core import StatementConfig
 
-    AsyncmyConnection: TypeAlias = Connection
-else:
-    AsyncmyConnection = Connection
+    AsyncmyConnection: TypeAlias = _AsyncmyConnection
+
+if not TYPE_CHECKING:
+    AsyncmyConnection = _AsyncmyConnection
 
 
 class AsyncmySessionContext:

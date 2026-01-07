@@ -1,5 +1,6 @@
 """Core parameter data structures and utilities."""
 
+# noqa: ruff: FBT003
 from collections.abc import Callable, Collection, Generator, Iterable, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -69,6 +70,19 @@ class TypedParameter:
     def __repr__(self) -> str:
         name_part = f", semantic_name='{self.semantic_name}'" if self.semantic_name else ""
         return f"TypedParameter({self.value!r}, original_type={self.original_type.__name__}{name_part})"
+
+
+class _TupleAdapter:
+    __slots__ = ("_as_list", "_serializer")
+
+    def __init__(self, serializer: "Callable[[Any], str]", as_list: bool) -> None:
+        self._serializer = serializer
+        self._as_list = as_list
+
+    def __call__(self, value: Any) -> "Any":
+        if self._as_list:
+            return self._serializer(list(value))
+        return self._serializer(value)
 
 
 @singledispatch
@@ -251,15 +265,9 @@ class ParameterStyleConfig:
         """Return a copy configured with JSON serializers for complex parameters."""
 
         if tuple_strategy == "list":
-
-            def tuple_adapter(value: Any) -> Any:
-                return serializer(list(value))
-
+            tuple_adapter = _TupleAdapter(serializer, True)
         elif tuple_strategy == "tuple":
-
-            def tuple_adapter(value: Any) -> Any:
-                return serializer(value)
-
+            tuple_adapter = _TupleAdapter(serializer, False)
         else:
             msg = f"Unsupported tuple_strategy: {tuple_strategy}"
             raise ValueError(msg)

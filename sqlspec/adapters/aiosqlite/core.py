@@ -4,14 +4,23 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle
+from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
-__all__ = ("process_sqlite_result",)
+__all__ = (
+    "aiosqlite_statement_config",
+    "apply_aiosqlite_driver_features",
+    "build_aiosqlite_profile",
+    "build_aiosqlite_statement_config",
+    "build_sqlite_insert_statement",
+    "format_sqlite_identifier",
+    "process_sqlite_result",
+)
 
 
 _TIME_TO_ISO = build_time_iso_converter()
@@ -89,3 +98,38 @@ def build_aiosqlite_profile() -> "DriverParameterProfile":
         },
         default_dialect="sqlite",
     )
+
+
+def build_aiosqlite_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> "StatementConfig":
+    """Construct the AIOSQLite statement configuration with optional JSON codecs."""
+    serializer = json_serializer or to_json
+    deserializer = json_deserializer or from_json
+    return build_statement_config_from_profile(
+        build_aiosqlite_profile(),
+        statement_overrides={"dialect": "sqlite"},
+        json_serializer=serializer,
+        json_deserializer=deserializer,
+    )
+
+
+aiosqlite_statement_config = build_aiosqlite_statement_config()
+
+
+def apply_aiosqlite_driver_features(
+    statement_config: "StatementConfig", driver_features: "dict[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
+    """Apply AIOSQLite driver feature defaults to statement config."""
+    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    processed_driver_features.setdefault("enable_custom_adapters", True)
+    json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
+    json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
+
+    if json_serializer is not None:
+        parameter_config = statement_config.parameter_config.with_json_serializers(
+            json_serializer, deserializer=json_deserializer
+        )
+        statement_config = statement_config.replace(parameter_config=parameter_config)
+
+    return statement_config, processed_driver_features

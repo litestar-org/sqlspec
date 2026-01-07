@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 from adbc_driver_manager.dbapi import Connection
 
+_AdbcConnection = Connection
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
@@ -16,9 +18,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import StatementConfig
 
-    AdbcConnection: TypeAlias = Connection
-else:
-    AdbcConnection = Connection
+    AdbcConnection: TypeAlias = _AdbcConnection
+
+if not TYPE_CHECKING:
+    AdbcConnection = _AdbcConnection
 
 
 class AdbcSessionContext:

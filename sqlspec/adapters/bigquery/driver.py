@@ -17,7 +17,12 @@ from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
-from sqlspec.adapters.bigquery.core import build_bigquery_profile, create_bq_parameters
+from sqlspec.adapters.bigquery.core import (
+    build_bigquery_profile,
+    create_bq_parameters,
+    map_bigquery_source_format,
+    rows_to_results,
+)
 from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
@@ -368,17 +373,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
             except (AttributeError, TypeError):
                 continue
 
-    def _map_source_format(self, file_format: "StorageFormat") -> str:
-        if file_format == "parquet":
-            return "PARQUET"
-        if file_format in {"json", "jsonl"}:
-            return "NEWLINE_DELIMITED_JSON"
-        msg = f"BigQuery does not support loading '{file_format}' artifacts via the storage bridge"
-        raise StorageCapabilityError(msg, capability="parquet_import_enabled")
-
     def _build_load_job_config(self, file_format: "StorageFormat", overwrite: bool) -> LoadJobConfig:
         job_config = LoadJobConfig()
-        job_config.source_format = self._map_source_format(file_format)
+        job_config.source_format = map_bigquery_source_format(file_format)
         job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
         return job_config
 
@@ -434,18 +431,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         final_job_config.query_parameters = bq_parameters
 
         return conn.query(sql_str, job_config=final_job_config)
-
-    @staticmethod
-    def _rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
-        """Convert BigQuery rows to dictionary format.
-
-        Args:
-            rows_iterator: BigQuery rows iterator
-
-        Returns:
-            List of dictionaries representing the rows
-        """
-        return [dict(row) for row in rows_iterator]
 
     def _inline_literals(self, expression: "sqlglot.Expression", parameters: Any) -> str:
         """Inline literal values into a parsed SQLGlot expression."""
@@ -660,7 +645,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
         if is_select_like:
-            rows_list = self._rows_to_results(iter(job_result))
+            rows_list = rows_to_results(iter(job_result))
             column_names = [field.name for field in cursor.job.schema] if cursor.job.schema else []
 
             return self.create_execution_result(

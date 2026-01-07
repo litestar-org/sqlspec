@@ -27,6 +27,8 @@ __all__ = ("PostgresAsyncDataDictionary", "PostgresSyncDataDictionary")
 class PostgresSyncDataDictionary(SyncDataDictionaryBase):
     """PostgreSQL-specific sync data dictionary."""
 
+    __slots__ = ()
+
     def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
@@ -342,6 +344,8 @@ class PostgresSyncDataDictionary(SyncDataDictionaryBase):
 
 class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
+
+    __slots__ = ()
 
     async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get PostgreSQL database version information.

@@ -20,6 +20,8 @@ __all__ = ("DuckDBSyncDataDictionary",)
 class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
     """DuckDB-specific sync data dictionary."""
 
+    __slots__ = ()
+
     def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get DuckDB database version information.
 

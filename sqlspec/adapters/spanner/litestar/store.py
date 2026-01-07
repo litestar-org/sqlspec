@@ -21,6 +21,46 @@ logger = get_logger("adapters.spanner.litestar.store")
 __all__ = ("SpannerSyncStore",)
 
 
+class _SpannerExecuteUpdateJob:
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None) -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: "Transaction") -> None:
+        if self._params is None and self._types is None:
+            transaction.execute_update(self._sql)  # type: ignore[no-untyped-call]
+            return
+        transaction.execute_update(self._sql, params=self._params or {}, param_types=self._types)  # type: ignore[no-untyped-call]
+
+
+class _SpannerUpsertJob:
+    __slots__ = ("_insert_sql", "_params", "_types", "_update_sql")
+
+    def __init__(self, update_sql: str, insert_sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._update_sql = update_sql
+        self._insert_sql = insert_sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: "Transaction") -> None:
+        row_ct = transaction.execute_update(self._update_sql, params=self._params, param_types=self._types)  # type: ignore[no-untyped-call]
+        if row_ct == 0:
+            transaction.execute_update(self._insert_sql, params=self._params, param_types=self._types)  # type: ignore[no-untyped-call]
+
+
+class _SpannerExecuteUpdateCountJob:
+    __slots__ = ("_sql",)
+
+    def __init__(self, sql: str) -> None:
+        self._sql = sql
+
+    def __call__(self, transaction: "Transaction") -> int:
+        return int(transaction.execute_update(self._sql))  # type: ignore[no-untyped-call]
+
+
 class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
     """Spanner-backed Litestar session store using sync driver wrapped as async."""
 
@@ -110,11 +150,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
                 update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
             params = self._build_params(key, new_expires)
             types = self._get_param_types(expires_at=True)
-
-            def _renew_txn(transaction: "Transaction") -> None:
-                transaction.execute_update(update_sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-            self._database().run_in_transaction(_renew_txn)  # type: ignore[no-untyped-call]
+            self._database().run_in_transaction(_SpannerExecuteUpdateJob(update_sql, params, types))  # type: ignore[no-untyped-call]
 
         return spanner_to_bytes(data)
 
@@ -140,13 +176,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         INSERT {self._table_name} (session_id, data, expires_at, created_at, updated_at)
         VALUES (@session_id, @data, @expires_at, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())
         """
-
-        def _set_txn(transaction: "Transaction") -> None:
-            row_ct = transaction.execute_update(update_sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-            if row_ct == 0:
-                transaction.execute_update(insert_sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-        self._database().run_in_transaction(_set_txn)  # type: ignore[no-untyped-call]
+        self._database().run_in_transaction(_SpannerUpsertJob(update_sql, insert_sql, params, types))  # type: ignore[no-untyped-call]
 
     async def delete(self, key: str) -> None:
         await async_(self._delete)(key)
@@ -157,22 +187,14 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         params = {"session_id": key}
         types = self._get_param_types(session_id=True)
-
-        def _delete_txn(transaction: "Transaction") -> None:
-            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-        self._database().run_in_transaction(_delete_txn)  # type: ignore[no-untyped-call]
+        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql, params, types))  # type: ignore[no-untyped-call]
 
     async def delete_all(self) -> None:
         await async_(self._delete_all)()
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE TRUE"
-
-        def _delete_all_txn(transaction: "Transaction") -> None:
-            transaction.execute_update(sql)  # type: ignore[no-untyped-call]
-
-        self._database().run_in_transaction(_delete_all_txn)  # type: ignore[no-untyped-call]
+        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql))  # type: ignore[no-untyped-call]
 
     async def exists(self, key: str) -> bool:
         return await async_(self._exists)(key)
@@ -216,14 +238,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         DELETE FROM {self._table_name}
         WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP()
         """
-        deleted_count: list[int] = [0]
-
-        def _delete_expired_txn(transaction: "Transaction") -> None:
-            row_ct = transaction.execute_update(sql)  # type: ignore[no-untyped-call]
-            deleted_count[0] = row_ct
-
-        self._database().run_in_transaction(_delete_expired_txn)  # type: ignore[no-untyped-call]
-        return deleted_count[0]
+        return self._database().run_in_transaction(_SpannerExecuteUpdateCountJob(sql))  # type: ignore[no-untyped-call]
 
     async def create_table(self) -> None:
         await async_(self._create_table)()

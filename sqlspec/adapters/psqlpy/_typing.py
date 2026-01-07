@@ -6,18 +6,19 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+from psqlpy import Connection as _PsqlpyConnection
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
 
-    from psqlpy import Connection
-
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
     from sqlspec.core import StatementConfig
 
-    PsqlpyConnection: TypeAlias = Connection
-else:
-    from psqlpy import Connection as PsqlpyConnection
+    PsqlpyConnection: TypeAlias = _PsqlpyConnection
+
+if not TYPE_CHECKING:
+    PsqlpyConnection = _PsqlpyConnection
 
 
 class PsqlpySessionContext:

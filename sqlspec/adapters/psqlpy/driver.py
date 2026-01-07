@@ -5,8 +5,7 @@ and transaction management.
 """
 
 import inspect
-import re
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any
 
 import psqlpy.exceptions
 
@@ -20,6 +19,7 @@ from sqlspec.adapters.psqlpy.core import (
     encode_records_for_binary_copy,
     format_table_identifier,
     normalize_scalar_parameter,
+    parse_psqlpy_command_tag,
     prepare_dict_parameter,
     prepare_list_parameter,
     prepare_tuple_parameter,
@@ -75,8 +75,6 @@ __all__ = (
 logger = get_logger("adapters.psqlpy")
 
 _type_converter = PostgreSQLOutputConverter()
-
-PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 
 class PsqlpyCursor:
@@ -458,34 +456,13 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         try:
             if has_query_result_metadata(result):
                 if result.tag:
-                    return self._parse_command_tag(result.tag)
+                    return parse_psqlpy_command_tag(result.tag)
                 if result.status:
-                    return self._parse_command_tag(result.status)
+                    return parse_psqlpy_command_tag(result.status)
             if isinstance(result, str):
-                return self._parse_command_tag(result)
+                return parse_psqlpy_command_tag(result)
         except Exception as e:
             logger.debug("Failed to parse psqlpy command tag: %s", e)
-        return -1
-
-    def _parse_command_tag(self, tag: str) -> int:
-        """Parse PostgreSQL command tag to extract rows affected.
-
-        Args:
-            tag: PostgreSQL command tag string
-
-        Returns:
-            Number of rows affected, -1 if unable to parse
-        """
-        if not tag:
-            return -1
-
-        match = PSQLPY_STATUS_REGEX.match(tag.strip())
-        if match:
-            command = match.group(1).upper()
-            if command == "INSERT" and match.group(3):
-                return int(match.group(3))
-            if command in {"UPDATE", "DELETE"} and match.group(3):
-                return int(match.group(3))
         return -1
 
     async def select_to_storage(

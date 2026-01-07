@@ -136,6 +136,25 @@ class SpannerConnectionContext:
         return None
 
 
+class _SpannerSessionConnectionHandler:
+    __slots__ = ("_connection_ctx",)
+
+    def __init__(self, connection_ctx: "SpannerConnectionContext") -> None:
+        self._connection_ctx = connection_ctx
+
+    def acquire_connection(self) -> "SpannerConnection":
+        return self._connection_ctx.__enter__()
+
+    def release_connection(
+        self,
+        _conn: "SpannerConnection",
+        exc_type: "type[BaseException] | None",
+        exc_val: "BaseException | None",
+        exc_tb: Any,
+    ) -> None:
+        self._connection_ctx.__exit__(exc_type, exc_val, exc_tb)
+
+
 class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSessionPool", SpannerSyncDriver]):
     """Spanner configuration and session management."""
 
@@ -288,21 +307,11 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             A Spanner driver session context manager.
         """
         connection_ctx = SpannerConnectionContext(self, transaction=transaction)
-
-        def acquire_connection() -> SpannerConnection:
-            return connection_ctx.__enter__()
-
-        def release_connection(
-            _conn: SpannerConnection,
-            exc_type: "type[BaseException] | None",
-            exc_val: "BaseException | None",
-            exc_tb: Any,
-        ) -> None:
-            connection_ctx.__exit__(exc_type, exc_val, exc_tb)
+        handler = _SpannerSessionConnectionHandler(connection_ctx)
 
         return SpannerSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or spanner_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,

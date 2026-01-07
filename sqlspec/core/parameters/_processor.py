@@ -54,6 +54,55 @@ def _fingerprint_parameters(parameters: Any) -> str:
     return f"{type(parameters).__name__}:{digest}"
 
 
+def _coerce_nested_value(value: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> Any:
+    if isinstance(value, (list, tuple)) and not isinstance(value, (str, bytes)):
+        return [_coerce_parameter_value(item, type_coercion_map) for item in value]
+    if isinstance(value, dict):
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in value.items()}
+    return value
+
+
+def _coerce_parameter_value(value: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> Any:
+    if value is None:
+        return value
+
+    if isinstance(value, TypedParameter):
+        wrapped_value: Any = value.value
+        if wrapped_value is None:
+            return wrapped_value
+        original_type = value.original_type
+        if original_type in type_coercion_map:
+            coerced = type_coercion_map[original_type](wrapped_value)
+            return _coerce_nested_value(coerced, type_coercion_map)
+        return wrapped_value
+
+    value_type = type(value)
+    if value_type in type_coercion_map:
+        coerced = type_coercion_map[value_type](value)
+        return _coerce_nested_value(coerced, type_coercion_map)
+    return value
+
+
+def _coerce_parameter_set(param_set: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> Any:
+    if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
+        return [_coerce_parameter_value(item, type_coercion_map) for item in param_set]
+    if isinstance(param_set, Mapping):
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in param_set.items()}
+    return _coerce_parameter_value(param_set, type_coercion_map)
+
+
+def _coerce_parameters_payload(
+    parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool
+) -> Any:
+    if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+        return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in parameters]
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+        return [_coerce_parameter_value(item, type_coercion_map) for item in parameters]
+    if isinstance(parameters, Mapping):
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in parameters.items()}
+    return _coerce_parameter_value(parameters, type_coercion_map)
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterProcessor:
     """Parameter processing engine coordinating conversion phases."""
@@ -124,49 +173,7 @@ class ParameterProcessor:
     def _coerce_parameter_types(
         self, parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool = False
     ) -> Any:
-        def coerce_value(value: Any) -> Any:
-            if value is None:
-                return value
-
-            if isinstance(value, TypedParameter):
-                wrapped_value: Any = value.value
-                if wrapped_value is None:
-                    return wrapped_value
-                original_type = value.original_type
-                if original_type in type_coercion_map:
-                    coerced = type_coercion_map[original_type](wrapped_value)
-                    if isinstance(coerced, (list, tuple)) and not isinstance(coerced, (str, bytes)):
-                        coerced = [coerce_value(item) for item in coerced]
-                    elif isinstance(coerced, dict):
-                        coerced = {k: coerce_value(v) for k, v in coerced.items()}
-                    return coerced
-                return wrapped_value
-
-            value_type = type(value)
-            if value_type in type_coercion_map:
-                coerced = type_coercion_map[value_type](value)
-                if isinstance(coerced, (list, tuple)) and not isinstance(coerced, (str, bytes)):
-                    coerced = [coerce_value(item) for item in coerced]
-                elif isinstance(coerced, dict):
-                    coerced = {k: coerce_value(v) for k, v in coerced.items()}
-                return coerced
-            return value
-
-        def coerce_parameter_set(param_set: Any) -> Any:
-            if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
-                return [coerce_value(p) for p in param_set]
-            if isinstance(param_set, Mapping):
-                return {k: coerce_value(v) for k, v in param_set.items()}
-            return coerce_value(param_set)
-
-        if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            return [coerce_parameter_set(param_set) for param_set in parameters]
-
-        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            return [coerce_value(p) for p in parameters]
-        if isinstance(parameters, Mapping):
-            return {k: coerce_value(v) for k, v in parameters.items()}
-        return coerce_value(parameters)
+        return _coerce_parameters_payload(parameters, type_coercion_map, is_many)
 
     def _store_cached_result(self, cache_key: str, result: "ParameterProcessingResult") -> "ParameterProcessingResult":
         if self._cache_max_size <= 0:

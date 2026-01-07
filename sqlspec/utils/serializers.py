@@ -5,6 +5,7 @@ and cache instrumentation aligned with the core pipeline counters.
 """
 
 import os
+from functools import partial
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
@@ -287,6 +288,26 @@ def _dump_msgspec_fields(value: Any) -> "dict[str, Any]":
     return {f: value.__getattribute__(f) for f in value.__struct_fields__}
 
 
+def _dump_msgspec_excluding_unset(value: Any) -> "dict[str, Any]":
+    return {f: field_value for f in value.__struct_fields__ if (field_value := value.__getattribute__(f)) != UNSET}
+
+
+def _dump_dataclass(value: Any, *, exclude_unset: bool) -> "dict[str, Any]":
+    return dataclass_to_dict(value, exclude_empty=exclude_unset)
+
+
+def _dump_pydantic(value: Any, *, exclude_unset: bool) -> "dict[str, Any]":
+    return cast("dict[str, Any]", value.model_dump(exclude_unset=exclude_unset))
+
+
+def _dump_attrs(value: Any) -> "dict[str, Any]":
+    return attrs_asdict(value, recurse=True)
+
+
+def _dump_dict_attr(value: Any) -> "dict[str, Any]":
+    return dict(value.__dict__)
+
+
 def _dump_mapping(value: Any) -> "dict[str, Any]":
     return dict(value)
 
@@ -296,43 +317,18 @@ def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], d
         return _dump_identity_dict
 
     if is_dataclass_instance(sample):
-
-        def _dump_dataclass(value: Any) -> "dict[str, Any]":
-            return dataclass_to_dict(value, exclude_empty=exclude_unset)
-
-        return _dump_dataclass
+        return cast("Callable[[Any], dict[str, Any]]", partial(_dump_dataclass, exclude_unset=exclude_unset))
     if is_pydantic_model(sample):
-
-        def _dump_pydantic(value: Any) -> "dict[str, Any]":
-            return cast("dict[str, Any]", value.model_dump(exclude_unset=exclude_unset))
-
-        return _dump_pydantic
+        return cast("Callable[[Any], dict[str, Any]]", partial(_dump_pydantic, exclude_unset=exclude_unset))
     if is_msgspec_struct(sample):
         if exclude_unset:
-
-            def _dump(value: Any) -> "dict[str, Any]":
-                return {
-                    f: field_value
-                    for f in value.__struct_fields__
-                    if (field_value := value.__getattribute__(f)) != UNSET
-                }
-
-            return _dump
-
+            return _dump_msgspec_excluding_unset
         return _dump_msgspec_fields
 
     if is_attrs_instance(sample):
-
-        def _dump_attrs(value: Any) -> "dict[str, Any]":
-            return attrs_asdict(value, recurse=True)
-
         return _dump_attrs
 
     if has_dict_attribute(sample):
-
-        def _dump_dict_attr(value: Any) -> "dict[str, Any]":
-            return dict(value.__dict__)
-
         return _dump_dict_attr
 
     return _dump_mapping

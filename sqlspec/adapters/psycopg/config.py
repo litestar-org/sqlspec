@@ -138,6 +138,31 @@ class PsycopgSyncConnectionContext:
         return None
 
 
+class _PsycopgSyncSessionConnectionHandler:
+    __slots__ = ("_config", "_conn", "_ctx")
+
+    def __init__(self, config: "PsycopgSyncConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+        self._conn: PsycopgSyncConnection | None = None
+
+    def acquire_connection(self) -> "PsycopgSyncConnection":
+        if self._config.connection_instance:
+            self._ctx = self._config.connection_instance.connection()
+            return self._ctx.__enter__()  # type: ignore[no-any-return]
+        self._conn = self._config.create_connection()
+        return self._conn
+
+    def release_connection(self, _conn: "PsycopgSyncConnection") -> None:
+        if self._ctx is not None:
+            self._ctx.__exit__(None, None, None)
+            self._ctx = None
+            return
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
     """Configuration for Psycopg synchronous database connections with direct field-based configuration."""
 
@@ -211,17 +236,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             "num_workers": all_config.pop("num_workers", 3),
         }
 
-        autocommit_setting = all_config.get("autocommit")
-
-        def configure_connection(conn: "PsycopgSyncConnection") -> None:
-            conn.row_factory = dict_row
-            if autocommit_setting is not None:
-                conn.autocommit = autocommit_setting
-
-            if self.driver_features.get("enable_pgvector", False):
-                register_pgvector_sync(conn)
-
-        pool_parameters["configure"] = all_config.pop("configure", configure_connection)
+        pool_parameters["configure"] = all_config.pop("configure", self._configure_connection)
 
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
@@ -232,6 +247,15 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         kwargs = all_config.pop("kwargs", {})
         all_config.update(kwargs)
         return ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
+
+    def _configure_connection(self, conn: "PsycopgSyncConnection") -> None:
+        conn.row_factory = dict_row
+        autocommit_setting = self.connection_config.get("autocommit")
+        if autocommit_setting is not None:
+            conn.autocommit = autocommit_setting
+
+        if self.driver_features.get("enable_pgvector", False):
+            register_pgvector_sync(conn)
 
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
@@ -278,28 +302,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Returns:
             A PsycopgSyncDriver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
-
-        def acquire_connection() -> PsycopgSyncConnection:
-            if self.connection_instance:
-                ctx = self.connection_instance.connection()
-                conn_ctx_holder["ctx"] = ctx
-                return ctx.__enter__()  # type: ignore[return-value]
-            conn = self.create_connection()
-            conn_ctx_holder["conn"] = conn
-            return conn
-
-        def release_connection(_conn: PsycopgSyncConnection) -> None:
-            if "ctx" in conn_ctx_holder:
-                conn_ctx_holder["ctx"].__exit__(None, None, None)
-                conn_ctx_holder.clear()
-            elif "conn" in conn_ctx_holder:
-                conn_ctx_holder["conn"].close()
-                conn_ctx_holder.clear()
+        handler = _PsycopgSyncSessionConnectionHandler(self)
 
         return PsycopgSyncSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or psycopg_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
@@ -368,6 +375,26 @@ class PsycopgAsyncConnectionContext:
         if self._ctx:
             return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
         return None
+
+
+class _PsycopgAsyncSessionConnectionHandler:
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "PsycopgAsyncConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    async def acquire_connection(self) -> "PsycopgAsyncConnection":
+        if self._config.connection_instance is None:
+            self._config.connection_instance = await self._config.create_pool()
+        self._ctx = self._config.connection_instance.connection()
+        return await self._ctx.__aenter__()  # type: ignore[no-any-return]
+
+    async def release_connection(self, _conn: "PsycopgAsyncConnection") -> None:
+        if self._ctx is None:
+            return
+        await self._ctx.__aexit__(None, None, None)  # type: ignore[no-any-return]
+        self._ctx = None
 
 
 @mypyc_attr(native_class=False)
@@ -445,17 +472,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "num_workers": all_config.pop("num_workers", 3),
         }
 
-        autocommit_setting = all_config.get("autocommit")
-
-        async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
-            conn.row_factory = dict_row
-            if autocommit_setting is not None:
-                await conn.set_autocommit(autocommit_setting)
-
-                if self.driver_features.get("enable_pgvector", False):
-                    await register_pgvector_async(conn)
-
-        pool_parameters["configure"] = all_config.pop("configure", configure_connection)
+        pool_parameters["configure"] = all_config.pop("configure", self._configure_async_connection)
 
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
@@ -470,6 +487,15 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         await pool.open()
 
         return pool
+
+    async def _configure_async_connection(self, conn: "PsycopgAsyncConnection") -> None:
+        conn.row_factory = dict_row
+        autocommit_setting = self.connection_config.get("autocommit")
+        if autocommit_setting is not None:
+            await conn.set_autocommit(autocommit_setting)
+
+            if self.driver_features.get("enable_pgvector", False):
+                await register_pgvector_async(conn)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
@@ -535,23 +561,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Returns:
             A PsycopgAsyncDriver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
-
-        async def acquire_connection() -> PsycopgAsyncConnection:
-            if self.connection_instance is None:
-                self.connection_instance = await self.create_pool()
-            ctx = self.connection_instance.connection()
-            conn_ctx_holder["ctx"] = ctx
-            return await ctx.__aenter__()  # type: ignore[return-value]
-
-        async def release_connection(_conn: PsycopgAsyncConnection) -> None:
-            if "ctx" in conn_ctx_holder:
-                await conn_ctx_holder["ctx"].__aexit__(None, None, None)
-                conn_ctx_holder.clear()
+        handler = _PsycopgAsyncSessionConnectionHandler(self)
 
         return PsycopgAsyncSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or psycopg_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,

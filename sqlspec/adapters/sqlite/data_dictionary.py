@@ -20,6 +20,8 @@ __all__ = ("SqliteSyncDataDictionary",)
 class SqliteSyncDataDictionary(SyncDataDictionaryBase):
     """SQLite-specific sync data dictionary."""
 
+    __slots__ = ()
+
     def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get SQLite database version information.
 

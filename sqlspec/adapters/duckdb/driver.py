@@ -2,7 +2,7 @@
 
 import contextlib
 import typing
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import duckdb
@@ -577,4 +577,4 @@ def build_duckdb_statement_config(*, json_serializer: "typing.Callable[[Any], st
 duckdb_statement_config = build_duckdb_statement_config()
 
 
-MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")
+MODIFYING_OPERATIONS: "tuple[str, ...]" = ("INSERT", "UPDATE", "DELETE")

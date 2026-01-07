@@ -311,6 +311,8 @@ class OracleDataDictionaryMixin:
 class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase):
     """Oracle-specific sync data dictionary."""
 
+    __slots__ = ()
+
     def _is_oracle_autonomous(self, driver: "OracleSyncDriver") -> bool:
         """Check if this is an Oracle Autonomous Database.
 
@@ -509,6 +511,8 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
 
 class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBase):
     """Oracle-specific async data dictionary."""
+
+    __slots__ = ()
 
     async def get_version(self, driver: AsyncDriverAdapterBase) -> "OracleVersionInfo | None":
         """Get Oracle database version information.

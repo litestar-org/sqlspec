@@ -147,6 +147,27 @@ class OracleSyncConnectionContext:
         return None
 
 
+class _OracleSyncSessionConnectionHandler:
+    __slots__ = ("_config", "_conn")
+
+    def __init__(self, config: "OracleSyncConfig") -> None:
+        self._config = config
+        self._conn: OracleSyncConnection | None = None
+
+    def acquire_connection(self) -> "OracleSyncConnection":
+        if self._config.connection_instance is None:
+            self._config.connection_instance = self._config.create_pool()
+        self._conn = self._config.connection_instance.acquire()
+        return self._conn
+
+    def release_connection(self, _conn: "OracleSyncConnection") -> None:
+        if self._conn is None:
+            return
+        if self._config.connection_instance:
+            self._config.connection_instance.release(self._conn)
+        self._conn = None
+
+
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections."""
 
@@ -272,23 +293,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         Returns:
             An OracleSyncDriver session context manager.
         """
-        conn_holder: dict[str, OracleSyncConnection] = {}
-
-        def acquire_connection() -> OracleSyncConnection:
-            if self.connection_instance is None:
-                self.connection_instance = self.create_pool()
-            conn = self.connection_instance.acquire()
-            conn_holder["conn"] = conn
-            return conn
-
-        def release_connection(_conn: OracleSyncConnection) -> None:
-            if "conn" in conn_holder and self.connection_instance:
-                self.connection_instance.release(conn_holder["conn"])
-                conn_holder.clear()
+        handler = _OracleSyncSessionConnectionHandler(self)
 
         return OracleSyncSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or oracledb_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
@@ -357,6 +366,27 @@ class OracleAsyncConnectionContext:
                 await self._config.connection_instance.release(self._conn)
             self._conn = None
         return None
+
+
+class _OracleAsyncSessionConnectionHandler:
+    __slots__ = ("_config", "_conn")
+
+    def __init__(self, config: "OracleAsyncConfig") -> None:
+        self._config = config
+        self._conn: OracleAsyncConnection | None = None
+
+    async def acquire_connection(self) -> "OracleAsyncConnection":
+        if self._config.connection_instance is None:
+            self._config.connection_instance = await self._config.create_pool()
+        self._conn = cast("OracleAsyncConnection", await self._config.connection_instance.acquire())
+        return self._conn
+
+    async def release_connection(self, _conn: "OracleAsyncConnection") -> None:
+        if self._conn is None:
+            return
+        if self._config.connection_instance:
+            await self._config.connection_instance.release(self._conn)
+        self._conn = None
 
 
 @mypyc_attr(native_class=False)
@@ -488,23 +518,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         Returns:
             An OracleAsyncDriver session context manager.
         """
-        conn_holder: dict[str, OracleAsyncConnection] = {}
-
-        async def acquire_connection() -> OracleAsyncConnection:
-            if self.connection_instance is None:
-                self.connection_instance = await self.create_pool()
-            conn = cast("OracleAsyncConnection", await self.connection_instance.acquire())
-            conn_holder["conn"] = conn
-            return conn
-
-        async def release_connection(_conn: OracleAsyncConnection) -> None:
-            if "conn" in conn_holder and self.connection_instance:
-                await self.connection_instance.release(conn_holder["conn"])
-                conn_holder.clear()
+        handler = _OracleAsyncSessionConnectionHandler(self)
 
         return OracleAsyncSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or oracledb_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,

@@ -3,6 +3,8 @@
 import re
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, ForeignKeyMetadata, VersionInfo
 from sqlspec.utils.logging import get_logger
 
@@ -17,8 +19,11 @@ POSTGRES_VERSION_PATTERN = re.compile(r"PostgreSQL (\d+)\.(\d+)(?:\.(\d+))?")
 __all__ = ("PostgresAsyncDataDictionary",)
 
 
+@mypyc_attr(native_class=False)
 class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
+
+    __slots__ = ()
 
     async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get PostgreSQL database version information.

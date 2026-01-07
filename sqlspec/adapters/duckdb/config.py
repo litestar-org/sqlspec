@@ -187,6 +187,38 @@ class DuckDBConnectionContext:
         return None
 
 
+class _DuckDBConnectionHook:
+    __slots__ = ("_hook",)
+
+    def __init__(self, hook: "Callable[[Any], None]") -> None:
+        self._hook = hook
+
+    def __call__(self, context: "dict[str, Any]") -> None:
+        connection = context.get("connection")
+        if connection is None:
+            return
+        self._hook(connection)
+
+
+class _DuckDBSessionConnectionHandler:
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "DuckDBConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    def acquire_connection(self) -> "DuckDBConnection":
+        pool = self._config.provide_pool()
+        self._ctx = pool.get_connection()
+        return self._ctx.__enter__()  # type: ignore[no-any-return]
+
+    def release_connection(self, _conn: "DuckDBConnection") -> None:
+        if self._ctx is None:
+            return
+        self._ctx.__exit__(None, None, None)  # type: ignore[no-any-return]
+        self._ctx = None
+
+
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
     """DuckDB configuration with connection pooling.
 
@@ -292,14 +324,9 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         local_observability = observability_config
         if user_connection_hook is not None:
-
-            def _wrap_lifecycle_hook(context: "dict[str, Any]") -> None:
-                connection = context.get("connection")
-                if connection is None:
-                    return
-                user_connection_hook(connection)
-
-            lifecycle_override = ObservabilityConfig(lifecycle={"on_connection_create": [_wrap_lifecycle_hook]})
+            lifecycle_override = ObservabilityConfig(
+                lifecycle={"on_connection_create": [_DuckDBConnectionHook(user_connection_hook)]}
+            )
             local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
 
         base_statement_config = statement_config or build_duckdb_statement_config(
@@ -407,22 +434,11 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         Returns:
             A DuckDB driver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
-
-        def acquire_connection() -> DuckDBConnection:
-            pool = self.provide_pool()
-            ctx = pool.get_connection()
-            conn_ctx_holder["ctx"] = ctx
-            return ctx.__enter__()
-
-        def release_connection(_conn: DuckDBConnection) -> None:
-            if "ctx" in conn_ctx_holder:
-                conn_ctx_holder["ctx"].__exit__(None, None, None)
-                conn_ctx_holder.clear()
+        handler = _DuckDBSessionConnectionHandler(self)
 
         return DuckDBSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or duckdb_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from google.cloud.bigquery import Client
 
+_BigQueryConnection = Client
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
@@ -15,9 +17,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
     from sqlspec.core import StatementConfig
 
-    BigQueryConnection: TypeAlias = Client
-else:
-    BigQueryConnection = Client
+    BigQueryConnection: TypeAlias = _BigQueryConnection
+
+if not TYPE_CHECKING:
+    BigQueryConnection = _BigQueryConnection
 
 
 class BigQuerySessionContext:

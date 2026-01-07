@@ -25,6 +25,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     Delegates to appropriate dialect-specific logic based on the driver's dialect.
     """
 
+    __slots__ = ()
+
     def get_foreign_keys(
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":

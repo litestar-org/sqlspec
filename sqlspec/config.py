@@ -70,6 +70,24 @@ DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
 }
 
 
+class _DriverFeatureHookWrapper:
+    __slots__ = ("_callback", "_context_key", "_expects_argument")
+
+    def __init__(self, callback: "Callable[..., Any]", context_key: "str | None", expects_argument: bool) -> None:
+        self._callback = callback
+        self._context_key = context_key
+        self._expects_argument = expects_argument
+
+    def __call__(self, context: "dict[str, Any]") -> None:
+        if not self._expects_argument:
+            self._callback()
+            return
+        if self._context_key is None:
+            self._callback(context)
+            return
+        self._callback(context.get(self._context_key))
+
+
 class LifecycleConfig(TypedDict):
     """Lifecycle hooks for database adapters.
 
@@ -865,16 +883,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         ]
         expects_argument = bool(positional_params)
 
-        def handler(context: dict[str, Any]) -> None:
-            if not expects_argument:
-                callback()
-                return
-            if context_key is None:
-                callback(context)
-                return
-            callback(context.get(context_key))
-
-        return handler
+        return _DriverFeatureHookWrapper(callback, context_key, expects_argument)
 
     def attach_observability(self, registry_config: "ObservabilityConfig | None") -> None:
         """Attach merged observability runtime composed from registry and adapter overrides."""

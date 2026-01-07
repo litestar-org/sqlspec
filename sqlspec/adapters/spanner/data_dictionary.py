@@ -14,6 +14,8 @@ __all__ = ("SpannerDataDictionary",)
 class SpannerDataDictionary(SyncDataDictionaryBase):
     """Fetch table, column, and index metadata from Spanner."""
 
+    __slots__ = ()
+
     def get_version(self, driver: "SyncDriverAdapterBase") -> "VersionInfo | None":
         """Get Spanner version information.
 

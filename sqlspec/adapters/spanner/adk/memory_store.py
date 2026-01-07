@@ -30,6 +30,29 @@ def _json_param_type() -> Any:
         return SPANNER_PARAM_TYPES.STRING
 
 
+class _SpannerMemoryWriteJob:
+    __slots__ = ("_statements",)
+
+    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
+        self._statements = statements
+
+    def __call__(self, transaction: "Transaction") -> None:
+        for sql, params, types in self._statements:
+            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+
+
+class _SpannerMemoryUpdateJob:
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: "Transaction") -> int:
+        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
+
+
 class _SpannerReadProtocol(Protocol):
     def execute_sql(
         self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
@@ -59,17 +82,10 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        def _txn_job(transaction: "Transaction") -> None:
-            for sql, params, types in statements:
-                transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-        self._database().run_in_transaction(_txn_job)  # type: ignore[no-untyped-call]
+        self._database().run_in_transaction(_SpannerMemoryWriteJob(statements))  # type: ignore[no-untyped-call]
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        def _txn_job(transaction: "Transaction") -> int:
-            return int(transaction.execute_update(sql, params=params, param_types=types))  # type: ignore[no-untyped-call]
-
-        return int(self._database().run_in_transaction(_txn_job))  # type: ignore[no-untyped-call]
+        return int(self._database().run_in_transaction(_SpannerMemoryUpdateJob(sql, params, types)))  # type: ignore[no-untyped-call]
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {

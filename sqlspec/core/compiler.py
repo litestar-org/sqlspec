@@ -117,6 +117,26 @@ def is_copy_to_operation(operation_type: "OperationType") -> bool:
     return operation_type in COPY_TO_OPERATION_TYPES
 
 
+def _assign_placeholder_position(
+    placeholder: "exp.Placeholder", placeholder_positions: "dict[str, int]", placeholder_counter: "list[int]"
+) -> "int | None":
+    name_expr = placeholder.name if placeholder.name is not None else None
+    if name_expr is not None:
+        placeholder_key = str(name_expr)
+    else:
+        value = placeholder.args.get("this")
+        placeholder_key = str(value) if value is not None else placeholder.sql()
+
+    if not placeholder_key:
+        return None
+
+    if placeholder_key not in placeholder_positions:
+        placeholder_counter[0] += 1
+        placeholder_positions[placeholder_key] = placeholder_counter[0]
+
+    return placeholder_positions[placeholder_key]
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class OperationProfile:
     """Semantic characteristics derived from the parsed SQL expression."""
@@ -569,31 +589,12 @@ class SQLProcessor:
 
         cast_positions: dict[int, str] = {}
         placeholder_positions: dict[str, int] = {}
-        placeholder_counter = 0
-
-        def _assign_placeholder_position(placeholder: "exp.Placeholder") -> "int | None":
-            nonlocal placeholder_counter
-
-            name_expr = placeholder.name if placeholder.name is not None else None
-            if name_expr is not None:
-                placeholder_key = str(name_expr)
-            else:
-                value = placeholder.args.get("this")
-                placeholder_key = str(value) if value is not None else placeholder.sql()
-
-            if not placeholder_key:
-                return None
-
-            if placeholder_key not in placeholder_positions:
-                placeholder_counter += 1
-                placeholder_positions[placeholder_key] = placeholder_counter
-
-            return placeholder_positions[placeholder_key]
+        placeholder_counter = [0]
 
         # Walk all nodes in order to track parameter positions
         for node in expression.walk():
             if isinstance(node, exp.Placeholder):
-                _assign_placeholder_position(node)
+                _assign_placeholder_position(node, placeholder_positions, placeholder_counter)
             # Check for cast nodes with parameter children
             if isinstance(node, exp.Cast):
                 cast_target = node.this
@@ -605,7 +606,7 @@ class SQLProcessor:
                     if isinstance(param_value, exp.Literal):
                         position = int(param_value.this)
                 elif isinstance(cast_target, exp.Placeholder):
-                    position = _assign_placeholder_position(cast_target)
+                    position = _assign_placeholder_position(cast_target, placeholder_positions, placeholder_counter)
                 elif isinstance(cast_target, exp.Column):
                     # Handle cases where $1 gets parsed as a column
                     column_name = str(cast_target.this) if cast_target.this else str(cast_target)

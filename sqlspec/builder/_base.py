@@ -1,4 +1,3 @@
-# ruff: noqa: FBT003
 """Base query builder with validation and parameter binding.
 
 Provides abstract base classes and core functionality for SQL query builders.
@@ -37,6 +36,52 @@ __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
+
+
+class _ExpressionParameterizer:
+    __slots__ = ("_builder",)
+
+    def __init__(self, builder: "QueryBuilder") -> None:
+        self._builder = builder
+
+    def __call__(self, node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Literal):
+            if node.this in {True, False, None}:
+                return node
+
+            parent = node.parent
+            if isinstance(parent, exp.Array) and node.find_ancestor(VectorDistance) is not None:
+                return node
+
+            value = node.this
+            if node.is_number and isinstance(node.this, str):
+                try:
+                    value = float(node.this) if "." in node.this or "e" in node.this.lower() else int(node.this)
+                except ValueError:
+                    value = node.this
+
+            param_name = self._builder._add_parameter(value, context="where")
+            return exp.Placeholder(this=param_name)
+        return node
+
+
+class _PlaceholderReplacer:
+    __slots__ = ("_param_mapping",)
+
+    def __init__(self, param_mapping: dict[str, str]) -> None:
+        self._param_mapping = param_mapping
+
+    def __call__(self, node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Placeholder) and str(node.this) in self._param_mapping:
+            return exp.Placeholder(this=self._param_mapping[str(node.this)])
+        return node
+
+
+def _unquote_identifier(node: exp.Expression) -> exp.Expression:
+    if isinstance(node, exp.Identifier):
+        node.set("quoted", False)
+    return node
+
 
 logger = get_logger(__name__)
 
@@ -320,27 +365,7 @@ class QueryBuilder(ABC):
             A new expression with literals replaced by parameter placeholders
         """
 
-        def replacer(node: exp.Expression) -> exp.Expression:
-            if isinstance(node, exp.Literal):
-                if node.this in {True, False, None}:
-                    return node
-
-                parent = node.parent
-                if isinstance(parent, exp.Array) and node.find_ancestor(VectorDistance) is not None:
-                    return node
-
-                value = node.this
-                if node.is_number and isinstance(node.this, str):
-                    try:
-                        value = float(node.this) if "." in node.this or "e" in node.this.lower() else int(node.this)
-                    except ValueError:
-                        value = node.this
-
-                param_name = self._add_parameter(value, context="where")
-                return exp.Placeholder(this=param_name)
-            return node
-
-        return expression.transform(replacer, copy=False)
+        return expression.transform(_ExpressionParameterizer(self), copy=False)
 
     def add_parameter(self: Self, value: Any, name: str | None = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
@@ -489,12 +514,7 @@ class QueryBuilder(ABC):
             Updated expression with new placeholder names
         """
 
-        def placeholder_replacer(node: exp.Expression) -> exp.Expression:
-            if isinstance(node, exp.Placeholder) and str(node.this) in param_mapping:
-                return exp.Placeholder(this=param_mapping[str(node.this)])
-            return node
-
-        return expression.transform(placeholder_replacer, copy=False)
+        return expression.transform(_PlaceholderReplacer(param_mapping), copy=False)
 
     def _generate_builder_cache_key(self, config: "StatementConfig | None" = None) -> str:
         """Generate cache key based on builder state and configuration.
@@ -839,12 +859,7 @@ class QueryBuilder(ABC):
     def _unquote_identifiers_for_oracle(self, expression: exp.Expression) -> exp.Expression:
         """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
 
-        def _strip(node: exp.Expression) -> exp.Expression:
-            if isinstance(node, exp.Identifier):
-                node.set("quoted", False)
-            return node
-
-        return expression.copy().transform(_strip, copy=False)
+        return expression.copy().transform(_unquote_identifier, copy=False)
 
     def _strip_lock_identifier_quotes(self, sql_string: str) -> str:
         for keyword in ("FOR UPDATE OF ", "FOR SHARE OF "):

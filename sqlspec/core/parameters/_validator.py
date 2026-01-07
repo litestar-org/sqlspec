@@ -36,17 +36,34 @@ PARAMETER_REGEX = re.compile(
 class ParameterValidator:
     """Extracts placeholder metadata and dialect compatibility information."""
 
-    __slots__ = ("_cache_max_size", "_parameter_cache")
+    __slots__ = ("_cache_hits", "_cache_max_size", "_cache_misses", "_parameter_cache")
 
     def __init__(self, cache_max_size: int = 5000) -> None:
         self._parameter_cache: OrderedDict[str, list[ParameterInfo]] = OrderedDict()
         self._cache_max_size = max(cache_max_size, 0)
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     def set_cache_max_size(self, cache_max_size: int) -> None:
         """Update the maximum cache size for parameter metadata."""
         self._cache_max_size = max(cache_max_size, 0)
         while len(self._parameter_cache) > self._cache_max_size:
             self._parameter_cache.popitem(last=False)
+
+    def clear_cache(self) -> None:
+        """Clear cached parameter metadata and reset stats."""
+        self._parameter_cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+    def cache_stats(self) -> "dict[str, int]":
+        """Return cache statistics."""
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "size": len(self._parameter_cache),
+            "max_size": self._cache_max_size,
+        }
 
     def _extract_parameter_style(self, match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
         """Map a regex match to a placeholder style and optional name."""
@@ -76,7 +93,9 @@ class ParameterValidator:
         cached_result = self._parameter_cache.get(sql)
         if cached_result is not None:
             self._parameter_cache.move_to_end(sql)
+            self._cache_hits += 1
             return cached_result
+        self._cache_misses += 1
 
         if not any(c in sql for c in ("?", "%", ":", "@", "$")):
             if len(self._parameter_cache) >= self._cache_max_size:

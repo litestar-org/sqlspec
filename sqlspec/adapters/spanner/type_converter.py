@@ -18,7 +18,7 @@ Input conversion handles:
 
 import base64
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
@@ -42,8 +42,8 @@ __all__ = (
     "uuid_to_spanner",
 )
 
-SPANNER_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
-UUID_BYTE_LENGTH: Final[int] = 16
+SPANNER_SPECIAL_CHARS: "frozenset[str]" = frozenset({"{", "[", "-", ":", "T", "."})
+UUID_BYTE_LENGTH: int = 16
 _SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None
 _JSON_OBJECT_TYPE: "type[Any] | None" = None
 

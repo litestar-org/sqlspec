@@ -123,6 +123,32 @@ class BigQueryConnectionContext:
         return None
 
 
+class _BigQueryConnectionHook:
+    __slots__ = ("_hook",)
+
+    def __init__(self, hook: "Callable[[BigQueryConnection], None]") -> None:
+        self._hook = hook
+
+    def __call__(self, context: "dict[str, Any]") -> None:
+        connection = context.get("connection")
+        if connection is None:
+            return
+        self._hook(connection)
+
+
+class _BigQuerySessionConnectionHandler:
+    __slots__ = ("_config",)
+
+    def __init__(self, config: "BigQueryConfig") -> None:
+        self._config = config
+
+    def acquire_connection(self) -> "BigQueryConnection":
+        return self._config.create_connection()
+
+    def release_connection(self, _conn: "BigQueryConnection") -> None:
+        return None
+
+
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
 
 
@@ -184,14 +210,9 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         local_observability = observability_config
         if user_connection_hook is not None:
-
-            def _wrap_hook(context: "dict[str, Any]") -> None:
-                connection = context.get("connection")
-                if connection is None:
-                    return
-                user_connection_hook(connection)
-
-            lifecycle_override = ObservabilityConfig(lifecycle={"on_connection_create": [_wrap_hook]})
+            lifecycle_override = ObservabilityConfig(
+                lifecycle={"on_connection_create": [_BigQueryConnectionHook(user_connection_hook)]}
+            )
             local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
 
         super().__init__(
@@ -299,16 +320,11 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Returns:
             A BigQuery driver session context manager.
         """
-
-        def acquire_connection() -> BigQueryConnection:
-            return self.create_connection()
-
-        def release_connection(_conn: BigQueryConnection) -> None:
-            pass
+        handler = _BigQuerySessionConnectionHandler(self)
 
         return BigQuerySessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or bigquery_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,

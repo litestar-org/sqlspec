@@ -6,8 +6,8 @@ Used to communicate API changes and migration paths to users.
 
 import inspect
 from collections.abc import Callable
-from functools import wraps
-from typing import Literal
+from functools import update_wrapper
+from typing import Generic, Literal, cast
 from warnings import warn
 
 from typing_extensions import ParamSpec, TypeVar
@@ -97,19 +97,44 @@ def deprecated(
     """
 
     def decorator(func: Callable[P, T]) -> Callable[P, T]:
-        @wraps(func)
-        def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
-            warn_deprecation(
-                version=version,
-                deprecated_name=func.__name__,
-                info=info,
-                alternative=alternative,
-                pending=pending,
-                removal_in=removal_in,
-                kind=kind or ("method" if inspect.ismethod(func) else "function"),
-            )
-            return func(*args, **kwargs)
-
-        return wrapped
+        wrapper = _DeprecatedWrapper(
+            func, version=version, removal_in=removal_in, alternative=alternative, info=info, pending=pending, kind=kind
+        )
+        return cast("Callable[P, T]", update_wrapper(wrapper, func))
 
     return decorator
+
+
+class _DeprecatedWrapper(Generic[P, T]):
+    __slots__ = ("_alternative", "_func", "_info", "_kind", "_pending", "_removal_in", "_version")
+
+    def __init__(
+        self,
+        func: Callable[P, T],
+        *,
+        version: str,
+        removal_in: str | None,
+        alternative: str | None,
+        info: str | None,
+        pending: bool,
+        kind: Literal["function", "method", "classmethod", "property"] | None,
+    ) -> None:
+        self._func = func
+        self._version = version
+        self._removal_in = removal_in
+        self._alternative = alternative
+        self._info = info
+        self._pending = pending
+        self._kind = kind
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
+        warn_deprecation(
+            version=self._version,
+            deprecated_name=self._func.__name__,
+            info=self._info,
+            alternative=self._alternative,
+            pending=self._pending,
+            removal_in=self._removal_in,
+            kind=self._kind or ("method" if inspect.ismethod(self._func) else "function"),
+        )
+        return self._func(*args, **kwargs)

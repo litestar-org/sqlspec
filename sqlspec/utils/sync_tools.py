@@ -230,8 +230,8 @@ def ensure_async_(
     async def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
         result = function(*args, **kwargs)
         if inspect.isawaitable(result):
-            return await result
-        return await async_(functools.partial(_return_value, result))()
+            return cast("ReturnT", await result)
+        return cast("ReturnT", await async_(functools.partial(_return_value, result))())
 
     return wrapper
 

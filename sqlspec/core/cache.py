@@ -42,8 +42,8 @@ __all__ = (
     "create_cache_key",
     "get_cache",
     "get_cache_config",
-    "get_default_cache",
     "get_cache_instances",
+    "get_default_cache",
     "get_pipeline_metrics",
     "reset_pipeline_registry",
     "set_cache_instances",
@@ -403,9 +403,9 @@ def get_cache_statistics() -> "dict[str, CacheStats]":
     Returns:
         Dictionary mapping cache type to statistics
     """
-    stats = {}
-    if _default_cache is not None:
-        stats["default"] = _default_cache.get_stats()
+    stats: dict[str, CacheStats] = {}
+    default_cache = get_default_cache()
+    stats["default"] = default_cache.get_stats()
     cache = get_cache()
     stats["namespaced"] = cache.get_stats()
     return stats

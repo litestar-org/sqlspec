@@ -27,6 +27,17 @@ def _json_param_type() -> Any:
         return SPANNER_PARAM_TYPES.STRING
 
 
+class _SpannerWriteJob:
+    __slots__ = ("_statements",)
+
+    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
+        self._statements = statements
+
+    def __call__(self, transaction: "Transaction") -> None:
+        for sql, params, types in self._statements:
+            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+
+
 class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
     """Spanner ADK store backed by synchronous Spanner client."""
 
@@ -51,11 +62,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        def _txn_job(transaction: "Transaction") -> None:
-            for sql, params, types in statements:
-                transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-        self._database().run_in_transaction(_txn_job)  # type: ignore[no-untyped-call]
+        self._database().run_in_transaction(_SpannerWriteJob(statements))  # type: ignore[no-untyped-call]
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
         json_type = _json_param_type()

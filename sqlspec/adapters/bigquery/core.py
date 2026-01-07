@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, StorageCapabilityError
 from sqlspec.utils.type_guards import has_value_attribute
 
 if TYPE_CHECKING:
@@ -13,12 +13,23 @@ if TYPE_CHECKING:
     from typing import TypeAlias
 
     from google.cloud.bigquery import ArrayQueryParameter, ScalarQueryParameter
+    from sqlspec.storage import StorageFormat
 
     BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter
-else:
-    BigQueryParam = Any
 
-__all__ = ("build_bigquery_profile", "create_bq_parameters")
+try:
+    from google.cloud.bigquery import ArrayQueryParameter, ScalarQueryParameter
+except ImportError:
+    BigQueryParam = Any
+else:
+    BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
+
+__all__ = (
+    "build_bigquery_profile",
+    "create_bq_parameters",
+    "map_bigquery_source_format",
+    "rows_to_results",
+)
 
 
 def _identity(value: Any) -> Any:
@@ -172,6 +183,27 @@ def create_bq_parameters(parameters: Any, json_serializer: "Callable[[Any], str]
         raise SQLSpecError(msg)
 
     return bq_parameters
+
+
+def map_bigquery_source_format(file_format: "StorageFormat") -> str:
+    if file_format == "parquet":
+        return "PARQUET"
+    if file_format in {"json", "jsonl"}:
+        return "NEWLINE_DELIMITED_JSON"
+    msg = f"BigQuery does not support loading '{file_format}' artifacts via the storage bridge"
+    raise StorageCapabilityError(msg, capability="parquet_import_enabled")
+
+
+def rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
+    """Convert BigQuery rows to dictionary format.
+
+    Args:
+        rows_iterator: BigQuery rows iterator
+
+    Returns:
+        List of dictionaries representing the rows
+    """
+    return [dict(row) for row in rows_iterator]
 
 
 def build_bigquery_profile() -> "DriverParameterProfile":

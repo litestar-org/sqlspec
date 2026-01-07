@@ -25,6 +25,20 @@ logger = get_logger("events.postgres")
 __all__ = ("AsyncpgEventsBackend", "AsyncpgHybridEventsBackend", "create_event_backend")
 
 
+class _AsyncpgNotificationListener:
+    __slots__ = ("_channel", "_future", "_loop")
+
+    def __init__(self, channel: str, future: "asyncio.Future[str]", loop: "asyncio.AbstractEventLoop") -> None:
+        self._channel = channel
+        self._future = future
+        self._loop = loop
+
+    def __call__(self, _conn: Any, _pid: int, notified_channel: str, payload: str) -> None:
+        if notified_channel != self._channel or self._future.done():
+            return
+        self._loop.call_soon_threadsafe(self._future.set_result, payload)
+
+
 class AsyncpgHybridEventsBackend:
     """Hybrid backend combining durable queue with LISTEN/NOTIFY wakeups."""
 
@@ -203,20 +217,16 @@ class AsyncpgEventsBackend:
         """Wait for notification using add_listener callback API."""
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
+        listener = _AsyncpgNotificationListener(channel, future, loop)
 
-        def _listener(_conn: Any, _pid: int, notified_channel: str, payload: str) -> None:
-            if notified_channel != channel or future.done():
-                return
-            loop.call_soon_threadsafe(future.set_result, payload)
-
-        await connection.add_listener(channel, _listener)
+        await connection.add_listener(channel, listener)
         try:
             payload_str = await asyncio.wait_for(future, timeout=poll_interval)
         except asyncio.TimeoutError:
             return None
         finally:
             with contextlib.suppress(Exception):
-                await connection.remove_listener(channel, _listener)
+                await connection.remove_listener(channel, listener)
         return decode_notify_payload(channel, payload_str)
 
     async def _dequeue_with_notifies(self, connection: Any, channel: str, poll_interval: float) -> EventMessage | None:

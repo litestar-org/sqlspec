@@ -1,4 +1,3 @@
-# ruff: noqa: FBT003
 """MERGE statement builder.
 
 Provides a fluent interface for building SQL MERGE queries with

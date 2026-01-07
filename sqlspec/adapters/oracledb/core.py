@@ -1,7 +1,7 @@
 """OracleDB adapter compiled helpers."""
 
 import re
-from typing import Any, Final
+from typing import Any
 
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import DriverParameterProfile, ParameterStyle
@@ -16,8 +16,8 @@ __all__ = (
 )
 
 
-IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
-_VERSION_COMPONENTS: Final[int] = 3
+IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
+_VERSION_COMPONENTS: int = 3
 TYPE_CONVERTER = OracleOutputConverter()
 
 
@@ -40,7 +40,7 @@ def _resolve_oracledb_version() -> "tuple[int, int, int]":
     return _parse_version_tuple(version)
 
 
-ORACLEDB_VERSION: Final[tuple[int, int, int]] = _resolve_oracledb_version()
+ORACLEDB_VERSION: "tuple[int, int, int]" = _resolve_oracledb_version()
 
 
 def normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":

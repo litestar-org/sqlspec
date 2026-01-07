@@ -20,6 +20,8 @@ __all__ = ("PsqlpyAsyncDataDictionary",)
 class PsqlpyAsyncDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary via psqlpy."""
 
+    __slots__ = ()
+
     async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 

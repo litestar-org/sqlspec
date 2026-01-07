@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
+_AiosqliteConnection = aiosqlite.Connection
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
@@ -16,9 +18,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
     from sqlspec.core import StatementConfig
 
-    AiosqliteConnection: TypeAlias = aiosqlite.Connection
-else:
-    AiosqliteConnection = aiosqlite.Connection
+    AiosqliteConnection: TypeAlias = _AiosqliteConnection
+
+if not TYPE_CHECKING:
+    AiosqliteConnection = _AiosqliteConnection
 
 
 class AiosqliteSessionContext:

@@ -1,13 +1,16 @@
 """AsyncPG PostgreSQL driver implementation for async PostgreSQL operations."""
 
-import re
 from collections import OrderedDict
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 
 import asyncpg
 
-from sqlspec.adapters.asyncpg.core import build_asyncpg_profile, configure_asyncpg_parameter_serializers
+from sqlspec.adapters.asyncpg.core import (
+    build_asyncpg_profile,
+    configure_asyncpg_parameter_serializers,
+    parse_asyncpg_status,
+)
 from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
 from sqlspec.core import (
     SQL,
@@ -71,10 +74,6 @@ class _NormalizedStackOperation(NamedTuple):
     statement: "SQL"
     sql: str
     parameters: "tuple[Any, ...] | dict[str, Any] | None"
-
-
-ASYNC_PG_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
-EXPECTED_REGEX_GROUPS: Final[int] = 3
 
 
 class AsyncpgCursor:
@@ -456,7 +455,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         result = await cursor.execute(sql, *prepared_parameters) if prepared_parameters else await cursor.execute(sql)
 
-        affected_rows = self._parse_asyncpg_status(result) if isinstance(result, str) else 0
+        affected_rows = parse_asyncpg_status(result) if isinstance(result, str) else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
@@ -475,7 +474,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             return StackResult.from_sql_result(sql_result)
 
         status = await self._invoke_prepared(prepared, normalized.parameters, fetch=False)
-        rowcount = self._parse_asyncpg_status(status) if isinstance(status, str) else 0
+        rowcount = parse_asyncpg_status(status) if isinstance(status, str) else 0
         sql_result = create_sql_result(normalized.statement, rows_affected=rowcount, metadata=metadata)
         return StackResult.from_sql_result(sql_result)
 
@@ -581,33 +580,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
-
-    @staticmethod
-    def _parse_asyncpg_status(status: str) -> int:
-        """Parse AsyncPG status string to extract row count.
-
-        AsyncPG returns status strings like "INSERT 0 1", "UPDATE 3", "DELETE 2"
-        for non-SELECT operations. This method extracts the affected row count.
-
-        Args:
-            status: Status string from AsyncPG operation
-
-        Returns:
-            Number of affected rows, or 0 if cannot parse
-        """
-        if not status:
-            return 0
-
-        match = ASYNC_PG_STATUS_REGEX.match(status.strip())
-        if match:
-            groups = match.groups()
-            if len(groups) >= EXPECTED_REGEX_GROUPS:
-                try:
-                    return int(groups[-1])
-                except (ValueError, IndexError):
-                    pass
-
-        return 0
 
     async def begin(self) -> None:
         """Begin a database transaction."""
