@@ -1,6 +1,6 @@
 """BigQuery database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
@@ -197,11 +197,12 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self.connection_config = normalize_connection_config(connection_config)
 
         normalized_driver_features = dict(driver_features) if driver_features else None
-        (processed_driver_features, serializer, user_connection_hook, connection_instance) = (
+        (processed_driver_features, serializer, user_connection_hook, features_connection_instance) = (
             apply_bigquery_driver_features(normalized_driver_features)
         )
 
-        self._connection_instance: BigQueryConnection | None = connection_instance
+        resolved_connection_instance = connection_instance or features_connection_instance
+        self._connection_instance = resolved_connection_instance
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
@@ -217,7 +218,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         super().__init__(
             connection_config=self.connection_config,
-            connection_instance=connection_instance,
+            connection_instance=resolved_connection_instance,
             migration_config=migration_config,
             statement_config=base_statement_config,
             driver_features=processed_driver_features,
@@ -269,7 +270,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         if self._connection_instance is not None:
-            return self._connection_instance
+            return cast("BigQueryConnection", self._connection_instance)
 
         try:
             client_fields = {"project", "location", "credentials", "client_options", "client_info"}

@@ -31,12 +31,12 @@ __all__ = (
     "build_bigquery_profile",
     "build_bigquery_retry",
     "build_bigquery_statement_config",
+    "collect_bigquery_rows",
     "copy_bigquery_job_config",
     "create_bq_parameters",
     "detect_bigquery_emulator",
     "extract_bigquery_insert_table",
     "is_simple_bigquery_insert",
-    "collect_bigquery_rows",
     "map_bigquery_source_format",
     "normalize_bigquery_driver_features",
     "rows_to_results",
@@ -424,6 +424,8 @@ def normalize_bigquery_driver_features(
     processed_driver_features.setdefault("enable_uuid_conversion", True)
     serializer = processed_driver_features.setdefault("json_serializer", to_json)
     connection_instance = processed_driver_features.get("connection_instance")
+    if connection_instance is not None:
+        processed_driver_features.pop("connection_instance", None)
 
     return (
         processed_driver_features,

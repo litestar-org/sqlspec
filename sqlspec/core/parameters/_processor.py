@@ -180,7 +180,7 @@ class ParameterProcessor:
             coerced_params = self._coerce_parameter_types(parameters, config.type_coercion_map, is_many)
 
         static_sql, static_params = self._converter.convert_placeholder_style(
-            sql, coerced_params, ParameterStyle.STATIC, is_many
+            sql, coerced_params, ParameterStyle.STATIC, is_many, strict_named_parameters=config.strict_named_parameters
         )
         result = ParameterProcessingResult(static_sql, static_params, ParameterProfile.empty(), sqlglot_sql=static_sql)
         return self._store_cached_result(cache_key, result)
@@ -359,7 +359,11 @@ class ParameterProcessor:
         if requires_mapping:
             target_style = self._select_execution_style(original_styles, config)
             processed_sql, processed_parameters = self._converter.convert_placeholder_style(
-                processed_sql, processed_parameters, target_style, is_many
+                processed_sql,
+                processed_parameters,
+                target_style,
+                is_many,
+                strict_named_parameters=config.strict_named_parameters,
             )
 
         if processed_parameters and wrap_types:
@@ -444,8 +448,12 @@ class ParameterProcessor:
 
         if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
             target_style = self._select_execution_style(original_styles, config)
-            processed_sql, _ = self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
+            processed_sql, _ = self._converter.convert_placeholder_style(
+                sql, parameters, target_style, is_many, strict_named_parameters=config.strict_named_parameters
+            )
             return processed_sql, parameters
 
         target_style = self._select_execution_style(original_styles, config)
-        return self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
+        return self._converter.convert_placeholder_style(
+            sql, parameters, target_style, is_many, strict_named_parameters=config.strict_named_parameters
+        )

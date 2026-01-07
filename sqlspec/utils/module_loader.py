@@ -33,6 +33,7 @@ __all__ = (
     "ensure_prometheus",
     "ensure_pyarrow",
     "ensure_pydantic",
+    "ensure_uvloop",
     "import_string",
     "module_to_os_path",
 )
@@ -218,3 +219,8 @@ def ensure_pyarrow() -> None:
 def ensure_pydantic() -> None:
     """Ensure Pydantic is available for data validation."""
     _require_dependency("pydantic")
+
+
+def ensure_uvloop() -> None:
+    """Ensure uvloop is available for fast event loops."""
+    _require_dependency("uvloop")

@@ -242,7 +242,12 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         )
 
         parsed = sg.parse_one(from_sql, dialect="postgres")
-        return exp.Subquery(this=parsed, alias=exp.TableAlias(this=exp.to_identifier(alias_name)))
+        return exp.Subquery(
+            this=parsed,
+            alias=exp.TableAlias(
+                this=exp.to_identifier(alias_name), columns=[exp.to_identifier(col) for col in columns]
+            ),
+        )
 
     def _create_oracle_json_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", alias: "str | None"

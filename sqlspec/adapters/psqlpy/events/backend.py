@@ -26,6 +26,8 @@ logger = get_logger("events.psqlpy")
 
 __all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
 
+_PQLSPY_CALLBACK_MIN_ARGS = 3
+
 
 class _PsqlpyNotifyCapture:
     __slots__ = ("_channel", "_event", "payload")
@@ -35,8 +37,30 @@ class _PsqlpyNotifyCapture:
         self._event = event
         self.payload: str | None = None
 
-    async def __call__(self, _connection: Any, payload: str, notified_channel: str, _process_id: int) -> None:
-        if notified_channel == self._channel and self.payload is None:
+    async def __call__(self, *args: Any) -> None:
+        if not args:
+            return
+
+        notified_channel: str | None = None
+        payload: str | None = None
+
+        if len(args) == 1:
+            message = args[0]
+            notified_channel = cast("str | None", getattr(message, "channel", None))
+            payload = cast("str | None", getattr(message, "payload", None))
+        elif len(args) >= _PQLSPY_CALLBACK_MIN_ARGS:
+            value1 = cast("str", args[1])
+            value2 = cast("str", args[2])
+            if value1 == self._channel:
+                notified_channel = value1
+                payload = value2
+            elif value2 == self._channel:
+                notified_channel = value2
+                payload = value1
+            else:
+                return
+
+        if notified_channel == self._channel and payload is not None and self.payload is None:
             self.payload = payload
             self._event.set()
 
@@ -48,7 +72,22 @@ class _PsqlpyNotifySignal:
         self._channel = channel
         self._event = event
 
-    async def __call__(self, _connection: Any, _payload: str, notified_channel: str, _process_id: int) -> None:
+    async def __call__(self, *args: Any) -> None:
+        if not args:
+            return
+
+        notified_channel: str | None = None
+        if len(args) == 1:
+            message = args[0]
+            notified_channel = cast("str | None", getattr(message, "channel", None))
+        elif len(args) >= _PQLSPY_CALLBACK_MIN_ARGS:
+            value1 = cast("str", args[1])
+            value2 = cast("str", args[2])
+            if value1 == self._channel:
+                notified_channel = value1
+            elif value2 == self._channel:
+                notified_channel = value2
+
         if notified_channel == self._channel:
             self._event.set()
 
@@ -89,7 +128,7 @@ class PsqlpyEventsBackend:
         listener = await self._ensure_listener(channel)
         event = asyncio.Event()
         callback = _PsqlpyNotifyCapture(channel, event)
-        await listener.add_callback(channel=channel, callback=callback)
+        await listener.add_callback(channel=channel, callback=callback.__call__)
 
         if not self._listener_started:
             listener.listen()
@@ -160,7 +199,7 @@ class PsqlpyHybridEventsBackend:
         listener = await self._ensure_listener(channel)
         event = asyncio.Event()
         callback = _PsqlpyNotifySignal(channel, event)
-        await listener.add_callback(channel=channel, callback=callback)
+        await listener.add_callback(channel=channel, callback=callback.__call__)
 
         if not self._listener_started:
             listener.listen()

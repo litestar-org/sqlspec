@@ -7,6 +7,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
 from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.exceptions import SQLSpecError
 
 __all__ = ("ParameterConverter",)
 
@@ -95,13 +96,7 @@ class ParameterConverter:
         for param in reversed(param_info):
             if param.style in incompatible_styles:
                 if (
-                    param.style
-                    in {
-                        ParameterStyle.NAMED_COLON,
-                        ParameterStyle.NAMED_AT,
-                        ParameterStyle.NAMED_DOLLAR,
-                        ParameterStyle.NAMED_PYFORMAT,
-                    }
+                    param.style in {ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_AT, ParameterStyle.NAMED_DOLLAR}
                     and param.name
                     and param.name.isidentifier()
                 ):
@@ -117,7 +112,13 @@ class ParameterConverter:
         return converted_sql
 
     def convert_placeholder_style(
-        self, sql: str, parameters: Any, target_style: ParameterStyle, is_many: bool = False
+        self,
+        sql: str,
+        parameters: Any,
+        target_style: ParameterStyle,
+        is_many: bool = False,
+        *,
+        strict_named_parameters: bool = True,
     ) -> "tuple[str, Any]":
         param_info = self.validator.extract_parameters(sql)
 
@@ -127,13 +128,25 @@ class ParameterConverter:
         current_styles = {p.style for p in param_info}
         if len(current_styles) == 1 and target_style in current_styles:
             converted_parameters = self._convert_parameter_format(
-                parameters, param_info, target_style, parameters, preserve_parameter_format=True, is_many=is_many
+                parameters,
+                param_info,
+                target_style,
+                parameters,
+                preserve_parameter_format=True,
+                is_many=is_many,
+                strict_named_parameters=strict_named_parameters,
             )
             return sql, converted_parameters
 
         converted_sql = self._convert_placeholders_to_style(sql, param_info, target_style)
         converted_parameters = self._convert_parameter_format(
-            parameters, param_info, target_style, parameters, preserve_parameter_format=True, is_many=is_many
+            parameters,
+            param_info,
+            target_style,
+            parameters,
+            preserve_parameter_format=True,
+            is_many=is_many,
+            strict_named_parameters=strict_named_parameters,
         )
         return converted_sql, converted_parameters
 
@@ -204,6 +217,8 @@ class ParameterConverter:
     ) -> "tuple[Any, bool]":
         if param.name and param.name in parameters:
             return parameters[param.name], True
+        if param.placeholder_text in parameters:
+            return parameters[param.placeholder_text], True
 
         if (
             param.style == ParameterStyle.NUMERIC
@@ -237,6 +252,8 @@ class ParameterConverter:
     ) -> "tuple[Any, bool]":
         if param.name and param.name in parameters:
             return parameters[param.name], True
+        if param.placeholder_text in parameters:
+            return parameters[param.placeholder_text], True
         if f"param_{param.ordinal}" in parameters:
             return parameters[f"param_{param.ordinal}"], True
 
@@ -254,6 +271,24 @@ class ParameterConverter:
                 return parameters[key], True
 
         return None, False
+
+    def _collect_missing_named_parameters(
+        self, param_info: "list[ParameterInfo]", parameters: Mapping[str, Any]
+    ) -> "list[str]":
+        named_styles = {
+            ParameterStyle.NAMED_COLON,
+            ParameterStyle.NAMED_AT,
+            ParameterStyle.NAMED_DOLLAR,
+            ParameterStyle.NAMED_PYFORMAT,
+        }
+        missing: list[str] = []
+        for param in param_info:
+            if param.style not in named_styles or not param.name:
+                continue
+            if param.name in parameters or param.placeholder_text in parameters:
+                continue
+            missing.append(param.name)
+        return sorted(set(missing))
 
     def _preserve_original_format(self, param_values: "list[Any]", original_parameters: Any) -> Any:
         if isinstance(original_parameters, tuple):
@@ -278,6 +313,8 @@ class ParameterConverter:
         original_parameters: Any = None,
         preserve_parameter_format: bool = False,
         is_many: bool = False,
+        *,
+        strict_named_parameters: bool = True,
     ) -> Any:
         if not parameters or not param_info:
             return parameters
@@ -291,7 +328,13 @@ class ParameterConverter:
         ):
             normalized_sets = [
                 self._convert_parameter_format(
-                    param_set, param_info, target_style, param_set, preserve_parameter_format, is_many=False
+                    param_set,
+                    param_info,
+                    target_style,
+                    param_set,
+                    preserve_parameter_format,
+                    is_many=False,
+                    strict_named_parameters=strict_named_parameters,
                 )
                 if isinstance(param_set, Mapping)
                 else param_set
@@ -318,6 +361,11 @@ class ParameterConverter:
             return parameters
 
         elif isinstance(parameters, Mapping):
+            if strict_named_parameters:
+                missing_names = self._collect_missing_named_parameters(param_info, parameters)
+                if missing_names:
+                    msg = f"Missing named parameter(s): {', '.join(missing_names)}"
+                    raise SQLSpecError(msg)
             param_values: list[Any] = []
             parameter_styles = {p.style for p in param_info}
             has_mixed_styles = len(parameter_styles) > 1

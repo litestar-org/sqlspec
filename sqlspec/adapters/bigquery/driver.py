@@ -21,13 +21,13 @@ from sqlspec.adapters.bigquery.core import (
     build_bigquery_profile,
     build_bigquery_retry,
     build_bigquery_statement_config,
-    copy_bigquery_job_config,
     collect_bigquery_rows,
+    copy_bigquery_job_config,
     create_bq_parameters,
     detect_bigquery_emulator,
     extract_bigquery_insert_table,
     is_simple_bigquery_insert,
-    )
+)
 from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (

@@ -12,7 +12,7 @@ from sqlspec.extensions.events._payload import decode_notify_payload, encode_not
 from sqlspec.extensions.events._queue import AsyncTableEventQueue, SyncTableEventQueue, build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -27,6 +27,16 @@ __all__ = (
     "PsycopgSyncHybridEventsBackend",
     "create_event_backend",
 )
+
+
+def _extract_event_id(payload: str | None) -> "str | None":
+    if not payload:
+        return None
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        event_id = raw.get("event_id")
+        return event_id if isinstance(event_id, str) else None
+    return None
 
 
 class PsycopgSyncEventsBackend:
@@ -199,7 +209,12 @@ class PsycopgSyncHybridEventsBackend:
         connection = self._ensure_listener(channel)
         notify_iter = connection.notifies(timeout=poll_interval, stop_after=1)
         with contextlib.suppress(StopIteration):
-            next(notify_iter)
+            notify = next(notify_iter)
+            event_id = _extract_event_id(notify.payload)
+            if event_id:
+                event = self._queue.dequeue_by_event_id(event_id)
+                if event is not None:
+                    return event
         return self._queue.dequeue(channel, poll_interval)
 
     def ack(self, event_id: str) -> None:
@@ -291,7 +306,12 @@ class PsycopgAsyncHybridEventsBackend:
 
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         connection = await self._ensure_listener(channel)
-        async for _notify in connection.notifies(timeout=poll_interval, stop_after=1):
+        async for notify in connection.notifies(timeout=poll_interval, stop_after=1):
+            event_id = _extract_event_id(notify.payload)
+            if event_id:
+                event = await self._queue.dequeue_by_event_id(event_id)
+                if event is not None:
+                    return event
             break
         return await self._queue.dequeue(channel, poll_interval)
 

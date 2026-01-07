@@ -17,10 +17,15 @@ if TYPE_CHECKING:
 
     BigQueryConnection: TypeAlias = Client
     BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter
-
-if not TYPE_CHECKING:
-    BigQueryConnection = Any
-    BigQueryParam = Any
+else:
+    try:
+        from google.cloud.bigquery import ArrayQueryParameter, Client, ScalarQueryParameter
+    except Exception:
+        BigQueryConnection = Any
+        BigQueryParam = Any
+    else:
+        BigQueryConnection = Client
+        BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
 
 
 class BigQuerySessionContext:

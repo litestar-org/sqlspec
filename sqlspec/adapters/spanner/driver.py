@@ -9,8 +9,8 @@ from google.cloud.spanner_v1.transaction import Transaction
 from sqlspec.adapters.spanner._typing import SpannerSessionContext
 from sqlspec.adapters.spanner.core import (
     build_spanner_profile,
-    collect_spanner_rows,
     coerce_spanner_params,
+    collect_spanner_rows,
     infer_spanner_param_types_for_params,
     spanner_statement_config,
     supports_spanner_batch_update,

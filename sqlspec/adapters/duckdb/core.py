@@ -17,8 +17,8 @@ __all__ = (
     "apply_duckdb_driver_features",
     "build_duckdb_profile",
     "build_duckdb_statement_config",
-    "collect_duckdb_rows",
     "coerce_duckdb_rows",
+    "collect_duckdb_rows",
     "duckdb_statement_config",
 )
 

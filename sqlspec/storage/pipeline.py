@@ -306,6 +306,12 @@ class SyncStoragePipeline:
     def __init__(self, *, registry: StorageRegistry | None = None) -> None:
         self.registry = registry or storage_registry
 
+    def _resolve_backend(
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
+    ) -> "tuple[ObjectStoreProtocol, str]":
+        """Resolve storage backend and normalized path for a destination."""
+        return _resolve_storage_backend(self.registry, destination, backend_options)
+
     def write_rows(
         self,
         rows: "list[dict[str, Any]]",
@@ -353,7 +359,7 @@ class SyncStoragePipeline:
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         """Read an artifact from storage and decode it into an Arrow table."""
 
-        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
+        backend, path = self._resolve_backend(source, storage_options)
         backend_name = backend.backend_type
         payload = _read_backend_sync(backend, path, backend_name=backend_name)
         table = _decode_arrow_payload(payload, file_format)
@@ -392,7 +398,7 @@ class SyncStoragePipeline:
         """Delete staged artifacts best-effort."""
 
         for artifact in artifacts:
-            backend, path = _resolve_storage_backend(self.registry, artifact["uri"], None)
+            backend, path = self._resolve_backend(artifact["uri"], None)
             try:
                 _delete_backend_sync(backend, path, backend_name=backend.backend_type)
             except Exception:
@@ -408,7 +414,7 @@ class SyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = _resolve_storage_backend(self.registry, destination, storage_options)
+        backend, path = self._resolve_backend(destination, storage_options)
         backend_name = backend.backend_type
         start = perf_counter()
         _write_backend_sync(backend, path, payload, backend_name=backend_name)

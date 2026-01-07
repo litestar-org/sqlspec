@@ -39,6 +39,8 @@ from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, supports_json_type
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -354,11 +356,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             json_indexes = detect_asyncmy_json_columns(cursor, ASYNCMY_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
             rows, column_names = collect_asyncmy_rows(
-                cast("list[Any] | None", fetched_data),
-                cursor.description,
-                json_indexes,
-                deserializer,
-                logger=logger,
+                cast("list[Any] | None", fetched_data), cursor.description, json_indexes, deserializer, logger=logger
             )
 
             return self.create_execution_result(

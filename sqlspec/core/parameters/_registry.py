@@ -122,6 +122,7 @@ def _build_parameter_style_config_from_profile(
         "preserve_original_params_for_many": overrides.pop(
             "preserve_original_params_for_many", profile.preserve_original_params_for_many
         ),
+        "strict_named_parameters": overrides.pop("strict_named_parameters", profile.strict_named_parameters),
         "output_transformer": overrides.pop("output_transformer", profile.default_output_transformer),
         "ast_transformer": overrides.pop("ast_transformer", profile.default_ast_transformer),
     }

@@ -45,6 +45,7 @@ class _BaseTableEventQueue:
         "_nack_sql",
         "_retention_seconds",
         "_runtime",
+        "_select_by_id_sql",
         "_select_sql",
         "_statement_config",
         "_table_name",
@@ -71,6 +72,7 @@ class _BaseTableEventQueue:
         self._max_claim_attempts = 5
         self._upsert_sql = self._build_insert_sql()
         self._select_sql = self._build_select_sql(bool(select_for_update), bool(skip_locked))
+        self._select_by_id_sql = self._build_select_by_id_sql()
         self._claim_sql = self._build_claim_sql()
         self._ack_sql = self._build_ack_sql()
         self._nack_sql = self._build_nack_sql()
@@ -100,6 +102,13 @@ class _BaseTableEventQueue:
             if skip_locked:
                 locking_clause += " SKIP LOCKED"
         return base + limit_clause + locking_clause
+
+    def _build_select_by_id_sql(self) -> str:
+        limit_clause = " FETCH FIRST 1 ROWS ONLY" if "oracle" in self._dialect else " LIMIT 1"
+        return (
+            f"SELECT event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
+            f"FROM {self._table_name} WHERE event_id = :event_id" + limit_clause
+        )
 
     def _build_claim_sql(self) -> str:
         return (
@@ -213,6 +222,27 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 return self._hydrate_event(row, leased_until)
         return None
 
+    def dequeue_by_event_id(self, event_id: str) -> "EventMessage | None":
+        row = self._fetch_by_event_id(event_id)
+        if row is None:
+            return None
+        now = self._utcnow()
+        leased_until = now + timedelta(seconds=self._lease_seconds)
+        claimed = self._execute(
+            self._claim_sql,
+            {
+                "claimed_status": _LEASED_STATUS,
+                "lease_expires_at": leased_until,
+                "event_id": row["event_id"],
+                "pending_status": _PENDING_STATUS,
+                "leased_status": _LEASED_STATUS,
+                "lease_reentry_cutoff": now,
+            },
+        )
+        if claimed:
+            return self._hydrate_event(row, leased_until)
+        return None
+
     def ack(self, event_id: str) -> None:
         now = self._utcnow()
         self._execute(self._ack_sql, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
@@ -245,6 +275,12 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                     },
                     statement_config=self._statement_config,
                 )
+            )
+
+    def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
+        with cast("AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session()) as driver:
+            return driver.select_one_or_none(
+                SQL(self._select_by_id_sql, {"event_id": event_id}, statement_config=self._statement_config)
             )
 
     def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
@@ -311,6 +347,27 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 return self._hydrate_event(row, leased_until)
         return None
 
+    async def dequeue_by_event_id(self, event_id: str) -> "EventMessage | None":
+        row = await self._fetch_by_event_id(event_id)
+        if row is None:
+            return None
+        now = self._utcnow()
+        leased_until = now + timedelta(seconds=self._lease_seconds)
+        claimed = await self._execute(
+            self._claim_sql,
+            {
+                "claimed_status": _LEASED_STATUS,
+                "lease_expires_at": leased_until,
+                "event_id": row["event_id"],
+                "pending_status": _PENDING_STATUS,
+                "leased_status": _LEASED_STATUS,
+                "lease_reentry_cutoff": now,
+            },
+        )
+        if claimed:
+            return self._hydrate_event(row, leased_until)
+        return None
+
     async def ack(self, event_id: str) -> None:
         now = self._utcnow()
         await self._execute(self._ack_sql, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
@@ -345,6 +402,14 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                     },
                     statement_config=self._statement_config,
                 )
+            )
+
+    async def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
+        async with cast(
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session()
+        ) as driver:
+            return await driver.select_one_or_none(
+                SQL(self._select_by_id_sql, {"event_id": event_id}, statement_config=self._statement_config)
             )
 
     async def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:

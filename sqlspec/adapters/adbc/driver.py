@@ -401,7 +401,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             dict_data, column_names = collect_adbc_rows(cast("list[Any] | None", fetched_data), cursor.description)
             return self.create_execution_result(
                 cursor,
-                selected_data=cast("list[dict[str, Any]]", dict_data),
+                selected_data=dict_data,
                 column_names=column_names,
                 data_row_count=len(dict_data),
                 is_select_result=True,

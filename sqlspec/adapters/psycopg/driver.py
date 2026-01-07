@@ -13,10 +13,10 @@ from sqlspec.adapters.psycopg._typing import (
 )
 from sqlspec.adapters.psycopg.core import (
     build_copy_from_command,
-    collect_psycopg_rows,
     build_psycopg_profile,
     build_psycopg_statement_config,
     build_truncate_command,
+    collect_psycopg_rows,
     psycopg_pipeline_supported,
     psycopg_statement_config,
 )
@@ -531,7 +531,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            fetched_data, column_names = collect_psycopg_rows(
+                cast("list[Any] | None", fetched_data), cursor.description
+            )
             execution_result = self.create_execution_result(
                 cursor,
                 selected_data=fetched_data,
@@ -586,7 +588,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            fetched_data, column_names = collect_psycopg_rows(
+                cast("list[Any] | None", fetched_data), cursor.description
+            )
 
             return self.create_execution_result(
                 cursor,
@@ -1081,7 +1085,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
-            fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            fetched_data, column_names = collect_psycopg_rows(
+                cast("list[Any] | None", fetched_data), cursor.description
+            )
             execution_result = self.create_execution_result(
                 cursor,
                 selected_data=fetched_data,
@@ -1136,7 +1142,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
-            fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            fetched_data, column_names = collect_psycopg_rows(
+                cast("list[Any] | None", fetched_data), cursor.description
+            )
 
             return self.create_execution_result(
                 cursor,

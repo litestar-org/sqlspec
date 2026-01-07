@@ -16,15 +16,16 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from typing_extensions import ParamSpec
 
+from sqlspec.utils.dependencies import module_available
 from sqlspec.utils.portal import get_global_portal
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
     from types import TracebackType
 
-try:
+if module_available("uvloop"):
     import uvloop  # pyright: ignore[reportMissingImports]
-except ImportError:
+else:
     uvloop = None  # type: ignore[assignment,unused-ignore]
 
 

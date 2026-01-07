@@ -36,7 +36,7 @@ from sqlspec.core import (
     replace_placeholders_with_literals,
     wrap_with_type,
 )
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 
 _ADAPTER_MODULE_NAMES: "tuple[str, ...]" = (
@@ -575,6 +575,7 @@ def test_parameter_style_config_basic() -> None:
     assert not config.has_native_list_expansion
     assert config.output_transformer is None
     assert config.needs_static_script_compilation is False
+    assert config.strict_named_parameters is True
 
 
 def test_parameter_style_config_advanced() -> None:
@@ -595,6 +596,7 @@ def test_parameter_style_config_advanced() -> None:
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=True,
         preserve_parameter_format=True,
+        strict_named_parameters=False,
     )
 
     assert config.default_parameter_style == ParameterStyle.NAMED_COLON
@@ -607,6 +609,7 @@ def test_parameter_style_config_advanced() -> None:
     assert config.needs_static_script_compilation is False
     assert config.allow_mixed_parameter_styles is True
     assert config.preserve_parameter_format is True
+    assert config.strict_named_parameters is False
 
 
 def test_parameter_style_config_hash() -> None:
@@ -1092,6 +1095,28 @@ def test_dict_parameter_handling(converter: ParameterConverter) -> None:
 
     assert isinstance(converted_params, dict)
     assert converted_params == parameters
+
+
+def test_missing_named_parameters_raise(converter: ParameterConverter) -> None:
+    """Missing named parameters should raise rather than fall back to ordinal ordering."""
+    sql = "SELECT * FROM users WHERE id = :provider_user_id AND token = :access_token"
+    parameters = {"access_token": "token"}
+
+    with pytest.raises(SQLSpecError):
+        converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
+
+
+def test_missing_named_parameters_can_fallback_when_disabled(converter: ParameterConverter) -> None:
+    """Missing named parameters may fall back to ordinal ordering when strict mode is disabled."""
+    sql = "SELECT * FROM users WHERE id = :provider_user_id AND token = :access_token"
+    parameters = {"access_token": "token", "refresh_token": "refresh"}
+
+    _sql, converted_params = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.QMARK, strict_named_parameters=False
+    )
+
+    assert len(converted_params) == 2
+    assert next(iter(converted_params)) == "token"
 
 
 @pytest.mark.parametrize(

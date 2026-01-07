@@ -688,9 +688,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             data, column_names = collect_oracledb_sync_rows(
-                cast("list[Any] | None", fetched_data),
-                cursor.description,
-                self.driver_features,
+                cast("list[Any] | None", fetched_data), cursor.description, self.driver_features
             )
 
             return self.create_execution_result(
@@ -1184,9 +1182,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if is_select_like:
             fetched_data = await cursor.fetchall()
             data, column_names = await collect_oracledb_async_rows(
-                cast("list[Any] | None", fetched_data),
-                cursor.description,
-                self.driver_features,
+                cast("list[Any] | None", fetched_data), cursor.description, self.driver_features
             )
 
             return self.create_execution_result(

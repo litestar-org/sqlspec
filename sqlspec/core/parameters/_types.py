@@ -159,6 +159,7 @@ class ParameterStyleConfig:
         "output_transformer",
         "preserve_original_params_for_many",
         "preserve_parameter_format",
+        "strict_named_parameters",
         "supported_execution_parameter_styles",
         "supported_parameter_styles",
         "type_coercion_map",
@@ -180,6 +181,7 @@ class ParameterStyleConfig:
         ast_transformer: "Callable[[Any, Any], tuple[Any, Any]] | None" = None,
         json_serializer: "Callable[[Any], str] | None" = None,
         json_deserializer: "Callable[[str], Any] | None" = None,
+        strict_named_parameters: bool = True,
     ) -> None:
         self.default_parameter_style = default_parameter_style
         self.supported_parameter_styles = frozenset(supported_parameter_styles or (default_parameter_style,))
@@ -195,6 +197,7 @@ class ParameterStyleConfig:
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_parameter_format = preserve_parameter_format
         self.preserve_original_params_for_many = preserve_original_params_for_many
+        self.strict_named_parameters = strict_named_parameters
         self.json_serializer = json_serializer
         self.json_deserializer = json_deserializer
 
@@ -215,6 +218,7 @@ class ParameterStyleConfig:
             self.needs_static_script_compilation,
             self.allow_mixed_parameter_styles,
             self.preserve_parameter_format,
+            self.strict_named_parameters,
             bool(self.ast_transformer),
             self.json_serializer,
             self.json_deserializer,
@@ -246,6 +250,7 @@ class ParameterStyleConfig:
             "allow_mixed_parameter_styles": self.allow_mixed_parameter_styles,
             "preserve_parameter_format": self.preserve_parameter_format,
             "preserve_original_params_for_many": self.preserve_original_params_for_many,
+            "strict_named_parameters": self.strict_named_parameters,
             "output_transformer": self.output_transformer,
             "ast_transformer": self.ast_transformer,
             "json_serializer": self.json_serializer,
@@ -303,6 +308,7 @@ class DriverParameterProfile:
         "preserve_original_params_for_many",
         "preserve_parameter_format",
         "statement_kwargs",
+        "strict_named_parameters",
         "supported_execution_styles",
         "supported_styles",
     )
@@ -326,6 +332,7 @@ class DriverParameterProfile:
         extras: "Mapping[str, Any] | None" = None,
         default_dialect: "str | None" = None,
         statement_kwargs: "Mapping[str, Any] | None" = None,
+        strict_named_parameters: bool = True,
     ) -> None:
         self.name = name
         self.default_style = default_style
@@ -339,6 +346,7 @@ class DriverParameterProfile:
         self.needs_static_script_compilation = needs_static_script_compilation
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_original_params_for_many = preserve_original_params_for_many
+        self.strict_named_parameters = strict_named_parameters
         self.json_serializer_strategy = json_serializer_strategy
         self.custom_type_coercions = (
             MappingProxyType(dict(custom_type_coercions)) if custom_type_coercions else MappingProxyType({})
