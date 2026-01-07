@@ -1,23 +1,17 @@
 """SQLite database configuration with thread-local connections."""
 
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
-from sqlspec.adapters.sqlite.driver import (
-    SqliteCursor,
-    SqliteDriver,
-    SqliteExceptionHandler,
-    SqliteSessionContext,
-    sqlite_statement_config,
-)
+from sqlspec.adapters.sqlite.core import apply_sqlite_driver_features, sqlite_statement_config
+from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, SqliteSessionContext
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
 
 logger = get_logger("adapters.sqlite")
 
@@ -85,13 +79,13 @@ class SqliteConnectionContext:
     def __enter__(self) -> SqliteConnection:
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
-        return self._ctx.__enter__()  # type: ignore[no-any-return]
+        return cast("SqliteConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> bool | None:
         if self._ctx:
-            return self._ctx.__exit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
         return None
 
 
@@ -105,12 +99,12 @@ class _SqliteSessionConnectionHandler:
     def acquire_connection(self) -> "SqliteConnection":
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
-        return self._ctx.__enter__()  # type: ignore[no-any-return]
+        return cast("SqliteConnection", self._ctx.__enter__())
 
     def release_connection(self, _conn: "SqliteConnection") -> None:
         if self._ctx is None:
             return
-        self._ctx.__exit__(None, None, None)  # type: ignore[no-any-return]
+        self._ctx.__exit__(None, None, None)
         self._ctx = None
 
 
@@ -165,17 +159,11 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
                 )
                 config_dict["uri"] = True
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        processed_driver_features.setdefault("enable_custom_adapters", True)
-        json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
-        json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
-
         base_statement_config = statement_config or sqlite_statement_config
-        if json_serializer is not None:
-            parameter_config = base_statement_config.parameter_config.with_json_serializers(
-                json_serializer, deserializer=json_deserializer
-            )
-            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+        normalized_driver_features = dict(driver_features) if driver_features else None
+        base_statement_config, processed_driver_features = apply_sqlite_driver_features(
+            base_statement_config, normalized_driver_features
+        )
 
         super().__init__(
             bind_key=bind_key,

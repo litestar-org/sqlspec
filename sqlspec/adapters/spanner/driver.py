@@ -7,19 +7,17 @@ from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
 
 from sqlspec.adapters.spanner._typing import SpannerSessionContext
-from sqlspec.adapters.spanner.core import build_spanner_profile
+from sqlspec.adapters.spanner.core import (
+    build_spanner_profile,
+    coerce_spanner_params,
+    infer_spanner_param_types_for_params,
+    spanner_statement_config,
+    supports_spanner_batch_update,
+    supports_spanner_write,
+)
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
-from sqlspec.adapters.spanner.type_converter import (
-    SpannerOutputConverter,
-    coerce_params_for_spanner,
-    infer_spanner_param_types,
-)
-from sqlspec.core import (
-    StatementConfig,
-    build_statement_config_from_profile,
-    create_arrow_result,
-    register_driver_profile,
-)
+from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
+from sqlspec.core import StatementConfig, create_arrow_result, register_driver_profile
 from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     DatabaseConnectionError,
@@ -178,6 +176,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "SpannerExceptionHandler":
         return SpannerExceptionHandler()
 
+    def _coerce_params(self, params: "dict[str, Any] | None") -> "dict[str, Any] | None":
+        return coerce_spanner_params(params, json_serializer=self.driver_features.get("json_serializer"))
+
+    def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
+        return infer_spanner_param_types_for_params(params)
+
     def _execute_statement(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
         coerced_params = self._coerce_params(params)
@@ -209,7 +213,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        if self._supports_write(cursor):
+        if supports_spanner_write(cursor):
             writer = cast("_SpannerWriteProtocol", cursor)
             row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map)
             return self.create_execution_result(cursor, rowcount_override=row_count)
@@ -220,7 +224,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _execute_script(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        is_transaction = self._supports_write(cursor)
+        is_transaction = supports_spanner_write(cursor)
         reader = cast("_SpannerReadProtocol", cursor)
 
         count = 0
@@ -244,7 +248,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
-        if not self._supports_batch_update(cursor):
+        if not supports_spanner_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
 
@@ -266,49 +270,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         total_rows = sum(row_counts) if row_counts else 0
 
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
-
-    def _supports_write(self, cursor: Any) -> bool:
-        """Check whether the cursor supports DML execution.
-
-        Args:
-            cursor: Connection or transaction object to inspect.
-
-        Returns:
-            True if DML execution is available, False otherwise.
-        """
-        try:
-            _ = cursor.execute_update
-        except AttributeError:
-            return False
-        return True
-
-    def _supports_batch_update(self, cursor: Any) -> bool:
-        """Check whether the cursor supports batch updates.
-
-        Args:
-            cursor: Connection or transaction object to inspect.
-
-        Returns:
-            True if batch updates are available, False otherwise.
-        """
-        try:
-            _ = cursor.batch_update
-        except AttributeError:
-            return False
-        return True
-
-    def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
-        """Infer Spanner param_types from Python values."""
-        if isinstance(params, (list, tuple)):
-            return {}
-        return infer_spanner_param_types(params)
-
-    def _coerce_params(self, params: "dict[str, Any] | None") -> "dict[str, Any] | None":
-        """Coerce Python types to Spanner-compatible formats."""
-        if isinstance(params, (list, tuple)):
-            return None
-        json_serializer = self.driver_features.get("json_serializer")
-        return coerce_params_for_spanner(params, json_serializer=json_serializer)
 
     def begin(self) -> None:
         return None
@@ -428,7 +389,3 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
 _SPANNER_PROFILE = build_spanner_profile()
 register_driver_profile("spanner", _SPANNER_PROFILE)
-
-spanner_statement_config = build_statement_config_from_profile(
-    _SPANNER_PROFILE, statement_overrides={"dialect": "spanner"}
-)

@@ -9,13 +9,14 @@ from typing import TYPE_CHECKING, Any, cast
 import aiosqlite
 
 from sqlspec.adapters.aiosqlite.core import (
+    aiosqlite_statement_config,
     build_aiosqlite_profile,
     build_sqlite_insert_statement,
     format_sqlite_identifier,
     process_sqlite_result,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteAsyncDataDictionary
-from sqlspec.core import ArrowResult, build_statement_config_from_profile, get_cache_config, register_driver_profile
+from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -29,7 +30,6 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
@@ -417,7 +417,3 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 _AIOSQLITE_PROFILE = build_aiosqlite_profile()
 
 register_driver_profile("aiosqlite", _AIOSQLITE_PROFILE)
-
-aiosqlite_statement_config = build_statement_config_from_profile(
-    _AIOSQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
-)

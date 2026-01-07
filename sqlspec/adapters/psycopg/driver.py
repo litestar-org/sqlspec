@@ -14,19 +14,19 @@ from sqlspec.adapters.psycopg._typing import (
 from sqlspec.adapters.psycopg.core import (
     build_copy_from_command,
     build_psycopg_profile,
+    build_psycopg_statement_config,
     build_truncate_command,
     psycopg_pipeline_supported,
+    psycopg_statement_config,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.core import (
     SQL,
-    ParameterStyleConfig,
     SQLResult,
     StackOperation,
     StackResult,
     StatementConfig,
     StatementStack,
-    build_statement_config_from_profile,
     get_cache_config,
     is_copy_from_operation,
     is_copy_operation,
@@ -50,13 +50,9 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
 from sqlspec.utils.type_guards import has_sqlstate, is_readable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
@@ -382,7 +378,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             SQLResult with COPY operation results
         """
 
-        sql, _ = statement.compile()
+        sql, _ = self._get_compiled_sql(statement, statement.statement_config)
         operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
@@ -929,7 +925,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             SQLResult with COPY operation results
         """
 
-        sql, _ = statement.compile()
+        sql, _ = self._get_compiled_sql(statement, statement.statement_config)
         sql_upper = sql.upper()
         operation_type = statement.operation_type
         copy_data = statement.parameters
@@ -1244,26 +1240,3 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 _PSYCOPG_PROFILE = build_psycopg_profile()
 
 register_driver_profile("psycopg", _PSYCOPG_PROFILE)
-
-
-def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> "ParameterStyleConfig":
-    """Construct parameter configuration with shared JSON serializer support."""
-
-    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
-
-    updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[list] = build_json_list_converter(serializer)
-    updated_type_map[tuple] = build_json_tuple_converter(serializer)
-
-    return base_config.replace(type_coercion_map=updated_type_map)
-
-
-def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> "StatementConfig":
-    """Construct the psycopg statement configuration with optional JSON codecs."""
-
-    parameter_config = _create_psycopg_parameter_config(json_serializer)
-    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=json_serializer)
-    return base_config.replace(parameter_config=parameter_config)
-
-
-psycopg_statement_config = build_psycopg_statement_config()

@@ -13,6 +13,7 @@ from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
     build_psqlpy_insert_statement,
     build_psqlpy_profile,
+    build_psqlpy_statement_config,
     coerce_numeric_for_write,
     coerce_parameter_for_cast,
     coerce_records_for_execute_many,
@@ -20,21 +21,12 @@ from sqlspec.adapters.psqlpy.core import (
     format_table_identifier,
     normalize_scalar_parameter,
     parse_psqlpy_command_tag,
-    prepare_dict_parameter,
-    prepare_list_parameter,
-    prepare_tuple_parameter,
+    psqlpy_statement_config,
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
-from sqlspec.core import (
-    SQL,
-    ParameterStyleConfig,
-    StatementConfig,
-    build_statement_config_from_profile,
-    get_cache_config,
-    register_driver_profile,
-)
+from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -55,8 +47,6 @@ from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
     from sqlspec.core import ArrowResult
     from sqlspec.driver import ExecutionResult
@@ -593,23 +583,3 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 _PSQLPY_PROFILE = build_psqlpy_profile()
 
 register_driver_profile("psqlpy", _PSQLPY_PROFILE)
-
-
-def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> "ParameterStyleConfig":
-    base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=serializer).parameter_config
-
-    updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[dict] = prepare_dict_parameter
-    updated_type_map[list] = prepare_list_parameter
-    updated_type_map[tuple] = prepare_tuple_parameter
-
-    return base_config.replace(type_coercion_map=updated_type_map)
-
-
-def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> "StatementConfig":
-    parameter_config = _create_psqlpy_parameter_config(json_serializer)
-    base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=json_serializer)
-    return base_config.replace(parameter_config=parameter_config)
-
-
-psqlpy_statement_config = build_psqlpy_statement_config()

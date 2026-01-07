@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 import asyncpg
 
 from sqlspec.adapters.asyncpg.core import (
+    asyncpg_statement_config,
     build_asyncpg_profile,
+    build_asyncpg_statement_config,
     configure_asyncpg_parameter_serializers,
     parse_asyncpg_status,
 )
@@ -17,7 +19,6 @@ from sqlspec.core import (
     StackOperation,
     StackResult,
     StatementStack,
-    build_statement_config_from_profile,
     create_sql_result,
     get_cache_config,
     is_copy_from_operation,
@@ -41,12 +42,9 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPreparedStatement
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig
     from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
@@ -295,7 +293,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         execution_args = statement.statement_config.execution_args
         metadata: dict[str, Any] = dict(execution_args) if execution_args else {}
-        sql_text, _ = statement.compile()
+        sql_text, _ = self._get_compiled_sql(statement, statement.statement_config)
         sql_upper = sql_text.upper()
         copy_data = metadata.get("postgres_copy_data")
 
@@ -643,28 +641,3 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 _ASYNC_PG_PROFILE = build_asyncpg_profile()
 
 register_driver_profile("asyncpg", _ASYNC_PG_PROFILE)
-
-
-def build_asyncpg_statement_config(
-    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
-) -> "StatementConfig":
-    """Construct the AsyncPG statement configuration with optional JSON codecs."""
-
-    effective_serializer = json_serializer or to_json
-    effective_deserializer = json_deserializer or from_json
-
-    base_config = build_statement_config_from_profile(
-        _ASYNC_PG_PROFILE,
-        statement_overrides={"dialect": "postgres"},
-        json_serializer=effective_serializer,
-        json_deserializer=effective_deserializer,
-    )
-
-    parameter_config = configure_asyncpg_parameter_serializers(
-        base_config.parameter_config, effective_serializer, deserializer=effective_deserializer
-    )
-
-    return base_config.replace(parameter_config=parameter_config)
-
-
-asyncpg_statement_config = build_asyncpg_statement_config()

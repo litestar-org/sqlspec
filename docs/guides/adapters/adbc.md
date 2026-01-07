@@ -17,6 +17,11 @@ This guide provides specific instructions for the `adbc` adapter.
 - **JSON Strategy:** `helper` (shared serializers wrap dict/list/tuple values)
 - **Extras:** `type_coercion_overrides` ensure Arrow arrays map to Python lists; PostgreSQL dialects attach a NULL-handling AST transformer
 
+## Implementation Notes
+
+- Statement config helpers live in `sqlspec/adapters/adbc/core.py` (`get_adbc_statement_config` and related builders).
+- Driver detection helpers (URI normalization, driver aliases, parameter style detection) are centralized in `sqlspec/adapters/adbc/core.py` and used by `AdbcConfig`.
+
 ## Query Stack Support
 
 - Each ADBC backend falls back to SQLSpec's sequential stack executor. There is no driver-agnostic pipeline API today, so stacks simply reuse the same cursor management that individual `execute()` calls use, wrapped in a transaction when the backend supports it (e.g., PostgreSQL) and as independent statements when it does not (e.g., SQLite, DuckDB).

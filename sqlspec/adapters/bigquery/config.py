@@ -6,6 +6,7 @@ from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection
+from sqlspec.adapters.bigquery.core import apply_bigquery_driver_features
 from sqlspec.adapters.bigquery.driver import (
     BigQueryCursor,
     BigQueryDriver,
@@ -20,7 +21,6 @@ from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
 from sqlspec.utils.config_normalization import normalize_connection_config
-from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -196,12 +196,12 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         self.connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        user_connection_hook = processed_driver_features.pop("on_connection_create", None)
-        processed_driver_features.setdefault("enable_uuid_conversion", True)
-        serializer = processed_driver_features.setdefault("json_serializer", to_json)
+        normalized_driver_features = dict(driver_features) if driver_features else None
+        (processed_driver_features, serializer, user_connection_hook, connection_instance) = (
+            apply_bigquery_driver_features(normalized_driver_features)
+        )
 
-        self._connection_instance: BigQueryConnection | None = processed_driver_features.get("connection_instance")
+        self._connection_instance: BigQueryConnection | None = connection_instance
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()

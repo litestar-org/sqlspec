@@ -1,6 +1,5 @@
 """Core parameter data structures and utilities."""
 
-# noqa: ruff: FBT003
 from collections.abc import Callable, Collection, Generator, Iterable, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal

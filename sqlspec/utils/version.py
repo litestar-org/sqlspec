@@ -261,6 +261,15 @@ def parse_version(version_str: "str | None") -> MigrationVersion:
     raise ValueError(msg)
 
 
+def _try_parse_version(version_str: str) -> "MigrationVersion | None":
+    """Parse version string, returning None for invalid versions."""
+    try:
+        return parse_version(version_str)
+    except ValueError:
+        logger.warning("Skipping invalid migration version: %s", version_str)
+        return None
+
+
 def generate_timestamp_version() -> str:
     """Generate new timestamp version in UTC.
 
@@ -403,14 +412,6 @@ def generate_conversion_map(migrations: "list[tuple[str, Any]]") -> "dict[str, s
     """
     if not migrations:
         return {}
-
-    def _try_parse_version(version_str: str) -> "MigrationVersion | None":
-        """Parse version string, returning None for invalid versions."""
-        try:
-            return parse_version(version_str)
-        except ValueError:
-            logger.warning("Skipping invalid migration version: %s", version_str)
-            return None
 
     parsed_versions = [v for version_str, _path in migrations if (v := _try_parse_version(version_str)) is not None]
 

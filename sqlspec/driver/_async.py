@@ -1295,6 +1295,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 class AsyncDataDictionaryBase(DataDictionaryMixin):
     """Base class for asynchronous data dictionary implementations."""
 
+    __slots__ = ()
+
     @abstractmethod
     async def get_version(self, driver: "AsyncDriverAdapterBase") -> "VersionInfo | None":
         """Get database version information.

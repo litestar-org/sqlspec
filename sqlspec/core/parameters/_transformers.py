@@ -26,27 +26,146 @@ __all__ = (
 _AST_TRANSFORMER_VALIDATOR: "ParameterValidator" = ParameterValidator()
 
 
+class _NullPruningTransform:
+    __slots__ = ("_dialect", "_validator")
+
+    def __init__(self, dialect: str, validator: "ParameterValidator | None") -> None:
+        self._dialect = dialect
+        self._validator = validator
+
+    def __call__(self, expression: Any, parameters: Any) -> "tuple[Any, Any]":
+        return replace_null_parameters_with_literals(
+            expression, parameters, dialect=self._dialect, validator=self._validator
+        )
+
+
+class _LiteralInliningTransform:
+    __slots__ = ("_json_serializer",)
+
+    def __init__(self, json_serializer: "Callable[[Any], str]") -> None:
+        self._json_serializer = json_serializer
+
+    def __call__(self, expression: Any, parameters: Any) -> "tuple[Any, Any]":
+        literal_expression = replace_placeholders_with_literals(
+            expression, parameters, json_serializer=self._json_serializer
+        )
+        return literal_expression, parameters
+
+
+class _NullPlaceholderTransformer:
+    __slots__ = ("_null_positions", "_qmark_position", "_sorted_null_positions")
+
+    def __init__(self, null_positions: "set[int]", sorted_null_positions: "list[int]") -> None:
+        self._null_positions = null_positions
+        self._sorted_null_positions = sorted_null_positions
+        self._qmark_position = 0
+
+    def __call__(self, node: Any) -> Any:
+        if isinstance(node, _exp.Placeholder) and node.this is None:
+            current_position = self._qmark_position
+            self._qmark_position += 1
+            if current_position in self._null_positions:
+                return _exp.Null()
+            return node
+
+        if isinstance(node, _exp.Placeholder) and node.this is not None:
+            placeholder_text = str(node.this)
+            normalized_text = placeholder_text.lstrip("$")
+            if normalized_text.isdigit():
+                param_index = int(normalized_text) - 1
+                if param_index in self._null_positions:
+                    return _exp.Null()
+                shift = bisect.bisect_left(self._sorted_null_positions, param_index)
+                new_param_num = param_index - shift + 1
+                return _exp.Placeholder(this=f"${new_param_num}")
+            return node
+
+        if isinstance(node, _exp.Parameter) and node.this is not None:
+            parameter_text = str(node.this)
+            if parameter_text.isdigit():
+                param_index = int(parameter_text) - 1
+                if param_index in self._null_positions:
+                    return _exp.Null()
+                shift = bisect.bisect_left(self._sorted_null_positions, param_index)
+                new_param_num = param_index - shift + 1
+                return _exp.Parameter(this=str(new_param_num))
+            return node
+
+        return node
+
+
+class _PlaceholderLiteralTransformer:
+    __slots__ = ("_json_serializer", "_parameters", "_placeholder_index")
+
+    def __init__(self, parameters: Any, json_serializer: "Callable[[Any], str]") -> None:
+        self._parameters = parameters
+        self._json_serializer = json_serializer
+        self._placeholder_index = 0
+
+    def _resolve_mapping_value(self, param_name: str, payload: "Mapping[str, Any]") -> Any | None:
+        candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
+        for candidate in candidate_names:
+            if candidate in payload:
+                return get_value_attribute(payload[candidate])
+        normalized = param_name.lstrip("@:$")
+        if normalized in payload:
+            return get_value_attribute(payload[normalized])
+        return None
+
+    def __call__(self, node: Any) -> Any:
+        if (
+            isinstance(node, _exp.Placeholder)
+            and isinstance(self._parameters, Sequence)
+            and not isinstance(self._parameters, (str, bytes, bytearray))
+        ):
+            current_index = self._placeholder_index
+            self._placeholder_index += 1
+            if current_index < len(self._parameters):
+                literal_value = get_value_attribute(self._parameters[current_index])
+                return _create_literal_expression(literal_value, self._json_serializer)
+            return node
+
+        if isinstance(node, _exp.Parameter):
+            param_name = str(node.this) if node.this is not None else ""
+
+            if isinstance(self._parameters, Mapping):
+                resolved_value = self._resolve_mapping_value(param_name, self._parameters)
+                if resolved_value is not None:
+                    return _create_literal_expression(resolved_value, self._json_serializer)
+                return node
+
+            if isinstance(self._parameters, Sequence) and not isinstance(self._parameters, (str, bytes, bytearray)):
+                name = param_name
+                try:
+                    if name.startswith("param_"):
+                        index_value = int(name[6:])
+                        if 0 <= index_value < len(self._parameters):
+                            literal_value = get_value_attribute(self._parameters[index_value])
+                            return _create_literal_expression(literal_value, self._json_serializer)
+                    if name.isdigit():
+                        index_value = int(name)
+                        if 0 <= index_value < len(self._parameters):
+                            literal_value = get_value_attribute(self._parameters[index_value])
+                            return _create_literal_expression(literal_value, self._json_serializer)
+                except (ValueError, AttributeError):
+                    return node
+            return node
+
+        return node
+
+
 def build_null_pruning_transform(
     *, dialect: str = "postgres", validator: "ParameterValidator | None" = None
 ) -> "Callable[[Any, Any], tuple[Any, Any]]":
     """Return a callable that prunes NULL placeholders from an expression."""
-
-    def transform(expression: Any, parameters: Any) -> "tuple[Any, Any]":
-        return replace_null_parameters_with_literals(expression, parameters, dialect=dialect, validator=validator)
-
-    return transform
+    return _NullPruningTransform(dialect, validator)
 
 
 def build_literal_inlining_transform(
     *, json_serializer: "Callable[[Any], str]"
 ) -> "Callable[[Any, Any], tuple[Any, Any]]":
     """Return a callable that replaces placeholders with SQL literals."""
-
-    def transform(expression: Any, parameters: Any) -> "tuple[Any, Any]":
-        literal_expression = replace_placeholders_with_literals(expression, parameters, json_serializer=json_serializer)
-        return literal_expression, parameters
-
-    return transform
+    return _LiteralInliningTransform(json_serializer)
 
 
 def replace_null_parameters_with_literals(
@@ -80,44 +199,8 @@ def replace_null_parameters_with_literals(
 
     sorted_null_positions = sorted(null_positions)
 
-    qmark_position = 0
-
-    def transform_node(node: Any) -> Any:
-        nonlocal qmark_position
-
-        if isinstance(node, _exp.Placeholder) and node.this is None:
-            current_position = qmark_position
-            qmark_position += 1
-            if current_position in null_positions:
-                return _exp.Null()
-            return node
-
-        if isinstance(node, _exp.Placeholder) and node.this is not None:
-            placeholder_text = str(node.this)
-            normalized_text = placeholder_text.lstrip("$")
-            if normalized_text.isdigit():
-                param_index = int(normalized_text) - 1
-                if param_index in null_positions:
-                    return _exp.Null()
-                shift = bisect.bisect_left(sorted_null_positions, param_index)
-                new_param_num = param_index - shift + 1
-                return _exp.Placeholder(this=f"${new_param_num}")
-            return node
-
-        if isinstance(node, _exp.Parameter) and node.this is not None:
-            parameter_text = str(node.this)
-            if parameter_text.isdigit():
-                param_index = int(parameter_text) - 1
-                if param_index in null_positions:
-                    return _exp.Null()
-                shift = bisect.bisect_left(sorted_null_positions, param_index)
-                new_param_num = param_index - shift + 1
-                return _exp.Parameter(this=str(new_param_num))
-            return node
-
-        return node
-
-    transformed_expression = expression.transform(transform_node)
+    transformer = _NullPlaceholderTransformer(null_positions, sorted_null_positions)
+    transformed_expression = expression.transform(transformer)
 
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
         cleaned_parameters = [value for index, value in enumerate(parameters) if index not in null_positions]
@@ -167,57 +250,5 @@ def replace_placeholders_with_literals(
     if not parameters:
         return expression
 
-    placeholder_counter = {"index": 0}
-
-    def resolve_mapping_value(param_name: str, payload: Mapping[str, Any]) -> Any | None:
-        candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
-        for candidate in candidate_names:
-            if candidate in payload:
-                return get_value_attribute(payload[candidate])
-        normalized = param_name.lstrip("@:$")
-        if normalized in payload:
-            return get_value_attribute(payload[normalized])
-        return None
-
-    def transform(node: Any) -> Any:
-        if (
-            isinstance(node, _exp.Placeholder)
-            and isinstance(parameters, Sequence)
-            and not isinstance(parameters, (str, bytes, bytearray))
-        ):
-            current_index = placeholder_counter["index"]
-            placeholder_counter["index"] += 1
-            if current_index < len(parameters):
-                literal_value = get_value_attribute(parameters[current_index])
-                return _create_literal_expression(literal_value, json_serializer)
-            return node
-
-        if isinstance(node, _exp.Parameter):
-            param_name = str(node.this) if node.this is not None else ""
-
-            if isinstance(parameters, Mapping):
-                resolved_value = resolve_mapping_value(param_name, parameters)
-                if resolved_value is not None:
-                    return _create_literal_expression(resolved_value, json_serializer)
-                return node
-
-            if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
-                name = param_name
-                try:
-                    if name.startswith("param_"):
-                        index_value = int(name[6:])
-                        if 0 <= index_value < len(parameters):
-                            literal_value = get_value_attribute(parameters[index_value])
-                            return _create_literal_expression(literal_value, json_serializer)
-                    if name.isdigit():
-                        index_value = int(name)
-                        if 0 <= index_value < len(parameters):
-                            literal_value = get_value_attribute(parameters[index_value])
-                            return _create_literal_expression(literal_value, json_serializer)
-                except (ValueError, AttributeError):
-                    return node
-            return node
-
-        return node
-
-    return expression.transform(transform)
+    transformer = _PlaceholderLiteralTransformer(parameters, json_serializer)
+    return expression.transform(transformer)

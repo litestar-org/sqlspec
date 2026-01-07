@@ -107,7 +107,7 @@ def _coerce_parameters_payload(
 class ParameterProcessor:
     """Parameter processing engine coordinating conversion phases."""
 
-    __slots__ = ("_cache", "_cache_max_size", "_converter", "_validator")
+    __slots__ = ("_cache", "_cache_hits", "_cache_max_size", "_cache_misses", "_converter", "_validator")
 
     DEFAULT_CACHE_SIZE = 1000
 
@@ -123,6 +123,8 @@ class ParameterProcessor:
         if cache_max_size is None:
             cache_max_size = self.DEFAULT_CACHE_SIZE
         self._cache_max_size = max(cache_max_size, 0)
+        self._cache_hits = 0
+        self._cache_misses = 0
         if converter is None:
             if validator is None:
                 validator_cache = validator_cache_max_size
@@ -140,6 +142,35 @@ class ParameterProcessor:
                 self._converter.validator = validator
             if validator_cache_max_size is not None and isinstance(self._validator, ParameterValidator):
                 self._validator.set_cache_max_size(validator_cache_max_size)
+
+    def clear_cache(self) -> None:
+        """Clear cached processing results and reset stats."""
+        self._cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+        if isinstance(self._validator, ParameterValidator):
+            self._validator.clear_cache()
+
+    def cache_stats(self) -> "dict[str, int]":
+        """Return cache statistics for parameter processing."""
+        stats = {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "size": len(self._cache),
+            "max_size": self._cache_max_size,
+        }
+        if isinstance(self._validator, ParameterValidator):
+            validator_stats = self._validator.cache_stats()
+            stats["validator_hits"] = validator_stats["hits"]
+            stats["validator_misses"] = validator_stats["misses"]
+            stats["validator_size"] = validator_stats["size"]
+            stats["validator_max_size"] = validator_stats["max_size"]
+        else:
+            stats["validator_hits"] = 0
+            stats["validator_misses"] = 0
+            stats["validator_size"] = 0
+            stats["validator_max_size"] = 0
+        return stats
 
     def _compile_static_script(
         self, sql: str, parameters: Any, config: "ParameterStyleConfig", is_many: bool, cache_key: str
@@ -227,11 +258,14 @@ class ParameterProcessor:
         is_many: bool,
         dialect: str | None,
         wrap_types: bool,
+        normalize_for_parsing: bool,
     ) -> str:
         param_fingerprint = _fingerprint_parameters(parameters)
         dialect_marker = dialect or "default"
         default_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
-        return f"{sql}:{param_fingerprint}:{default_style}:{is_many}:{dialect_marker}:{wrap_types}"
+        return (
+            f"{sql}:{param_fingerprint}:{default_style}:{is_many}:{dialect_marker}:{wrap_types}:{normalize_for_parsing}"
+        )
 
     def process(
         self,
@@ -242,12 +276,63 @@ class ParameterProcessor:
         is_many: bool = False,
         wrap_types: bool = True,
     ) -> "ParameterProcessingResult":
-        cache_key = self._make_processor_cache_key(sql, parameters, config, is_many, dialect, wrap_types)
+        return self._process_internal(
+            sql, parameters, config, dialect=dialect, is_many=is_many, wrap_types=wrap_types, normalize_for_parsing=True
+        )
+
+    def process_for_execution(
+        self,
+        sql: str,
+        parameters: Any,
+        config: "ParameterStyleConfig",
+        dialect: str | None = None,
+        is_many: bool = False,
+        wrap_types: bool = True,
+    ) -> "ParameterProcessingResult":
+        """Process parameters for execution without parse normalization.
+
+        Args:
+            sql: SQL string to process.
+            parameters: Parameter payload.
+            config: Parameter style configuration.
+            dialect: Optional SQL dialect.
+            is_many: Whether this is execute_many.
+            wrap_types: Whether to wrap parameters with type metadata.
+
+        Returns:
+            ParameterProcessingResult with execution SQL and parameters.
+        """
+        return self._process_internal(
+            sql,
+            parameters,
+            config,
+            dialect=dialect,
+            is_many=is_many,
+            wrap_types=wrap_types,
+            normalize_for_parsing=False,
+        )
+
+    def _process_internal(
+        self,
+        sql: str,
+        parameters: Any,
+        config: "ParameterStyleConfig",
+        *,
+        dialect: str | None,
+        is_many: bool,
+        wrap_types: bool,
+        normalize_for_parsing: bool,
+    ) -> "ParameterProcessingResult":
+        cache_key = self._make_processor_cache_key(
+            sql, parameters, config, is_many, dialect, wrap_types, normalize_for_parsing
+        )
         if self._cache_max_size > 0:
             cached_result = self._cache.get(cache_key)
             if cached_result is not None:
                 self._cache.move_to_end(cache_key)
+                self._cache_hits += 1
                 return cached_result
+            self._cache_misses += 1
 
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
@@ -263,7 +348,7 @@ class ParameterProcessor:
             and not config.output_transformer
             and not requires_mapping
         ):
-            normalized_sql = self._normalize_sql_for_parsing(sql, param_info, dialect)
+            normalized_sql = self._normalize_sql_for_parsing(sql, param_info, dialect) if normalize_for_parsing else sql
             result = ParameterProcessingResult(
                 sql, parameters, ParameterProfile(param_info), sqlglot_sql=normalized_sql
             )
@@ -292,7 +377,11 @@ class ParameterProcessor:
 
         final_param_info = self._validator.extract_parameters(processed_sql)
         final_profile = ParameterProfile(final_param_info)
-        sqlglot_sql = self._normalize_sql_for_parsing(processed_sql, final_param_info, dialect)
+        sqlglot_sql = (
+            self._normalize_sql_for_parsing(processed_sql, final_param_info, dialect)
+            if normalize_for_parsing
+            else processed_sql
+        )
         result = ParameterProcessingResult(processed_sql, processed_parameters, final_profile, sqlglot_sql=sqlglot_sql)
 
         return self._store_cached_result(cache_key, result)

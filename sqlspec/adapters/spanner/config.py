@@ -7,12 +7,12 @@ from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import SpannerConnection
+from sqlspec.adapters.spanner.core import apply_spanner_driver_features
 from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver, spanner_statement_config
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
-from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
@@ -190,10 +190,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self.connection_config.setdefault("max_sessions", 10)
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
-        features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        features.setdefault("enable_uuid_conversion", True)
-        features.setdefault("json_serializer", to_json)
-        features.setdefault("json_deserializer", from_json)
+        normalized_driver_features = dict(driver_features) if driver_features else None
+        features = apply_spanner_driver_features(normalized_driver_features)
 
         base_statement_config = statement_config or spanner_statement_config
 

@@ -10,9 +10,17 @@ import asyncmy.errors  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
-from sqlspec.adapters.asyncmy.core import build_asyncmy_insert_statement, build_asyncmy_profile, format_mysql_identifier
+from sqlspec.adapters.asyncmy.core import (
+    asyncmy_statement_config,
+    build_asyncmy_insert_statement,
+    build_asyncmy_profile,
+    build_asyncmy_statement_config,
+    deserialize_asyncmy_json_rows,
+    detect_asyncmy_json_columns,
+    format_mysql_identifier,
+)
 from sqlspec.adapters.asyncmy.data_dictionary import MySQLAsyncDataDictionary
-from sqlspec.core import ArrowResult, build_statement_config_from_profile, get_cache_config, register_driver_profile
+from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -27,19 +35,9 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_guards import (
-    has_cursor_metadata,
-    has_lastrowid,
-    has_rowcount,
-    has_sqlstate,
-    has_type_code,
-    supports_json_type,
-)
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, supports_json_type
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -279,80 +277,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         return AsyncmyExceptionHandler()
 
-    def _detect_json_columns(self, cursor: Any) -> "list[int]":
-        """Identify JSON column indexes from cursor metadata.
-
-        Args:
-            cursor: Database cursor with description metadata available.
-
-        Returns:
-            List of index positions where JSON values are present.
-        """
-
-        if not has_cursor_metadata(cursor):
-            return []
-        description = cursor.description
-        if not description or not ASYNCMY_JSON_TYPE_CODES:
-            return []
-
-        json_indexes: list[int] = []
-        for index, column in enumerate(description):
-            if has_type_code(column):
-                type_code = column.type_code
-            elif isinstance(column, (tuple, list)) and len(column) > 1:
-                type_code = column[1]
-            else:
-                type_code = None
-            if type_code in ASYNCMY_JSON_TYPE_CODES:
-                json_indexes.append(index)
-        return json_indexes
-
-    def _deserialize_json_columns(
-        self, cursor: Any, column_names: "list[str]", rows: "list[dict[str, Any]]"
-    ) -> "list[dict[str, Any]]":
-        """Apply configured JSON deserializer to result rows.
-
-        Args:
-            cursor: Database cursor used for the current result set.
-            column_names: Ordered column names from the cursor description.
-            rows: Result rows represented as dictionaries.
-
-        Returns:
-            Rows with JSON columns decoded when a deserializer is configured.
-        """
-
-        if not rows or not column_names:
-            return rows
-
-        deserializer = self.driver_features.get("json_deserializer")
-        if deserializer is None:
-            return rows
-
-        json_indexes = self._detect_json_columns(cursor)
-        if not json_indexes:
-            return rows
-
-        target_columns = [column_names[index] for index in json_indexes if index < len(column_names)]
-        if not target_columns:
-            return rows
-
-        for row in rows:
-            for column in target_columns:
-                if column not in row:
-                    continue
-                raw_value = row[column]
-                if raw_value is None:
-                    continue
-                if isinstance(raw_value, bytearray):
-                    raw_value = bytes(raw_value)
-                if not isinstance(raw_value, (str, bytes)):
-                    continue
-                try:
-                    row[column] = deserializer(raw_value)
-                except Exception:
-                    logger.debug("Failed to deserialize JSON column %s", column, exc_info=True)
-        return rows
-
     async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
@@ -435,7 +359,11 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             else:
                 rows = []
 
-            rows = self._deserialize_json_columns(cursor, column_names, rows)
+            deserializer = self.driver_features.get("json_deserializer")
+            if deserializer is not None:
+                json_indexes = detect_asyncmy_json_columns(cursor, ASYNCMY_JSON_TYPE_CODES)
+                if json_indexes:
+                    rows = deserialize_asyncmy_json_rows(column_names, rows, json_indexes, deserializer, logger=logger)
 
             return self.create_execution_result(
                 cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
@@ -582,21 +510,3 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 _ASYNCMY_PROFILE = build_asyncmy_profile()
 
 register_driver_profile("asyncmy", _ASYNCMY_PROFILE)
-
-
-def build_asyncmy_statement_config(
-    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
-) -> "StatementConfig":
-    """Construct the AsyncMy statement configuration with optional JSON codecs."""
-
-    serializer = json_serializer or to_json
-    deserializer = json_deserializer or from_json
-    return build_statement_config_from_profile(
-        _ASYNCMY_PROFILE,
-        statement_overrides={"dialect": "mysql"},
-        json_serializer=serializer,
-        json_deserializer=deserializer,
-    )
-
-
-asyncmy_statement_config = build_asyncmy_statement_config()

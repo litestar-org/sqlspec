@@ -27,6 +27,32 @@ logger = get_logger("events.psqlpy")
 __all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
 
 
+class _PsqlpyNotifyCapture:
+    __slots__ = ("_channel", "_event", "payload")
+
+    def __init__(self, channel: str, event: asyncio.Event) -> None:
+        self._channel = channel
+        self._event = event
+        self.payload: str | None = None
+
+    async def __call__(self, _connection: Any, payload: str, notified_channel: str, _process_id: int) -> None:
+        if notified_channel == self._channel and self.payload is None:
+            self.payload = payload
+            self._event.set()
+
+
+class _PsqlpyNotifySignal:
+    __slots__ = ("_channel", "_event")
+
+    def __init__(self, channel: str, event: asyncio.Event) -> None:
+        self._channel = channel
+        self._event = event
+
+    async def __call__(self, _connection: Any, _payload: str, notified_channel: str, _process_id: int) -> None:
+        if notified_channel == self._channel:
+            self._event.set()
+
+
 class PsqlpyEventsBackend:
     """Native LISTEN/NOTIFY backend for psqlpy adapters.
 
@@ -61,16 +87,9 @@ class PsqlpyEventsBackend:
 
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         listener = await self._ensure_listener(channel)
-        received_payload: str | None = None
         event = asyncio.Event()
-
-        async def _callback(_connection: Any, payload: str, notified_channel: str, _process_id: int) -> None:
-            nonlocal received_payload
-            if notified_channel == channel and received_payload is None:
-                received_payload = payload
-                event.set()
-
-        await listener.add_callback(channel=channel, callback=_callback)
+        callback = _PsqlpyNotifyCapture(channel, event)
+        await listener.add_callback(channel=channel, callback=callback)
 
         if not self._listener_started:
             listener.listen()
@@ -81,7 +100,7 @@ class PsqlpyEventsBackend:
             await asyncio.wait_for(event.wait(), timeout=poll_interval)
 
         await listener.clear_channel_callbacks(channel=channel)
-        return decode_notify_payload(channel, received_payload) if received_payload is not None else None
+        return decode_notify_payload(channel, callback.payload) if callback.payload is not None else None
 
     async def ack(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
@@ -140,12 +159,8 @@ class PsqlpyHybridEventsBackend:
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         listener = await self._ensure_listener(channel)
         event = asyncio.Event()
-
-        async def _callback(_connection: Any, _payload: str, notified_channel: str, _process_id: int) -> None:
-            if notified_channel == channel:
-                event.set()
-
-        await listener.add_callback(channel=channel, callback=_callback)
+        callback = _PsqlpyNotifySignal(channel, event)
+        await listener.add_callback(channel=channel, callback=callback)
 
         if not self._listener_started:
             listener.listen()

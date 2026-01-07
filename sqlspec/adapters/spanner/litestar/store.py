@@ -11,10 +11,20 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from google.cloud.spanner_v1.database import Database
+    from collections.abc import Callable
+    from typing import Protocol
+
     from google.cloud.spanner_v1.transaction import Transaction
 
     from sqlspec.adapters.spanner.config import SpannerSyncConfig
+
+    class _DatabaseProtocol(Protocol):
+        def run_in_transaction(self, func: "Callable[[Transaction], Any]") -> Any: ...
+
+        def update_ddl(self, ddl_statements: "list[str]") -> Any: ...
+
+        def list_tables(self) -> Any: ...
+
 
 logger = get_logger("adapters.spanner.litestar.store")
 
@@ -73,8 +83,8 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         self._table_options: str | None = litestar_cfg.get("table_options")
         self._index_options: str | None = litestar_cfg.get("index_options")
 
-    def _database(self) -> "Database":
-        return self._config.get_database()
+    def _database(self) -> "_DatabaseProtocol":
+        return cast("_DatabaseProtocol", self._config.get_database())
 
     def _datetime_to_timestamp(self, dt: "datetime | None") -> "datetime | None":
         if dt is None:
@@ -150,7 +160,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
                 update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
             params = self._build_params(key, new_expires)
             types = self._get_param_types(expires_at=True)
-            self._database().run_in_transaction(_SpannerExecuteUpdateJob(update_sql, params, types))  # type: ignore[no-untyped-call]
+            self._database().run_in_transaction(_SpannerExecuteUpdateJob(update_sql, params, types))
 
         return spanner_to_bytes(data)
 
@@ -176,7 +186,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         INSERT {self._table_name} (session_id, data, expires_at, created_at, updated_at)
         VALUES (@session_id, @data, @expires_at, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())
         """
-        self._database().run_in_transaction(_SpannerUpsertJob(update_sql, insert_sql, params, types))  # type: ignore[no-untyped-call]
+        self._database().run_in_transaction(_SpannerUpsertJob(update_sql, insert_sql, params, types))
 
     async def delete(self, key: str) -> None:
         await async_(self._delete)(key)
@@ -187,14 +197,14 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         params = {"session_id": key}
         types = self._get_param_types(session_id=True)
-        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql, params, types))  # type: ignore[no-untyped-call]
+        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql, params, types))
 
     async def delete_all(self) -> None:
         await async_(self._delete_all)()
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE TRUE"
-        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql))  # type: ignore[no-untyped-call]
+        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql))
 
     async def exists(self, key: str) -> bool:
         return await async_(self._exists)(key)
@@ -238,7 +248,8 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         DELETE FROM {self._table_name}
         WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP()
         """
-        return self._database().run_in_transaction(_SpannerExecuteUpdateCountJob(sql))  # type: ignore[no-untyped-call]
+        result = self._database().run_in_transaction(_SpannerExecuteUpdateCountJob(sql))
+        return cast("int", result)
 
     async def create_table(self) -> None:
         await async_(self._create_table)()

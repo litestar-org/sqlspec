@@ -17,6 +17,11 @@ This guide provides specific instructions and best practices for working with th
 -   **JSON Strategy:** `helper` (shared JSON serializer wraps dict/list/tuple values before psycopg adapters run)
 -   **Extras:** None (adapter-specific list/tuple converters remain in driver to preserve array semantics)
 
+## Implementation Notes
+
+-   Statement config helpers live in `sqlspec/adapters/psycopg/core.py` (builder + `psycopg_statement_config`).
+-   `PsycopgAsyncConfig` and `PsycopgSyncConfig` apply `apply_psycopg_driver_features(...)` before creating sessions.
+
 ## Best Practices
 
 -   **General Purpose:** `psycopg` is a robust, general-purpose PostgreSQL adapter. It has excellent type handling and is a good choice for a wide variety of applications.

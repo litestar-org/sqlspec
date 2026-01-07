@@ -7,17 +7,23 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle
+from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
+
+    from sqlspec.core import ParameterStyleConfig
 
 __all__ = (
+    "apply_psqlpy_driver_features",
     "build_psqlpy_insert_statement",
+    "build_psqlpy_parameter_config",
     "build_psqlpy_profile",
+    "build_psqlpy_statement_config",
     "coerce_numeric_for_write",
     "coerce_parameter_for_cast",
     "coerce_records_for_execute_many",
@@ -28,6 +34,7 @@ __all__ = (
     "prepare_dict_parameter",
     "prepare_list_parameter",
     "prepare_tuple_parameter",
+    "psqlpy_statement_config",
     "split_schema_and_table",
 )
 
@@ -141,6 +148,75 @@ def prepare_list_parameter(value: "list[Any]") -> "list[Any]":
 
 def prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
     return tuple(_DECIMAL_NORMALIZER(item) for item in value)
+
+
+def build_psqlpy_profile() -> "DriverParameterProfile":
+    """Create the psqlpy driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="Psqlpy",
+        default_style=ParameterStyle.NUMERIC,
+        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.NUMERIC,
+        supported_execution_styles={ParameterStyle.NUMERIC},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={decimal.Decimal: float},
+        default_dialect="postgres",
+    )
+
+
+def build_psqlpy_parameter_config(
+    profile: "DriverParameterProfile", serializer: "Callable[[Any], str]"
+) -> "ParameterStyleConfig":
+    """Construct parameter configuration for psqlpy.
+
+    Args:
+        profile: Driver parameter profile to extend.
+        serializer: JSON serializer for parameter coercion.
+
+    Returns:
+        ParameterStyleConfig with updated type coercions.
+    """
+
+    base_config = build_statement_config_from_profile(profile, json_serializer=serializer).parameter_config
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[dict] = prepare_dict_parameter
+    updated_type_map[list] = prepare_list_parameter
+    updated_type_map[tuple] = prepare_tuple_parameter
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
+    """Construct the psqlpy statement configuration with optional JSON codecs."""
+    serializer = json_serializer or to_json
+    parameter_config = build_psqlpy_parameter_config(build_psqlpy_profile(), serializer)
+    base_config = build_statement_config_from_profile(build_psqlpy_profile(), json_serializer=serializer)
+    return base_config.replace(parameter_config=parameter_config)
+
+
+psqlpy_statement_config = build_psqlpy_statement_config()
+
+
+def apply_psqlpy_driver_features(
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
+    """Apply psqlpy driver feature defaults to statement config."""
+    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    serializer = processed_driver_features.get("json_serializer", to_json)
+    processed_driver_features.setdefault("json_serializer", serializer)
+    processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+
+    parameter_config = build_psqlpy_parameter_config(build_psqlpy_profile(), serializer)
+    statement_config = statement_config.replace(parameter_config=parameter_config)
+
+    return statement_config, processed_driver_features
 
 
 def normalize_scalar_parameter(value: Any) -> Any:
@@ -260,23 +336,3 @@ def coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[l
         else:
             formatted_records.append([coerced])
     return formatted_records
-
-
-def build_psqlpy_profile() -> "DriverParameterProfile":
-    """Create the psqlpy driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="Psqlpy",
-        default_style=ParameterStyle.NUMERIC,
-        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
-        default_execution_style=ParameterStyle.NUMERIC,
-        supported_execution_styles={ParameterStyle.NUMERIC},
-        has_native_list_expansion=False,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={decimal.Decimal: float},
-        default_dialect="postgres",
-    )

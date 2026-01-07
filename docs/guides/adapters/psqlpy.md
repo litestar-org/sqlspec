@@ -18,6 +18,11 @@ This guide provides specific instructions for the `psqlpy` adapter for PostgreSQ
 -   **JSON Strategy:** `helper` (shared JSON serializer applied before Rust-side codecs)
 -   **Extras:** Decimal writes coerce through `_decimal_to_float` to match Rust numeric expectations
 
+## Implementation Notes
+
+-   Statement config helpers live in `sqlspec/adapters/psqlpy/core.py` (builder + `psqlpy_statement_config`).
+-   `PsqlpyConfig` applies `apply_psqlpy_driver_features(...)` before creating sessions.
+
 ## Architecture
 
 Psqlpy handles type conversion differently than other PostgreSQL drivers:

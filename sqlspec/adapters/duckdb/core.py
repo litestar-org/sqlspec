@@ -10,7 +10,7 @@ from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
 
 __all__ = (
@@ -30,10 +30,7 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def coerce_duckdb_rows(
-    fetched_data: "list[Any]",
-    column_names: "list[str]",
-) -> "list[dict[str, Any]] | list[Any]":
+def coerce_duckdb_rows(fetched_data: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]] | list[Any]":
     """Convert row tuples into dictionaries keyed by column names.
 
     Args:
@@ -74,7 +71,7 @@ def build_duckdb_profile() -> "DriverParameterProfile":
 
 
 def apply_duckdb_driver_features(
-    statement_config: "StatementConfig", driver_features: "dict[str, Any] | None"
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "StatementConfig":
     """Apply DuckDB-specific driver features to statement configuration."""
     if not driver_features:

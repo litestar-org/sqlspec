@@ -17,6 +17,11 @@ This guide covers `sqlite3` (sync) and `aiosqlite` (async).
 - **JSON Strategy:** `helper` for both drivers (shared serializer handles dict/list/tuple parameters)
 - **Extras:** None (profiles apply ISO formatting for datetime/date and convert Decimal to string)
 
+## Implementation Notes
+
+- Statement config helpers for SQLite live in `sqlspec/adapters/sqlite/core.py` (builder + `sqlite_statement_config`).
+- `SqliteConfig` applies `apply_sqlite_driver_features(...)` before creating sessions.
+
 ## Query Stack Support
 
 - Neither `sqlite3` nor `aiosqlite` exposes a native batching primitive, so `StatementStack` reuses the base sequential executor. When `continue_on_error=False`, SQLSpec opens a transaction (if one is not already active) so the full stack succeeds or fails atomically; when `continue_on_error=True`, each statement commits immediately to match SQLite’s autocommit semantics.

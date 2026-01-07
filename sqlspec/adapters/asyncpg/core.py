@@ -1,21 +1,35 @@
 """AsyncPG adapter compiled helpers."""
 
 import datetime
+import importlib
 import re
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle
-from sqlspec.utils.serializers import from_json
+from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from sqlspec.core import ParameterStyleConfig
 
-__all__ = ("build_asyncpg_profile", "configure_asyncpg_parameter_serializers", "parse_asyncpg_status")
+__all__ = (
+    "apply_asyncpg_driver_features",
+    "asyncpg_statement_config",
+    "build_asyncpg_profile",
+    "build_asyncpg_statement_config",
+    "configure_asyncpg_parameter_serializers",
+    "parse_asyncpg_status",
+    "register_asyncpg_json_codecs",
+    "register_asyncpg_pgvector_support",
+)
 
 ASYNC_PG_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 EXPECTED_REGEX_GROUPS = 3
+
+logger = get_logger("adapters.asyncpg.core")
 
 
 def _convert_datetime_param(value: Any) -> Any:
@@ -82,6 +96,76 @@ def configure_asyncpg_parameter_serializers(
 
     effective_deserializer = deserializer or parameter_config.json_deserializer or from_json
     return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
+
+
+def build_asyncpg_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> "StatementConfig":
+    """Construct the AsyncPG statement configuration with optional JSON codecs."""
+
+    effective_serializer = json_serializer or to_json
+    effective_deserializer = json_deserializer or from_json
+
+    base_config = build_statement_config_from_profile(
+        build_asyncpg_profile(),
+        statement_overrides={"dialect": "postgres"},
+        json_serializer=effective_serializer,
+        json_deserializer=effective_deserializer,
+    )
+
+    parameter_config = configure_asyncpg_parameter_serializers(
+        base_config.parameter_config, effective_serializer, deserializer=effective_deserializer
+    )
+
+    return base_config.replace(parameter_config=parameter_config)
+
+
+asyncpg_statement_config = build_asyncpg_statement_config()
+
+
+async def register_asyncpg_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
+    """Register JSON type codecs on asyncpg connection."""
+    try:
+        await connection.set_type_codec("json", encoder=encoder, decoder=decoder, schema="pg_catalog")
+        await connection.set_type_codec("jsonb", encoder=encoder, decoder=decoder, schema="pg_catalog")
+        logger.debug("Registered JSON type codecs on asyncpg connection")
+    except Exception:
+        logger.exception("Failed to register JSON type codecs")
+
+
+async def register_asyncpg_pgvector_support(connection: Any) -> None:
+    """Register pgvector extension support on asyncpg connection."""
+    if not PGVECTOR_INSTALLED:
+        logger.debug("pgvector not installed - skipping vector type support")
+        return
+
+    try:
+        pgvector_asyncpg = importlib.import_module("pgvector.asyncpg")
+        await pgvector_asyncpg.register_vector(connection)
+        logger.debug("Registered pgvector support on asyncpg connection")
+    except Exception:
+        logger.exception("Failed to register pgvector support")
+
+
+def apply_asyncpg_driver_features(
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
+    """Apply AsyncPG driver feature defaults to statement config."""
+    processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+
+    serializer = processed_features.setdefault("json_serializer", to_json)
+    deserializer = processed_features.setdefault("json_deserializer", from_json)
+    processed_features.setdefault("enable_json_codecs", True)
+    processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+    processed_features.setdefault("enable_cloud_sql", False)
+    processed_features.setdefault("enable_alloydb", False)
+
+    parameter_config = configure_asyncpg_parameter_serializers(
+        statement_config.parameter_config, serializer, deserializer=deserializer
+    )
+    statement_config = statement_config.replace(parameter_config=parameter_config)
+
+    return statement_config, processed_features
 
 
 def parse_asyncpg_status(status: str) -> int:

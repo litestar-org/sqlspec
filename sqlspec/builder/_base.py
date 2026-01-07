@@ -60,7 +60,7 @@ class _ExpressionParameterizer:
                 except ValueError:
                     value = node.this
 
-            param_name = self._builder._add_parameter(value, context="where")
+            param_name = self._builder.add_parameter_for_expression(value, context="where")
             return exp.Placeholder(this=param_name)
         return node
 
@@ -350,6 +350,18 @@ class QueryBuilder(ABC):
 
         self._parameters[param_name] = value
         return param_name
+
+    def add_parameter_for_expression(self, value: Any, context: str | None = None) -> str:
+        """Add a parameter for expression parameterization.
+
+        Args:
+            value: The value of the parameter.
+            context: Optional context hint for parameter naming.
+
+        Returns:
+            Parameter placeholder name.
+        """
+        return self._add_parameter(value, context=context)
 
     def _parameterize_expression(self, expression: exp.Expression) -> exp.Expression:
         """Replace literal values in an expression with bound parameters.

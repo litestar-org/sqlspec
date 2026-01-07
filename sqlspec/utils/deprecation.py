@@ -96,17 +96,16 @@ def deprecated(
         A decorator wrapping the function call with a warning
     """
 
-    def decorator(func: Callable[P, T]) -> Callable[P, T]:
-        wrapper = _DeprecatedWrapper(
-            func, version=version, removal_in=removal_in, alternative=alternative, info=info, pending=pending, kind=kind
-        )
-        return cast("Callable[P, T]", update_wrapper(wrapper, func))
-
-    return decorator
+    return cast(
+        "Callable[[Callable[P, T]], Callable[P, T]]",
+        _DeprecatedFactory(
+            version=version, removal_in=removal_in, alternative=alternative, info=info, pending=pending, kind=kind
+        ),
+    )
 
 
 class _DeprecatedWrapper(Generic[P, T]):
-    __slots__ = ("_alternative", "_func", "_info", "_kind", "_pending", "_removal_in", "_version")
+    __slots__ = ("__dict__", "_alternative", "_func", "_info", "_kind", "_pending", "_removal_in", "_version")
 
     def __init__(
         self,
@@ -128,6 +127,7 @@ class _DeprecatedWrapper(Generic[P, T]):
         self._kind = kind
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
+        kind = cast("DeprecatedKind", self._kind or ("method" if inspect.ismethod(self._func) else "function"))
         warn_deprecation(
             version=self._version,
             deprecated_name=self._func.__name__,
@@ -135,6 +135,39 @@ class _DeprecatedWrapper(Generic[P, T]):
             alternative=self._alternative,
             pending=self._pending,
             removal_in=self._removal_in,
-            kind=self._kind or ("method" if inspect.ismethod(self._func) else "function"),
+            kind=kind,
         )
         return self._func(*args, **kwargs)
+
+
+class _DeprecatedFactory(Generic[P, T]):
+    __slots__ = ("_alternative", "_info", "_kind", "_pending", "_removal_in", "_version")
+
+    def __init__(
+        self,
+        *,
+        version: str,
+        removal_in: str | None,
+        alternative: str | None,
+        info: str | None,
+        pending: bool,
+        kind: Literal["function", "method", "classmethod", "property"] | None,
+    ) -> None:
+        self._version = version
+        self._removal_in = removal_in
+        self._alternative = alternative
+        self._info = info
+        self._pending = pending
+        self._kind: Literal["function", "method", "classmethod", "property"] | None = kind
+
+    def __call__(self, func: Callable[P, T]) -> Callable[P, T]:
+        wrapper = _DeprecatedWrapper(
+            func,
+            version=self._version,
+            removal_in=self._removal_in,
+            alternative=self._alternative,
+            info=self._info,
+            pending=self._pending,
+            kind=self._kind,
+        )
+        return cast("Callable[P, T]", update_wrapper(wrapper, func))

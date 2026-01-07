@@ -1,8 +1,24 @@
 """Spanner adapter compiled helpers."""
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle
+from typing import TYPE_CHECKING, Any
 
-__all__ = ("build_spanner_profile",)
+from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
+from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.utils.serializers import from_json, to_json
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
+__all__ = (
+    "apply_spanner_driver_features",
+    "build_spanner_profile",
+    "build_spanner_statement_config",
+    "coerce_spanner_params",
+    "infer_spanner_param_types_for_params",
+    "spanner_statement_config",
+    "supports_spanner_batch_update",
+    "supports_spanner_write",
+)
 
 
 def build_spanner_profile() -> "DriverParameterProfile":
@@ -24,3 +40,54 @@ def build_spanner_profile() -> "DriverParameterProfile":
         custom_type_coercions=None,
         extras={},
     )
+
+
+def build_spanner_statement_config() -> StatementConfig:
+    """Construct the Spanner statement configuration."""
+    return build_statement_config_from_profile(build_spanner_profile(), statement_overrides={"dialect": "spanner"})
+
+
+spanner_statement_config = build_spanner_statement_config()
+
+
+def apply_spanner_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
+    """Apply Spanner driver feature defaults."""
+    processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    processed_features.setdefault("enable_uuid_conversion", True)
+    processed_features.setdefault("json_serializer", to_json)
+    processed_features.setdefault("json_deserializer", from_json)
+    return processed_features
+
+
+def supports_spanner_write(cursor: Any) -> bool:
+    """Return True when the cursor supports DML execution."""
+    try:
+        _ = cursor.execute_update
+    except AttributeError:
+        return False
+    return True
+
+
+def supports_spanner_batch_update(cursor: Any) -> bool:
+    """Return True when the cursor supports batch updates."""
+    try:
+        _ = cursor.batch_update
+    except AttributeError:
+        return False
+    return True
+
+
+def infer_spanner_param_types_for_params(params: "dict[str, Any] | None") -> "dict[str, Any]":
+    """Infer Spanner param_types from Python values."""
+    if isinstance(params, (list, tuple)):
+        return {}
+    return infer_spanner_param_types(params)
+
+
+def coerce_spanner_params(
+    params: "dict[str, Any] | None", *, json_serializer: "Callable[[Any], str] | None" = None
+) -> "dict[str, Any] | None":
+    """Coerce Python types to Spanner-compatible formats."""
+    if isinstance(params, (list, tuple)):
+        return None
+    return coerce_params_for_spanner(params, json_serializer=json_serializer)

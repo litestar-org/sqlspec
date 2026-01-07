@@ -8,20 +8,17 @@ import contextlib
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
-from sqlspec.adapters.adbc.core import build_adbc_profile, get_type_coercion_map
-from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
-from sqlspec.core import (
-    SQL,
-    ParameterStyle,
-    StatementConfig,
-    build_null_pruning_transform,
-    build_statement_config_from_profile,
-    create_arrow_result,
-    get_cache_config,
-    get_driver_profile,
-    register_driver_profile,
+from sqlspec.adapters.adbc.core import (
+    build_adbc_profile,
+    detect_adbc_dialect,
+    get_adbc_statement_config,
+    handle_postgres_rollback,
+    normalize_postgres_empty_parameters,
+    prepare_adbc_parameters_with_casts,
+    resolve_adbc_parameter_casts,
 )
+from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
+from sqlspec.core import SQL, StatementConfig, create_arrow_result, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -35,13 +32,14 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
-from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from adbc_driver_manager.dbapi import Cursor
 
     from sqlspec.adapters.adbc._typing import AdbcConnection
@@ -55,25 +53,6 @@ if TYPE_CHECKING:
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext", "get_adbc_statement_config")
 
 logger = get_logger("adapters.adbc")
-
-DIALECT_PATTERNS = {
-    "postgres": ["postgres", "postgresql"],
-    "bigquery": ["bigquery"],
-    "sqlite": ["sqlite", "flight", "flightsql"],
-    "duckdb": ["duckdb"],
-    "mysql": ["mysql"],
-    "snowflake": ["snowflake"],
-}
-
-DIALECT_PARAMETER_STYLES = {
-    "postgres": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
-    "postgresql": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
-    "bigquery": (ParameterStyle.NAMED_AT, [ParameterStyle.NAMED_AT]),
-    "sqlite": (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
-    "duckdb": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR]),
-    "mysql": (ParameterStyle.POSITIONAL_PYFORMAT, [ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT]),
-    "snowflake": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC]),
-}
 
 
 class AdbcCursor:
@@ -249,7 +228,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
-        self._detected_dialect = self._get_dialect(connection)
+        self._detected_dialect = detect_adbc_dialect(connection, logger)
 
         if statement_config is None:
             cache_config = get_cache_config()
@@ -262,54 +241,13 @@ class AdbcDriver(SyncDriverAdapterBase):
         self.dialect = statement_config.dialect
         self._data_dictionary: SyncDataDictionaryBase | None = None
 
-    @staticmethod
-    def _get_dialect(connection: "AdbcConnection") -> str:
-        """Detect database dialect from connection information.
-
-        Args:
-            connection: ADBC connection
-
-        Returns:
-            Detected dialect name (defaults to 'postgres')
-        """
-        try:
-            driver_info = connection.adbc_get_info()
-            vendor_name = driver_info.get("vendor_name", "").lower()
-            driver_name = driver_info.get("driver_name", "").lower()
-
-            for dialect, patterns in DIALECT_PATTERNS.items():
-                if any(pattern in vendor_name or pattern in driver_name for pattern in patterns):
-                    logger.debug("Dialect detected: %s (from %s/%s)", dialect, vendor_name, driver_name)
-                    return dialect
-        except Exception as e:
-            logger.debug("Dialect detection failed: %s", e)
-
-        logger.warning("Could not determine dialect from driver info. Defaulting to 'postgres'.")
-        return "postgres"
-
-    def _handle_postgres_rollback(self, cursor: "Cursor") -> None:
-        """Execute rollback for PostgreSQL after transaction failure.
-
-        Args:
-            cursor: Database cursor
-        """
-        if self.dialect == "postgres":
-            with contextlib.suppress(Exception):
-                cursor.execute("ROLLBACK")
-                logger.debug("PostgreSQL rollback executed after transaction failure")
-
-    def _handle_postgres_empty_parameters(self, parameters: Any) -> Any:
-        """Process empty parameters for PostgreSQL compatibility.
-
-        Args:
-            parameters: Parameter values
-
-        Returns:
-            Processed parameters
-        """
-        if self.dialect == "postgres" and isinstance(parameters, dict) and not parameters:
-            return None
-        return parameters
+    def _normalized_dialect(self) -> str:
+        dialect = self.dialect
+        if dialect is None:
+            return ""
+        if isinstance(dialect, str):
+            return dialect
+        return str(dialect)
 
     def prepare_driver_parameters(
         self,
@@ -334,69 +272,20 @@ class AdbcDriver(SyncDriverAdapterBase):
             Parameters with cast-aware type coercion applied
         """
         enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
+        dialect_name = self._normalized_dialect()
 
-        if enable_cast_detection and prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
-            parameter_casts = self._get_parameter_casts(prepared_statement)
-            postgres_compatible = self._handle_postgres_empty_parameters(parameters)
-            return self._prepare_parameters_with_casts(postgres_compatible, parameter_casts, statement_config)
+        if enable_cast_detection and prepared_statement and dialect_name in {"postgres", "postgresql"} and not is_many:
+            parameter_casts = resolve_adbc_parameter_casts(prepared_statement)
+            postgres_compatible = normalize_postgres_empty_parameters(dialect_name, parameters)
+            return prepare_adbc_parameters_with_casts(
+                postgres_compatible,
+                parameter_casts,
+                statement_config,
+                dialect=dialect_name,
+                json_serializer=cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)),
+            )
 
         return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
-
-    def _get_parameter_casts(self, statement: SQL) -> "dict[int, str]":
-        """Get parameter cast metadata from compiled statement.
-
-        Args:
-            statement: SQL statement with compiled metadata
-
-        Returns:
-            Dict mapping parameter positions to cast types
-        """
-
-        processed_state = statement.get_processed_state()
-        if processed_state is not Empty:
-            return processed_state.parameter_casts or {}
-        return {}
-
-    def _prepare_parameters_with_casts(
-        self, parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
-    ) -> Any:
-        """Prepare parameters with cast-aware type coercion.
-
-        Uses type coercion map for non-dict types and dialect-aware dict handling.
-        Respects driver_features configuration for JSON serialization backend.
-
-        Args:
-            parameters: Parameter values (list, tuple, or scalar)
-            parameter_casts: Mapping of parameter positions to cast types
-            statement_config: Statement configuration for type coercion
-
-        Returns:
-            Parameters with cast-aware type coercion applied
-        """
-        json_encoder = statement_config.parameter_config.json_serializer or self.driver_features.get(
-            "json_serializer", to_json
-        )
-
-        if isinstance(parameters, (list, tuple)):
-            result: list[Any] = []
-            for idx, param in enumerate(parameters, start=1):  # pyright: ignore
-                cast_type = parameter_casts.get(idx, "").upper()
-                if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
-                    if isinstance(param, dict):
-                        result.append(json_encoder(param))
-                    else:
-                        result.append(param)
-                elif isinstance(param, dict):
-                    result.append(ADBCOutputConverter(self.dialect).convert_dict(param))  # type: ignore[arg-type]
-                else:
-                    if statement_config.parameter_config.type_coercion_map:
-                        for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
-                            if type_check is not dict and isinstance(param, type_check):
-                                param = converter(param)
-                                break
-                    result.append(param)
-            return tuple(result) if isinstance(parameters, tuple) else result
-        return parameters
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         """Create context manager for cursor.
@@ -429,7 +318,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        parameter_casts = self._get_parameter_casts(statement)
+        parameter_casts = resolve_adbc_parameter_casts(statement)
+        dialect_name = self._normalized_dialect()
 
         try:
             if not prepared_parameters:
@@ -438,12 +328,18 @@ class AdbcDriver(SyncDriverAdapterBase):
             elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
                 processed_params = []
                 for param_set in prepared_parameters:
-                    postgres_compatible = self._handle_postgres_empty_parameters(param_set)
+                    postgres_compatible = normalize_postgres_empty_parameters(dialect_name, param_set)
 
-                    if self.dialect in {"postgres", "postgresql"}:
+                    if dialect_name in {"postgres", "postgresql"}:
                         # For postgres, always use cast-aware parameter preparation
-                        formatted_params = self._prepare_parameters_with_casts(
-                            postgres_compatible, parameter_casts, self.statement_config
+                        formatted_params = prepare_adbc_parameters_with_casts(
+                            postgres_compatible,
+                            parameter_casts,
+                            self.statement_config,
+                            dialect=dialect_name,
+                            json_serializer=cast(
+                                "Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)
+                            ),
                         )
                     else:
                         formatted_params = self.prepare_driver_parameters(
@@ -458,7 +354,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 row_count = cursor.rowcount if cursor.rowcount is not None else -1
 
         except Exception:
-            self._handle_postgres_rollback(cursor)
+            handle_postgres_rollback(dialect_name, cursor, logger)
             raise
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
@@ -475,21 +371,26 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        parameter_casts = self._get_parameter_casts(statement)
+        parameter_casts = resolve_adbc_parameter_casts(statement)
+        dialect_name = self._normalized_dialect()
 
         try:
-            postgres_compatible_params = self._handle_postgres_empty_parameters(prepared_parameters)
+            postgres_compatible_params = normalize_postgres_empty_parameters(dialect_name, prepared_parameters)
 
-            if self.dialect in {"postgres", "postgresql"}:
-                formatted_params = self._prepare_parameters_with_casts(
-                    postgres_compatible_params, parameter_casts, self.statement_config
+            if dialect_name in {"postgres", "postgresql"}:
+                formatted_params = prepare_adbc_parameters_with_casts(
+                    postgres_compatible_params,
+                    parameter_casts,
+                    self.statement_config,
+                    dialect=dialect_name,
+                    json_serializer=cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)),
                 )
                 cursor.execute(sql, parameters=formatted_params)
             else:
                 cursor.execute(sql, parameters=postgres_compatible_params)
 
         except Exception:
-            self._handle_postgres_rollback(cursor)
+            handle_postgres_rollback(dialect_name, cursor, logger)
             raise
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
@@ -534,11 +435,12 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         successful_count = 0
         last_rowcount = 0
+        dialect_name = self._normalized_dialect()
 
         try:
             for stmt in statements:
                 if prepared_parameters:
-                    postgres_compatible_params = self._handle_postgres_empty_parameters(prepared_parameters)
+                    postgres_compatible_params = normalize_postgres_empty_parameters(dialect_name, prepared_parameters)
                     cursor.execute(stmt, parameters=postgres_compatible_params)
                 else:
                     cursor.execute(stmt)
@@ -546,7 +448,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 if cursor.rowcount is not None:
                     last_rowcount = cursor.rowcount
         except Exception:
-            self._handle_postgres_rollback(cursor)
+            handle_postgres_rollback(dialect_name, cursor, logger)
             raise
 
         return self.create_execution_result(
@@ -754,36 +656,3 @@ class AdbcDriver(SyncDriverAdapterBase):
 _ADBC_PROFILE = build_adbc_profile()
 
 register_driver_profile("adbc", _ADBC_PROFILE)
-
-
-def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
-    """Create statement configuration for the specified dialect."""
-    default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
-        detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
-    )
-
-    type_map = get_type_coercion_map(detected_dialect)
-
-    sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
-
-    parameter_overrides: dict[str, Any] = {
-        "default_parameter_style": default_style,
-        "supported_parameter_styles": set(supported_styles),
-        "default_execution_parameter_style": default_style,
-        "supported_execution_parameter_styles": set(supported_styles),
-        "type_coercion_map": type_map,
-    }
-
-    if detected_dialect == "duckdb":
-        parameter_overrides["preserve_parameter_format"] = False
-        parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK, ParameterStyle.NUMERIC}
-
-    if detected_dialect in {"postgres", "postgresql"}:
-        parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
-
-    return build_statement_config_from_profile(
-        get_driver_profile("adbc"),
-        parameter_overrides=parameter_overrides,
-        statement_overrides={"dialect": sqlglot_dialect},
-        json_serializer=to_json,
-    )

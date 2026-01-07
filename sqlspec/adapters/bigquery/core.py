@@ -1,34 +1,45 @@
 """BigQuery adapter compiled helpers."""
 
 import datetime
+import os
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle
+import sqlglot
+from google.api_core.retry import Retry
+from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
+from google.cloud.exceptions import GoogleCloudError
+from sqlglot import exp
+
+from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import SQLSpecError, StorageCapabilityError
-from sqlspec.utils.type_guards import has_value_attribute
+from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import TypeAlias
+    from collections.abc import Callable, Mapping
 
-    from google.cloud.bigquery import ArrayQueryParameter, ScalarQueryParameter
-    from sqlspec.storage import StorageFormat
-
-    BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter
-
-try:
-    from google.cloud.bigquery import ArrayQueryParameter, ScalarQueryParameter
-except ImportError:
-    BigQueryParam = Any
-else:
-    BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
+    from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryParam
+    from sqlspec.storage import StorageFormat, StorageTelemetry
 
 __all__ = (
+    "apply_bigquery_driver_features",
+    "bigquery_statement_config",
+    "build_bigquery_load_job_config",
+    "build_bigquery_load_job_telemetry",
     "build_bigquery_profile",
+    "build_bigquery_retry",
+    "build_bigquery_statement_config",
+    "copy_bigquery_job_config",
     "create_bq_parameters",
+    "detect_bigquery_emulator",
+    "extract_bigquery_insert_table",
+    "is_simple_bigquery_insert",
     "map_bigquery_source_format",
+    "normalize_bigquery_driver_features",
     "rows_to_results",
+    "should_retry_bigquery_job",
 )
 
 
@@ -114,6 +125,34 @@ def _get_bigquery_module() -> Any:
     return _BIGQUERY_MODULE
 
 
+logger = get_logger("adapters.bigquery.core")
+
+
+def normalize_bigquery_driver_features(
+    driver_features: "Mapping[str, Any] | None",
+) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
+    """Normalize driver feature defaults and extract core options."""
+    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    user_connection_hook = processed_driver_features.pop("on_connection_create", None)
+    processed_driver_features.setdefault("enable_uuid_conversion", True)
+    serializer = processed_driver_features.setdefault("json_serializer", to_json)
+    connection_instance = processed_driver_features.get("connection_instance")
+
+    return (
+        processed_driver_features,
+        cast("Callable[[Any], str] | None", serializer),
+        cast("Callable[[Any], None] | None", user_connection_hook),
+        connection_instance,
+    )
+
+
+def apply_bigquery_driver_features(
+    driver_features: "Mapping[str, Any] | None",
+) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
+    """Apply BigQuery driver feature defaults and extract core options."""
+    return normalize_bigquery_driver_features(driver_features)
+
+
 def _get_bq_param_type(value: Any) -> "tuple[str | None, str | None]":
     """Determine BigQuery parameter type from Python value.
 
@@ -185,6 +224,141 @@ def create_bq_parameters(parameters: Any, json_serializer: "Callable[[Any], str]
     return bq_parameters
 
 
+def detect_bigquery_emulator(connection: "BigQueryConnection") -> bool:
+    """Detect whether the BigQuery client targets an emulator endpoint."""
+    emulator_host = os.getenv("BIGQUERY_EMULATOR_HOST") or os.getenv("BIGQUERY_EMULATOR_HOST_HTTP")
+    if emulator_host:
+        return True
+
+    try:
+        inner_connection = cast("Any", connection)._connection
+    except AttributeError:
+        inner_connection = None
+    if inner_connection is None:
+        return False
+    try:
+        api_base_url = inner_connection.API_BASE_URL
+    except AttributeError:
+        api_base_url = ""
+    if not api_base_url:
+        return False
+    return "googleapis.com" not in api_base_url
+
+
+def should_retry_bigquery_job(exception: Exception) -> bool:
+    """Return True when a BigQuery job exception is safe to retry."""
+    if not isinstance(exception, GoogleCloudError):
+        return False
+
+    errors = exception.errors if has_errors(exception) and exception.errors is not None else []
+    retryable_reasons = {
+        "backendError",
+        "internalError",
+        "jobInternalError",
+        "rateLimitExceeded",
+        "jobRateLimitExceeded",
+    }
+
+    for err in errors:
+        if not isinstance(err, dict):
+            continue
+        reason = err.get("reason")
+        message = (err.get("message") or "").lower()
+        if reason in retryable_reasons:
+            return not ("nonexistent_column" in message or ("column" in message and "not present" in message))
+
+    return False
+
+
+def build_bigquery_retry(deadline: float, using_emulator: bool) -> "Retry | None":
+    """Build retry policy for job restarts based on error reason codes."""
+    if using_emulator:
+        return None
+    return Retry(predicate=should_retry_bigquery_job, deadline=deadline)
+
+
+def _should_copy_job_attribute(attr: str, source_config: QueryJobConfig) -> bool:
+    if attr.startswith("_"):
+        return False
+
+    try:
+        value = source_config.__getattribute__(attr)
+        return value is not None and not callable(value)
+    except (AttributeError, TypeError):
+        return False
+
+
+def copy_bigquery_job_config(source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
+    """Copy non-private attributes from source config to target config."""
+    for attr in dir(source_config):
+        if not _should_copy_job_attribute(attr, source_config):
+            continue
+
+        try:
+            value = source_config.__getattribute__(attr)
+            setattr(target_config, attr, value)
+        except (AttributeError, TypeError):
+            continue
+
+
+def build_bigquery_load_job_config(file_format: "StorageFormat", overwrite: bool) -> "LoadJobConfig":
+    job_config = LoadJobConfig()
+    job_config.source_format = map_bigquery_source_format(file_format)
+    job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
+    return job_config
+
+
+def build_bigquery_load_job_telemetry(job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":
+    try:
+        properties = cast("Any", job)._properties
+    except AttributeError:
+        properties = {}
+    load_stats = properties.get("statistics", {}).get("load", {})
+    rows_processed = int(load_stats.get("outputRows") or 0)
+    bytes_processed = int(load_stats.get("outputBytes") or load_stats.get("inputFileBytes", 0) or 0)
+    duration = 0.0
+    if job.ended and job.started:
+        duration = (job.ended - job.started).total_seconds()
+    telemetry: StorageTelemetry = {
+        "destination": table,
+        "rows_processed": rows_processed,
+        "bytes_processed": bytes_processed,
+        "duration_s": duration,
+        "format": format_label,
+    }
+    return telemetry
+
+
+def is_simple_bigquery_insert(sql: str, expression: "exp.Expression | None" = None) -> bool:
+    """Check if SQL is a simple INSERT VALUES statement."""
+    try:
+        parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
+        if not isinstance(parsed, exp.Insert):
+            return False
+        return parsed.expression is not None or parsed.find(exp.Values) is not None
+    except Exception:
+        return False
+
+
+def extract_bigquery_insert_table(sql: str, expression: "exp.Expression | None" = None) -> str | None:
+    """Extract table name from INSERT statement using sqlglot."""
+    try:
+        parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
+        if isinstance(parsed, exp.Insert):
+            table = parsed.find(exp.Table)
+            if table:
+                parts = []
+                if table.catalog:
+                    parts.append(table.catalog)
+                if table.db:
+                    parts.append(table.db)
+                parts.append(table.name)
+                return ".".join(parts)
+    except Exception:
+        logger.debug("Failed to extract table name from INSERT statement")
+    return None
+
+
 def map_bigquery_source_format(file_format: "StorageFormat") -> str:
     if file_format == "parquet":
         return "PARQUET"
@@ -236,3 +410,14 @@ def build_bigquery_profile() -> "DriverParameterProfile":
         extras={"json_tuple_strategy": "tuple", "type_coercion_overrides": {list: _identity, tuple: _tuple_to_list}},
         default_dialect="bigquery",
     )
+
+
+def build_bigquery_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
+    """Construct the BigQuery statement configuration with optional JSON serializer."""
+    serializer = json_serializer or to_json
+    return build_statement_config_from_profile(
+        build_bigquery_profile(), statement_overrides={"dialect": "bigquery"}, json_serializer=serializer
+    )
+
+
+bigquery_statement_config = build_bigquery_statement_config()

@@ -461,6 +461,22 @@ def test_statement_transformers_apply(basic_statement_config: "StatementConfig")
     assert result.operation_type == "SELECT"
 
 
+def test_ast_transformer_single_parse(basic_statement_config: "StatementConfig") -> None:
+    """AST transformers should not trigger a second parse."""
+
+    def pass_through(expression: exp.Expression, parameters: Any) -> "tuple[exp.Expression, Any]":
+        return expression, parameters
+
+    parameter_config = basic_statement_config.parameter_config.replace(ast_transformer=pass_through)
+    config = basic_statement_config.replace(parameter_config=parameter_config)
+    processor = SQLProcessor(config)
+
+    with patch("sqlspec.core.compiler.sqlglot.parse_one", wraps=sqlglot.parse_one) as mock_parse:
+        processor.compile("SELECT * FROM users WHERE id = ?", [123])
+
+    assert mock_parse.call_count == 1
+
+
 def test_statement_transformer_updates_operation_type(basic_statement_config: "StatementConfig") -> None:
     """Statement transformers should refresh detected operation metadata."""
 
@@ -690,6 +706,19 @@ def test_cache_statistics(basic_statement_config: "StatementConfig", sample_sql_
     assert stats["hit_rate_percent"] == 33
 
 
+def test_parameter_cache_statistics(basic_statement_config: "StatementConfig") -> None:
+    """Parameter processor cache stats should reflect reuse."""
+    processor = SQLProcessor(basic_statement_config, cache_enabled=False, parse_cache_size=10, parameter_cache_size=10)
+
+    processor.compile("SELECT * FROM users WHERE id = ?", [123])
+    processor.compile("SELECT * FROM users WHERE id = ?", [123])
+
+    stats = processor.cache_stats
+    assert stats["parameter_hits"] >= 1
+    assert stats["parameter_misses"] >= 1
+    assert stats["parameter_size"] >= 1
+
+
 def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
     """Test cache clearing functionality."""
     processor = SQLProcessor(basic_statement_config)
@@ -705,6 +734,10 @@ def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queri
     assert len(processor._cache) == 0
     assert processor._cache_hits == 0
     assert processor._cache_misses == 0
+    stats = processor.cache_stats
+    assert stats["parameter_hits"] == 0
+    assert stats["parameter_misses"] == 0
+    assert stats["parameter_size"] == 0
 
 
 def test_memory_efficiency_with_slots() -> None:

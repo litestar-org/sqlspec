@@ -10,7 +10,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
 __all__ = (
     "apply_sqlite_driver_features",
@@ -119,7 +119,7 @@ sqlite_statement_config = build_sqlite_statement_config()
 
 
 def apply_sqlite_driver_features(
-    statement_config: "StatementConfig", driver_features: "dict[str, Any] | None"
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply SQLite driver feature defaults to statement config."""
     processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}

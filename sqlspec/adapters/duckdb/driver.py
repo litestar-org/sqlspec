@@ -1,23 +1,21 @@
 """DuckDB driver implementation."""
 
 import contextlib
-import typing
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import duckdb
 
-from sqlspec.adapters.duckdb.core import build_duckdb_profile
+from sqlspec.adapters.duckdb.core import (
+    apply_duckdb_driver_features,
+    build_duckdb_profile,
+    build_duckdb_statement_config,
+    coerce_duckdb_rows,
+    duckdb_statement_config,
+)
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
-from sqlspec.core import (
-    SQL,
-    StatementConfig,
-    build_statement_config_from_profile,
-    create_arrow_result,
-    get_cache_config,
-    register_driver_profile,
-)
+from sqlspec.core import SQL, StatementConfig, create_arrow_result, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -34,7 +32,6 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
@@ -224,21 +221,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             )
             statement_config = updated_config
 
-        if driver_features:
-            param_config = statement_config.parameter_config
-            json_serializer = driver_features.get("json_serializer")
-            if json_serializer:
-                param_config = param_config.with_json_serializers(json_serializer, tuple_strategy="tuple")
-
-            enable_uuid_conversion = driver_features.get("enable_uuid_conversion", True)
-            if not enable_uuid_conversion:
-                type_converter = DuckDBOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
-                type_coercion_map = dict(param_config.type_coercion_map)
-                type_coercion_map[str] = type_converter.convert_if_detected
-                param_config = param_config.replace(type_coercion_map=type_coercion_map)
-
-            if param_config is not statement_config.parameter_config:
-                statement_config = statement_config.replace(parameter_config=param_config)
+        statement_config = apply_duckdb_driver_features(statement_config, driver_features)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SyncDataDictionaryBase | None = None
@@ -342,10 +325,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 
-            if fetched_data and isinstance(fetched_data[0], tuple):
-                dict_data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-            else:
-                dict_data = fetched_data
+            dict_data = coerce_duckdb_rows(fetched_data, column_names)
 
             return self.create_execution_result(
                 cursor,
@@ -563,18 +543,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
 _DUCKDB_PROFILE = build_duckdb_profile()
 
 register_driver_profile("duckdb", _DUCKDB_PROFILE)
-
-
-def build_duckdb_statement_config(*, json_serializer: "typing.Callable[[Any], str] | None" = None) -> StatementConfig:
-    """Construct the DuckDB statement configuration with optional JSON serializer."""
-
-    serializer = json_serializer or to_json
-    return build_statement_config_from_profile(
-        _DUCKDB_PROFILE, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
-    )
-
-
-duckdb_statement_config = build_duckdb_statement_config()
 
 
 MODIFYING_OPERATIONS: "tuple[str, ...]" = ("INSERT", "UPDATE", "DELETE")

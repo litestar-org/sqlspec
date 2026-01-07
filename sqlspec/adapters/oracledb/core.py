@@ -1,18 +1,28 @@
 """OracleDB adapter compiled helpers."""
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
-from sqlspec.core import DriverParameterProfile, ParameterStyle
+from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.typing import NUMPY_INSTALLED
+from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import is_readable
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
 __all__ = (
+    "apply_oracledb_driver_features",
     "build_oracledb_profile",
+    "build_oracledb_statement_config",
+    "coerce_async_row_values",
     "coerce_sync_row_values",
     "normalize_column_names",
     "oracle_insert_statement",
     "oracle_truncate_statement",
+    "oracledb_statement_config",
+    "requires_oracledb_session_callback",
 )
 
 
@@ -66,6 +76,22 @@ def oracle_truncate_statement(table: str) -> str:
     return f"TRUNCATE TABLE {table}"
 
 
+def apply_oracledb_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
+    """Apply OracleDB driver feature defaults."""
+    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
+    processed_driver_features.setdefault("enable_lowercase_column_names", True)
+    processed_driver_features.setdefault("enable_uuid_binary", True)
+    return processed_driver_features
+
+
+def requires_oracledb_session_callback(driver_features: "dict[str, Any]") -> bool:
+    """Return True when the session callback should be installed."""
+    enable_numpy_vectors = bool(driver_features.get("enable_numpy_vectors", False))
+    enable_uuid_binary = bool(driver_features.get("enable_uuid_binary", False))
+    return enable_numpy_vectors or enable_uuid_binary
+
+
 def coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     """Coerce LOB handles to concrete values for synchronous execution.
 
@@ -95,6 +121,35 @@ def coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     return coerced_values
 
 
+async def coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+    """Coerce LOB handles to concrete values for asynchronous execution.
+
+    Processes each value in the row, reading LOB objects asynchronously
+    and applying type detection for JSON values stored in CLOBs.
+
+    Args:
+        row: Tuple of column values from database fetch.
+
+    Returns:
+        List of coerced values with LOBs read to strings/bytes.
+
+    """
+    coerced_values: list[Any] = []
+    for value in row:
+        if is_readable(value):
+            try:
+                processed_value = await TYPE_CONVERTER.process_lob(value)
+            except Exception:
+                coerced_values.append(value)
+                continue
+            if isinstance(processed_value, str):
+                processed_value = TYPE_CONVERTER.convert_if_detected(processed_value)
+            coerced_values.append(processed_value)
+        else:
+            coerced_values.append(value)
+    return coerced_values
+
+
 def build_oracledb_profile() -> "DriverParameterProfile":
     """Create the OracleDB driver parameter profile."""
     return DriverParameterProfile(
@@ -111,3 +166,14 @@ def build_oracledb_profile() -> "DriverParameterProfile":
         json_serializer_strategy="helper",
         default_dialect="oracle",
     )
+
+
+def build_oracledb_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
+    """Construct the OracleDB statement configuration with optional JSON serializer."""
+    serializer = json_serializer or to_json
+    return build_statement_config_from_profile(
+        build_oracledb_profile(), statement_overrides={"dialect": "oracle"}, json_serializer=serializer
+    )
+
+
+oracledb_statement_config = build_oracledb_statement_config()

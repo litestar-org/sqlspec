@@ -28,7 +28,24 @@ def _is_truthy(value: "str | None") -> bool:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _PipelineMetrics:
-    __slots__ = ("hits", "max_size", "misses", "parse_hits", "parse_max_size", "parse_misses", "parse_size", "size")
+    __slots__ = (
+        "hits",
+        "max_size",
+        "misses",
+        "parameter_hits",
+        "parameter_max_size",
+        "parameter_misses",
+        "parameter_size",
+        "parse_hits",
+        "parse_max_size",
+        "parse_misses",
+        "parse_size",
+        "size",
+        "validator_hits",
+        "validator_max_size",
+        "validator_misses",
+        "validator_size",
+    )
 
     def __init__(self) -> None:
         self.hits = 0
@@ -39,6 +56,14 @@ class _PipelineMetrics:
         self.parse_misses = 0
         self.parse_size = 0
         self.parse_max_size = 0
+        self.parameter_hits = 0
+        self.parameter_misses = 0
+        self.parameter_size = 0
+        self.parameter_max_size = 0
+        self.validator_hits = 0
+        self.validator_misses = 0
+        self.validator_size = 0
+        self.validator_max_size = 0
 
     def update(self, stats: "dict[str, int]") -> None:
         self.hits = stats.get("hits", 0)
@@ -49,6 +74,14 @@ class _PipelineMetrics:
         self.parse_misses = stats.get("parse_misses", 0)
         self.parse_size = stats.get("parse_size", 0)
         self.parse_max_size = stats.get("parse_max_size", 0)
+        self.parameter_hits = stats.get("parameter_hits", 0)
+        self.parameter_misses = stats.get("parameter_misses", 0)
+        self.parameter_size = stats.get("parameter_size", 0)
+        self.parameter_max_size = stats.get("parameter_max_size", 0)
+        self.validator_hits = stats.get("validator_hits", 0)
+        self.validator_misses = stats.get("validator_misses", 0)
+        self.validator_size = stats.get("validator_size", 0)
+        self.validator_max_size = stats.get("validator_max_size", 0)
 
     def snapshot(self) -> "dict[str, int]":
         return {
@@ -60,6 +93,14 @@ class _PipelineMetrics:
             "parse_misses": self.parse_misses,
             "parse_size": self.parse_size,
             "parse_max_size": self.parse_max_size,
+            "parameter_hits": self.parameter_hits,
+            "parameter_misses": self.parameter_misses,
+            "parameter_size": self.parameter_size,
+            "parameter_max_size": self.parameter_max_size,
+            "validator_hits": self.validator_hits,
+            "validator_misses": self.validator_misses,
+            "validator_size": self.validator_size,
+            "validator_max_size": self.validator_max_size,
         }
 
     def reset(self) -> None:
@@ -71,6 +112,14 @@ class _PipelineMetrics:
         self.parse_misses = 0
         self.parse_size = 0
         self.parse_max_size = 0
+        self.parameter_hits = 0
+        self.parameter_misses = 0
+        self.parameter_size = 0
+        self.parameter_max_size = 0
+        self.validator_hits = 0
+        self.validator_misses = 0
+        self.validator_size = 0
+        self.validator_max_size = 0
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -191,6 +240,14 @@ class StatementPipelineRegistry:
             entry["parse_misses"] = metrics.get("parse_misses", 0)
             entry["parse_size"] = metrics.get("parse_size", 0)
             entry["parse_max_size"] = metrics.get("parse_max_size", 0)
+            entry["parameter_hits"] = metrics.get("parameter_hits", 0)
+            entry["parameter_misses"] = metrics.get("parameter_misses", 0)
+            entry["parameter_size"] = metrics.get("parameter_size", 0)
+            entry["parameter_max_size"] = metrics.get("parameter_max_size", 0)
+            entry["validator_hits"] = metrics.get("validator_hits", 0)
+            entry["validator_misses"] = metrics.get("validator_misses", 0)
+            entry["validator_size"] = metrics.get("validator_size", 0)
+            entry["validator_max_size"] = metrics.get("validator_max_size", 0)
             snapshots.append(entry)
         return snapshots
 

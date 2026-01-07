@@ -10,9 +10,10 @@ from sqlspec.adapters.sqlite.core import (
     build_sqlite_profile,
     format_sqlite_identifier,
     process_sqlite_result,
+    sqlite_statement_config,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
-from sqlspec.core import ArrowResult, build_statement_config_from_profile, get_cache_config, register_driver_profile
+from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -26,7 +27,6 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
@@ -468,7 +468,3 @@ class SqliteDriver(SyncDriverAdapterBase):
 _SQLITE_PROFILE = build_sqlite_profile()
 
 register_driver_profile("sqlite", _SQLITE_PROFILE)
-
-sqlite_statement_config = build_statement_config_from_profile(
-    _SQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
-)

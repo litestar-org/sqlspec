@@ -19,6 +19,11 @@ This guide provides specific instructions for the `spanner` adapter.
 - **JSON Strategy:** `helper`
 - **Default Style:** `NAMED_AT` (parameters prefixed with `@`)
 
+## Implementation Notes
+
+- Statement config helpers live in `sqlspec/adapters/spanner/core.py` (builder + `spanner_statement_config`).
+- Spanner configs apply `apply_spanner_driver_features(...)` before creating sessions.
+
 ## Features
 
 - **Full ACID Transactions:** Spanner provides global transactions with strong consistency

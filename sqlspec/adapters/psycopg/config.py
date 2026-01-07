@@ -8,6 +8,7 @@ from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg.core import apply_psycopg_driver_features, psycopg_statement_config
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
     PsycopgAsyncDriver,
@@ -17,16 +18,12 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
     PsycopgSyncSessionContext,
-    build_psycopg_statement_config,
-    psycopg_statement_config,
 )
 from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints
-from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
-from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -123,16 +120,16 @@ class PsycopgSyncConnectionContext:
     def __enter__(self) -> "PsycopgSyncConnection":
         if self._config.connection_instance:
             self._ctx = self._config.connection_instance.connection()
-            return self._ctx.__enter__()  # type: ignore[no-any-return]
+            return cast("PsycopgSyncConnection", self._ctx.__enter__())
         # Fallback for no pool
         self._ctx = self._config.create_connection()
-        return self._ctx  # type: ignore[no-any-return]
+        return cast("PsycopgSyncConnection", self._ctx)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> bool | None:
         if self._config.connection_instance and self._ctx:
-            return self._ctx.__exit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
         if self._ctx:
             self._ctx.close()
         return None
@@ -149,7 +146,7 @@ class _PsycopgSyncSessionConnectionHandler:
     def acquire_connection(self) -> "PsycopgSyncConnection":
         if self._config.connection_instance:
             self._ctx = self._config.connection_instance.connection()
-            return self._ctx.__enter__()  # type: ignore[no-any-return]
+            return cast("PsycopgSyncConnection", self._ctx.__enter__())
         self._conn = self._config.create_connection()
         return self._conn
 
@@ -204,16 +201,17 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         processed_connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
-        processed_driver_features.setdefault("json_serializer", serializer)
-        processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+        base_statement_config = statement_config or psycopg_statement_config
+        normalized_driver_features = dict(driver_features) if driver_features else None
+        base_statement_config, processed_driver_features = apply_psycopg_driver_features(
+            base_statement_config, normalized_driver_features
+        )
 
         super().__init__(
             connection_config=processed_connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or build_psycopg_statement_config(json_serializer=serializer),
+            statement_config=base_statement_config,
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
@@ -365,7 +363,7 @@ class PsycopgAsyncConnectionContext:
         # pool.connection() returns an async context manager
         if self._config.connection_instance:
             self._ctx = self._config.connection_instance.connection()
-            return await self._ctx.__aenter__()  # type: ignore[no-any-return]
+            return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
         msg = "Connection pool not initialized"
         raise ImproperConfigurationError(msg)
 
@@ -373,7 +371,7 @@ class PsycopgAsyncConnectionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> bool | None:
         if self._ctx:
-            return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+            return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
         return None
 
 
@@ -388,12 +386,12 @@ class _PsycopgAsyncSessionConnectionHandler:
         if self._config.connection_instance is None:
             self._config.connection_instance = await self._config.create_pool()
         self._ctx = self._config.connection_instance.connection()
-        return await self._ctx.__aenter__()  # type: ignore[no-any-return]
+        return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
 
     async def release_connection(self, _conn: "PsycopgAsyncConnection") -> None:
         if self._ctx is None:
             return
-        await self._ctx.__aexit__(None, None, None)  # type: ignore[no-any-return]
+        await self._ctx.__aexit__(None, None, None)
         self._ctx = None
 
 
@@ -439,16 +437,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         processed_connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
-        processed_driver_features.setdefault("json_serializer", serializer)
-        processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+        base_statement_config = statement_config or psycopg_statement_config
+        normalized_driver_features = dict(driver_features) if driver_features else None
+        base_statement_config, processed_driver_features = apply_psycopg_driver_features(
+            base_statement_config, normalized_driver_features
+        )
 
         super().__init__(
             connection_config=processed_connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or build_psycopg_statement_config(json_serializer=serializer),
+            statement_config=base_statement_config,
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,

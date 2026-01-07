@@ -17,6 +17,11 @@ This guide provides specific instructions and best practices for working with th
 - **JSON Strategy:** `helper` (shared JSON serializer applied through the profile)
 - **Extras:** None (uses defaults with native list expansion disabled)
 
+## Implementation Notes
+
+- Statement config helpers live in `sqlspec/adapters/oracledb/core.py` (builder + `oracledb_statement_config`).
+- `OracleDBConfig` applies `apply_oracledb_driver_features(...)` before creating sessions.
+
 ## Query Stack Support
 
 `StatementStack` executions automatically use python-oracledb's native pipeline APIs when the adapter detects a compatible runtime (Oracle Database 23ai+ and python-oracledb ≥ 2.4.0). The pipeline path batches every operation in a stack into a single round-trip while preserving the regular `StackResult.result` semantics, so downstream helpers like `get_data()` or `rows_affected` continue to work without code changes.

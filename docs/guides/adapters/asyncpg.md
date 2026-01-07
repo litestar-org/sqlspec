@@ -17,6 +17,12 @@ This guide provides specific instructions and best practices for working with th
 - **JSON Strategy:** `driver` (delegates JSON binding to asyncpg codecs)
 - **Extras:** None (codecs registered through config init hook)
 
+## Implementation Notes
+
+- Statement config helpers live in `sqlspec/adapters/asyncpg/core.py` (builder + `asyncpg_statement_config`).
+- `AsyncpgConfig` applies `apply_asyncpg_driver_features(...)` before creating sessions.
+- Codec registration helpers (`register_asyncpg_json_codecs`, `register_asyncpg_pgvector_support`) live in core and are invoked by the config.
+
 ## Best Practices
 
 - **High-Performance:** `asyncpg` is often chosen for high-performance applications due to its speed. It's a good choice for applications with a high volume of database traffic.

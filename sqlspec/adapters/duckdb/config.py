@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
+from sqlspec.adapters.duckdb.core import apply_duckdb_driver_features
 from sqlspec.adapters.duckdb.driver import (
     DuckDBCursor,
     DuckDBDriver,
@@ -177,13 +178,13 @@ class DuckDBConnectionContext:
     def __enter__(self) -> DuckDBConnection:
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
-        return self._ctx.__enter__()  # type: ignore[no-any-return]
+        return cast("DuckDBConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> bool | None:
         if self._ctx:
-            return self._ctx.__exit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
         return None
 
 
@@ -210,12 +211,12 @@ class _DuckDBSessionConnectionHandler:
     def acquire_connection(self) -> "DuckDBConnection":
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
-        return self._ctx.__enter__()  # type: ignore[no-any-return]
+        return cast("DuckDBConnection", self._ctx.__enter__())
 
     def release_connection(self, _conn: "DuckDBConnection") -> None:
         if self._ctx is None:
             return
-        self._ctx.__exit__(None, None, None)  # type: ignore[no-any-return]
+        self._ctx.__exit__(None, None, None)
         self._ctx = None
 
 
@@ -332,6 +333,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         base_statement_config = statement_config or build_duckdb_statement_config(
             json_serializer=cast("Callable[[Any], str]", serializer)
         )
+        base_statement_config = apply_duckdb_driver_features(base_statement_config, processed_features)
 
         super().__init__(
             bind_key=bind_key,

@@ -6,12 +6,12 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
+from sqlspec.adapters.aiosqlite.core import aiosqlite_statement_config, apply_aiosqlite_driver_features
 from sqlspec.adapters.aiosqlite.driver import (
     AiosqliteCursor,
     AiosqliteDriver,
     AiosqliteExceptionHandler,
     AiosqliteSessionContext,
-    aiosqlite_statement_config,
 )
 from sqlspec.adapters.aiosqlite.pool import (
     AiosqliteConnectionPool,
@@ -22,7 +22,6 @@ from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -33,6 +32,28 @@ if TYPE_CHECKING:
 __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatures", "AiosqlitePoolParams")
 
 logger = get_logger("adapters.aiosqlite")
+
+
+class _AiosqliteSessionFactory:
+    __slots__ = ("_config", "_pool_conn")
+
+    def __init__(self, config: "AiosqliteConfig") -> None:
+        self._config = config
+        self._pool_conn: AiosqlitePoolConnection | None = None
+
+    async def acquire_connection(self) -> "AiosqliteConnection":
+        pool = self._config.connection_instance
+        if pool is None:
+            pool = await self._config.create_pool()
+            self._config.connection_instance = pool
+        pool_conn = await pool.acquire()
+        self._pool_conn = pool_conn
+        return pool_conn.connection
+
+    async def release_connection(self, _conn: "AiosqliteConnection") -> None:
+        if self._pool_conn is not None and self._config.connection_instance is not None:
+            await self._config.connection_instance.release(self._pool_conn)
+            self._pool_conn = None
 
 
 class AiosqliteConnectionParams(TypedDict):
@@ -96,9 +117,11 @@ class AiosqliteConnectionContext:
         self._ctx: AiosqlitePoolConnectionContext | None = None
 
     async def __aenter__(self) -> AiosqliteConnection:
-        if self._config.connection_instance is None:
-            self._config.connection_instance = await self._config._create_pool()  # pyright: ignore[reportPrivateUsage]
-        self._ctx = self._config.connection_instance.get_connection()
+        pool = self._config.connection_instance
+        if pool is None:
+            pool = await self._config.create_pool()
+            self._config.connection_instance = pool
+        self._ctx = pool.get_connection()
         return await self._ctx.__aenter__()
 
     async def __aexit__(
@@ -165,17 +188,11 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         config_dict = normalize_connection_config(config_dict)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        processed_driver_features.setdefault("enable_custom_adapters", True)
-        json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
-        json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
-
         base_statement_config = statement_config or aiosqlite_statement_config
-        if json_serializer is not None:
-            parameter_config = base_statement_config.parameter_config.with_json_serializers(
-                json_serializer, deserializer=json_deserializer
-            )
-            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+        normalized_driver_features = dict(driver_features) if driver_features else None
+        base_statement_config, processed_driver_features = apply_aiosqlite_driver_features(
+            base_statement_config, normalized_driver_features
+        )
 
         super().__init__(
             connection_config=config_dict,
@@ -245,23 +262,10 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             An AiosqliteDriver session context manager.
 
         """
-        pool_conn_holder: dict[str, AiosqlitePoolConnection] = {}
-
-        async def acquire_connection() -> AiosqliteConnection:
-            if self.connection_instance is None:
-                self.connection_instance = await self._create_pool()
-            pool_conn = await self.connection_instance.acquire()
-            pool_conn_holder["conn"] = pool_conn
-            return pool_conn.connection
-
-        async def release_connection(_conn: AiosqliteConnection) -> None:
-            if "conn" in pool_conn_holder and self.connection_instance is not None:
-                await self.connection_instance.release(pool_conn_holder["conn"])
-                pool_conn_holder.clear()
-
+        factory = _AiosqliteSessionFactory(self)
         return AiosqliteSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
+            acquire_connection=factory.acquire_connection,
+            release_connection=factory.release_connection,
             statement_config=statement_config or self.statement_config or aiosqlite_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
@@ -338,9 +342,11 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             An aiosqlite connection instance.
 
         """
-        if self.connection_instance is None:
-            self.connection_instance = await self._create_pool()
-        pool_connection = await self.connection_instance.acquire()
+        pool = self.connection_instance
+        if pool is None:
+            pool = await self.create_pool()
+            self.connection_instance = pool
+        pool_connection = await pool.acquire()
         return pool_connection.connection
 
     async def provide_pool(self) -> AiosqliteConnectionPool:

@@ -468,7 +468,7 @@ class SQLProcessor:
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
             elif ast_was_transformed and expression is not None:
-                transformed_result = self._parameter_processor.process(
+                transformed_result = self._parameter_processor.process_for_execution(
                     sql=expression.sql(dialect=dialect_str),
                     parameters=final_parameters,
                     config=self._config.parameter_config,
@@ -684,6 +684,7 @@ class SQLProcessor:
         self._parse_cache.clear()
         self._parse_cache_hits = 0
         self._parse_cache_misses = 0
+        self._parameter_processor.clear_cache()
 
     def _make_parse_cache_key(self, sql: str, dialect: "str | None") -> str:
         dialect_marker = dialect or "default"
@@ -701,6 +702,7 @@ class SQLProcessor:
         hit_rate_pct = int((self._cache_hits / total_requests) * 100) if total_requests > 0 else 0
         parse_total = self._parse_cache_hits + self._parse_cache_misses
         parse_hit_rate_pct = int((self._parse_cache_hits / parse_total) * 100) if parse_total > 0 else 0
+        parameter_stats = self._parameter_processor.cache_stats()
 
         return {
             "hits": self._cache_hits,
@@ -713,4 +715,12 @@ class SQLProcessor:
             "parse_size": len(self._parse_cache),
             "parse_max_size": self._parse_cache_max_size,
             "parse_hit_rate_percent": parse_hit_rate_pct,
+            "parameter_hits": parameter_stats["hits"],
+            "parameter_misses": parameter_stats["misses"],
+            "parameter_size": parameter_stats["size"],
+            "parameter_max_size": parameter_stats["max_size"],
+            "validator_hits": parameter_stats["validator_hits"],
+            "validator_misses": parameter_stats["validator_misses"],
+            "validator_size": parameter_stats["validator_size"],
+            "validator_max_size": parameter_stats["validator_max_size"],
         }

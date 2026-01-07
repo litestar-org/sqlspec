@@ -14,6 +14,7 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncConnectionPool,
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
+from sqlspec.adapters.oracledb.core import apply_oracledb_driver_features, requires_oracledb_session_callback
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncCursor,
     OracleAsyncDriver,
@@ -27,7 +28,6 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 
 if TYPE_CHECKING:
@@ -213,10 +213,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         processed_connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or oracledb_statement_config
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
-        processed_driver_features.setdefault("enable_lowercase_column_names", True)
-        processed_driver_features.setdefault("enable_uuid_binary", True)
+        normalized_driver_features = dict(driver_features) if driver_features else None
+        processed_driver_features = apply_oracledb_driver_features(normalized_driver_features)
 
         super().__init__(
             connection_config=processed_connection_config,
@@ -233,10 +231,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Create the actual connection pool."""
         config = dict(self.connection_config)
 
-        needs_session_callback = self.driver_features.get("enable_numpy_vectors", False) or self.driver_features.get(
-            "enable_uuid_binary", False
-        )
-        if needs_session_callback:
+        if requires_oracledb_session_callback(self.driver_features):
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool(**config)
@@ -434,10 +429,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
         processed_connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
-        processed_driver_features.setdefault("enable_lowercase_column_names", True)
-        processed_driver_features.setdefault("enable_uuid_binary", True)
+        normalized_driver_features = dict(driver_features) if driver_features else None
+        processed_driver_features = apply_oracledb_driver_features(normalized_driver_features)
 
         super().__init__(
             connection_config=processed_connection_config,
@@ -454,10 +447,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
 
-        needs_session_callback = self.driver_features.get("enable_numpy_vectors", False) or self.driver_features.get(
-            "enable_uuid_binary", False
-        )
-        if needs_session_callback:
+        if requires_oracledb_session_callback(self.driver_features):
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool_async(**config)

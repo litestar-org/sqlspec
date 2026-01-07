@@ -17,6 +17,11 @@ This guide provides specific instructions for the `duckdb` adapter.
 - **JSON Strategy:** `helper` (shared serializer covers dict/list/tuple)
 - **Extras:** None (profile preserves existing `allow_mixed_parameter_styles=False`)
 
+## Implementation Notes
+
+- Statement config helpers live in `sqlspec/adapters/duckdb/core.py` (builder + `duckdb_statement_config`).
+- `DuckDBConfig` applies `apply_duckdb_driver_features(...)` before creating sessions.
+
 ## Query Stack Support
 
 - DuckDB does **not** expose a native multi-statement pipeline, so `StatementStack` always executes through the base sequential path. Transactions are created automatically when `continue_on_error=False`, matching the behavior of standalone `execute()` calls.

@@ -17,6 +17,11 @@ This guide provides specific instructions for the `bigquery` adapter.
 -   **JSON Strategy:** `helper` with `json_tuple_strategy="tuple"`
 -   **Extras:** `type_coercion_overrides` keep list values intact while converting tuples to lists during binding
 
+## Implementation Notes
+
+-   Statement config helpers live in `sqlspec/adapters/bigquery/core.py` (builder + `bigquery_statement_config`).
+-   `BigQueryConfig` applies `apply_bigquery_driver_features(...)` before creating sessions.
+
 ## Query Stack Support
 
 -   BigQuery does **not** expose a native pipeline API, so `StatementStack` calls execute sequentially through the core driver. Because BigQuery does not offer transactional semantics, the `begin()`/`commit()` hooks are no-ops—the stack still runs each statement in order and surfaces failures via `StackResult.error`.

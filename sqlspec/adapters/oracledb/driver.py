@@ -16,12 +16,13 @@ from sqlspec.adapters.oracledb._typing import (
 )
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
-    TYPE_CONVERTER,
     build_oracledb_profile,
+    coerce_async_row_values,
     coerce_sync_row_values,
     normalize_column_names,
     oracle_insert_statement,
     oracle_truncate_statement,
+    oracledb_statement_config,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
 from sqlspec.core import (
@@ -29,7 +30,6 @@ from sqlspec.core import (
     StackResult,
     StatementConfig,
     StatementStack,
-    build_statement_config_from_profile,
     create_arrow_result,
     create_sql_result,
     get_cache_config,
@@ -59,8 +59,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_pipeline_capability, is_readable
+from sqlspec.utils.type_guards import has_pipeline_capability
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -310,35 +309,6 @@ class OraclePipelineMixin:
         return StackExecutionError(
             -1, "Oracle pipeline execution failed", error, adapter=type(self).__name__, mode=mode
         )
-
-
-async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
-    """Coerce LOB handles to concrete values for asynchronous execution.
-
-    Processes each value in the row, reading LOB objects asynchronously
-    and applying type detection for JSON values stored in CLOBs.
-
-    Args:
-        row: Tuple of column values from database fetch.
-
-    Returns:
-        List of coerced values with LOBs read to strings/bytes.
-
-    """
-    coerced_values: list[Any] = []
-    for value in row:
-        if is_readable(value):
-            try:
-                processed_value = await TYPE_CONVERTER.process_lob(value)
-            except Exception:
-                coerced_values.append(value)
-                continue
-            if isinstance(processed_value, str):
-                processed_value = TYPE_CONVERTER.convert_if_detected(processed_value)
-            coerced_values.append(processed_value)
-        else:
-            coerced_values.append(value)
-    return coerced_values
 
 
 ORA_CHECK_CONSTRAINT = 2290
@@ -1219,7 +1189,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             # Oracle returns tuples - convert to consistent dict format after LOB hydration
             data = []
             for row in fetched_data:
-                coerced_row = await _coerce_async_row_values(row)
+                coerced_row = await coerce_async_row_values(row)
                 data.append(dict(zip(column_names, coerced_row, strict=False)))
 
             return self.create_execution_result(
@@ -1457,7 +1427,3 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 _ORACLE_PROFILE = build_oracledb_profile()
 
 register_driver_profile("oracledb", _ORACLE_PROFILE)
-
-oracledb_statement_config = build_statement_config_from_profile(
-    _ORACLE_PROFILE, statement_overrides={"dialect": "oracle"}, json_serializer=to_json
-)

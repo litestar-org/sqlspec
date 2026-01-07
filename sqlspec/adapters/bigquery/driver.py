@@ -6,21 +6,26 @@ type coercion, error handling, and query job management.
 """
 
 import io
-import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
-from google.api_core.retry import Retry
-from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
+from google.cloud.bigquery import QueryJob, QueryJobConfig
 from google.cloud.exceptions import GoogleCloudError
-from sqlglot import exp
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
+    bigquery_statement_config,
+    build_bigquery_load_job_config,
+    build_bigquery_load_job_telemetry,
     build_bigquery_profile,
+    build_bigquery_retry,
+    build_bigquery_statement_config,
+    copy_bigquery_job_config,
     create_bq_parameters,
-    map_bigquery_source_format,
+    detect_bigquery_emulator,
+    extract_bigquery_insert_table,
+    is_simple_bigquery_insert,
     rows_to_results,
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
@@ -28,7 +33,6 @@ from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
     StatementConfig,
     build_literal_inlining_transform,
-    build_statement_config_from_profile,
     create_arrow_result,
     get_cache_config,
     register_driver_profile,
@@ -48,10 +52,11 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_errors
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from sqlglot import exp
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementFilter
@@ -258,9 +263,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
         self._data_dictionary: SyncDataDictionaryBase | None = None
-        self._using_emulator = self._detect_emulator_endpoint(connection)
+        self._using_emulator = detect_bigquery_emulator(connection)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
-        self._job_retry = None if self._using_emulator else self._build_job_retry()
+        self._job_retry = build_bigquery_retry(self._job_retry_deadline, self._using_emulator)
 
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create context manager for cursor management.
@@ -283,121 +288,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
 
-    @staticmethod
-    def _detect_emulator_endpoint(connection: BigQueryConnection) -> bool:
-        """Detect whether the BigQuery client targets an emulator endpoint."""
+    def _is_simple_insert_operation(self, sql: str, expression: "exp.Expression | None" = None) -> bool:
+        """Return True when the SQL matches a simple INSERT pattern."""
+        return is_simple_bigquery_insert(sql, expression)
 
-        emulator_host = os.getenv("BIGQUERY_EMULATOR_HOST") or os.getenv("BIGQUERY_EMULATOR_HOST_HTTP")
-        if emulator_host:
-            return True
-
-        try:
-            inner_connection = cast("Any", connection)._connection
-        except AttributeError:
-            inner_connection = None
-        if inner_connection is None:
-            return False
-        try:
-            api_base_url = inner_connection.API_BASE_URL
-        except AttributeError:
-            api_base_url = ""
-        if not api_base_url:
-            return False
-        return "googleapis.com" not in api_base_url
-
-    def _build_job_retry(self) -> Retry:
-        """Build retry policy for job restarts based on error reason codes."""
-
-        return Retry(predicate=self._should_retry_job_exception, deadline=self._job_retry_deadline)
-
-    @staticmethod
-    def _should_retry_job_exception(exception: Exception) -> bool:
-        """Return True when a BigQuery job exception is safe to retry."""
-
-        if not isinstance(exception, GoogleCloudError):
-            return False
-
-        errors = exception.errors if has_errors(exception) and exception.errors is not None else []
-        retryable_reasons = {
-            "backendError",
-            "internalError",
-            "jobInternalError",
-            "rateLimitExceeded",
-            "jobRateLimitExceeded",
-        }
-
-        for err in errors:
-            if not isinstance(err, dict):
-                continue
-            reason = err.get("reason")
-            message = (err.get("message") or "").lower()
-            if reason in retryable_reasons:
-                # Emulator sometimes reports invalid DML as jobInternalError; guard with obvious syntax hints
-                return not ("nonexistent_column" in message or ("column" in message and "not present" in message))
-
-        return False
-
-    def _should_copy_attribute(self, attr: str, source_config: QueryJobConfig) -> bool:
-        """Check if attribute should be copied between job configs.
-
-        Args:
-            attr: Attribute name to check.
-            source_config: Source configuration object.
-
-        Returns:
-            True if attribute should be copied, False otherwise.
-        """
-        if attr.startswith("_"):
-            return False
-
-        try:
-            value = source_config.__getattribute__(attr)
-            return value is not None and not callable(value)
-        except (AttributeError, TypeError):
-            return False
-
-    def _copy_job_config_attrs(self, source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
-        """Copy non-private attributes from source config to target config.
-
-        Args:
-            source_config: Configuration to copy attributes from.
-            target_config: Configuration to copy attributes to.
-        """
-        for attr in dir(source_config):
-            if not self._should_copy_attribute(attr, source_config):
-                continue
-
-            try:
-                value = source_config.__getattribute__(attr)
-                setattr(target_config, attr, value)
-            except (AttributeError, TypeError):
-                continue
-
-    def _build_load_job_config(self, file_format: "StorageFormat", overwrite: bool) -> LoadJobConfig:
-        job_config = LoadJobConfig()
-        job_config.source_format = map_bigquery_source_format(file_format)
-        job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
-        return job_config
-
-    def _build_load_job_telemetry(self, job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":
-        try:
-            properties = cast("Any", job)._properties
-        except AttributeError:
-            properties = {}
-        load_stats = properties.get("statistics", {}).get("load", {})
-        rows_processed = int(load_stats.get("outputRows") or 0)
-        bytes_processed = int(load_stats.get("outputBytes") or load_stats.get("inputFileBytes", 0) or 0)
-        duration = 0.0
-        if job.ended and job.started:
-            duration = (job.ended - job.started).total_seconds()
-        telemetry: StorageTelemetry = {
-            "destination": table,
-            "rows_processed": rows_processed,
-            "bytes_processed": bytes_processed,
-            "duration_s": duration,
-            "format": format_label,
-        }
-        return telemetry
+    def _extract_table_from_insert(self, sql: str, expression: "exp.Expression | None" = None) -> str | None:
+        """Extract table name from a simple INSERT statement."""
+        return extract_bigquery_insert_table(sql, expression)
 
     def _run_query_job(
         self,
@@ -422,24 +319,24 @@ class BigQueryDriver(SyncDriverAdapterBase):
         final_job_config = QueryJobConfig()
 
         if self._default_query_job_config:
-            self._copy_job_config_attrs(self._default_query_job_config, final_job_config)
+            copy_bigquery_job_config(self._default_query_job_config, final_job_config)
 
         if job_config:
-            self._copy_job_config_attrs(job_config, final_job_config)
+            copy_bigquery_job_config(job_config, final_job_config)
 
         bq_parameters = create_bq_parameters(parameters, self._json_serializer)
         final_job_config.query_parameters = bq_parameters
 
         return conn.query(sql_str, job_config=final_job_config)
 
-    def _inline_literals(self, expression: "sqlglot.Expression", parameters: Any) -> str:
+    def _inline_literals(self, expression: "exp.Expression", parameters: Any) -> str:
         """Inline literal values into a parsed SQLGlot expression."""
 
         if not parameters:
-            return expression.sql(dialect="bigquery")
+            return str(expression.sql(dialect="bigquery"))
 
         transformed_expression, _ = self._literal_inliner(expression, parameters)
-        return cast("str", transformed_expression.sql(dialect="bigquery"))
+        return str(transformed_expression.sql(dialect="bigquery"))
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
@@ -471,50 +368,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    def _is_simple_insert_operation(self, sql: str, expression: "exp.Expression | None" = None) -> bool:
-        """Check if SQL is a simple INSERT VALUES statement.
-
-        Args:
-            sql: SQL string to analyze
-            expression: Optional parsed expression to reuse
-
-        Returns:
-            True if this is a simple INSERT with VALUES, False otherwise
-        """
-        try:
-            parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
-            if not isinstance(parsed, exp.Insert):
-                return False
-            return parsed.expression is not None or parsed.find(exp.Values) is not None
-        except Exception:
-            return False
-
-    def _extract_table_from_insert(self, sql: str, expression: "exp.Expression | None" = None) -> str | None:
-        """Extract table name from INSERT statement using sqlglot.
-
-        Args:
-            sql: INSERT SQL statement
-            expression: Optional parsed expression to reuse
-
-        Returns:
-            Fully qualified table name or None if extraction fails
-        """
-        try:
-            parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
-            if isinstance(parsed, exp.Insert):
-                table = parsed.find(exp.Table)
-                if table:
-                    parts = []
-                    if table.catalog:
-                        parts.append(table.catalog)
-                    if table.db:
-                        parts.append(table.db)
-                    parts.append(table.name)
-                    return ".".join(parts)
-        except Exception:
-            logger.debug("Failed to extract table name from INSERT statement")
-        return None
-
     def _execute_bulk_insert(
         self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]", expression: "exp.Expression | None" = None
     ) -> ExecutionResult | None:
@@ -531,7 +384,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult if successful, None to fall back to literal inlining
         """
-        table_name = self._extract_table_from_insert(sql, expression)
+        table_name = extract_bigquery_insert_table(sql, expression)
         if not table_name:
             return None
 
@@ -545,7 +398,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             pq.write_table(arrow_table, buffer)
             buffer.seek(0)
 
-            job_config = self._build_load_job_config("parquet", overwrite=False)
+            job_config = build_bigquery_load_job_config("parquet", overwrite=False)
             job = self.connection.load_table_from_file(buffer, table_name, job_config=job_config)
             job.result()
 
@@ -619,7 +472,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not prepared_parameters or not isinstance(prepared_parameters, list):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        if self._is_simple_insert_operation(sql, parsed_expression):
+        if is_simple_bigquery_insert(sql, parsed_expression):
             result = self._execute_bulk_insert(cursor, sql, prepared_parameters, parsed_expression)
             if result is not None:
                 return result
@@ -859,10 +712,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
         buffer = io.BytesIO()
         pq.write_table(arrow_table, buffer)
         buffer.seek(0)
-        job_config = self._build_load_job_config("parquet", overwrite)
+        job_config = build_bigquery_load_job_config("parquet", overwrite)
         job = self.connection.load_table_from_file(buffer, table, job_config=job_config)
         job.result()
-        telemetry_payload = self._build_load_job_telemetry(job, table, format_label="parquet")
+        telemetry_payload = build_bigquery_load_job_telemetry(job, table, format_label="parquet")
         if telemetry:
             telemetry_payload.setdefault("extra", {})
             telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
@@ -883,10 +736,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if file_format != "parquet":
             msg = "BigQuery storage bridge currently supports Parquet ingest only"
             raise StorageCapabilityError(msg, capability="parquet_import_enabled")
-        job_config = self._build_load_job_config(file_format, overwrite)
+        job_config = build_bigquery_load_job_config(file_format, overwrite)
         job = self.connection.load_table_from_uri(source, table, job_config=job_config)
         job.result()
-        telemetry_payload = self._build_load_job_telemetry(job, table, format_label=file_format)
+        telemetry_payload = build_bigquery_load_job_telemetry(job, table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload)
 
@@ -894,15 +747,3 @@ class BigQueryDriver(SyncDriverAdapterBase):
 _BIGQUERY_PROFILE = build_bigquery_profile()
 
 register_driver_profile("bigquery", _BIGQUERY_PROFILE)
-
-
-def build_bigquery_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
-    """Construct the BigQuery statement configuration with optional JSON serializer."""
-
-    serializer = json_serializer or to_json
-    return build_statement_config_from_profile(
-        _BIGQUERY_PROFILE, statement_overrides={"dialect": "bigquery"}, json_serializer=serializer
-    )
-
-
-bigquery_statement_config = build_bigquery_statement_config()

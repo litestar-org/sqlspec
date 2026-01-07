@@ -1268,6 +1268,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 class SyncDataDictionaryBase(DataDictionaryMixin):
     """Base class for synchronous data dictionary implementations."""
 
+    __slots__ = ()
+
     @abstractmethod
     def get_version(self, driver: "SyncDriverAdapterBase") -> "VersionInfo | None":
         """Get database version information.

@@ -17,6 +17,11 @@ This guide covers `asyncmy`.
 -   **JSON Strategy:** `helper` (uses shared JSON serializers for dict/list/tuple)
 -   **Extras:** None (native list expansion remains disabled)
 
+## Implementation Notes
+
+-   Statement config helpers live in `sqlspec/adapters/asyncmy/core.py` (builder + `asyncmy_statement_config`).
+-   `AsyncmyConfig` applies `apply_asyncmy_driver_features(...)` before creating sessions.
+
 ## Best Practices
 
 -   **Character Set:** Always ensure the connection character set is `utf8mb4` to support a full range of Unicode characters, including emojis.
