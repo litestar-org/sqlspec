@@ -232,15 +232,17 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     sample_values[column] = value
 
         alias_name = alias or "src"
+        recordset_alias = f"{alias_name}_data"
 
         column_type_spec = ", ".join([f"{col} {self._infer_postgres_type(sample_values.get(col))}" for col in columns])
         column_selects = ", ".join(columns)
-        from_sql = f"SELECT {column_selects} FROM jsonb_to_recordset(:{json_param_name}::jsonb) AS {alias_name}({column_type_spec})"
+        from_sql = (
+            f"SELECT {column_selects} FROM jsonb_to_recordset(:{json_param_name}::jsonb) AS "
+            f"{recordset_alias}({column_type_spec})"
+        )
 
         parsed = sg.parse_one(from_sql, dialect="postgres")
-        paren_expr = exp.paren(parsed)
-        paren_expr.set("alias", exp.TableAlias(this=exp.to_identifier(alias_name)))
-        return paren_expr
+        return exp.Subquery(this=parsed, alias=exp.TableAlias(this=exp.to_identifier(alias_name)))
 
     def _create_oracle_json_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", alias: "str | None"
@@ -266,9 +268,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         from_sql = f"SELECT {column_selects} FROM JSON_TABLE(:{json_param_name}, '$[*]' COLUMNS ({columns_clause}))"
 
         parsed = sg.parse_one(from_sql, dialect="oracle")
-        paren_expr = exp.paren(parsed)
-        paren_expr.set("alias", exp.TableAlias(this=exp.to_identifier(alias_name)))
-        return paren_expr
+        return exp.Subquery(this=parsed, alias=exp.TableAlias(this=exp.to_identifier(alias_name)))
 
     def _infer_postgres_type(self, value: "Any") -> str:
         """Infer PostgreSQL column type from Python value.

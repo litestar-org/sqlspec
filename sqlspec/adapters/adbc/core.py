@@ -28,6 +28,7 @@ __all__ = (
     "apply_adbc_driver_features",
     "apply_adbc_json_serializer",
     "build_adbc_profile",
+    "collect_adbc_rows",
     "detect_adbc_dialect",
     "driver_from_uri",
     "driver_kind_from_driver_name",
@@ -306,6 +307,7 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
     type_map = get_type_coercion_map(detected_dialect)
 
     sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
+    profile = build_adbc_profile()
 
     parameter_overrides: dict[str, Any] = {
         "default_parameter_style": default_style,
@@ -323,20 +325,20 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
 
     return build_statement_config_from_profile(
-        build_adbc_profile(), parameter_overrides=parameter_overrides, statement_overrides={"dialect": sqlglot_dialect}
+        profile, parameter_overrides=parameter_overrides, statement_overrides={"dialect": sqlglot_dialect}
     )
 
 
 def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "dict[str, Any]":
     if "strict_type_coercion" in processed_features and "enable_strict_type_coercion" not in processed_features:
-        processed_features["enable_strict_type_coercion"] = processed_features.pop("strict_type_coercion")
-    else:
-        processed_features.pop("strict_type_coercion", None)
+        processed_features["enable_strict_type_coercion"] = processed_features["strict_type_coercion"]
+    if "enable_strict_type_coercion" in processed_features and "strict_type_coercion" not in processed_features:
+        processed_features["strict_type_coercion"] = processed_features["enable_strict_type_coercion"]
 
     if "arrow_extension_types" in processed_features and "enable_arrow_extension_types" not in processed_features:
-        processed_features["enable_arrow_extension_types"] = processed_features.pop("arrow_extension_types")
-    else:
-        processed_features.pop("arrow_extension_types", None)
+        processed_features["enable_arrow_extension_types"] = processed_features["arrow_extension_types"]
+    if "enable_arrow_extension_types" in processed_features and "arrow_extension_types" not in processed_features:
+        processed_features["arrow_extension_types"] = processed_features["enable_arrow_extension_types"]
 
     return processed_features
 
@@ -385,13 +387,38 @@ def apply_adbc_driver_features(
 
     json_serializer = cast("Callable[[Any], str] | None", processed_features.setdefault("json_serializer", to_json))
     processed_features.setdefault("enable_cast_detection", True)
-    processed_features.setdefault("enable_strict_type_coercion", False)
-    processed_features.setdefault("enable_arrow_extension_types", True)
+    processed_features.setdefault("strict_type_coercion", False)
+    processed_features.setdefault("enable_strict_type_coercion", processed_features["strict_type_coercion"])
+    processed_features.setdefault("arrow_extension_types", True)
+    processed_features.setdefault("enable_arrow_extension_types", processed_features["arrow_extension_types"])
 
     if json_serializer is not None:
         statement_config = apply_adbc_json_serializer(statement_config, json_serializer)
 
     return statement_config, processed_features
+
+
+def collect_adbc_rows(
+    fetched_data: "list[Any] | None", description: "list[Any] | None"
+) -> "tuple[list[dict[str, Any]], list[str]]":
+    """Collect ADBC rows into dictionaries with column names.
+
+    Args:
+        fetched_data: Rows returned from cursor.fetchall().
+        description: Cursor description metadata.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    if not description:
+        return [], []
+    column_names = [col[0] for col in description]
+    if not fetched_data:
+        return [], column_names
+    if isinstance(fetched_data[0], tuple):
+        dict_rows = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+        return dict_rows, column_names
+    return cast("list[dict[str, Any]]", fetched_data), column_names
 
 
 def resolve_adbc_parameter_casts(statement: "SQL") -> "dict[int, str]":

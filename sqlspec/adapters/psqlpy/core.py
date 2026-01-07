@@ -27,6 +27,7 @@ __all__ = (
     "coerce_numeric_for_write",
     "coerce_parameter_for_cast",
     "coerce_records_for_execute_many",
+    "collect_psqlpy_rows",
     "encode_records_for_binary_copy",
     "format_table_identifier",
     "normalize_scalar_parameter",
@@ -196,8 +197,9 @@ def build_psqlpy_parameter_config(
 def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
     """Construct the psqlpy statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
-    parameter_config = build_psqlpy_parameter_config(build_psqlpy_profile(), serializer)
-    base_config = build_statement_config_from_profile(build_psqlpy_profile(), json_serializer=serializer)
+    profile = build_psqlpy_profile()
+    parameter_config = build_psqlpy_parameter_config(profile, serializer)
+    base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
     return base_config.replace(parameter_config=parameter_config)
 
 
@@ -217,6 +219,20 @@ def apply_psqlpy_driver_features(
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, processed_driver_features
+
+
+def collect_psqlpy_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[str]]":
+    """Collect psqlpy rows and column names.
+
+    Args:
+        query_result: Result returned from cursor.fetch().
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    dict_rows: list[dict[str, Any]] = query_result.result() if query_result else []
+    column_names = list(dict_rows[0].keys()) if dict_rows else []
+    return dict_rows, column_names
 
 
 def normalize_scalar_parameter(value: Any) -> Any:

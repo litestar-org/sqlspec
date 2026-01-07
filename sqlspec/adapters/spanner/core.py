@@ -13,6 +13,7 @@ __all__ = (
     "apply_spanner_driver_features",
     "build_spanner_profile",
     "build_spanner_statement_config",
+    "collect_spanner_rows",
     "coerce_spanner_params",
     "infer_spanner_param_types_for_params",
     "spanner_statement_config",
@@ -44,7 +45,8 @@ def build_spanner_profile() -> "DriverParameterProfile":
 
 def build_spanner_statement_config() -> StatementConfig:
     """Construct the Spanner statement configuration."""
-    return build_statement_config_from_profile(build_spanner_profile(), statement_overrides={"dialect": "spanner"})
+    profile = build_spanner_profile()
+    return build_statement_config_from_profile(profile, statement_overrides={"dialect": "spanner"})
 
 
 spanner_statement_config = build_spanner_statement_config()
@@ -91,3 +93,26 @@ def coerce_spanner_params(
     if isinstance(params, (list, tuple)):
         return None
     return coerce_params_for_spanner(params, json_serializer=json_serializer)
+
+
+def collect_spanner_rows(
+    rows: "list[Any]", fields: "list[Any]", converter: Any
+) -> "tuple[list[dict[str, Any]], list[str]]":
+    """Collect Spanner rows into dictionaries.
+
+    Args:
+        rows: Rows from result set.
+        fields: Result set fields metadata.
+        converter: Type converter for row values.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    column_names = [field.name for field in fields]
+    data: list[dict[str, Any]] = []
+    for row in rows:
+        item: dict[str, Any] = {}
+        for index, column in enumerate(column_names):
+            item[column] = converter.convert_if_detected(row[index])
+        data.append(item)
+    return data, column_names

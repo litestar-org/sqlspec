@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     build_adbc_profile,
+    collect_adbc_rows,
     detect_adbc_dialect,
     get_adbc_statement_config,
     handle_postgres_rollback,
@@ -241,6 +242,25 @@ class AdbcDriver(SyncDriverAdapterBase):
         self.dialect = statement_config.dialect
         self._data_dictionary: SyncDataDictionaryBase | None = None
 
+    def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
+        """Create context manager for cursor.
+
+        Args:
+            connection: Database connection
+
+        Returns:
+            Cursor context manager
+        """
+        return AdbcCursor(connection)
+
+    def handle_database_exceptions(self) -> "AdbcExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately.
+
+        Returns:
+            Exception handler context manager
+        """
+        return AdbcExceptionHandler()
+
     def _normalized_dialect(self) -> str:
         dialect = self.dialect
         if dialect is None:
@@ -286,25 +306,6 @@ class AdbcDriver(SyncDriverAdapterBase):
             )
 
         return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
-
-    def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
-        """Create context manager for cursor.
-
-        Args:
-            connection: Database connection
-
-        Returns:
-            Cursor context manager
-        """
-        return AdbcCursor(connection)
-
-    def handle_database_exceptions(self) -> "AdbcExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
-
-        Returns:
-            Exception handler context manager
-        """
-        return AdbcExceptionHandler()
 
     def _execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
@@ -397,13 +398,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         if is_select_like:
             fetched_data = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-
-            if fetched_data and isinstance(fetched_data[0], tuple):
-                dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-            else:
-                dict_data = fetched_data  # type: ignore[assignment]
-
+            dict_data, column_names = collect_adbc_rows(cast("list[Any] | None", fetched_data), cursor.description)
             return self.create_execution_result(
                 cursor,
                 selected_data=cast("list[dict[str, Any]]", dict_data),

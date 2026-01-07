@@ -20,10 +20,7 @@ DEFAULT_PIPELINE_COUNT: Final[int] = 32
 
 
 def _is_truthy(value: "str | None") -> bool:
-    if value is None:
-        return False
-    normalized = value.strip().lower()
-    return normalized in {"1", "true", "yes", "on"}
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

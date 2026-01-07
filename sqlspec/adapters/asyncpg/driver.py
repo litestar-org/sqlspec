@@ -10,6 +10,7 @@ from sqlspec.adapters.asyncpg.core import (
     asyncpg_statement_config,
     build_asyncpg_profile,
     build_asyncpg_statement_config,
+    collect_asyncpg_rows,
     configure_asyncpg_parameter_serializers,
     parse_asyncpg_status,
 )
@@ -443,9 +444,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             records = await cursor.fetch(sql, *prepared_parameters) if prepared_parameters else await cursor.fetch(sql)
-
-            data = [dict(record) for record in records]
-            column_names = list(records[0].keys()) if records else []
+            data, column_names = collect_asyncpg_rows(records)
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
@@ -603,6 +602,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             msg = f"Failed to commit async transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.is_in_transaction())
+
     async def _get_prepared_statement(self, sql: str) -> "AsyncpgPreparedStatement":
         cached = self._prepared_statements.get(sql)
         if cached is not None:
@@ -632,10 +635,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         except asyncpg.PostgresError as exc:
             msg = f"Failed to truncate table '{table}': {exc}"
             raise SQLSpecError(msg) from exc
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return bool(self.connection.is_in_transaction())
 
 
 _ASYNC_PG_PROFILE = build_asyncpg_profile()

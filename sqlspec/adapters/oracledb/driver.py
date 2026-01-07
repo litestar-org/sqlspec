@@ -17,8 +17,8 @@ from sqlspec.adapters.oracledb._typing import (
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
     build_oracledb_profile,
-    coerce_async_row_values,
-    coerce_sync_row_values,
+    collect_oracledb_async_rows,
+    collect_oracledb_sync_rows,
     normalize_column_names,
     oracle_insert_statement,
     oracle_truncate_statement,
@@ -687,11 +687,11 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         # SELECT result processing for Oracle
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-            column_names = normalize_column_names(column_names, self.driver_features)  # pyright: ignore[reportArgumentType]
-
-            # Oracle returns tuples - convert to consistent dict format after LOB hydration
-            data = [dict(zip(column_names, coerce_sync_row_values(row), strict=False)) for row in fetched_data]
+            data, column_names = collect_oracledb_sync_rows(
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                self.driver_features,
+            )
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
@@ -940,6 +940,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=rows_affected)
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return False
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -956,10 +960,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         statement = oracle_truncate_statement(table)
         with self.handle_database_exceptions():
             self.connection.execute(statement)
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return False
 
 
 class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
@@ -1183,14 +1183,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         if is_select_like:
             fetched_data = await cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-            column_names = normalize_column_names(column_names, self.driver_features)  # pyright: ignore[reportArgumentType]
-
-            # Oracle returns tuples - convert to consistent dict format after LOB hydration
-            data = []
-            for row in fetched_data:
-                coerced_row = await coerce_async_row_values(row)
-                data.append(dict(zip(column_names, coerced_row, strict=False)))
+            data, column_names = await collect_oracledb_async_rows(
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                self.driver_features,
+            )
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
@@ -1402,6 +1399,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=rows_affected)
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return False
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -1418,10 +1419,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         statement = oracle_truncate_statement(table)
         async with self.handle_database_exceptions():
             await self.connection.execute(statement)
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return False
 
 
 _ORACLE_PROFILE = build_oracledb_profile()

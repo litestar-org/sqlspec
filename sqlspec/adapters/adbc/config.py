@@ -85,10 +85,12 @@ class AdbcDriverFeatures(TypedDict):
             When True, raises errors for unsupported type conversions.
             When False, attempts best-effort conversion.
             Default: False
+        strict_type_coercion: Alias for enable_strict_type_coercion.
         enable_arrow_extension_types: Enable PyArrow extension type support.
             When True, preserves Arrow extension type metadata when reading data.
             When False, falls back to storage types.
             Default: True
+        arrow_extension_types: Alias for enable_arrow_extension_types.
         enable_events: Enable database event channel support.
             Defaults to True when extension_config["events"] is configured.
             Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
@@ -102,7 +104,9 @@ class AdbcDriverFeatures(TypedDict):
     json_serializer: "NotRequired[Callable[[Any], str]]"
     enable_cast_detection: NotRequired[bool]
     enable_strict_type_coercion: NotRequired[bool]
+    strict_type_coercion: NotRequired[bool]
     enable_arrow_extension_types: NotRequired[bool]
+    arrow_extension_types: NotRequired[bool]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 

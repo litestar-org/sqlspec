@@ -256,6 +256,47 @@ def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "Arro
     raise ValueError(msg)
 
 
+def _resolve_alias_destination(
+    registry: StorageRegistry, destination: str, backend_options: "dict[str, Any]"
+) -> "tuple[ObjectStoreProtocol, str] | None":
+    if not destination.startswith("alias://"):
+        return None
+    payload = destination.removeprefix("alias://")
+    alias_name, _, relative_path = payload.partition("/")
+    alias = alias_name.strip()
+    if not alias:
+        msg = "Alias destinations must include a registry alias before the path component"
+        raise ImproperConfigurationError(msg)
+    path_segment = relative_path.strip()
+    if not path_segment:
+        msg = "Alias destinations must include an object path after the alias name"
+        raise ImproperConfigurationError(msg)
+    backend = registry.get(alias, **backend_options)
+    return backend, path_segment.lstrip("/")
+
+
+def _normalize_path_for_backend(destination: str) -> str:
+    if destination.startswith("file://"):
+        return destination.removeprefix("file://")
+    if "://" in destination:
+        _, remainder = destination.split("://", 1)
+        return remainder.lstrip("/")
+    return destination
+
+
+def _resolve_storage_backend(
+    registry: StorageRegistry, destination: StorageDestination, backend_options: "dict[str, Any] | None"
+) -> "tuple[ObjectStoreProtocol, str]":
+    destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
+    options = backend_options or {}
+    alias_resolution = _resolve_alias_destination(registry, destination_str, options)
+    if alias_resolution is not None:
+        return alias_resolution
+    backend = registry.get(destination_str, **options)
+    normalized_path = _normalize_path_for_backend(destination_str)
+    return backend, normalized_path
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class SyncStoragePipeline:
     """Pipeline coordinating storage registry operations and telemetry."""
@@ -312,11 +353,9 @@ class SyncStoragePipeline:
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         """Read an artifact from storage and decode it into an Arrow table."""
 
-        backend, path = self._resolve_backend(source, storage_options)
+        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
         backend_name = backend.backend_type
-        payload = execute_sync_storage_operation(
-            partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
-        )
+        payload = _read_backend_sync(backend, path, backend_name=backend_name)
         table = _decode_arrow_payload(payload, file_format)
         rows_processed = int(table.num_rows)
         telemetry: StorageTelemetry = {
@@ -353,11 +392,9 @@ class SyncStoragePipeline:
         """Delete staged artifacts best-effort."""
 
         for artifact in artifacts:
-            backend, path = self._resolve_backend(artifact["uri"], None)
+            backend, path = _resolve_storage_backend(self.registry, artifact["uri"], None)
             try:
-                execute_sync_storage_operation(
-                    partial(backend.delete, path), backend=backend.backend_type, operation="delete", path=path
-                )
+                _delete_backend_sync(backend, path, backend_name=backend.backend_type)
             except Exception:
                 if not ignore_errors:
                     raise
@@ -371,12 +408,10 @@ class SyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = self._resolve_backend(destination, storage_options)
+        backend, path = _resolve_storage_backend(self.registry, destination, storage_options)
         backend_name = backend.backend_type
         start = perf_counter()
-        execute_sync_storage_operation(
-            partial(backend.write_bytes, path, payload), backend=backend_name, operation="write_bytes", path=path
-        )
+        _write_backend_sync(backend, path, payload, backend_name=backend_name)
         elapsed = perf_counter() - start
         bytes_written = len(payload)
         _METRICS.record_bytes(bytes_written)
@@ -389,44 +424,6 @@ class SyncStoragePipeline:
             "backend": backend_name,
         }
         return telemetry
-
-    def _resolve_backend(
-        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-    ) -> "tuple[ObjectStoreProtocol, str]":
-        destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-        options = backend_options or {}
-        alias_resolution = self._resolve_alias_destination(destination_str, options)
-        if alias_resolution is not None:
-            return alias_resolution
-        backend = self.registry.get(destination_str, **options)
-        normalized_path = self._normalize_path_for_backend(destination_str)
-        return backend, normalized_path
-
-    def _resolve_alias_destination(
-        self, destination: str, backend_options: "dict[str, Any]"
-    ) -> "tuple[ObjectStoreProtocol, str] | None":
-        if not destination.startswith("alias://"):
-            return None
-        payload = destination.removeprefix("alias://")
-        alias_name, _, relative_path = payload.partition("/")
-        alias = alias_name.strip()
-        if not alias:
-            msg = "Alias destinations must include a registry alias before the path component"
-            raise ImproperConfigurationError(msg)
-        path_segment = relative_path.strip()
-        if not path_segment:
-            msg = "Alias destinations must include an object path after the alias name"
-            raise ImproperConfigurationError(msg)
-        backend = self.registry.get(alias, **backend_options)
-        return backend, path_segment.lstrip("/")
-
-    def _normalize_path_for_backend(self, destination: str) -> str:
-        if destination.startswith("file://"):
-            return destination.removeprefix("file://")
-        if "://" in destination:
-            _, remainder = destination.split("://", 1)
-            return remainder.lstrip("/")
-        return destination
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -478,7 +475,7 @@ class AsyncStoragePipeline:
 
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
         for artifact in artifacts:
-            backend, path = self._resolve_backend(artifact["uri"], None)
+            backend, path = _resolve_storage_backend(self.registry, artifact["uri"], None)
             backend_name = backend.backend_type
             if supports_async_delete(backend):
                 try:
@@ -505,7 +502,7 @@ class AsyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = self._resolve_backend(destination, storage_options)
+        backend, path = _resolve_storage_backend(self.registry, destination, storage_options)
         backend_name = backend.backend_type
         start = perf_counter()
         if supports_async_write_bytes(backend):
@@ -534,7 +531,7 @@ class AsyncStoragePipeline:
     async def read_arrow_async(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
-        backend, path = self._resolve_backend(source, storage_options)
+        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
         backend_name = backend.backend_type
         if supports_async_read_bytes(backend):
             payload = await execute_async_storage_operation(
@@ -553,41 +550,3 @@ class AsyncStoragePipeline:
             "backend": backend_name,
         }
         return table, telemetry
-
-    def _resolve_backend(
-        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-    ) -> "tuple[ObjectStoreProtocol, str]":
-        destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-        options = backend_options or {}
-        alias_resolution = self._resolve_alias_destination(destination_str, options)
-        if alias_resolution is not None:
-            return alias_resolution
-        backend = self.registry.get(destination_str, **options)
-        normalized_path = self._normalize_path_for_backend(destination_str)
-        return backend, normalized_path
-
-    def _resolve_alias_destination(
-        self, destination: str, backend_options: "dict[str, Any]"
-    ) -> "tuple[ObjectStoreProtocol, str] | None":
-        if not destination.startswith("alias://"):
-            return None
-        payload = destination.removeprefix("alias://")
-        alias_name, _, relative_path = payload.partition("/")
-        alias = alias_name.strip()
-        if not alias:
-            msg = "Alias destinations must include a registry alias before the path component"
-            raise ImproperConfigurationError(msg)
-        path_segment = relative_path.strip()
-        if not path_segment:
-            msg = "Alias destinations must include an object path after the alias name"
-            raise ImproperConfigurationError(msg)
-        backend = self.registry.get(alias, **backend_options)
-        return backend, path_segment.lstrip("/")
-
-    def _normalize_path_for_backend(self, destination: str) -> str:
-        if destination.startswith("file://"):
-            return destination.removeprefix("file://")
-        if "://" in destination:
-            _, remainder = destination.split("://", 1)
-            return remainder.lstrip("/")
-        return destination

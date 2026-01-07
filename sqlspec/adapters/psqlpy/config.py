@@ -19,28 +19,6 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
 
-class _PsqlpySessionFactory:
-    __slots__ = ("_config", "_ctx")
-
-    def __init__(self, config: "PsqlpyConfig") -> None:
-        self._config = config
-        self._ctx: Any | None = None
-
-    async def acquire_connection(self) -> "PsqlpyConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        ctx = pool.acquire()
-        self._ctx = ctx
-        return await ctx.__aenter__()
-
-    async def release_connection(self, _conn: "PsqlpyConnection") -> None:
-        if self._ctx is not None:
-            await self._ctx.__aexit__(None, None, None)
-            self._ctx = None
-
-
 class PsqlpyConnectionParams(TypedDict):
     """Psqlpy connection parameters."""
 
@@ -120,6 +98,28 @@ class PsqlpyDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+
+
+class _PsqlpySessionFactory:
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "PsqlpyConfig") -> None:
+        self._config = config
+        self._ctx: Any | None = None
+
+    async def acquire_connection(self) -> "PsqlpyConnection":
+        pool = self._config.connection_instance
+        if pool is None:
+            pool = await self._config.create_pool()
+            self._config.connection_instance = pool
+        ctx = pool.acquire()
+        self._ctx = ctx
+        return await ctx.__aenter__()
+
+    async def release_connection(self, _conn: "PsqlpyConnection") -> None:
+        if self._ctx is not None:
+            await self._ctx.__aexit__(None, None, None)
+            self._ctx = None
 
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")

@@ -1,7 +1,7 @@
 """DuckDB driver implementation."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import duckdb
@@ -10,7 +10,7 @@ from sqlspec.adapters.duckdb.core import (
     apply_duckdb_driver_features,
     build_duckdb_profile,
     build_duckdb_statement_config,
-    coerce_duckdb_rows,
+    collect_duckdb_rows,
     duckdb_statement_config,
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
@@ -323,9 +323,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         if is_select_like:
             fetched_data = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-
-            dict_data = coerce_duckdb_rows(fetched_data, column_names)
+            dict_data, column_names = collect_duckdb_rows(cast("list[Any] | None", fetched_data), cursor.description)
 
             return self.create_execution_result(
                 cursor,

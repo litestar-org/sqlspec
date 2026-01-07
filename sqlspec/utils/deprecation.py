@@ -6,7 +6,7 @@ Used to communicate API changes and migration paths to users.
 
 import inspect
 from collections.abc import Callable
-from functools import update_wrapper
+from functools import WRAPPER_ASSIGNMENTS, WRAPPER_UPDATES
 from typing import Generic, Literal, cast
 from warnings import warn
 
@@ -170,4 +170,21 @@ class _DeprecatedFactory(Generic[P, T]):
             pending=self._pending,
             kind=self._kind,
         )
-        return cast("Callable[P, T]", update_wrapper(wrapper, func))
+        return cast("Callable[P, T]", _copy_wrapper_metadata(wrapper, func))
+
+
+def _copy_wrapper_metadata(wrapper: "_DeprecatedWrapper[P, T]", func: "Callable[P, T]") -> "_DeprecatedWrapper[P, T]":
+    assignments: tuple[str, ...] = tuple(WRAPPER_ASSIGNMENTS)
+    updates: tuple[str, ...] = tuple(WRAPPER_UPDATES)
+    wrapper_dict = wrapper.__dict__
+    wrapper_dict.update(getattr(func, "__dict__", {}))
+    for attr in assignments:
+        if hasattr(func, attr):
+            wrapper_dict[attr] = getattr(func, attr)
+    wrapper_dict["__wrapped__"] = func
+    for attr in updates:
+        if attr == "__dict__":
+            continue
+        if hasattr(func, attr):
+            wrapper_dict[attr] = getattr(func, attr)
+    return wrapper

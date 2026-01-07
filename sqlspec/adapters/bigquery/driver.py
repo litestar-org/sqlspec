@@ -22,12 +22,12 @@ from sqlspec.adapters.bigquery.core import (
     build_bigquery_retry,
     build_bigquery_statement_config,
     copy_bigquery_job_config,
+    collect_bigquery_rows,
     create_bq_parameters,
     detect_bigquery_emulator,
     extract_bigquery_insert_table,
     is_simple_bigquery_insert,
-    rows_to_results,
-)
+    )
 from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
@@ -426,20 +426,24 @@ class BigQueryDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution details
         """
-        if expression is not None:
-            parsed_expression = expression
-        else:
+        parsed_expression = expression
+        if parsed_expression is None:
             try:
                 parsed_expression = sqlglot.parse_one(sql, dialect="bigquery")
             except sqlglot.ParseError:
                 parsed_expression = None
 
-        script_statements = []
-        for param_set in parameters:
-            if parsed_expression is None:
-                script_statements.append(sql)
-                continue
+        if parsed_expression is None:
+            script_sql = ";\n".join([sql] * len(parameters))
+            cursor.job = self._run_query_job(script_sql, None, connection=cursor)
+            cursor.job.result(job_retry=self._job_retry)
+            affected_rows = (
+                cursor.job.num_dml_affected_rows if cursor.job.num_dml_affected_rows is not None else len(parameters)
+            )
+            return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
+        script_statements: list[str] = []
+        for param_set in parameters:
             expression_copy = parsed_expression.copy()
             script_statements.append(self._inline_literals(expression_copy, param_set))
 
@@ -498,8 +502,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
         if is_select_like:
-            rows_list = rows_to_results(iter(job_result))
-            column_names = [field.name for field in cursor.job.schema] if cursor.job.schema else []
+            rows_list, column_names = collect_bigquery_rows(job_result, cursor.job.schema)
 
             return self.create_execution_result(
                 cursor,

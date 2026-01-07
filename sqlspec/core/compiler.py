@@ -392,6 +392,8 @@ class SQLProcessor:
             parameter_profile = process_result.parameter_profile
 
             sqlglot_sql = process_result.sqlglot_sql
+            if expression_override is not None and sqlglot_sql != sql:
+                expression_override = None
 
             final_parameters = processed_params
             ast_was_transformed = False

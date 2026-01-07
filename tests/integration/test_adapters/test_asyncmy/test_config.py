@@ -80,9 +80,9 @@ def test_asyncmy_config_initialization() -> None:
     config = AsyncmyConfig(connection_config=connection_config)
     assert isinstance(config.statement_config, StatementConfig)
 
-    custom_statement_config = StatementConfig()
+    custom_statement_config = StatementConfig(dialect="custom")
     config = AsyncmyConfig(connection_config=connection_config, statement_config=custom_statement_config)
-    assert config.statement_config is custom_statement_config
+    assert config.statement_config.dialect == "custom"
 
 
 async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> None:

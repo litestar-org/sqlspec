@@ -16,6 +16,8 @@ __all__ = (
     "apply_oracledb_driver_features",
     "build_oracledb_profile",
     "build_oracledb_statement_config",
+    "collect_oracledb_async_rows",
+    "collect_oracledb_sync_rows",
     "coerce_async_row_values",
     "coerce_sync_row_values",
     "normalize_column_names",
@@ -150,6 +152,55 @@ async def coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     return coerced_values
 
 
+def collect_oracledb_sync_rows(
+    fetched_data: "list[Any] | None", description: "list[Any] | None", driver_features: "dict[str, Any]"
+) -> "tuple[list[dict[str, Any]], list[str]]":
+    """Collect OracleDB sync rows into dictionaries with normalized column names.
+
+    Args:
+        fetched_data: Rows returned from cursor.fetchall().
+        description: Cursor description metadata.
+        driver_features: Driver feature configuration.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    if not description:
+        return [], []
+    column_names = [col[0] for col in description]
+    column_names = normalize_column_names(column_names, driver_features)
+    if not fetched_data:
+        return [], column_names
+    data = [dict(zip(column_names, coerce_sync_row_values(row), strict=False)) for row in fetched_data]
+    return data, column_names
+
+
+async def collect_oracledb_async_rows(
+    fetched_data: "list[Any] | None", description: "list[Any] | None", driver_features: "dict[str, Any]"
+) -> "tuple[list[dict[str, Any]], list[str]]":
+    """Collect OracleDB async rows into dictionaries with normalized column names.
+
+    Args:
+        fetched_data: Rows returned from cursor.fetchall().
+        description: Cursor description metadata.
+        driver_features: Driver feature configuration.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    if not description:
+        return [], []
+    column_names = [col[0] for col in description]
+    column_names = normalize_column_names(column_names, driver_features)
+    if not fetched_data:
+        return [], column_names
+    data: list[dict[str, Any]] = []
+    for row in fetched_data:
+        coerced_row = await coerce_async_row_values(row)
+        data.append(dict(zip(column_names, coerced_row, strict=False)))
+    return data, column_names
+
+
 def build_oracledb_profile() -> "DriverParameterProfile":
     """Create the OracleDB driver parameter profile."""
     return DriverParameterProfile(
@@ -171,8 +222,9 @@ def build_oracledb_profile() -> "DriverParameterProfile":
 def build_oracledb_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the OracleDB statement configuration with optional JSON serializer."""
     serializer = json_serializer or to_json
+    profile = build_oracledb_profile()
     return build_statement_config_from_profile(
-        build_oracledb_profile(), statement_overrides={"dialect": "oracle"}, json_serializer=serializer
+        profile, statement_overrides={"dialect": "oracle"}, json_serializer=serializer
     )
 
 

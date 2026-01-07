@@ -111,9 +111,7 @@ class LocalStore:
             Resolved Path object.
         """
         p = Path(path)
-        if p.is_absolute():
-            return p
-        return self.base_path / p
+        return p if p.is_absolute() else self.base_path / p
 
     def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file."""

@@ -483,12 +483,12 @@ SELECT 'shared between loaders' as message;
             mock_cache_factory.return_value = shared_cache
 
             loader1 = SQLFileLoader()
-            shared_cache.get.return_value = None
+            shared_cache.get_file.return_value = None
 
             with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True):
                 loader1._load_single_file(tf.name, None)
 
-            shared_cache.put.assert_called_once()
+            shared_cache.put_file.assert_called_once()
 
             loader2 = SQLFileLoader()
 
@@ -496,14 +496,14 @@ SELECT 'shared between loaders' as message;
             statements = {"shared_query": NamedStatement("shared_query", "SELECT 'shared between loaders' as message")}
             cached_file = SQLFileCacheEntry(sql_file, statements)
 
-            shared_cache.get.return_value = cached_file
             shared_cache.reset_mock()
+            shared_cache.get_file.return_value = cached_file
 
             with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True):
                 loader2._load_single_file(tf.name, None)
 
-            shared_cache.get.assert_called_once()
-            shared_cache.put.assert_not_called()
+            shared_cache.get_file.assert_called_once()
+            shared_cache.put_file.assert_not_called()
 
             assert "shared_query" in loader1._queries
             assert "shared_query" in loader2._queries

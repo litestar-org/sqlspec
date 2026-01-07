@@ -17,6 +17,7 @@ __all__ = (
     "apply_duckdb_driver_features",
     "build_duckdb_profile",
     "build_duckdb_statement_config",
+    "collect_duckdb_rows",
     "coerce_duckdb_rows",
     "duckdb_statement_config",
 )
@@ -43,6 +44,26 @@ def coerce_duckdb_rows(fetched_data: "list[Any]", column_names: "list[str]") -> 
     if fetched_data and isinstance(fetched_data[0], tuple):
         return [dict(zip(column_names, row, strict=False)) for row in fetched_data]
     return fetched_data
+
+
+def collect_duckdb_rows(
+    fetched_data: "list[Any] | None", description: "list[Any] | None"
+) -> "tuple[list[dict[str, Any]] | list[Any], list[str]]":
+    """Collect DuckDB rows and column names.
+
+    Args:
+        fetched_data: Rows returned from cursor.fetchall().
+        description: Cursor description metadata.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    if not description:
+        return [], []
+    column_names = [col[0] for col in description]
+    if not fetched_data:
+        return [], column_names
+    return coerce_duckdb_rows(fetched_data, column_names), column_names
 
 
 def build_duckdb_profile() -> "DriverParameterProfile":
@@ -99,8 +120,9 @@ def apply_duckdb_driver_features(
 def build_duckdb_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the DuckDB statement configuration with optional JSON serializer."""
     serializer = json_serializer or to_json
+    profile = build_duckdb_profile()
     return build_statement_config_from_profile(
-        build_duckdb_profile(), statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
+        profile, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
     )
 
 

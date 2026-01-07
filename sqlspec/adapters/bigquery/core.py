@@ -36,6 +36,7 @@ __all__ = (
     "detect_bigquery_emulator",
     "extract_bigquery_insert_table",
     "is_simple_bigquery_insert",
+    "collect_bigquery_rows",
     "map_bigquery_source_format",
     "normalize_bigquery_driver_features",
     "rows_to_results",
@@ -126,31 +127,6 @@ def _get_bigquery_module() -> Any:
 
 
 logger = get_logger("adapters.bigquery.core")
-
-
-def normalize_bigquery_driver_features(
-    driver_features: "Mapping[str, Any] | None",
-) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
-    """Normalize driver feature defaults and extract core options."""
-    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    user_connection_hook = processed_driver_features.pop("on_connection_create", None)
-    processed_driver_features.setdefault("enable_uuid_conversion", True)
-    serializer = processed_driver_features.setdefault("json_serializer", to_json)
-    connection_instance = processed_driver_features.get("connection_instance")
-
-    return (
-        processed_driver_features,
-        cast("Callable[[Any], str] | None", serializer),
-        cast("Callable[[Any], None] | None", user_connection_hook),
-        connection_instance,
-    )
-
-
-def apply_bigquery_driver_features(
-    driver_features: "Mapping[str, Any] | None",
-) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
-    """Apply BigQuery driver feature defaults and extract core options."""
-    return normalize_bigquery_driver_features(driver_features)
 
 
 def _get_bq_param_type(value: Any) -> "tuple[str | None, str | None]":
@@ -380,6 +356,21 @@ def rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
     return [dict(row) for row in rows_iterator]
 
 
+def collect_bigquery_rows(job_result: Any, schema: Any | None) -> "tuple[list[dict[str, Any]], list[str]]":
+    """Collect BigQuery rows and schema into structured lists.
+
+    Args:
+        job_result: BigQuery job result iterator.
+        schema: BigQuery schema object (or None).
+
+    Returns:
+        Tuple of (rows_list, column_names).
+    """
+    rows_list = rows_to_results(iter(job_result))
+    column_names = [field.name for field in schema] if schema else []
+    return rows_list, column_names
+
+
 def build_bigquery_profile() -> "DriverParameterProfile":
     """Create the BigQuery driver parameter profile."""
 
@@ -415,9 +406,35 @@ def build_bigquery_profile() -> "DriverParameterProfile":
 def build_bigquery_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the BigQuery statement configuration with optional JSON serializer."""
     serializer = json_serializer or to_json
+    profile = build_bigquery_profile()
     return build_statement_config_from_profile(
-        build_bigquery_profile(), statement_overrides={"dialect": "bigquery"}, json_serializer=serializer
+        profile, statement_overrides={"dialect": "bigquery"}, json_serializer=serializer
     )
 
 
 bigquery_statement_config = build_bigquery_statement_config()
+
+
+def normalize_bigquery_driver_features(
+    driver_features: "Mapping[str, Any] | None",
+) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
+    """Normalize driver feature defaults and extract core options."""
+    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    user_connection_hook = processed_driver_features.pop("on_connection_create", None)
+    processed_driver_features.setdefault("enable_uuid_conversion", True)
+    serializer = processed_driver_features.setdefault("json_serializer", to_json)
+    connection_instance = processed_driver_features.get("connection_instance")
+
+    return (
+        processed_driver_features,
+        cast("Callable[[Any], str] | None", serializer),
+        cast("Callable[[Any], None] | None", user_connection_hook),
+        connection_instance,
+    )
+
+
+def apply_bigquery_driver_features(
+    driver_features: "Mapping[str, Any] | None",
+) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
+    """Apply BigQuery driver feature defaults and extract core options."""
+    return normalize_bigquery_driver_features(driver_features)

@@ -93,9 +93,12 @@ class FSSpecBackend:
     def base_uri(self) -> str:
         return self._fs_uri
 
+    def _resolve_path(self, path: str | Path) -> str:
+        return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+
     def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from an object."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
         return cast(
             "bytes",
             execute_sync_storage_operation(
@@ -108,7 +111,7 @@ class FSSpecBackend:
 
     def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
 
         if self.protocol == "file":
             parent_dir = str(Path(resolved_path).parent)
@@ -133,12 +136,12 @@ class FSSpecBackend:
 
     def exists(self, path: str | Path, **kwargs: Any) -> bool:
         """Check if an object exists."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
         return self.fs.exists(resolved_path, **kwargs)  # type: ignore[no-any-return]
 
     def delete(self, path: str | Path, **kwargs: Any) -> None:
         """Delete an object."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
         execute_sync_storage_operation(
             partial(self.fs.rm, resolved_path, **kwargs),
             backend=self.backend_type,
@@ -148,8 +151,8 @@ class FSSpecBackend:
 
     def copy(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Copy an object."""
-        source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=False)
-        dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=False)
+        source_path = self._resolve_path(source)
+        dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
             partial(self.fs.copy, source_path, dest_path, **kwargs),
             backend=self.backend_type,
@@ -159,8 +162,8 @@ class FSSpecBackend:
 
     def move(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Move an object."""
-        source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=False)
-        dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=False)
+        source_path = self._resolve_path(source)
+        dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
             partial(self.fs.mv, source_path, dest_path, **kwargs),
             backend=self.backend_type,
@@ -172,11 +175,11 @@ class FSSpecBackend:
         """Read an Arrow table from storage."""
         pq = import_pyarrow_parquet()
 
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
         return cast(
             "ArrowTable",
             execute_sync_storage_operation(
-                partial(self._read_arrow, resolved_path, pq, kwargs),
+                partial(self._read_parquet_table, resolved_path, pq, kwargs),
                 backend=self.backend_type,
                 operation="read_arrow",
                 path=resolved_path,
@@ -187,7 +190,7 @@ class FSSpecBackend:
         """Write an Arrow table to storage."""
         pq = import_pyarrow_parquet()
 
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
 
         execute_sync_storage_operation(
             partial(_write_fsspec_arrow, self.fs, resolved_path, table, pq, kwargs),
@@ -196,7 +199,7 @@ class FSSpecBackend:
             path=resolved_path,
         )
 
-    def _read_arrow(self, resolved_path: str, pq: Any, options: "dict[str, Any]") -> Any:
+    def _read_parquet_table(self, resolved_path: str, pq: Any, options: "dict[str, Any]") -> Any:
         with self.fs.open(resolved_path, mode="rb", **options) as file_obj:
             return pq.read_table(file_obj)
 

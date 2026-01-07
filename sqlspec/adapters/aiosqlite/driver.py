@@ -389,11 +389,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    async def _truncate_table_async(self, table: str) -> None:
-        statement = f"DELETE FROM {format_sqlite_identifier(table)}"
-        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
-            await cursor.execute(statement)
-
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
@@ -401,6 +396,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             True if connection is in an active transaction.
         """
         return bool(self.connection.in_transaction)
+
+    async def _truncate_table_async(self, table: str) -> None:
+        statement = f"DELETE FROM {format_sqlite_identifier(table)}"
+        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            await cursor.execute(statement)
 
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":

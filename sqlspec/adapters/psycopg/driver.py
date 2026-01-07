@@ -13,6 +13,7 @@ from sqlspec.adapters.psycopg._typing import (
 )
 from sqlspec.adapters.psycopg.core import (
     build_copy_from_command,
+    collect_psycopg_rows,
     build_psycopg_profile,
     build_psycopg_statement_config,
     build_truncate_command,
@@ -530,7 +531,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
+            fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
             execution_result = self.create_execution_result(
                 cursor,
                 selected_data=fetched_data,
@@ -585,7 +586,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
+            fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
 
             return self.create_execution_result(
                 cursor,
@@ -664,6 +665,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -679,10 +684,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         truncate_sql = build_truncate_command(table)
         with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             cursor.execute(truncate_sql)
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
 
 class PsycopgAsyncCursor:
@@ -1080,7 +1081,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
+            fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
             execution_result = self.create_execution_result(
                 cursor,
                 selected_data=fetched_data,
@@ -1135,7 +1136,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
+            fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
 
             return self.create_execution_result(
                 cursor,
@@ -1216,6 +1217,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -1231,10 +1236,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         truncate_sql = build_truncate_command(table)
         async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             await cursor.execute(truncate_sql)
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
 
 _PSYCOPG_PROFILE = build_psycopg_profile()

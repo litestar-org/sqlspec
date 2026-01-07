@@ -128,6 +128,11 @@ class ObStoreBackend:
 
         return cls(uri=store_uri, **kwargs)
 
+    def _resolve_path(self, path: "str | Path") -> str:
+        if self._is_local_store:
+            return self._resolve_path_for_local_store(path)
+        return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
     def _resolve_path_for_local_store(self, path: "str | Path") -> str:
         """Resolve path for LocalStore which expects relative paths from its root."""
 
@@ -143,10 +148,7 @@ class ObStoreBackend:
 
     def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes using obstore."""
-        if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
-        else:
-            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
 
         return execute_sync_storage_operation(
             partial(_read_obstore_bytes, self.store, resolved_path),
@@ -157,10 +159,7 @@ class ObStoreBackend:
 
     def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
-        if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
-        else:
-            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
 
         execute_sync_storage_operation(
             partial(self.store.put, resolved_path, data),
@@ -185,31 +184,28 @@ class ObStoreBackend:
             else self.base_path or ""
         )
         items = self.store.list_with_delimiter(resolved_prefix) if not recursive else self.store.list(resolved_prefix)
-        paths: list[str] = []
-        for batch in items:
-            paths.extend(item["path"] for item in batch)
-        return sorted(paths)
+        return sorted(item["path"] for batch in items for item in batch)
 
     def exists(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists using obstore."""
         try:
-            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-            self.store.head(resolved_path)
+            resolved_path = self._resolve_path(path)
+            self.store.head(resolved_path)  # pyright: ignore[reportUnknownMemberType]
         except Exception:
             return False
         return True
 
     def delete(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Delete object using obstore."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
         execute_sync_storage_operation(
             partial(self.store.delete, resolved_path), backend=self.backend_type, operation="delete", path=resolved_path
         )
 
     def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object using obstore."""
-        source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
-        dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
+        source_path = self._resolve_path(source)
+        dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
             partial(self.store.copy, source_path, dest_path),
             backend=self.backend_type,
@@ -219,8 +215,8 @@ class ObStoreBackend:
 
     def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object using obstore."""
-        source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
-        dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
+        source_path = self._resolve_path(source)
+        dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
             partial(self.store.rename, source_path, dest_path),
             backend=self.backend_type,

@@ -34,28 +34,6 @@ __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatu
 logger = get_logger("adapters.aiosqlite")
 
 
-class _AiosqliteSessionFactory:
-    __slots__ = ("_config", "_pool_conn")
-
-    def __init__(self, config: "AiosqliteConfig") -> None:
-        self._config = config
-        self._pool_conn: AiosqlitePoolConnection | None = None
-
-    async def acquire_connection(self) -> "AiosqliteConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        pool_conn = await pool.acquire()
-        self._pool_conn = pool_conn
-        return pool_conn.connection
-
-    async def release_connection(self, _conn: "AiosqliteConnection") -> None:
-        if self._pool_conn is not None and self._config.connection_instance is not None:
-            await self._config.connection_instance.release(self._pool_conn)
-            self._pool_conn = None
-
-
 class AiosqliteConnectionParams(TypedDict):
     """TypedDict for aiosqlite connection parameters."""
 
@@ -105,6 +83,28 @@ class AiosqliteDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+
+
+class _AiosqliteSessionFactory:
+    __slots__ = ("_config", "_pool_conn")
+
+    def __init__(self, config: "AiosqliteConfig") -> None:
+        self._config = config
+        self._pool_conn: AiosqlitePoolConnection | None = None
+
+    async def acquire_connection(self) -> "AiosqliteConnection":
+        pool = self._config.connection_instance
+        if pool is None:
+            pool = await self._config.create_pool()
+            self._config.connection_instance = pool
+        pool_conn = await pool.acquire()
+        self._pool_conn = pool_conn
+        return pool_conn.connection
+
+    async def release_connection(self, _conn: "AiosqliteConnection") -> None:
+        if self._pool_conn is not None and self._config.connection_instance is not None:
+            await self._config.connection_instance.release(self._pool_conn)
+            self._pool_conn = None
 
 
 class AiosqliteConnectionContext:

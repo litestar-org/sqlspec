@@ -16,6 +16,7 @@ __all__ = (
     "build_asyncmy_insert_statement",
     "build_asyncmy_profile",
     "build_asyncmy_statement_config",
+    "collect_asyncmy_rows",
     "deserialize_asyncmy_json_rows",
     "detect_asyncmy_json_columns",
     "format_mysql_identifier",
@@ -73,11 +74,9 @@ def build_asyncmy_statement_config(
     """Construct the AsyncMy statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
     deserializer = json_deserializer or from_json
+    profile = build_asyncmy_profile()
     return build_statement_config_from_profile(
-        build_asyncmy_profile(),
-        statement_overrides={"dialect": "mysql"},
-        json_serializer=serializer,
-        json_deserializer=deserializer,
+        profile, statement_overrides={"dialect": "mysql"}, json_serializer=serializer, json_deserializer=deserializer
     )
 
 
@@ -174,3 +173,36 @@ def deserialize_asyncmy_json_rows(
                 if logger is not None:
                     logger.debug("Failed to deserialize JSON column %s", column, exc_info=True)
     return rows
+
+
+def collect_asyncmy_rows(
+    fetched_data: "list[Any] | None",
+    description: "list[Any] | None",
+    json_indexes: "list[int]",
+    deserializer: "Callable[[Any], Any]",
+    *,
+    logger: Any | None = None,
+) -> "tuple[list[dict[str, Any]], list[str]]":
+    """Collect AsyncMy rows into dictionaries with JSON decoding.
+
+    Args:
+        fetched_data: Rows returned from cursor.fetchall().
+        description: Cursor description metadata.
+        json_indexes: Column indexes containing JSON values.
+        deserializer: JSON deserializer function.
+        logger: Optional logger for debug output.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    if not description:
+        return [], []
+    column_names = [desc[0] for desc in description]
+    if not fetched_data:
+        return [], column_names
+    if not isinstance(fetched_data[0], dict):
+        rows = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+    else:
+        rows = [dict(row) for row in fetched_data]
+    rows = deserialize_asyncmy_json_rows(column_names, rows, json_indexes, deserializer, logger=logger)
+    return rows, column_names

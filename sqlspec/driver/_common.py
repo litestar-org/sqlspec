@@ -1336,11 +1336,13 @@ class CommonDriverAttributesMixin:
 
         """
         cache_config = get_cache_config()
+        dialect_key = str(statement.dialect) if statement.dialect else None
         cache_key = None
+        cache = None
         if cache_config.compiled_cache_enabled and statement_config.enable_caching:
             cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
-            cached_result = cache.get_statement(cache_key, str(statement.dialect) if statement.dialect else None)
+            cached_result = cache.get_statement(cache_key, dialect_key)
             if cached_result is not None and isinstance(cached_result, CachedStatement):
                 return cached_result.compiled_sql, cached_result.parameters
 
@@ -1354,8 +1356,7 @@ class CommonDriverAttributesMixin:
             prepared_statement=prepared_statement,
         )
 
-        if cache_key is not None:
-            cache = get_cache()
+        if cache_key is not None and cache is not None:
             cached_statement = CachedStatement(
                 compiled_sql=compiled_sql,
                 parameters=tuple(prepared_parameters)
@@ -1371,7 +1372,7 @@ class CommonDriverAttributesMixin:
                 ),
                 expression=prepared_statement.expression,
             )
-            cache.put_statement(cache_key, cached_statement, str(statement.dialect) if statement.dialect else None)
+            cache.put_statement(cache_key, cached_statement, dialect_key)
 
         return compiled_sql, prepared_parameters
 

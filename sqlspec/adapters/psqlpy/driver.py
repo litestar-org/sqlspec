@@ -17,6 +17,7 @@ from sqlspec.adapters.psqlpy.core import (
     coerce_numeric_for_write,
     coerce_parameter_for_cast,
     coerce_records_for_execute_many,
+    collect_psqlpy_rows,
     encode_records_for_binary_copy,
     format_table_identifier,
     normalize_scalar_parameter,
@@ -419,12 +420,12 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             query_result = await cursor.fetch(sql, effective_parameters or [])
-            dict_rows: list[dict[str, Any]] = query_result.result() if query_result else []
+            dict_rows, column_names = collect_psqlpy_rows(query_result)
 
             return self.create_execution_result(
                 cursor,
                 selected_data=dict_rows,
-                column_names=list(dict_rows[0].keys()) if dict_rows else [],
+                column_names=column_names,
                 data_row_count=len(dict_rows),
                 is_select_result=True,
             )

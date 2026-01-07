@@ -23,6 +23,7 @@ __all__ = (
     "build_psycopg_profile",
     "build_psycopg_statement_config",
     "build_truncate_command",
+    "collect_psycopg_rows",
     "psycopg_pipeline_supported",
     "psycopg_statement_config",
 )
@@ -121,8 +122,9 @@ def build_psycopg_profile() -> "DriverParameterProfile":
 def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
     """Construct the psycopg statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
-    parameter_config = build_psycopg_parameter_config(build_psycopg_profile(), serializer)
-    base_config = build_statement_config_from_profile(build_psycopg_profile(), json_serializer=serializer)
+    profile = build_psycopg_profile()
+    parameter_config = build_psycopg_parameter_config(profile, serializer)
+    base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
     return base_config.replace(parameter_config=parameter_config)
 
 
@@ -142,3 +144,21 @@ def apply_psycopg_driver_features(
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, processed_driver_features
+
+
+def collect_psycopg_rows(
+    fetched_data: "list[Any] | None", description: "list[Any] | None"
+) -> "tuple[list[Any], list[str]]":
+    """Collect psycopg rows and column names.
+
+    Args:
+        fetched_data: Rows returned from cursor.fetchall().
+        description: Cursor description metadata.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    if not description:
+        return [], []
+    column_names = [col.name for col in description]
+    return fetched_data or [], column_names

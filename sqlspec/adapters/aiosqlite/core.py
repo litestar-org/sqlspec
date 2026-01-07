@@ -106,11 +106,9 @@ def build_aiosqlite_statement_config(
     """Construct the AIOSQLite statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
     deserializer = json_deserializer or from_json
+    profile = build_aiosqlite_profile()
     return build_statement_config_from_profile(
-        build_aiosqlite_profile(),
-        statement_overrides={"dialect": "sqlite"},
-        json_serializer=serializer,
-        json_deserializer=deserializer,
+        profile, statement_overrides={"dialect": "sqlite"}, json_serializer=serializer, json_deserializer=deserializer
     )
 
 

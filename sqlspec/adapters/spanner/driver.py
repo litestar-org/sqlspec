@@ -9,6 +9,7 @@ from google.cloud.spanner_v1.transaction import Transaction
 from sqlspec.adapters.spanner._typing import SpannerSessionContext
 from sqlspec.adapters.spanner.core import (
     build_spanner_profile,
+    collect_spanner_rows,
     coerce_spanner_params,
     infer_spanner_param_types_for_params,
     spanner_statement_config,
@@ -200,15 +201,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             if not fields:
                 msg = "Result set metadata not available."
                 raise SQLConversionError(msg)
-            column_names = [field.name for field in fields]
-
-            data: list[dict[str, Any]] = []
-            for row in rows:
-                item: dict[str, Any] = {}
-                for index, column in enumerate(column_names):
-                    item[column] = self._type_converter.convert_if_detected(row[index])
-                data.append(item)
-
+            data, column_names = collect_spanner_rows(rows, fields, self._type_converter)
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
@@ -287,6 +280,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             if writer.committed is not None:
                 return
             writer.commit()
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return False
 
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
@@ -381,10 +378,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         else:
             msg = "Delete requires a Transaction context."
             raise SQLConversionError(msg)
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return False
 
 
 _SPANNER_PROFILE = build_spanner_profile()

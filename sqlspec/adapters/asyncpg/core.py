@@ -20,6 +20,7 @@ __all__ = (
     "asyncpg_statement_config",
     "build_asyncpg_profile",
     "build_asyncpg_statement_config",
+    "collect_asyncpg_rows",
     "configure_asyncpg_parameter_serializers",
     "parse_asyncpg_status",
     "register_asyncpg_json_codecs",
@@ -106,8 +107,9 @@ def build_asyncpg_statement_config(
     effective_serializer = json_serializer or to_json
     effective_deserializer = json_deserializer or from_json
 
+    profile = build_asyncpg_profile()
     base_config = build_statement_config_from_profile(
-        build_asyncpg_profile(),
+        profile,
         statement_overrides={"dialect": "postgres"},
         json_serializer=effective_serializer,
         json_deserializer=effective_deserializer,
@@ -193,3 +195,19 @@ def parse_asyncpg_status(status: str) -> int:
                 pass
 
     return 0
+
+
+def collect_asyncpg_rows(records: "list[Any] | None") -> "tuple[list[dict[str, Any]], list[str]]":
+    """Collect AsyncPG records into dictionaries and column names.
+
+    Args:
+        records: Records returned from asyncpg fetch.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    if not records:
+        return [], []
+    rows = [dict(record) for record in records]
+    column_names = list(records[0].keys())
+    return rows, column_names

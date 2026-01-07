@@ -4,7 +4,7 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncmy.errors  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
@@ -15,7 +15,7 @@ from sqlspec.adapters.asyncmy.core import (
     build_asyncmy_insert_statement,
     build_asyncmy_profile,
     build_asyncmy_statement_config,
-    deserialize_asyncmy_json_rows,
+    collect_asyncmy_rows,
     detect_asyncmy_json_columns,
     format_mysql_identifier,
 )
@@ -35,6 +35,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, supports_json_type
 
 if TYPE_CHECKING:
@@ -350,20 +351,15 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
-            column_names = [desc[0] for desc in cursor.description or []]
-
-            if fetched_data and not isinstance(fetched_data[0], dict):
-                rows = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-            elif fetched_data:
-                rows = [dict(row) for row in fetched_data]
-            else:
-                rows = []
-
-            deserializer = self.driver_features.get("json_deserializer")
-            if deserializer is not None:
-                json_indexes = detect_asyncmy_json_columns(cursor, ASYNCMY_JSON_TYPE_CODES)
-                if json_indexes:
-                    rows = deserialize_asyncmy_json_rows(column_names, rows, json_indexes, deserializer, logger=logger)
+            json_indexes = detect_asyncmy_json_columns(cursor, ASYNCMY_JSON_TYPE_CODES)
+            deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
+            rows, column_names = collect_asyncmy_rows(
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                json_indexes,
+                deserializer,
+                logger=logger,
+            )
 
             return self.create_execution_result(
                 cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
