@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import Self
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
@@ -80,7 +79,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
     @property
     @abstractmethod
-    def data_dictionary(self) -> "AsyncDataDictionaryBase[Self]":
+    def data_dictionary(self) -> "AsyncDataDictionaryBase[Any]":
         """Get the data dictionary for this driver.
 
         Returns:

@@ -515,6 +515,8 @@ def handle_single_row_error(error: ValueError) -> "NoReturn":
 class VersionInfo:
     """Database version information."""
 
+    __slots__ = ("major", "minor", "patch")
+
     def __init__(self, major: int, minor: int = 0, patch: int = 0) -> None:
         """Initialize version info.
 

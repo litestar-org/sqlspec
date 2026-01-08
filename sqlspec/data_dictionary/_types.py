@@ -95,10 +95,7 @@ class DialectConfig:
         Returns:
             Feature flag value or None if unknown.
         """
-        value = self.feature_flags.get(feature)
-        if value is None:
-            return None
-        return cast("bool", value)
+        return cast("bool | None", self.feature_flags.get(feature))
 
     def get_feature_version(self, feature: str) -> "VersionInfo | None":
         """Return required version for a feature if defined.
@@ -109,10 +106,7 @@ class DialectConfig:
         Returns:
             VersionInfo if defined, otherwise None.
         """
-        value = self.feature_versions.get(feature)
-        if value is None:
-            return None
-        return cast("VersionInfo", value)
+        return cast("VersionInfo | None", self.feature_versions.get(feature))
 
     def get_optimal_type(self, logical_type: str) -> str:
         """Return the dialect-specific type for a logical type.

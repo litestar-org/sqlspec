@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import Self
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
@@ -70,7 +69,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
     @property
     @abstractmethod
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
         """Get the data dictionary for this driver.
 
         Returns:

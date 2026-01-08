@@ -35,8 +35,6 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
-
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
@@ -226,7 +224,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         statement_config = apply_duckdb_driver_features(statement_config, driver_features)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase[Self] | None = None
+        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.
@@ -378,14 +376,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = DuckDBDataDictionary()
+            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", DuckDBDataDictionary())
         return self._data_dictionary
 
     def select_to_arrow(

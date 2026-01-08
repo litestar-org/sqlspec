@@ -33,8 +33,6 @@ from sqlspec.exceptions import (
 from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
-
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -230,7 +228,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             statement_config = aiosqlite_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase[Self] | None = None
+        self._data_dictionary: AsyncDataDictionaryBase[Any] | None = None
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""
@@ -405,14 +403,14 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             await cursor.execute(statement)
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase[Self]":
+    def data_dictionary(self) -> "AsyncDataDictionaryBase[Any]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = AiosqliteDataDictionary()
+            self._data_dictionary = cast("AsyncDataDictionaryBase[Any]", AiosqliteDataDictionary())
         return self._data_dictionary
 
 

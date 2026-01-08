@@ -263,7 +263,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
-        self._data_dictionary: SyncDataDictionaryBase[Self] | None = None
+        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
         self._using_emulator = detect_bigquery_emulator(connection)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry = build_bigquery_retry(self._job_retry_deadline, self._using_emulator)
@@ -527,14 +527,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = BigQueryDataDictionary()
+            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", BigQueryDataDictionary())
         return self._data_dictionary
 
     def _storage_api_available(self) -> bool:

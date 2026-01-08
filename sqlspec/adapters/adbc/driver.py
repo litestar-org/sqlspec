@@ -42,7 +42,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from adbc_driver_manager.dbapi import Cursor
-    from typing_extensions import Self
 
     from sqlspec.adapters.adbc._typing import AdbcConnection
     from sqlspec.builder import QueryBuilder
@@ -241,7 +240,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.dialect = statement_config.dialect
-        self._data_dictionary: SyncDataDictionaryBase[Self] | None = None
+        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         """Create context manager for cursor.
@@ -493,14 +492,14 @@ class AdbcDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = AdbcDataDictionary()
+            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", AdbcDataDictionary())
         return self._data_dictionary
 
     def select_to_arrow(

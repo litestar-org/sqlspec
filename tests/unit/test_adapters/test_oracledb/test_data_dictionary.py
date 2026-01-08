@@ -1,10 +1,13 @@
 """Unit tests for Oracle data dictionary version handling."""
 
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 
 ORACLE_AI_COMPONENT_ROW = {
     "product": "Oracle AI Database 26ai Free",

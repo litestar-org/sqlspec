@@ -112,7 +112,9 @@ class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver
             query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_type=ColumnMetadata)
 
-        table_identifier = f"{schema_name}.{table}" if schema_name else table
+        assert table is not None
+        table_name = table
+        table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
         query_text = self.get_query_text("columns_by_table").format(
             table_name=format_sqlite_identifier(table_identifier)
         )
@@ -123,8 +125,8 @@ class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver
     ) -> "list[IndexMetadata]":
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
+        indexes: list[IndexMetadata] = []
         if table is None:
-            indexes: list[IndexMetadata] = []
             for table_info in self.get_tables(driver, schema=schema_name):
                 table_name = table_info.get("table_name")
                 if not table_name:
@@ -132,12 +134,13 @@ class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver
                 indexes.extend(self.get_indexes(driver, table=table_name, schema=schema_name))
             return indexes
 
-        table_identifier = f"{schema_name}.{table}" if schema_name else table
+        assert table is not None
+        table_name = table
+        table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
         index_list_sql = self.get_query_text("indexes_by_table").format(
             table_name=format_sqlite_identifier(table_identifier)
         )
         index_rows = driver.select(index_list_sql)
-        indexes: list[IndexMetadata] = []
         for row in index_rows:
             index_name = row.get("name")
             if not index_name:
@@ -147,16 +150,25 @@ class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver
                 index_name=format_sqlite_identifier(index_identifier)
             )
             columns_rows = driver.select(columns_sql)
-            columns = [col.get("name") for col in columns_rows if col.get("name")]
+            columns: list[str] = []
+            for col in columns_rows:
+                column_name = col.get("name")
+                if column_name is None:
+                    continue
+                columns.append(str(column_name))
             is_primary = row.get("origin") == "pk"
-            indexes.append({
+            index_metadata: IndexMetadata = {
                 "index_name": index_name,
-                "table_name": table,
-                "schema_name": schema_name,
-                "is_unique": row.get("unique"),
-                "is_primary": is_primary,
+                "table_name": table_name,
                 "columns": columns,
-            })
+                "is_primary": is_primary,
+            }
+            if schema_name is not None:
+                index_metadata["schema_name"] = schema_name
+            unique_value = row.get("unique")
+            if unique_value is not None:
+                index_metadata["is_unique"] = unique_value
+            indexes.append(index_metadata)
         return indexes
 
     def get_foreign_keys(

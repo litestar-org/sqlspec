@@ -41,8 +41,6 @@ from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate,
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from typing_extensions import Self
-
     from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -261,7 +259,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         super().__init__(
             connection=connection, statement_config=final_statement_config, driver_features=driver_features
         )
-        self._data_dictionary: AsyncDataDictionaryBase[Self] | None = None
+        self._data_dictionary: AsyncDataDictionaryBase[Any] | None = None
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         """Create cursor context manager for the connection.
@@ -494,14 +492,14 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase[Self]":
+    def data_dictionary(self) -> "AsyncDataDictionaryBase[Any]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = AsyncmyDataDictionary()
+            self._data_dictionary = cast("AsyncDataDictionaryBase[Any]", AsyncmyDataDictionary())
         return self._data_dictionary
 
 

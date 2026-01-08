@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import Self
 
     from sqlspec.adapters.spanner._typing import SpannerConnection
     from sqlspec.core import ArrowResult
@@ -170,7 +169,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             enable_uuid_conversion=features.get("enable_uuid_conversion", True),
             json_deserializer=cast("Callable[[str], Any]", json_deserializer or from_json),
         )
-        self._data_dictionary: SyncDataDictionaryBase[SyncDriverAdapterBase] | None = None
+        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
 
     def with_cursor(self, connection: "SpannerConnection") -> "SpannerSyncCursor":
         return SpannerSyncCursor(connection)
@@ -287,9 +286,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
         if self._data_dictionary is None:
-            self._data_dictionary = SpannerDataDictionary()
+            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", SpannerDataDictionary())
         return self._data_dictionary
 
     def select_to_arrow(self, statement: "Any", /, *parameters: "Any", **kwargs: Any) -> "ArrowResult":

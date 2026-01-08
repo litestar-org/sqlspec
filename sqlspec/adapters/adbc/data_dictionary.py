@@ -1,6 +1,6 @@
 """ADBC multi-dialect data dictionary for metadata queries."""
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from sqlspec.adapters.sqlite.core import format_sqlite_identifier
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
@@ -227,12 +227,14 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
                     indexes.extend(self.get_indexes(driver, table=table_name, schema=schema_name))
                 return indexes
 
-            table_identifier = f"{schema_name}.{table}" if schema_name else table
+            assert table is not None
+            table_name = table
+            table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
             index_list_sql = self._get_query_text(dialect, "indexes_by_table").format(
                 table_name=format_sqlite_identifier(table_identifier)
             )
             index_list_rows = driver.select(index_list_sql)
-            indexes: list[IndexMetadata] = []
+            index_metadata_list: list[IndexMetadata] = []
             for row in index_list_rows:
                 index_name = row.get("name")
                 if not index_name:
@@ -242,15 +244,20 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
                     index_name=format_sqlite_identifier(index_identifier)
                 )
                 columns_rows = driver.select(columns_sql)
-                columns = [col.get("name") for col in columns_rows if col.get("name")]
-                indexes.append({
-                    "index_name": index_name,
-                    "table_name": table,
-                    "schema_name": schema_name,
-                    "is_unique": row.get("unique"),
-                    "columns": columns,
-                })
-            return cast("list[IndexMetadata]", indexes)
+                columns: list[str] = []
+                for col in columns_rows:
+                    column_name = col.get("name")
+                    if column_name is None:
+                        continue
+                    columns.append(str(column_name))
+                index_metadata: IndexMetadata = {"index_name": index_name, "table_name": table_name, "columns": columns}
+                if schema_name is not None:
+                    index_metadata["schema_name"] = schema_name
+                unique_value = row.get("unique")
+                if unique_value is not None:
+                    index_metadata["is_unique"] = unique_value
+                index_metadata_list.append(index_metadata)
+            return index_metadata_list
 
         if table is None:
             return driver.select(
@@ -300,9 +307,9 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
             return driver.select(query_text, schema_type=ForeignKeyMetadata)
 
         if table is None:
-            query_text = self._get_query_text_or_none(dialect, "foreign_keys_by_schema")
-            if query_text is not None:
-                return driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+            query_text_optional = self._get_query_text_or_none(dialect, "foreign_keys_by_schema")
+            if query_text_optional is not None:
+                return driver.select(query_text_optional, schema_name=schema_name, schema_type=ForeignKeyMetadata)
 
         return driver.select(
             self._get_query(dialect, "foreign_keys_by_table"),
