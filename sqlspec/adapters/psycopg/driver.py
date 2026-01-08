@@ -20,7 +20,7 @@ from sqlspec.adapters.psycopg.core import (
     psycopg_pipeline_supported,
     psycopg_statement_config,
 )
-from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
+from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
 from sqlspec.core import (
     SQL,
     SQLResult,
@@ -54,6 +54,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate, is_readable
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
@@ -307,7 +309,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase | None = None
+        self._data_dictionary: SyncDataDictionaryBase[SyncDriverAdapterBase] | None = None
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
         """Create context manager for PostgreSQL cursor."""
@@ -674,14 +676,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = PostgresSyncDataDictionary()
+            self._data_dictionary = PsycopgSyncDataDictionary()
         return self._data_dictionary
 
     def _truncate_table_sync(self, table: str) -> None:
@@ -853,7 +855,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
+        self._data_dictionary: AsyncDataDictionaryBase[AsyncDriverAdapterBase] | None = None
 
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
         """Create async context manager for PostgreSQL cursor."""
@@ -1230,14 +1232,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+    def data_dictionary(self) -> "AsyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = PostgresAsyncDataDictionary()
+            self._data_dictionary = PsycopgAsyncDataDictionary()
         return self._data_dictionary
 
     async def _truncate_table_async(self, table: str) -> None:

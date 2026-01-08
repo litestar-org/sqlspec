@@ -14,7 +14,7 @@ from sqlspec.adapters.asyncpg.core import (
     configure_asyncpg_parameter_serializers,
     parse_asyncpg_status,
 )
-from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
+from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.core import (
     SQL,
     StackOperation,
@@ -46,6 +46,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPreparedStatement
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig
     from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
@@ -255,7 +257,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
+        self._data_dictionary: AsyncDataDictionaryBase[Self] | None = None
         self._prepared_statements: OrderedDict[str, AsyncpgPreparedStatement] = OrderedDict()
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
@@ -619,14 +621,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return prepared
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+    def data_dictionary(self) -> "AsyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = PostgresAsyncDataDictionary()
+            self._data_dictionary = AsyncpgDataDictionary()
         return self._data_dictionary
 
     async def _truncate_table(self, table: str) -> None:

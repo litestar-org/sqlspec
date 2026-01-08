@@ -24,7 +24,7 @@ from sqlspec.adapters.oracledb.core import (
     oracle_truncate_statement,
     oracledb_statement_config,
 )
-from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
+from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.core import (
     SQL,
     StackResult,
@@ -63,6 +63,8 @@ from sqlspec.utils.type_guards import has_pipeline_capability
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from typing_extensions import Self
 
     from sqlspec.adapters.oracledb._typing import OraclePipelineDriver
     from sqlspec.builder import QueryBuilder
@@ -532,7 +534,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase | None = None
+        self._data_dictionary: SyncDataDictionaryBase[SyncDriverAdapterBase] | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
@@ -943,7 +945,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
@@ -951,7 +953,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         """
         if self._data_dictionary is None:
-            self._data_dictionary = OracleSyncDataDictionary()
+            self._data_dictionary = OracledbSyncDataDictionary()
         return self._data_dictionary
 
     def _truncate_table_sync(self, table: str) -> None:
@@ -986,7 +988,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
+        self._data_dictionary: AsyncDataDictionaryBase[AsyncDriverAdapterBase] | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
@@ -1400,7 +1402,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+    def data_dictionary(self) -> "AsyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
@@ -1408,7 +1410,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         """
         if self._data_dictionary is None:
-            self._data_dictionary = OracleAsyncDataDictionary()
+            self._data_dictionary = OracledbAsyncDataDictionary()
         return self._data_dictionary
 
     async def _truncate_table_async(self, table: str) -> None:

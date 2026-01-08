@@ -13,6 +13,7 @@ The `DataDictionary` is accessed via the `driver.data_dictionary` property. It p
 - **Indexes**: Get index definitions (columns, uniqueness).
 - **Foreign Keys**: Get foreign key constraints and relationships.
 - **Topological Sorting**: Get tables sorted by dependency order (useful for cleanups or migrations).
+- **Feature Flags**: Check supported capabilities via `get_feature_flag`.
 
 ## Usage
 
@@ -28,6 +29,10 @@ async with config.provide_session() as session:
     columns = await session.data_dictionary.get_columns(session, "users")
     for col in columns:
         print(f"{col['column_name']}: {col['data_type']}")
+
+    # Schema-wide metadata (table omitted)
+    schema_columns = await session.data_dictionary.get_columns(session, schema="public")
+    schema_fks = await session.data_dictionary.get_foreign_keys(session, schema="public")
 ```
 
 ### Topological Sort (Dependency Ordering)
@@ -53,6 +58,28 @@ async with config.provide_session() as session:
 - **Postgres / SQLite / MySQL 8+**: Uses efficient Recursive CTEs in SQL.
 - **Oracle**: Uses `CONNECT BY` queries.
 - **Others (BigQuery, MySQL 5.7)**: Falls back to a Python-based topological sort using `graphlib`.
+
+### Feature Flags
+
+Dialect feature flags are defined using typed dictionaries so IDEs can provide better completion and diagnostics.
+
+```python
+from sqlspec.data_dictionary import FeatureFlags, FeatureVersions
+
+flags: FeatureFlags = {
+    "supports_transactions": True,
+    "supports_prepared_statements": True,
+    "supports_in_memory": True,
+}
+```
+
+Example usage:
+
+```python
+async with config.provide_session() as session:
+    if await session.data_dictionary.get_feature_flag(session, "supports_in_memory"):
+        print("Adapter supports INMEMORY-backed storage")
+```
 
 ### Metadata Types
 

@@ -28,7 +28,7 @@ from sqlspec.adapters.bigquery.core import (
     extract_bigquery_insert_table,
     is_simple_bigquery_insert,
 )
-from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
+from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
     StatementConfig,
@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlglot import exp
+    from typing_extensions import Self
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementFilter
@@ -262,7 +263,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
-        self._data_dictionary: SyncDataDictionaryBase | None = None
+        self._data_dictionary: SyncDataDictionaryBase[Self] | None = None
         self._using_emulator = detect_bigquery_emulator(connection)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry = build_bigquery_retry(self._job_retry_deadline, self._using_emulator)
@@ -526,14 +527,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = BigQuerySyncDataDictionary()
+            self._data_dictionary = BigQueryDataDictionary()
         return self._data_dictionary
 
     def _storage_api_available(self) -> bool:

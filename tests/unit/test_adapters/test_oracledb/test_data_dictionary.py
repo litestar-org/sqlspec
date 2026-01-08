@@ -4,8 +4,7 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 
 ORACLE_AI_COMPONENT_ROW = {
     "product": "Oracle AI Database 26ai Free",
@@ -117,8 +116,8 @@ def oracle_async_driver(oracle_component_rows: "list[dict[str, Any]]") -> "_Fake
 def test_sync_data_dictionary_detects_native_json_type(oracle_sync_driver: "_FakeSyncOracleDriver") -> None:
     """Ensure sync data dictionary maps Oracle 23ai to native JSON columns."""
 
-    data_dictionary = OracleSyncDataDictionary()
-    sync_driver = cast("SyncDriverAdapterBase", oracle_sync_driver)
+    data_dictionary = OracledbSyncDataDictionary()
+    sync_driver = cast("OracleSyncDriver", oracle_sync_driver)
     version_info = data_dictionary.get_version(sync_driver)
 
     assert version_info is not None
@@ -130,8 +129,8 @@ def test_sync_data_dictionary_detects_native_json_type(oracle_sync_driver: "_Fak
 async def test_async_data_dictionary_detects_native_json_type(oracle_async_driver: "_FakeAsyncOracleDriver") -> None:
     """Ensure async data dictionary maps Oracle 23ai to native JSON columns."""
 
-    data_dictionary = OracleAsyncDataDictionary()
-    async_driver = cast("AsyncDriverAdapterBase", oracle_async_driver)
+    data_dictionary = OracledbAsyncDataDictionary()
+    async_driver = cast("OracleAsyncDriver", oracle_async_driver)
     version_info = await data_dictionary.get_version(async_driver)
 
     assert version_info is not None

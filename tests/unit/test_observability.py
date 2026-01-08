@@ -9,6 +9,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
+from sqlspec.driver import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.observability import (
     LifecycleDispatcher,
@@ -128,17 +129,39 @@ class _FakeSyncPipeline:
         )
 
 
-class _DummyDictionary(SyncDataDictionaryBase):
-    def get_version(self, driver: SyncDriverAdapterBase) -> None:
+class _DummyDictionary(SyncDataDictionaryBase["_DummyDriver"]):
+    def get_version(self, driver: "_DummyDriver") -> None:
         _ = driver
 
-    def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
+    def get_feature_flag(self, driver: "_DummyDriver", feature: str) -> bool:
         _ = driver, feature
         return False
 
-    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:
+    def get_optimal_type(self, driver: "_DummyDriver", type_category: str) -> str:
         _ = driver, type_category
         return "TEXT"
+
+    def get_tables(self, driver: "_DummyDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        _ = (driver, schema)
+        return []
+
+    def get_columns(
+        self, driver: "_DummyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        _ = (driver, table, schema)
+        return []
+
+    def get_indexes(
+        self, driver: "_DummyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        _ = (driver, table, schema)
+        return []
+
+    def get_foreign_keys(
+        self, driver: "_DummyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        _ = (driver, table, schema)
+        return []
 
 
 class _DummyCursor:

@@ -6,7 +6,20 @@ import logging
 import re
 from contextlib import suppress
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Literal,
+    NamedTuple,
+    NoReturn,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    cast,
+    overload,
+)
 
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
@@ -65,6 +78,7 @@ __all__ = (
     "ScriptExecutionResult",
     "StackExecutionObserver",
     "SyncExceptionHandler",
+    "TableMetadata",
     "VersionInfo",
     "describe_stack_statement",
     "handle_single_row_error",
@@ -200,98 +214,45 @@ class ForeignKeyMetadata:
         ))
 
 
-class ColumnMetadata:
+class ColumnMetadata(TypedDict, total=False):
     """Metadata for a database column."""
 
-    __slots__ = ("data_type", "default_value", "max_length", "name", "nullable", "precision", "primary_key", "scale")
-
-    def __init__(
-        self,
-        name: str,
-        data_type: str,
-        nullable: bool,
-        default_value: str | None = None,
-        primary_key: bool = False,
-        max_length: int | None = None,
-        precision: int | None = None,
-        scale: int | None = None,
-    ) -> None:
-        self.name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.default_value = default_value
-        self.primary_key = primary_key
-        self.max_length = max_length
-        self.precision = precision
-        self.scale = scale
-
-    def __repr__(self) -> str:
-        return (
-            f"ColumnMetadata(name={self.name!r}, data_type={self.data_type!r}, nullable={self.nullable!r}, "
-            f"default_value={self.default_value!r}, primary_key={self.primary_key!r}, max_length={self.max_length!r}, "
-            f"precision={self.precision!r}, scale={self.scale!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ColumnMetadata):
-            return NotImplemented
-        return (
-            self.name == other.name
-            and self.data_type == other.data_type
-            and self.nullable == other.nullable
-            and self.default_value == other.default_value
-            and self.primary_key == other.primary_key
-            and self.max_length == other.max_length
-            and self.precision == other.precision
-            and self.scale == other.scale
-        )
-
-    def __hash__(self) -> int:
-        return hash((
-            self.name,
-            self.data_type,
-            self.nullable,
-            self.default_value,
-            self.primary_key,
-            self.max_length,
-            self.precision,
-            self.scale,
-        ))
+    schema_name: str
+    table_name: str
+    column_name: str
+    data_type: str
+    is_nullable: str | bool | None
+    column_default: str | None
+    ordinal_position: int
+    max_length: int
+    numeric_precision: int
+    numeric_scale: int
+    is_primary: bool | int
+    is_unique: bool | int
+    extra: str
 
 
-class IndexMetadata:
+class TableMetadata(TypedDict, total=False):
+    """Metadata for a database table."""
+
+    schema_name: str
+    table_name: str
+    table_type: str
+    table_catalog: str
+    table_schema: str
+    dependency_level: int
+    level: int
+
+
+class IndexMetadata(TypedDict, total=False):
     """Metadata for a database index."""
 
-    __slots__ = ("columns", "name", "primary", "table_name", "unique")
-
-    def __init__(
-        self, name: str, table_name: str, columns: "list[str]", unique: bool = False, primary: bool = False
-    ) -> None:
-        self.name = name
-        self.table_name = table_name
-        self.columns = columns
-        self.unique = unique
-        self.primary = primary
-
-    def __repr__(self) -> str:
-        return (
-            f"IndexMetadata(name={self.name!r}, table_name={self.table_name!r}, columns={self.columns!r}, "
-            f"unique={self.unique!r}, primary={self.primary!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, IndexMetadata):
-            return NotImplemented
-        return (
-            self.name == other.name
-            and self.table_name == other.table_name
-            and self.columns == other.columns
-            and self.unique == other.unique
-            and self.primary == other.primary
-        )
-
-    def __hash__(self) -> int:
-        return hash((self.name, self.table_name, tuple(self.columns), self.unique, self.primary))
+    schema_name: str
+    table_name: str
+    index_name: str
+    columns: list[str] | str | None
+    is_unique: bool | int
+    is_primary: bool | int
 
 
 _CONVERT_TO_TUPLE = object()
@@ -676,6 +637,30 @@ class DataDictionaryMixin:
 
         return None
 
+    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
+        """Parse version string using a specific regex pattern.
+
+        Args:
+            pattern: Compiled regex pattern for the version format
+            version_str: Raw version string from database
+
+        Returns:
+            VersionInfo instance or None if parsing fails
+
+        """
+        match = pattern.search(version_str)
+        if not match:
+            return None
+
+        groups = match.groups()
+        if not groups:
+            return None
+
+        major = int(groups[0])
+        minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR and groups[1] else 0
+        patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2] else 0
+        return VersionInfo(major, minor, patch)
+
     def detect_version_with_queries(self, driver: Any, queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version.
 
@@ -739,9 +724,6 @@ class DataDictionaryMixin:
 
         Returns:
             List of table names in topological order (dependencies first).
-
-        Raises:
-            CycleError: If a dependency cycle is detected.
 
         """
         sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()

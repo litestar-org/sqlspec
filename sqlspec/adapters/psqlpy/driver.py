@@ -25,7 +25,7 @@ from sqlspec.adapters.psqlpy.core import (
     psqlpy_statement_config,
     split_schema_and_table,
 )
-from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
+from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
@@ -48,6 +48,8 @@ from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
     from sqlspec.core import ArrowResult
     from sqlspec.driver import ExecutionResult
@@ -234,7 +236,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             statement_config = psqlpy_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
+        self._data_dictionary: AsyncDataDictionaryBase[AsyncDriverAdapterBase] | None = None
 
     def prepare_driver_parameters(
         self,
@@ -570,14 +572,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return bool(self.connection.in_transaction())
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+    def data_dictionary(self) -> "AsyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = PsqlpyAsyncDataDictionary()
+            self._data_dictionary = PsqlpyDataDictionary()
         return self._data_dictionary
 
 

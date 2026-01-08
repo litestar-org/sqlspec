@@ -1,559 +1,312 @@
 """ADBC multi-dialect data dictionary for metadata queries."""
 
-import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
-from sqlspec.driver import ForeignKeyMetadata, SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
+from sqlspec.adapters.sqlite.core import format_sqlite_identifier
+from sqlspec.data_dictionary._loader import get_data_dictionary_loader
+from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.driver import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    SyncDataDictionaryBase,
+    TableMetadata,
+    VersionInfo,
+)
+from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.utils.logging import get_logger
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.adbc.driver import AdbcDriver
 
 logger = get_logger("adapters.adbc.data_dictionary")
 
-POSTGRES_VERSION_PATTERN = re.compile(r"PostgreSQL (\d+)\.(\d+)(?:\.(\d+))?")
-SQLITE_VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-DUCKDB_VERSION_PATTERN = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
-MYSQL_VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-
 __all__ = ("AdbcDataDictionary",)
 
+if TYPE_CHECKING:
+    from sqlspec.adapters.adbc.driver import AdbcDriver
+    from sqlspec.core import SQL
 
-class AdbcDataDictionary(SyncDataDictionaryBase):
-    """ADBC multi-dialect data dictionary.
 
-    Delegates to appropriate dialect-specific logic based on the driver's dialect.
-    """
+class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
+    """ADBC multi-dialect data dictionary."""
 
     __slots__ = ()
 
-    def get_foreign_keys(
-        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[ForeignKeyMetadata]":
-        """Get foreign key metadata based on detected dialect."""
+    def _normalize_dialect(self, driver: "AdbcDriver") -> str:
+        dialect_value = str(driver.dialect).lower()
+        if dialect_value == "postgresql":
+            return "postgres"
+        if dialect_value == "mariadb":
+            return "mysql"
+        return dialect_value
 
-        dialect = self._get_dialect(driver)
-        adbc_driver = cast("AdbcDriver", driver)
+    def _get_query(self, dialect: str, name: str) -> "SQL":
+        loader = get_data_dictionary_loader()
+        return loader.get_query(dialect, name)
 
-        if dialect == "sqlite":
-            if table:
-                # Single table
-                result = adbc_driver.execute(f"PRAGMA foreign_key_list('{table}')")
-                # SQLite PRAGMA returns: id, seq, table, from, to, on_update, on_delete, match
-                # We need 'from' (col) and 'table' (ref_table) and 'to' (ref_col)
-                # Note: PRAGMA results from ADBC might be keyed by name or index depending on driver
-                return [
-                    ForeignKeyMetadata(
-                        table_name=table,
-                        column_name=row["from"] if isinstance(row, dict) else row[3],
-                        referenced_table=row["table"] if isinstance(row, dict) else row[2],
-                        referenced_column=row["to"] if isinstance(row, dict) else row[4],
-                    )
-                    for row in result.data
-                ]
-            # For all tables in SQLite we'd have to iterate, which base class doesn't do efficiently.
-            # We'll just return empty if no table specified for now, or iterate if crucial.
-            # Base implementation will call this per-table if needed? No, base implementation expects all if table is None.
-            # For SQLite ADBC, iterating tables is expensive. Let's support single table primarily.
-            return []
+    def _get_query_text(self, dialect: str, name: str) -> str:
+        loader = get_data_dictionary_loader()
+        return loader.get_query_text(dialect, name)
 
-        # SQL-standard compliant databases (Postgres, MySQL, DuckDB, BigQuery)
-        # They all support information_schema.key_column_usage roughly the same way
-
-        # Postgres/DuckDB/MySQL query
-        params = []
-
-        if dialect == "bigquery":
-            dataset = schema
-            if not dataset:
-                return []  # BigQuery requires dataset for info schema
-            kcu = f"`{dataset}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
-            rc = f"`{dataset}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
-            # BQ uses named params usually or positional? ADBC usually positional '?'
-            # But BQ driver might want named. ADBC standardizes on '?' usually.
-            sql = f"""
-                SELECT
-                    kcu.table_name,
-                    kcu.column_name,
-                    pk_kcu.table_name AS referenced_table_name,
-                    pk_kcu.column_name AS referenced_column_name,
-                    kcu.constraint_name,
-                    kcu.table_schema,
-                    pk_kcu.table_schema AS referenced_table_schema
-                FROM {kcu} kcu
-                JOIN {rc} rc ON kcu.constraint_name = rc.constraint_name
-                JOIN {kcu} pk_kcu
-                  ON rc.unique_constraint_name = pk_kcu.constraint_name
-                  AND kcu.ordinal_position = pk_kcu.ordinal_position
-            """
-            if table:
-                sql += f" WHERE kcu.table_name = '{table}'"  # Simple string sub for BQ ADBC safety check needed?
-
-            try:
-                result = adbc_driver.execute(sql)
-                return [
-                    ForeignKeyMetadata(
-                        table_name=row["table_name"],
-                        column_name=row["column_name"],
-                        referenced_table=row["referenced_table_name"],
-                        referenced_column=row["referenced_column_name"],
-                        constraint_name=row["constraint_name"],
-                        schema=row["table_schema"],
-                        referenced_schema=row["referenced_table_schema"],
-                    )
-                    for row in result.data
-                ]
-            except Exception:
-                return []
-
-        # Standard ANSI SQL (Postgres, MySQL, DuckDB)
-        kcu = "information_schema.key_column_usage"
-
-        if dialect == "postgres":
-            sql = """
-                SELECT
-                    kcu.table_name,
-                    kcu.column_name,
-                    ccu.table_name AS referenced_table_name,
-                    ccu.column_name AS referenced_column_name,
-                    tc.constraint_name,
-                    tc.table_schema,
-                    ccu.table_schema AS referenced_table_schema
-                FROM
-                    information_schema.table_constraints AS tc
-                    JOIN information_schema.key_column_usage AS kcu
-                      ON tc.constraint_name = kcu.constraint_name
-                      AND tc.table_schema = kcu.table_schema
-                    JOIN information_schema.constraint_column_usage AS ccu
-                      ON ccu.constraint_name = tc.constraint_name
-                      AND ccu.table_schema = tc.table_schema
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-            """
-            if schema:
-                sql += " AND tc.table_schema = ?"
-                params.append(schema)
-            if table:
-                sql += " AND tc.table_name = ?"
-                params.append(table)
-
-        elif dialect == "mysql":
-            # MySQL information_schema
-            sql = """
-                SELECT
-                    table_name,
-                    column_name,
-                    referenced_table_name,
-                    referenced_column_name,
-                    constraint_name,
-                    table_schema,
-                    referenced_table_schema
-                FROM information_schema.key_column_usage
-                WHERE referenced_table_name IS NOT NULL
-            """
-            if schema:
-                sql += " AND table_schema = ?"
-                params.append(schema)
-            if table:
-                sql += " AND table_name = ?"
-                params.append(table)
-
-        elif dialect == "duckdb":
-            # DuckDB similar to Postgres but sometimes requires referential_constraints join
-            sql = """
-                SELECT
-                    kcu.table_name,
-                    kcu.column_name,
-                    pk_kcu.table_name AS referenced_table_name,
-                    pk_kcu.column_name AS referenced_column_name,
-                    kcu.constraint_name,
-                    kcu.table_schema,
-                    pk_kcu.table_schema AS referenced_table_schema
-                FROM information_schema.key_column_usage kcu
-                JOIN information_schema.referential_constraints rc
-                  ON kcu.constraint_name = rc.constraint_name
-                JOIN information_schema.key_column_usage pk_kcu
-                  ON rc.unique_constraint_name = pk_kcu.constraint_name
-                  AND kcu.ordinal_position = pk_kcu.ordinal_position
-                WHERE 1=1
-            """
-            if schema:
-                sql += " AND kcu.table_schema = ?"
-                params.append(schema)
-            if table:
-                sql += " AND kcu.table_name = ?"
-                params.append(table)
-        else:
-            return []
-
+    def _get_query_text_or_none(self, dialect: str, name: str) -> "str | None":
         try:
-            result = adbc_driver.execute(sql, tuple(params))
-            return [
-                ForeignKeyMetadata(
-                    table_name=row["table_name"],
-                    column_name=row["column_name"],
-                    referenced_table=row["referenced_table_name"],
-                    referenced_column=row["referenced_column_name"],
-                    constraint_name=row["constraint_name"],
-                    schema=row.get("table_schema"),
-                    referenced_schema=row.get("referenced_table_schema"),
-                )
-                for row in result.data
-            ]
-        except Exception:
-            return []
+            return self._get_query_text(dialect, name)
+        except SQLFileNotFoundError:
+            return None
 
-    def _get_dialect(self, driver: SyncDriverAdapterBase) -> str:
-        """Get dialect from ADBC driver.
+    def _resolve_schema(self, dialect: str, schema: "str | None") -> "str | None":
+        if schema is not None:
+            return schema
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            return None
+        return config.default_schema
 
-        Args:
-            driver: ADBC driver instance
+    def _resolve_feature_flag(self, dialect: str, feature: str, version_info: "VersionInfo | None") -> bool:
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            return False
+        flag = config.get_feature_flag(feature)
+        if flag is not None:
+            return flag
+        required_version = config.get_feature_version(feature)
+        if required_version is None or version_info is None:
+            return False
+        return bool(version_info >= required_version)
 
-        Returns:
-            Dialect name
-        """
-        return str(cast("AdbcDriver", driver).dialect)
+    def list_available_features(self) -> "list[str]":
+        features = set(self.get_default_features())
+        try:
+            config = get_dialect_config("postgres")
+        except ValueError:
+            return sorted(features)
+        features.update(config.feature_flags.keys())
+        features.update(config.feature_versions.keys())
+        return sorted(features)
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
-        """Get database version information based on detected dialect.
+    def get_version(self, driver: "AdbcDriver") -> "VersionInfo | None":
+        """Get database version information based on detected dialect."""
+        dialect = self._normalize_dialect(driver)
+        if dialect == "bigquery":
+            return None
 
-        Uses caching to avoid repeated database queries within the same
-        driver session.
-
-        Args:
-            driver: ADBC driver instance.
-
-        Returns:
-            Database version information or None if detection fails.
-        """
-        driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
+        was_cached, cached_version = self.get_cached_version_for_driver(driver)
         if was_cached:
             return cached_version
 
-        dialect = self._get_dialect(driver)
-        adbc_driver = cast("AdbcDriver", driver)
-        version_info: VersionInfo | None = None
-
         try:
-            if dialect == "postgres":
-                version_str = adbc_driver.select_value("SELECT version()")
-                if version_str:
-                    match = POSTGRES_VERSION_PATTERN.search(str(version_str))
-                    if match:
-                        major = int(match.group(1))
-                        minor = int(match.group(2))
-                        patch = int(match.group(3)) if match.group(3) else 0
-                        version_info = VersionInfo(major, minor, patch)
-
-            elif dialect == "sqlite":
-                version_str = adbc_driver.select_value("SELECT sqlite_version()")
-                if version_str:
-                    match = SQLITE_VERSION_PATTERN.match(str(version_str))
-                    if match:
-                        major, minor, patch = map(int, match.groups())
-                        version_info = VersionInfo(major, minor, patch)
-
-            elif dialect == "duckdb":
-                version_str = adbc_driver.select_value("SELECT version()")
-                if version_str:
-                    match = DUCKDB_VERSION_PATTERN.search(str(version_str))
-                    if match:
-                        major, minor, patch = map(int, match.groups())
-                        version_info = VersionInfo(major, minor, patch)
-
-            elif dialect == "mysql":
-                version_str = adbc_driver.select_value("SELECT VERSION()")
-                if version_str:
-                    match = MYSQL_VERSION_PATTERN.search(str(version_str))
-                    if match:
-                        major, minor, patch = map(int, match.groups())
-                        version_info = VersionInfo(major, minor, patch)
-
-            elif dialect == "bigquery":
-                version_info = VersionInfo(1, 0, 0)
-
+            version_value = driver.select_value_or_none(self._get_query(dialect, "version"))
         except Exception:
             logger.warning("Failed to get %s version", dialect)
+            self.cache_version_for_driver(driver, None)
+            return None
 
-        self.cache_version(driver_id, version_info)
+        if not version_value:
+            logger.warning("No %s version information found", dialect)
+            self.cache_version_for_driver(driver, None)
+            return None
+
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            logger.warning("Unknown ADBC dialect %s", dialect)
+            self.cache_version_for_driver(driver, None)
+            return None
+
+        version_info = self.parse_version_with_pattern(config.version_pattern, str(version_value))
+        if version_info is None:
+            logger.warning("Could not parse %s version: %s", dialect, version_value)
+            self.cache_version_for_driver(driver, None)
+            return None
+
+        self.cache_version_for_driver(driver, version_info)
         return version_info
 
-    def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
-        """Check if database supports a specific feature based on detected dialect.
-
-        Args:
-            driver: ADBC driver instance
-            feature: Feature name to check
-
-        Returns:
-            True if feature is supported, False otherwise
-        """
-        dialect = self._get_dialect(driver)
+    def get_feature_flag(self, driver: "AdbcDriver", feature: str) -> bool:
+        """Check if database supports a specific feature."""
+        dialect = self._normalize_dialect(driver)
         version_info = self.get_version(driver)
+        return self._resolve_feature_flag(dialect, feature, version_info)
 
-        feature_versions: dict[str, VersionInfo] = {}
-        feature_flags: dict[str, bool] = {}
+    def get_optimal_type(self, driver: "AdbcDriver", type_category: str) -> str:
+        """Get optimal database type for a category."""
+        dialect = self._normalize_dialect(driver)
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            return self.get_default_type_mapping().get(type_category, "TEXT")
 
-        if dialect == "postgres":
-            feature_versions = {
-                "supports_json": VersionInfo(9, 2, 0),
-                "supports_jsonb": VersionInfo(9, 4, 0),
-                "supports_returning": VersionInfo(8, 2, 0),
-                "supports_upsert": VersionInfo(9, 5, 0),
-                "supports_window_functions": VersionInfo(8, 4, 0),
-                "supports_cte": VersionInfo(8, 4, 0),
-            }
-            feature_flags = {
-                "supports_uuid": True,
-                "supports_arrays": True,
-                "supports_transactions": True,
-                "supports_prepared_statements": True,
-                "supports_schemas": True,
-            }
-        elif dialect == "sqlite":
-            feature_versions = {
-                "supports_json": VersionInfo(3, 38, 0),
-                "supports_returning": VersionInfo(3, 35, 0),
-                "supports_upsert": VersionInfo(3, 24, 0),
-                "supports_window_functions": VersionInfo(3, 25, 0),
-                "supports_cte": VersionInfo(3, 8, 3),
-            }
-            feature_flags = {
-                "supports_transactions": True,
-                "supports_prepared_statements": True,
-                "supports_schemas": False,
-                "supports_arrays": False,
-                "supports_uuid": False,
-            }
-        elif dialect == "duckdb":
-            feature_versions = {"supports_returning": VersionInfo(0, 8, 0), "supports_upsert": VersionInfo(0, 8, 0)}
-            feature_flags = {
-                "supports_json": True,
-                "supports_arrays": True,
-                "supports_uuid": True,
-                "supports_window_functions": True,
-                "supports_cte": True,
-                "supports_transactions": True,
-                "supports_prepared_statements": True,
-                "supports_schemas": True,
-            }
-        elif dialect == "mysql":
-            feature_versions = {
-                "supports_json": VersionInfo(5, 7, 8),
-                "supports_cte": VersionInfo(8, 0, 1),
-                "supports_window_functions": VersionInfo(8, 0, 2),
-            }
-            feature_flags = {
-                "supports_returning": False,
-                "supports_upsert": True,
-                "supports_transactions": True,
-                "supports_prepared_statements": True,
-                "supports_schemas": True,
-                "supports_uuid": False,
-                "supports_arrays": False,
-            }
-        elif dialect == "bigquery":
-            feature_flags = {
-                "supports_json": True,
-                "supports_arrays": True,
-                "supports_structs": True,
-                "supports_returning": False,
-                "supports_upsert": True,
-                "supports_window_functions": True,
-                "supports_cte": True,
-                "supports_transactions": False,
-                "supports_prepared_statements": True,
-                "supports_schemas": True,
-                "supports_uuid": False,
-            }
-        else:
-            feature_flags = {
-                "supports_transactions": True,
-                "supports_prepared_statements": True,
-                "supports_window_functions": True,
-                "supports_cte": True,
-            }
-
-        if feature in feature_versions:
-            if not version_info:
-                return False
-            return bool(version_info >= feature_versions[feature])
-        if feature in feature_flags:
-            return feature_flags[feature]
-
-        return False
-
-    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:
-        """Get optimal database type for a category based on detected dialect.
-
-        Args:
-            driver: ADBC driver instance
-            type_category: Type category
-
-        Returns:
-            Database-specific type name
-        """
-        dialect = self._get_dialect(driver)
-        version_info = self.get_version(driver)
-
-        if dialect == "postgres":
-            if type_category == "json":
-                if version_info and version_info >= VersionInfo(9, 4, 0):
-                    return "JSONB"
-                if version_info and version_info >= VersionInfo(9, 2, 0):
-                    return "JSON"
+        if type_category == "json":
+            json_version = config.get_feature_version("supports_json")
+            version_info = self.get_version(driver)
+            if json_version and (version_info is None or version_info < json_version):
                 return "TEXT"
-            type_map = {
-                "uuid": "UUID",
-                "boolean": "BOOLEAN",
-                "timestamp": "TIMESTAMP WITH TIME ZONE",
-                "text": "TEXT",
-                "blob": "BYTEA",
-                "array": "ARRAY",
-            }
 
-        elif dialect == "sqlite":
-            if type_category == "json":
-                if version_info and version_info >= VersionInfo(3, 38, 0):
-                    return "JSON"
-                return "TEXT"
-            type_map = {"uuid": "TEXT", "boolean": "INTEGER", "timestamp": "TIMESTAMP", "text": "TEXT", "blob": "BLOB"}
+        return config.get_optimal_type(type_category)
 
-        elif dialect == "duckdb":
-            type_map = {
-                "json": "JSON",
-                "uuid": "UUID",
-                "boolean": "BOOLEAN",
-                "timestamp": "TIMESTAMP",
-                "text": "TEXT",
-                "blob": "BLOB",
-                "array": "LIST",
-            }
+    def get_tables(self, driver: "AdbcDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables for the current dialect."""
+        dialect = self._normalize_dialect(driver)
+        schema_name: str | None = self._resolve_schema(dialect, schema)
 
-        elif dialect == "mysql":
-            if type_category == "json":
-                if version_info and version_info >= VersionInfo(5, 7, 8):
-                    return "JSON"
-                return "TEXT"
-            type_map = {
-                "uuid": "VARCHAR(36)",
-                "boolean": "TINYINT(1)",
-                "timestamp": "TIMESTAMP",
-                "text": "TEXT",
-                "blob": "BLOB",
-            }
-
-        elif dialect == "bigquery":
-            type_map = {
-                "json": "JSON",
-                "uuid": "STRING",
-                "boolean": "BOOL",
-                "timestamp": "TIMESTAMP",
-                "text": "STRING",
-                "blob": "BYTES",
-                "array": "ARRAY",
-            }
-        else:
-            type_map = {
-                "json": "TEXT",
-                "uuid": "VARCHAR(36)",
-                "boolean": "INTEGER",
-                "timestamp": "TIMESTAMP",
-                "text": "TEXT",
-                "blob": "BLOB",
-            }
-
-        return type_map.get(type_category, "TEXT")
-
-    def get_columns(
-        self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get column information for a table based on detected dialect.
-
-        Args:
-            driver: ADBC driver instance
-            table: Table name to query columns for
-            schema: Schema name (None for default)
-
-        Returns:
-            List of column metadata dictionaries with keys:
-                - column_name: Name of the column
-                - data_type: Database data type
-                - is_nullable or nullable: Whether column allows NULL
-                - column_default or default_value: Default value if any
-        """
-        dialect = self._get_dialect(driver)
-        adbc_driver = cast("AdbcDriver", driver)
+        if dialect == "bigquery":
+            if schema_name:
+                tables_table = f"`{schema_name}.INFORMATION_SCHEMA.TABLES`"
+                kcu_table = f"`{schema_name}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
+                rc_table = f"`{schema_name}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
+            else:
+                tables_table = "INFORMATION_SCHEMA.TABLES"
+                kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
+                rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+            query_text = self._get_query_text(dialect, "tables_by_schema").format(
+                tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
+            )
+            return driver.select(query_text, schema_type=TableMetadata)
 
         if dialect == "sqlite":
-            result = adbc_driver.execute(f"PRAGMA table_info({table})")
-            return [
-                {
-                    "column_name": row["name"] if isinstance(row, dict) else row[1],
-                    "data_type": row["type"] if isinstance(row, dict) else row[2],
-                    "nullable": not (row["notnull"] if isinstance(row, dict) else row[3]),
-                    "default_value": row["dflt_value"] if isinstance(row, dict) else row[4],
-                }
-                for row in result.data or []
-            ]
+            schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+            query_text = self._get_query_text(dialect, "tables_by_schema").format(schema_prefix=schema_prefix)
+            return driver.select(query_text, schema_type=TableMetadata)
 
-        if dialect == "postgres":
-            schema_name = schema or "public"
-            sql = """
-                SELECT
-                    a.attname::text AS column_name,
-                    pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
-                    CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
-                    pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
-                FROM pg_catalog.pg_attribute a
-                JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
-                JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-                LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
-                WHERE c.relname = ?
-                    AND n.nspname = ?
-                    AND a.attnum > 0
-                    AND NOT a.attisdropped
-                ORDER BY a.attnum
-            """
-            result = adbc_driver.execute(sql, (table, schema_name))
-            return result.data or []
+        return driver.select(
+            self._get_query(dialect, "tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+        )
 
-        if schema:
-            sql = """
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = ? AND table_schema = ?
-                ORDER BY ordinal_position
-            """
-            result = adbc_driver.execute(sql, (table, schema))
-        else:
-            sql = """
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = ?
-                ORDER BY ordinal_position
-            """
-            result = adbc_driver.execute(sql, (table,))
+    def get_columns(
+        self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        dialect = self._normalize_dialect(driver)
+        schema_name: str | None = self._resolve_schema(dialect, schema)
 
-        return result.data or []
+        if dialect == "bigquery":
+            schema_prefix = f"`{schema_name}`." if schema_name else ""
+            if table is None:
+                query_text = self._get_query_text(dialect, "columns_by_schema").format(schema_prefix=schema_prefix)
+                return driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
+            query_text = self._get_query_text(dialect, "columns_by_table").format(schema_prefix=schema_prefix)
+            return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
 
-    def list_available_features(self) -> "list[str]":
-        """List available feature flags across all supported dialects.
+        if dialect == "sqlite":
+            schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+            if table is None:
+                query_text = self._get_query_text(dialect, "columns_by_schema").format(schema_prefix=schema_prefix)
+                return driver.select(query_text, schema_type=ColumnMetadata)
+            table_identifier = f"{schema_name}.{table}" if schema_name else table
+            query_text = self._get_query_text(dialect, "columns_by_table").format(
+                table_name=format_sqlite_identifier(table_identifier)
+            )
+            return driver.select(query_text, schema_type=ColumnMetadata)
 
-        Returns:
-            List of supported feature names
-        """
-        return [
-            "supports_json",
-            "supports_jsonb",
-            "supports_uuid",
-            "supports_arrays",
-            "supports_structs",
-            "supports_returning",
-            "supports_upsert",
-            "supports_window_functions",
-            "supports_cte",
-            "supports_transactions",
-            "supports_prepared_statements",
-            "supports_schemas",
-        ]
+        if table is None:
+            return driver.select(
+                self._get_query(dialect, "columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+            )
+        return driver.select(
+            self._get_query(dialect, "columns_by_table"),
+            schema_name=schema_name,
+            table_name=table,
+            schema_type=ColumnMetadata,
+        )
+
+    def get_indexes(
+        self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index information for a table or schema."""
+        dialect = self._normalize_dialect(driver)
+        schema_name: str | None = self._resolve_schema(dialect, schema)
+
+        if dialect == "sqlite":
+            if table is None:
+                tables = self.get_tables(driver, schema=schema_name)
+                indexes: list[IndexMetadata] = []
+                for table_info in tables:
+                    table_name = table_info.get("table_name")
+                    if not table_name:
+                        continue
+                    indexes.extend(self.get_indexes(driver, table=table_name, schema=schema_name))
+                return indexes
+
+            table_identifier = f"{schema_name}.{table}" if schema_name else table
+            index_list_sql = self._get_query_text(dialect, "indexes_by_table").format(
+                table_name=format_sqlite_identifier(table_identifier)
+            )
+            index_list_rows = driver.select(index_list_sql)
+            indexes: list[IndexMetadata] = []
+            for row in index_list_rows:
+                index_name = row.get("name")
+                if not index_name:
+                    continue
+                index_identifier = f"{schema_name}.{index_name}" if schema_name else index_name
+                columns_sql = self._get_query_text(dialect, "index_columns_by_index").format(
+                    index_name=format_sqlite_identifier(index_identifier)
+                )
+                columns_rows = driver.select(columns_sql)
+                columns = [col.get("name") for col in columns_rows if col.get("name")]
+                indexes.append({
+                    "index_name": index_name,
+                    "table_name": table,
+                    "schema_name": schema_name,
+                    "is_unique": row.get("unique"),
+                    "columns": columns,
+                })
+            return cast("list[IndexMetadata]", indexes)
+
+        if table is None:
+            return driver.select(
+                self._get_query(dialect, "indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+            )
+
+        return driver.select(
+            self._get_query(dialect, "indexes_by_table"),
+            schema_name=schema_name,
+            table_name=table,
+            schema_type=IndexMetadata,
+        )
+
+    def get_foreign_keys(
+        self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        dialect = self._normalize_dialect(driver)
+        schema_name: str | None = self._resolve_schema(dialect, schema)
+
+        if dialect == "bigquery":
+            if schema_name:
+                kcu_table = f"`{schema_name}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
+                rc_table = f"`{schema_name}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
+            else:
+                kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
+                rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+            if table is None:
+                query_text = self._get_query_text(dialect, "foreign_keys_by_schema").format(
+                    kcu_table=kcu_table, rc_table=rc_table
+                )
+                return driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+            query_text = self._get_query_text(dialect, "foreign_keys_by_table").format(
+                kcu_table=kcu_table, rc_table=rc_table
+            )
+            return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+
+        if dialect == "sqlite":
+            if table is None:
+                schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+                query_text = self._get_query_text(dialect, "foreign_keys_by_schema").format(schema_prefix=schema_prefix)
+                return driver.select(query_text, schema_type=ForeignKeyMetadata)
+            table_identifier = f"{schema_name}.{table}" if schema_name else table
+            query_text = self._get_query_text(dialect, "foreign_keys_by_table").format(
+                table_name=format_sqlite_identifier(table_identifier)
+            )
+            return driver.select(query_text, schema_type=ForeignKeyMetadata)
+
+        if table is None:
+            query_text = self._get_query_text_or_none(dialect, "foreign_keys_by_schema")
+            if query_text is not None:
+                return driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+
+        return driver.select(
+            self._get_query(dialect, "foreign_keys_by_table"),
+            schema_name=schema_name,
+            table_name=table,
+            schema_type=ForeignKeyMetadata,
+        )

@@ -12,7 +12,7 @@ from sqlspec.adapters.sqlite.core import (
     process_sqlite_result,
     sqlite_statement_config,
 )
-from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
+from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
@@ -30,6 +30,8 @@ from sqlspec.exceptions import (
 from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -248,7 +250,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase | None = None
+        self._data_dictionary: SyncDataDictionaryBase[SyncDriverAdapterBase] | None = None
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         """Create context manager for SQLite cursor.
@@ -454,14 +456,14 @@ class SqliteDriver(SyncDriverAdapterBase):
         return bool(self.connection.in_transaction)
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = SqliteSyncDataDictionary()
+            self._data_dictionary = SqliteDataDictionary()
         return self._data_dictionary
 
 

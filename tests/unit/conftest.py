@@ -25,9 +25,13 @@ from sqlspec.core import (
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
+    ColumnMetadata,
     ExecutionResult,
+    ForeignKeyMetadata,
+    IndexMetadata,
     SyncDataDictionaryBase,
     SyncDriverAdapterBase,
+    TableMetadata,
     VersionInfo,
 )
 from sqlspec.exceptions import SQLSpecError
@@ -605,40 +609,92 @@ class MockAsyncCursor:
         await self.close()
 
 
-class MockSyncDataDictionary(SyncDataDictionaryBase):
+class MockSyncDataDictionary(SyncDataDictionaryBase["MockSyncDriver"]):
     """Mock sync data dictionary for testing."""
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
+    def get_version(self, driver: "MockSyncDriver") -> "VersionInfo | None":
         """Return mock version info."""
         return VersionInfo(3, 42, 0)
 
-    def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
+    def get_feature_flag(self, driver: "MockSyncDriver", feature: str) -> bool:
         """Return mock feature flag."""
         return feature in {"supports_transactions", "supports_prepared_statements"}
 
-    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:
+    def get_optimal_type(self, driver: "MockSyncDriver", type_category: str) -> str:
         """Return mock optimal type."""
         return {"text": "TEXT", "boolean": "INTEGER"}.get(type_category, "TEXT")
+
+    def get_tables(self, driver: "MockSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Return mock table list."""
+        _ = (driver, schema)
+        return []
+
+    def get_columns(
+        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Return mock column metadata."""
+        _ = (driver, table, schema)
+        return []
+
+    def get_indexes(
+        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Return mock index metadata."""
+        _ = (driver, table, schema)
+        return []
+
+    def get_foreign_keys(
+        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Return mock foreign key metadata."""
+        _ = (driver, table, schema)
+        return []
 
     def list_available_features(self) -> "list[str]":
         """Return mock available features."""
         return ["supports_transactions", "supports_prepared_statements"]
 
 
-class MockAsyncDataDictionary(AsyncDataDictionaryBase):
+class MockAsyncDataDictionary(AsyncDataDictionaryBase["MockAsyncDriver"]):
     """Mock async data dictionary for testing."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
+    async def get_version(self, driver: "MockAsyncDriver") -> "VersionInfo | None":
         """Return mock version info."""
         return VersionInfo(3, 42, 0)
 
-    async def get_feature_flag(self, driver: AsyncDriverAdapterBase, feature: str) -> bool:
+    async def get_feature_flag(self, driver: "MockAsyncDriver", feature: str) -> bool:
         """Return mock feature flag."""
         return feature in {"supports_transactions", "supports_prepared_statements"}
 
-    async def get_optimal_type(self, driver: AsyncDriverAdapterBase, type_category: str) -> str:
+    async def get_optimal_type(self, driver: "MockAsyncDriver", type_category: str) -> str:
         """Return mock optimal type."""
         return {"text": "TEXT", "boolean": "INTEGER"}.get(type_category, "TEXT")
+
+    async def get_tables(self, driver: "MockAsyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Return mock table list."""
+        _ = (driver, schema)
+        return []
+
+    async def get_columns(
+        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Return mock column metadata."""
+        _ = (driver, table, schema)
+        return []
+
+    async def get_indexes(
+        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Return mock index metadata."""
+        _ = (driver, table, schema)
+        return []
+
+    async def get_foreign_keys(
+        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Return mock foreign key metadata."""
+        _ = (driver, table, schema)
+        return []
 
     def list_available_features(self) -> "list[str]":
         """Return mock available features."""

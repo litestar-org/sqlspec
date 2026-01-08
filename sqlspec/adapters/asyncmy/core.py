@@ -8,7 +8,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import has_cursor_metadata, has_type_code
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
 __all__ = (
     "apply_asyncmy_driver_features",
@@ -176,8 +176,8 @@ def deserialize_asyncmy_json_rows(
 
 
 def collect_asyncmy_rows(
-    fetched_data: "list[Any] | None",
-    description: "list[Any] | None",
+    fetched_data: "Sequence[Any] | None",
+    description: "Sequence[Any] | None",
     json_indexes: "list[int]",
     deserializer: "Callable[[Any], Any]",
     *,

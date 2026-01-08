@@ -13,7 +13,7 @@ from sqlspec.adapters.duckdb.core import (
     collect_duckdb_rows,
     duckdb_statement_config,
 )
-from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
+from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import SQL, StatementConfig, create_arrow_result, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
@@ -35,6 +35,8 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
@@ -224,7 +226,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         statement_config = apply_duckdb_driver_features(statement_config, driver_features)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase | None = None
+        self._data_dictionary: SyncDataDictionaryBase[Self] | None = None
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.
@@ -376,14 +378,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase":
+    def data_dictionary(self) -> "SyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = DuckDBSyncDataDictionary()
+            self._data_dictionary = DuckDBDataDictionary()
         return self._data_dictionary
 
     def select_to_arrow(

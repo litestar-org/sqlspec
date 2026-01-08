@@ -19,7 +19,7 @@ from sqlspec.adapters.asyncmy.core import (
     detect_asyncmy_json_columns,
     format_mysql_identifier,
 )
-from sqlspec.adapters.asyncmy.data_dictionary import MySQLAsyncDataDictionary
+from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
@@ -40,6 +40,8 @@ from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate,
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from typing_extensions import Self
 
     from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
     from sqlspec.core import SQL, StatementConfig
@@ -259,7 +261,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         super().__init__(
             connection=connection, statement_config=final_statement_config, driver_features=driver_features
         )
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
+        self._data_dictionary: AsyncDataDictionaryBase[Self] | None = None
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         """Create cursor context manager for the connection.
@@ -353,10 +355,12 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
+            fetched_rows = list(fetched_data) if fetched_data else None
+            description = list(cursor.description) if cursor.description else None
             json_indexes = detect_asyncmy_json_columns(cursor, ASYNCMY_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
             rows, column_names = collect_asyncmy_rows(
-                cast("list[Any] | None", fetched_data), cursor.description, json_indexes, deserializer, logger=logger
+                fetched_rows, description, json_indexes, deserializer, logger=logger
             )
 
             return self.create_execution_result(
@@ -490,14 +494,14 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+    def data_dictionary(self) -> "AsyncDataDictionaryBase[Self]":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = MySQLAsyncDataDictionary()
+            self._data_dictionary = AsyncmyDataDictionary()
         return self._data_dictionary
 
 

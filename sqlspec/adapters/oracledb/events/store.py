@@ -21,8 +21,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb.data_dictionary import (
-    OracleAsyncDataDictionary,
-    OracleSyncDataDictionary,
+    OracledbAsyncDataDictionary,
+    OracledbSyncDataDictionary,
     OracleVersionInfo,
 )
 from sqlspec.extensions.events._store import BaseEventQueueStore
@@ -256,7 +256,7 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
             return self._oracle_version_info
 
         with self._config.provide_session() as driver:
-            dictionary = OracleSyncDataDictionary()
+            dictionary = OracledbSyncDataDictionary()
             self._oracle_version_info = dictionary.get_version(driver)
 
         if self._oracle_version_info is None:
@@ -361,7 +361,7 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
             return self._oracle_version_info
 
         async with self._config.provide_session() as driver:
-            dictionary = OracleAsyncDataDictionary()
+            dictionary = OracledbAsyncDataDictionary()
             self._oracle_version_info = await dictionary.get_version(driver)
 
         if self._oracle_version_info is None:

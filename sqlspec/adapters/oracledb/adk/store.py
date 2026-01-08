@@ -8,8 +8,8 @@ import oracledb
 
 from sqlspec import SQL
 from sqlspec.adapters.oracledb.data_dictionary import (
-    OracleAsyncDataDictionary,
-    OracleSyncDataDictionary,
+    OracledbAsyncDataDictionary,
+    OracledbSyncDataDictionary,
     OracleVersionInfo,
 )
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
@@ -239,7 +239,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             return self._oracle_version_info
 
         async with self._config.provide_session() as driver:
-            dictionary = OracleAsyncDataDictionary()
+            dictionary = OracledbAsyncDataDictionary()
             self._oracle_version_info = await dictionary.get_version(driver)
 
         if self._oracle_version_info is None:
@@ -1005,7 +1005,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             return self._oracle_version_info
 
         with self._config.provide_session() as driver:
-            dictionary = OracleSyncDataDictionary()
+            dictionary = OracledbSyncDataDictionary()
             self._oracle_version_info = dictionary.get_version(driver)
 
         if self._oracle_version_info is None:

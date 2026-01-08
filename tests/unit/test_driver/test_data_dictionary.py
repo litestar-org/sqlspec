@@ -3,7 +3,7 @@
 from unittest.mock import Mock
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
+from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.driver import SyncDriverAdapterBase, VersionInfo
 from tests.conftest import requires_interpreted
 
@@ -59,7 +59,7 @@ class TestSqliteDataDictionary:
         mock_driver = Mock(spec=SyncDriverAdapterBase)
         mock_driver.select_value.return_value = "3.42.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
         version = data_dict.get_version(mock_driver)
 
         assert version is not None
@@ -72,7 +72,7 @@ class TestSqliteDataDictionary:
         mock_driver = Mock(spec=SyncDriverAdapterBase)
         mock_driver.select_value.return_value = None
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
         version = data_dict.get_version(mock_driver)
 
         assert version is None
@@ -82,7 +82,7 @@ class TestSqliteDataDictionary:
         mock_driver = Mock(spec=SyncDriverAdapterBase)
         mock_driver.select_value.return_value = "invalid-version"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
         version = data_dict.get_version(mock_driver)
 
         assert version is None
@@ -92,7 +92,7 @@ class TestSqliteDataDictionary:
         mock_driver = Mock(spec=SyncDriverAdapterBase)
         mock_driver.select_value.return_value = "3.42.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         # Test features supported in 3.42.0
         assert data_dict.get_feature_flag(mock_driver, "supports_json") is True
@@ -111,7 +111,7 @@ class TestSqliteDataDictionary:
         mock_driver = Mock(spec=SyncDriverAdapterBase)
         mock_driver.select_value.return_value = "3.20.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         # Test features not supported in 3.20.0
         assert data_dict.get_feature_flag(mock_driver, "supports_json") is False
@@ -127,7 +127,7 @@ class TestSqliteDataDictionary:
         mock_driver = Mock(spec=SyncDriverAdapterBase)
         mock_driver.select_value.return_value = None
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         # Should return False for all features when version is unknown
         assert data_dict.get_feature_flag(mock_driver, "supports_json") is False
@@ -138,7 +138,7 @@ class TestSqliteDataDictionary:
         mock_driver = Mock(spec=SyncDriverAdapterBase)
         mock_driver.select_value.return_value = "3.42.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         assert data_dict.get_optimal_type(mock_driver, "json") == "JSON"
         assert data_dict.get_optimal_type(mock_driver, "uuid") == "TEXT"
@@ -151,13 +151,13 @@ class TestSqliteDataDictionary:
         mock_driver = Mock(spec=SyncDriverAdapterBase)
         mock_driver.select_value.return_value = "3.20.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         assert data_dict.get_optimal_type(mock_driver, "json") == "TEXT"
 
     def test_list_available_features(self) -> None:
         """Test listing available features."""
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
         features = data_dict.list_available_features()
 
         expected_features = [

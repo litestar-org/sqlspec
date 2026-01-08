@@ -41,8 +41,8 @@ async def test_aiosqlite_data_dictionary_topology_and_fks(aiosqlite_session: "Ai
     try:
         # Test 1: Topological Sort
         sorted_tables = await aiosqlite_driver.data_dictionary.get_tables(aiosqlite_driver)
-
-        test_tables = [t for t in sorted_tables if t in (users_table, orders_table, items_table)]
+        table_names = [table.get("table_name") for table in sorted_tables if table.get("table_name")]
+        test_tables = [name for name in table_names if name in (users_table, orders_table, items_table)]
         assert len(test_tables) == 3
 
         idx_users = test_tables.index(users_table)
@@ -63,7 +63,9 @@ async def test_aiosqlite_data_dictionary_topology_and_fks(aiosqlite_session: "Ai
         await aiosqlite_driver.execute(f"CREATE INDEX idx_{unique_suffix} ON {users_table}(name)")
         indexes = await aiosqlite_driver.data_dictionary.get_indexes(aiosqlite_driver, table=users_table)
         assert len(indexes) >= 1
-        assert any(idx["name"] == f"idx_{unique_suffix}" for idx in indexes)
+        assert any(idx["index_name"] == f"idx_{unique_suffix}" for idx in indexes)
+        all_indexes = await aiosqlite_driver.data_dictionary.get_indexes(aiosqlite_driver)
+        assert any(idx["index_name"] == f"idx_{unique_suffix}" for idx in all_indexes)
 
     finally:
         await aiosqlite_driver.execute_script(f"""

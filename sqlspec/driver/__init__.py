@@ -9,6 +9,7 @@ from sqlspec.driver._common import (
     ForeignKeyMetadata,
     IndexMetadata,
     StackExecutionObserver,
+    TableMetadata,
     VersionInfo,
     describe_stack_statement,
 )
@@ -27,6 +28,7 @@ __all__ = (
     "StackExecutionObserver",
     "SyncDataDictionaryBase",
     "SyncDriverAdapterBase",
+    "TableMetadata",
     "VersionInfo",
     "describe_stack_statement",
 )

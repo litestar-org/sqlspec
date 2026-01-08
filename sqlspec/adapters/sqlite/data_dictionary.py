@@ -1,270 +1,176 @@
 """SQLite-specific data dictionary for metadata queries."""
 
-import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
-from sqlspec.driver import ForeignKeyMetadata, SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
+from sqlspec.adapters.sqlite.core import format_sqlite_identifier
+from sqlspec.data_dictionary._helpers import DialectSQLMixin
+from sqlspec.driver import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    SyncDataDictionaryBase,
+    TableMetadata,
+    VersionInfo,
+)
 from sqlspec.utils.logging import get_logger
+
+logger = get_logger("adapters.sqlite.data_dictionary")
+
+__all__ = ("SqliteDataDictionary",)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.driver import SqliteDriver
 
-logger = get_logger("adapters.sqlite.data_dictionary")
 
-# Compiled regex patterns
-SQLITE_VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-
-__all__ = ("SqliteSyncDataDictionary",)
-
-
-class SqliteSyncDataDictionary(SyncDataDictionaryBase):
+class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver"]):
     """SQLite-specific sync data dictionary."""
 
     __slots__ = ()
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
-        """Get SQLite database version information.
+    dialect = "sqlite"
 
-        Uses caching to avoid repeated database queries within the same
-        driver session.
+    def get_version(self, driver: "SqliteDriver") -> "VersionInfo | None":
+        """Get SQLite database version information.
 
         Args:
             driver: Sync database driver instance.
 
         Returns:
             SQLite version information or None if detection fails.
+
         """
-        driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
+        was_cached, cached_version = self.get_cached_version_for_driver(driver)
         if was_cached:
             return cached_version
 
-        version_str = cast("SqliteDriver", driver).select_value("SELECT sqlite_version()")
-        if not version_str:
+        version_value = driver.select_value_or_none(self.get_query("version"))
+        if not version_value:
             logger.warning("No SQLite version information found")
-            self.cache_version(driver_id, None)
+            self.cache_version_for_driver(driver, None)
             return None
 
-        version_match = SQLITE_VERSION_PATTERN.match(str(version_str))
-        if not version_match:
-            logger.warning("Could not parse SQLite version: %s", version_str)
-            self.cache_version(driver_id, None)
+        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
+        if version_info is None:
+            logger.warning("Could not parse SQLite version: %s", version_value)
+            self.cache_version_for_driver(driver, None)
             return None
 
-        major, minor, patch = map(int, version_match.groups())
-        version_info = VersionInfo(major, minor, patch)
         logger.debug("Detected SQLite version: %s", version_info)
-        self.cache_version(driver_id, version_info)
+        self.cache_version_for_driver(driver, version_info)
         return version_info
 
-    def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
+    def get_feature_flag(self, driver: "SqliteDriver", feature: str) -> bool:
         """Check if SQLite database supports a specific feature.
 
         Args:
-            driver: SQLite driver instance
-            feature: Feature name to check
+            driver: Sync database driver instance.
+            feature: Feature name to check.
 
         Returns:
-            True if feature is supported, False otherwise
+            True if feature is supported, False otherwise.
+
         """
         version_info = self.get_version(driver)
-        if not version_info:
-            return False
+        return self.resolve_feature_flag(feature, version_info)
 
-        feature_versions: dict[str, VersionInfo] = {
-            "supports_json": VersionInfo(3, 38, 0),
-            "supports_returning": VersionInfo(3, 35, 0),
-            "supports_upsert": VersionInfo(3, 24, 0),
-            "supports_window_functions": VersionInfo(3, 25, 0),
-            "supports_cte": VersionInfo(3, 8, 3),
-        }
-        feature_flags: dict[str, bool] = {
-            "supports_transactions": True,
-            "supports_prepared_statements": True,
-            "supports_schemas": False,
-            "supports_arrays": False,
-            "supports_uuid": False,
-        }
-
-        if feature in feature_versions:
-            return bool(version_info >= feature_versions[feature])
-        if feature in feature_flags:
-            return feature_flags[feature]
-
-        return False
-
-    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:
+    def get_optimal_type(self, driver: "SqliteDriver", type_category: str) -> str:
         """Get optimal SQLite type for a category.
 
         Args:
-            driver: SQLite driver instance
-            type_category: Type category
+            driver: Sync database driver instance.
+            type_category: Type category.
 
         Returns:
-            SQLite-specific type name
+            SQLite-specific type name.
+
         """
+        config = self.get_dialect_config()
         version_info = self.get_version(driver)
 
         if type_category == "json":
-            if version_info and version_info >= VersionInfo(3, 38, 0):
+            json_version = config.get_feature_version("supports_json")
+            if version_info and json_version and version_info >= json_version:
                 return "JSON"
             return "TEXT"
 
-        type_map = {"uuid": "TEXT", "boolean": "INTEGER", "timestamp": "TIMESTAMP", "text": "TEXT", "blob": "BLOB"}
-        return type_map.get(type_category, "TEXT")
+        return config.get_optimal_type(type_category)
+
+    def get_tables(self, driver: "SqliteDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables sorted by topological dependency order using SQLite catalog."""
+        schema_name = self.resolve_schema(schema)
+        schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+        query_text = self.get_query_text("tables_by_schema").format(schema_prefix=schema_prefix)
+        return driver.select(query_text, schema_type=TableMetadata)
 
     def get_columns(
-        self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get column information for a table using SQLite PRAGMA.
+        self, driver: "SqliteDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+        if table is None:
+            query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
+            return driver.select(query_text, schema_type=ColumnMetadata)
 
-        Args:
-            driver: SQLite driver instance
-            table: Table name to query columns for
-            schema: Schema name (unused in SQLite)
-
-        Returns:
-            List of column metadata dictionaries with keys:
-                - column_name: Name of the column
-                - data_type: SQLite data type
-                - nullable: Whether column allows NULL
-                - default_value: Default value if any
-        """
-        sqlite_driver = cast("SqliteDriver", driver)
-        result = sqlite_driver.execute(f"PRAGMA table_info({table})")
-
-        return [
-            {
-                "column_name": row["name"] if isinstance(row, dict) else row[1],
-                "data_type": row["type"] if isinstance(row, dict) else row[2],
-                "nullable": not (row["notnull"] if isinstance(row, dict) else row[3]),
-                "default_value": row["dflt_value"] if isinstance(row, dict) else row[4],
-            }
-            for row in result.data or []
-        ]
-
-    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
-        """Get tables sorted by topological dependency order using SQLite catalog."""
-        sqlite_driver = cast("SqliteDriver", driver)
-
-        sql = """
-        WITH RECURSIVE dependency_tree AS (
-            SELECT
-                m.name as table_name,
-                0 as level,
-                '/' || m.name || '/' as path
-            FROM sqlite_schema m
-            WHERE m.type = 'table'
-              AND m.name NOT LIKE 'sqlite_%'
-              AND NOT EXISTS (
-                  SELECT 1 FROM pragma_foreign_key_list(m.name)
-              )
-
-            UNION ALL
-
-            SELECT
-                m.name as table_name,
-                dt.level + 1,
-                dt.path || m.name || '/'
-            FROM sqlite_schema m
-            JOIN pragma_foreign_key_list(m.name) fk
-            JOIN dependency_tree dt ON fk."table" = dt.table_name
-            WHERE m.type = 'table'
-              AND m.name NOT LIKE 'sqlite_%'
-              AND instr(dt.path, '/' || m.name || '/') = 0
+        table_identifier = f"{schema_name}.{table}" if schema_name else table
+        query_text = self.get_query_text("columns_by_table").format(
+            table_name=format_sqlite_identifier(table_identifier)
         )
-        SELECT DISTINCT table_name FROM dependency_tree ORDER BY level, table_name;
-        """
-        result = sqlite_driver.execute(sql)
-        return [row["table_name"] for row in result.get_data()]
-
-    def get_foreign_keys(
-        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[ForeignKeyMetadata]":
-        """Get foreign key metadata."""
-        sqlite_driver = cast("SqliteDriver", driver)
-
-        if table:
-            sql = f"SELECT '{table}' as table_name, fk.* FROM pragma_foreign_key_list('{table}') fk"
-            result = sqlite_driver.execute(sql)
-        else:
-            sql = """
-                SELECT m.name as table_name, fk.*
-                FROM sqlite_schema m, pragma_foreign_key_list(m.name) fk
-                WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'
-            """
-            result = sqlite_driver.execute(sql)
-
-        fks = []
-        for row in result.data:
-            if isinstance(row, (list, tuple)):
-                table_name = row[0]
-                ref_table = row[3]
-                col = row[4]
-                ref_col = row[5]
-            else:
-                table_name = row["table_name"]
-                ref_table = row["table"]
-                col = row["from"]
-                ref_col = row["to"]
-
-            fks.append(
-                ForeignKeyMetadata(
-                    table_name=table_name,
-                    column_name=col,
-                    referenced_table=ref_table,
-                    referenced_column=ref_col,
-                    constraint_name=None,
-                    schema=None,
-                    referenced_schema=None,
-                )
-            )
-        return fks
+        return driver.select(query_text, schema_type=ColumnMetadata)
 
     def get_indexes(
-        self, driver: "SyncDriverAdapterBase", table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get index information for a table."""
-        sqlite_driver = cast("SqliteDriver", driver)
+        self, driver: "SqliteDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            indexes: list[IndexMetadata] = []
+            for table_info in self.get_tables(driver, schema=schema_name):
+                table_name = table_info.get("table_name")
+                if not table_name:
+                    continue
+                indexes.extend(self.get_indexes(driver, table=table_name, schema=schema_name))
+            return indexes
 
-        index_list_res = sqlite_driver.execute(f"PRAGMA index_list('{table}')")
-        indexes = []
-
-        for idx_row in index_list_res.data:
-            if isinstance(idx_row, (list, tuple)):
-                idx_name = idx_row[1]
-                unique = bool(idx_row[2])
-            else:
-                idx_name = idx_row["name"]
-                unique = bool(idx_row["unique"])
-
-            info_res = sqlite_driver.execute(f"PRAGMA index_info('{idx_name}')")
-            cols = []
-            for col_row in info_res.data:
-                if isinstance(col_row, (list, tuple)):
-                    cols.append(col_row[2])
-                else:
-                    cols.append(col_row["name"])
-
-            indexes.append({"name": idx_name, "columns": cols, "unique": unique, "primary": False, "table_name": table})
-
+        table_identifier = f"{schema_name}.{table}" if schema_name else table
+        index_list_sql = self.get_query_text("indexes_by_table").format(
+            table_name=format_sqlite_identifier(table_identifier)
+        )
+        index_rows = driver.select(index_list_sql)
+        indexes: list[IndexMetadata] = []
+        for row in index_rows:
+            index_name = row.get("name")
+            if not index_name:
+                continue
+            index_identifier = f"{schema_name}.{index_name}" if schema_name else index_name
+            columns_sql = self.get_query_text("index_columns_by_index").format(
+                index_name=format_sqlite_identifier(index_identifier)
+            )
+            columns_rows = driver.select(columns_sql)
+            columns = [col.get("name") for col in columns_rows if col.get("name")]
+            is_primary = row.get("origin") == "pk"
+            indexes.append({
+                "index_name": index_name,
+                "table_name": table,
+                "schema_name": schema_name,
+                "is_unique": row.get("unique"),
+                "is_primary": is_primary,
+                "columns": columns,
+            })
         return indexes
 
-    def list_available_features(self) -> "list[str]":
-        """List available SQLite feature flags.
+    def get_foreign_keys(
+        self, driver: "SqliteDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        schema_name = self.resolve_schema(schema)
+        schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+        if table is None:
+            query_text = self.get_query_text("foreign_keys_by_schema").format(schema_prefix=schema_prefix)
+            return driver.select(query_text, schema_type=ForeignKeyMetadata)
 
-        Returns:
-            List of supported feature names
-        """
-        return [
-            "supports_json",
-            "supports_returning",
-            "supports_upsert",
-            "supports_window_functions",
-            "supports_cte",
-            "supports_transactions",
-            "supports_prepared_statements",
-            "supports_schemas",
-            "supports_arrays",
-            "supports_uuid",
-        ]
+        table_identifier = f"{schema_name}.{table}" if schema_name else table
+        query_text = self.get_query_text("foreign_keys_by_table").format(
+            table_name=format_sqlite_identifier(table_identifier)
+        )
+        return driver.select(query_text, schema_type=ForeignKeyMetadata)

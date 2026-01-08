@@ -140,6 +140,21 @@ The Data Dictionary API provides standardized introspection capabilities across 
    :undoc-members:
    :show-inheritance:
 
+Feature Flag Types
+------------------
+
+.. currentmodule:: sqlspec.data_dictionary
+
+.. autoclass:: FeatureFlags
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: FeatureVersions
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Driver Protocols
 ================
 

@@ -10,7 +10,7 @@ from sqlspec.adapters.oracledb.adk.store import (
     coerce_decimal_values,
     storage_type_from_version,
 )
-from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
+from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -77,7 +77,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             return self._oracle_version_info
 
         async with self._config.provide_session() as driver:
-            dictionary = OracleAsyncDataDictionary()
+            dictionary = OracledbAsyncDataDictionary()
             self._oracle_version_info = await dictionary.get_version(driver)
 
         if self._oracle_version_info is None:
@@ -418,7 +418,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             return self._oracle_version_info
 
         with self._config.provide_session() as driver:
-            dictionary = OracleSyncDataDictionary()
+            dictionary = OracledbSyncDataDictionary()
             self._oracle_version_info = dictionary.get_version(driver)
 
         if self._oracle_version_info is None:

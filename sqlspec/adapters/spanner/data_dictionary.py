@@ -1,109 +1,116 @@
 """Spanner metadata queries using INFORMATION_SCHEMA."""
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
-from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
-
-if TYPE_CHECKING:
-    from sqlspec.driver import VersionInfo
-
+from sqlspec.data_dictionary._helpers import DialectSQLMixin
+from sqlspec.driver import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    SyncDataDictionaryBase,
+    TableMetadata,
+    VersionInfo,
+)
 
 __all__ = ("SpannerDataDictionary",)
 
+if TYPE_CHECKING:
+    from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 
-class SpannerDataDictionary(SyncDataDictionaryBase):
+
+class SpannerDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SpannerSyncDriver"]):
     """Fetch table, column, and index metadata from Spanner."""
 
     __slots__ = ()
 
-    def get_version(self, driver: "SyncDriverAdapterBase") -> "VersionInfo | None":
+    dialect = "spanner"
+
+    def get_version(self, driver: "SpannerSyncDriver") -> "VersionInfo | None":
         """Get Spanner version information.
 
-        Spanner is a fully managed cloud service that doesn't expose
-        traditional version information. Feature availability is determined
-        by the service itself, not version numbers.
-
         Args:
-            driver: Spanner driver instance
+            driver: Spanner driver instance.
 
         Returns:
-            None - Spanner doesn't provide version information.
+            None since Spanner does not expose version information.
+
         """
         _ = driver
         return None
 
-    def get_feature_flag(self, driver: "SyncDriverAdapterBase", feature: str) -> bool:
+    def get_feature_flag(self, driver: "SpannerSyncDriver", feature: str) -> bool:
+        """Check if Spanner supports a specific feature.
+
+        Args:
+            driver: Spanner driver instance.
+            feature: Feature name to check.
+
+        Returns:
+            True if feature is supported, False otherwise.
+
+        """
         _ = driver
-        feature_flags: dict[str, bool] = {
-            "supports_json": True,
-            "supports_generators": False,
-            "supports_index_clustering": True,
-            "supports_interleaved_tables": True,
-        }
-        return feature_flags.get(feature, False)
+        return self.resolve_feature_flag(feature, None)
 
-    def get_optimal_type(self, driver: "SyncDriverAdapterBase", type_category: str) -> str:
+    def get_optimal_type(self, driver: "SpannerSyncDriver", type_category: str) -> str:
+        """Get optimal Spanner type for a category.
+
+        Args:
+            driver: Spanner driver instance.
+            type_category: Type category.
+
+        Returns:
+            Spanner-specific type name.
+
+        """
         _ = driver
-        type_map = {
-            "json": "JSON",
-            "uuid": "BYTES(16)",
-            "boolean": "BOOL",
-            "timestamp": "TIMESTAMP",
-            "text": "STRING(MAX)",
-            "blob": "BYTES(MAX)",
-            "numeric": "NUMERIC",
-            "bignumeric": "NUMERIC",
-            "array": "ARRAY",
-        }
-        return type_map.get(type_category, "STRING(MAX)")
+        return self.get_dialect_config().get_optimal_type(type_category)
 
-    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
-        sql = 'SELECT TABLE_NAME AS "table_name" FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = @schema'
-        params: dict[str, Any]
-        if schema is None:
-            sql = "SELECT TABLE_NAME AS \"table_name\" FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ''"
-            params = {}
-        else:
-            params = {"schema": schema}
-
-        results = driver.select(sql, params)
-        return [cast("str", row["table_name"]) for row in results]
+    def get_tables(self, driver: "SpannerSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables using INFORMATION_SCHEMA."""
+        schema_name = self.resolve_schema(schema)
+        return driver.select(self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata)
 
     def get_columns(
-        self, driver: "SyncDriverAdapterBase", table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        sql = """
-            SELECT COLUMN_NAME AS "column_name", SPANNER_TYPE AS "spanner_type", IS_NULLABLE AS "is_nullable"
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_NAME = @table
-        """
-        params: dict[str, Any] = {"table": table}
-        if schema is not None:
-            sql = f"{sql} AND TABLE_SCHEMA = @schema"
-            params["schema"] = schema
-        else:
-            sql = f"{sql} AND TABLE_SCHEMA = ''"
+        self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            return driver.select(
+                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+            )
 
-        results = driver.select(sql, params)
-        return [
-            {"name": row["column_name"], "type": row["spanner_type"], "nullable": row["is_nullable"] == "YES"}
-            for row in results
-        ]
+        return driver.select(
+            self.get_query("columns_by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
+        )
 
     def get_indexes(
-        self, driver: "SyncDriverAdapterBase", table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        sql = """
-            SELECT INDEX_NAME AS "index_name", INDEX_TYPE AS "index_type", IS_UNIQUE AS "is_unique"
-            FROM INFORMATION_SCHEMA.INDEXES
-            WHERE TABLE_NAME = @table
-        """
-        params: dict[str, Any] = {"table": table}
-        if schema is not None:
-            sql = f"{sql} AND TABLE_SCHEMA = @schema"
-            params["schema"] = schema
-        else:
-            sql = f"{sql} AND TABLE_SCHEMA = ''"
+        self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            return driver.select(
+                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+            )
 
-        results = driver.select(sql, params)
-        return [{"name": row["index_name"], "type": row["index_type"], "unique": row["is_unique"]} for row in results]
+        return driver.select(
+            self.get_query("indexes_by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
+        )
+
+    def get_foreign_keys(
+        self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            return driver.select(
+                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+            )
+        return driver.select(
+            self.get_query("foreign_keys_by_table"),
+            table_name=table,
+            schema_name=schema_name,
+            schema_type=ForeignKeyMetadata,
+        )
