@@ -1,10 +1,31 @@
 """OracleDB adapter compiled helpers."""
 
 import re
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterStyle,
+    StackResult,
+    StatementConfig,
+    build_statement_config_from_profile,
+    create_sql_result,
+)
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import is_readable
@@ -12,8 +33,11 @@ from sqlspec.utils.type_guards import is_readable
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from sqlspec.core import SQL
+
 __all__ = (
     "apply_oracledb_driver_features",
+    "build_oracledb_pipeline_stack_result",
     "build_oracledb_profile",
     "build_oracledb_statement_config",
     "coerce_async_row_values",
@@ -24,6 +48,7 @@ __all__ = (
     "oracle_insert_statement",
     "oracle_truncate_statement",
     "oracledb_statement_config",
+    "raise_oracledb_exception",
     "requires_oracledb_session_callback",
 )
 
@@ -31,6 +56,34 @@ __all__ = (
 IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _VERSION_COMPONENTS: int = 3
 TYPE_CONVERTER = OracleOutputConverter()
+
+ORA_CHECK_CONSTRAINT = 2290
+ORA_INTEGRITY_RANGE_START = 2200
+ORA_INTEGRITY_RANGE_END = 2300
+ORA_PARSING_RANGE_START = 900
+ORA_PARSING_RANGE_END = 1000
+ORA_TABLESPACE_FULL = 1652
+
+_ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
+    1: (UniqueViolationError, "unique constraint violation"),
+    2291: (ForeignKeyViolationError, "foreign key constraint violation"),
+    2292: (ForeignKeyViolationError, "foreign key constraint violation"),
+    ORA_CHECK_CONSTRAINT: (CheckViolationError, "check constraint violation"),
+    1400: (NotNullViolationError, "not-null constraint violation"),
+    1407: (NotNullViolationError, "not-null constraint violation"),
+    1017: (DatabaseConnectionError, "connection error"),
+    12154: (DatabaseConnectionError, "connection error"),
+    12541: (DatabaseConnectionError, "connection error"),
+    12545: (DatabaseConnectionError, "connection error"),
+    12514: (DatabaseConnectionError, "connection error"),
+    12505: (DatabaseConnectionError, "connection error"),
+    60: (TransactionError, "transaction error"),
+    8176: (TransactionError, "transaction error"),
+    1722: (DataError, "data error"),
+    1858: (DataError, "data error"),
+    1840: (DataError, "data error"),
+    ORA_TABLESPACE_FULL: (OperationalError, "operational error"),
+}
 
 
 def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
@@ -76,6 +129,99 @@ def oracle_insert_statement(table: str, columns: "list[str]") -> str:
 
 def oracle_truncate_statement(table: str) -> str:
     return f"TRUNCATE TABLE {table}"
+
+
+def build_oracledb_pipeline_stack_result(
+    statement: "SQL",
+    method: str,
+    returns_rows: bool,
+    parameters: Any,
+    pipeline_result: Any,
+    driver_features: "dict[str, Any]",
+) -> "StackResult":
+    """Build StackResult from Oracle pipeline output.
+
+    Args:
+        statement: Statement executed in the pipeline.
+        method: Pipeline execution method name.
+        returns_rows: Whether the operation returns rows.
+        parameters: Prepared parameters used for execution.
+        pipeline_result: Raw pipeline execution result.
+        driver_features: Driver feature configuration for normalization.
+
+    Returns:
+        StackResult for the pipeline operation.
+    """
+    try:
+        rows = pipeline_result.rows
+    except AttributeError:
+        rows = None
+    try:
+        columns = pipeline_result.columns
+    except AttributeError:
+        columns = None
+
+    data: list[dict[str, Any]] | None = None
+    if returns_rows:
+        if not rows:
+            data = []
+        else:
+            if columns:
+                names = []
+                for index, column in enumerate(columns):
+                    try:
+                        name = column.name
+                    except AttributeError:
+                        name = f"column_{index}"
+                    names.append(name)
+            else:
+                first = rows[0]
+                names = [f"column_{index}" for index in range(len(first) if isinstance(first, Sized) else 0)]
+            names = normalize_column_names(names, driver_features)
+            normalized_rows: list[dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    normalized_rows.append(row)
+                else:
+                    normalized_rows.append(dict(zip(names, row, strict=False)))
+            data = normalized_rows
+
+    metadata: dict[str, Any] = {"pipeline_operation": method}
+    try:
+        warning = pipeline_result.warning
+    except AttributeError:
+        warning = None
+    if warning is not None:
+        metadata["warning"] = warning
+
+    try:
+        return_value = pipeline_result.return_value
+    except AttributeError:
+        return_value = None
+    if return_value is not None:
+        metadata["return_value"] = return_value
+
+    try:
+        rowcount = pipeline_result.rowcount
+    except AttributeError:
+        rowcount = None
+
+    if isinstance(rowcount, int) and rowcount >= 0:
+        rows_affected = rowcount
+    elif method == "execute_many":
+        try:
+            rows_affected = len(parameters or ())
+        except TypeError:
+            rows_affected = 0
+    elif method == "execute" and not returns_rows:
+        rows_affected = 1
+    elif returns_rows:
+        rows_affected = len(data or [])
+    else:
+        rows_affected = 0
+
+    sql_result = create_sql_result(statement, data=data, rows_affected=rows_affected, metadata=metadata)
+    return StackResult.from_sql_result(sql_result)
 
 
 def apply_oracledb_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
@@ -199,6 +345,40 @@ async def collect_oracledb_async_rows(
         coerced_row = await coerce_async_row_values(row)
         data.append(dict(zip(column_names, coerced_row, strict=False)))
     return data, column_names
+
+
+def _raise_oracle_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:
+    msg = f"Oracle {description} [ORA-{code:05d}]: {error}" if code else f"Oracle {description}: {error}"
+    raise error_class(msg) from error
+
+
+def raise_oracledb_exception(error: Any) -> None:
+    """Raise SQLSpec exceptions for Oracle errors."""
+    error_obj = error.args[0] if getattr(error, "args", None) else None
+    if not error_obj:
+        _raise_oracle_error(error, None, SQLSpecError, "database error")
+        return
+
+    try:
+        error_code = error_obj.code
+    except AttributeError:
+        error_code = None
+    if not error_code:
+        _raise_oracle_error(error, None, SQLSpecError, "database error")
+        return
+
+    mapping = _ERROR_CODE_MAPPING.get(error_code)
+    if mapping:
+        error_class, error_desc = mapping
+        _raise_oracle_error(error, error_code, error_class, error_desc)
+
+    if ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
+        _raise_oracle_error(error, error_code, IntegrityError, "integrity constraint violation")
+
+    if ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
+        _raise_oracle_error(error, error_code, SQLParsingError, "SQL syntax error")
+
+    _raise_oracle_error(error, error_code, SQLSpecError, "database error")
 
 
 def build_oracledb_profile() -> "DriverParameterProfile":

@@ -2,8 +2,7 @@
 
 import contextlib
 import logging
-from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
@@ -16,6 +15,7 @@ from sqlspec.adapters.oracledb._typing import (
 )
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
+    build_oracledb_pipeline_stack_result,
     build_oracledb_profile,
     collect_oracledb_async_rows,
     collect_oracledb_sync_rows,
@@ -23,6 +23,7 @@ from sqlspec.adapters.oracledb.core import (
     oracle_insert_statement,
     oracle_truncate_statement,
     oracledb_statement_config,
+    raise_oracledb_exception,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.core import (
@@ -31,32 +32,12 @@ from sqlspec.core import (
     StatementConfig,
     StatementStack,
     create_arrow_result,
-    create_sql_result,
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import (
-    AsyncDataDictionaryBase,
-    AsyncDriverAdapterBase,
-    SyncDataDictionaryBase,
-    SyncDriverAdapterBase,
-)
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.driver._common import StackExecutionObserver, VersionInfo, describe_stack_statement, hash_stack_operations
-from sqlspec.exceptions import (
-    CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
-    ForeignKeyViolationError,
-    ImproperConfigurationError,
-    IntegrityError,
-    NotNullViolationError,
-    OperationalError,
-    SQLParsingError,
-    SQLSpecError,
-    StackExecutionError,
-    TransactionError,
-    UniqueViolationError,
-)
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.type_guards import has_pipeline_capability
@@ -106,9 +87,6 @@ class OraclePipelineMixin:
 
     __slots__ = ()
 
-    def _pipeline_driver(self) -> "OraclePipelineDriver":
-        return cast("OraclePipelineDriver", self)
-
     def _stack_native_blocker(self, stack: "StatementStack") -> "str | None":
         for operation in stack.operations:
             if operation.method == "execute_arrow":
@@ -129,7 +107,7 @@ class OraclePipelineMixin:
         )
 
     def _prepare_pipeline_operation(self, operation: "StackOperation") -> _CompiledStackOperation:
-        driver = self._pipeline_driver()
+        driver = cast("OraclePipelineDriver", self)
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
         statement_config = kwargs.pop("statement_config", None)
         config = statement_config or driver.statement_config
@@ -144,9 +122,15 @@ class OraclePipelineMixin:
                 raise ValueError(msg)
             parameter_sets = operation.arguments[0]
             filters = operation.arguments[1:]
-            sql_statement = self._build_execute_many_statement(
-                operation.statement, parameter_sets, filters, config, kwargs
-            )
+            if isinstance(operation.statement, SQL):
+                statement_seed = operation.statement.raw_expression or operation.statement.raw_sql
+                sql_statement = SQL(statement_seed, parameter_sets, statement_config=config, is_many=True, **kwargs)
+            else:
+                base_statement = driver.prepare_statement(
+                    operation.statement, filters, statement_config=config, kwargs=kwargs
+                )
+                statement_seed = base_statement.raw_expression or base_statement.raw_sql
+                sql_statement = SQL(statement_seed, parameter_sets, statement_config=config, is_many=True, **kwargs)
         else:
             msg = f"Unsupported stack operation method: {operation.method}"
             raise ValueError(msg)
@@ -163,21 +147,6 @@ class OraclePipelineMixin:
             returns_rows=sql_statement.returns_rows(),
             summary=summary,
         )
-
-    def _build_execute_many_statement(
-        self,
-        statement: "str | Statement | QueryBuilder",
-        parameter_sets: "Sequence[StatementParameters]",
-        filters: "tuple[StatementParameters | StatementFilter, ...]",
-        statement_config: "StatementConfig",
-        kwargs: "dict[str, Any]",
-    ) -> SQL:
-        driver = self._pipeline_driver()
-        if isinstance(statement, SQL):
-            return SQL(statement.raw_sql, parameter_sets, statement_config=statement_config, is_many=True, **kwargs)
-
-        base_statement = driver.prepare_statement(statement, filters, statement_config=statement_config, kwargs=kwargs)
-        return SQL(base_statement.raw_sql, parameter_sets, statement_config=statement_config, is_many=True, **kwargs)
 
     def _add_pipeline_operation(self, pipeline: Any, operation: _CompiledStackOperation) -> None:
         parameters = operation.parameters or []
@@ -202,6 +171,7 @@ class OraclePipelineMixin:
         continue_on_error: bool,
         observer: StackExecutionObserver,
     ) -> "list[StackResult]":
+        driver = cast("OraclePipelineDriver", self)
         stack_results: list[StackResult] = []
         for index, (compiled, result) in enumerate(zip(compiled_operations, pipeline_results, strict=False)):
             try:
@@ -222,85 +192,17 @@ class OraclePipelineMixin:
                     continue
                 raise stack_error
 
-            stack_results.append(self._pipeline_result_to_stack_result(compiled, result))
+            stack_results.append(
+                build_oracledb_pipeline_stack_result(
+                    compiled.statement,
+                    compiled.method,
+                    compiled.returns_rows,
+                    compiled.parameters,
+                    result,
+                    driver.driver_features,
+                )
+            )
         return stack_results
-
-    def _pipeline_result_to_stack_result(self, operation: _CompiledStackOperation, pipeline_result: Any) -> StackResult:
-        try:
-            rows = pipeline_result.rows
-        except AttributeError:
-            rows = None
-        try:
-            columns = pipeline_result.columns
-        except AttributeError:
-            columns = None
-        data = self._rows_from_pipeline_result(columns, rows) if operation.returns_rows else None
-        metadata: dict[str, Any] = {"pipeline_operation": operation.method}
-
-        try:
-            warning = pipeline_result.warning
-        except AttributeError:
-            warning = None
-        if warning is not None:
-            metadata["warning"] = warning
-
-        try:
-            return_value = pipeline_result.return_value
-        except AttributeError:
-            return_value = None
-        if return_value is not None:
-            metadata["return_value"] = return_value
-
-        rowcount = self._rows_affected_from_pipeline(operation, pipeline_result, data)
-        sql_result = create_sql_result(operation.statement, data=data, rows_affected=rowcount, metadata=metadata)
-        return StackResult.from_sql_result(sql_result)
-
-    def _rows_affected_from_pipeline(
-        self, operation: _CompiledStackOperation, pipeline_result: Any, data: "list[dict[str, Any]] | None"
-    ) -> int:
-        try:
-            rowcount = pipeline_result.rowcount
-        except AttributeError:
-            rowcount = None
-        if isinstance(rowcount, int) and rowcount >= 0:
-            return rowcount
-        if operation.method == "execute_many":
-            parameter_sets = operation.parameters or ()
-            try:
-                return len(parameter_sets)
-            except TypeError:
-                return 0
-        if operation.method == "execute" and not operation.returns_rows:
-            return 1
-        if operation.returns_rows:
-            return len(data or [])
-        return 0
-
-    def _rows_from_pipeline_result(self, columns: Any, rows: Any) -> "list[dict[str, Any]]":
-        if not rows:
-            return []
-
-        driver = self._pipeline_driver()
-        if columns:
-            names = []
-            for index, column in enumerate(columns):
-                try:
-                    name = column.name
-                except AttributeError:
-                    name = f"column_{index}"
-                names.append(name)
-        else:
-            first = rows[0]
-            names = [f"column_{index}" for index in range(len(first) if isinstance(first, Sized) else 0)]
-        names = normalize_column_names(names, driver.driver_features)
-
-        normalized_rows: list[dict[str, Any]] = []
-        for row in rows:
-            if isinstance(row, dict):
-                normalized_rows.append(row)
-                continue
-            normalized_rows.append(dict(zip(names, row, strict=False)))
-        return normalized_rows
 
     def _wrap_pipeline_error(
         self, error: Exception, stack: "StatementStack", continue_on_error: bool
@@ -309,35 +211,6 @@ class OraclePipelineMixin:
         return StackExecutionError(
             -1, "Oracle pipeline execution failed", error, adapter=type(self).__name__, mode=mode
         )
-
-
-ORA_CHECK_CONSTRAINT = 2290
-ORA_INTEGRITY_RANGE_START = 2200
-ORA_INTEGRITY_RANGE_END = 2300
-ORA_PARSING_RANGE_START = 900
-ORA_PARSING_RANGE_END = 1000
-ORA_TABLESPACE_FULL = 1652
-
-_ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
-    1: (UniqueViolationError, "unique constraint violation"),
-    2291: (ForeignKeyViolationError, "foreign key constraint violation"),
-    2292: (ForeignKeyViolationError, "foreign key constraint violation"),
-    ORA_CHECK_CONSTRAINT: (CheckViolationError, "check constraint violation"),
-    1400: (NotNullViolationError, "not-null constraint violation"),
-    1407: (NotNullViolationError, "not-null constraint violation"),
-    1017: (DatabaseConnectionError, "connection error"),
-    12154: (DatabaseConnectionError, "connection error"),
-    12541: (DatabaseConnectionError, "connection error"),
-    12545: (DatabaseConnectionError, "connection error"),
-    12514: (DatabaseConnectionError, "connection error"),
-    12505: (DatabaseConnectionError, "connection error"),
-    60: (TransactionError, "transaction error"),
-    8176: (TransactionError, "transaction error"),
-    1722: (DataError, "data error"),
-    1858: (DataError, "data error"),
-    1840: (DataError, "data error"),
-    ORA_TABLESPACE_FULL: (OperationalError, "operational error"),
-}
 
 
 class OracleSyncCursor:
@@ -380,69 +253,7 @@ class OracleAsyncCursor:
                 self.cursor.close()
 
 
-class OracleExceptionHandler:
-    """Context manager for handling Oracle database exceptions.
-
-    Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
-    for better error handling in application code.
-    """
-
-    __slots__ = ()
-
-    def _map_oracle_exception(self, e: "oracledb.DatabaseError") -> None:
-        """Map Oracle exception to SQLSpec exception.
-
-        Args:
-            e: oracledb.DatabaseError instance
-
-        Raises:
-            SQLSpecError: Mapped exception based on Oracle error code.
-
-        """
-        error_obj = e.args[0] if e.args else None
-        if not error_obj:
-            self._raise_error(e, None, SQLSpecError, "database error")
-
-        try:
-            error_code = error_obj.code
-        except AttributeError:
-            error_code = None
-        if not error_code:
-            self._raise_error(e, None, SQLSpecError, "database error")
-
-        mapping = _ERROR_CODE_MAPPING.get(error_code)
-        if mapping:
-            error_class, error_desc = mapping
-            self._raise_error(e, error_code, error_class, error_desc)
-
-        if ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
-            self._raise_error(e, error_code, IntegrityError, "integrity constraint violation")
-
-        if ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
-            self._raise_error(e, error_code, SQLParsingError, "SQL syntax error")
-
-        self._raise_error(e, error_code, SQLSpecError, "database error")
-
-    def _raise_error(
-        self, e: "oracledb.DatabaseError", code: "int | None", error_class: type[SQLSpecError], description: str
-    ) -> NoReturn:
-        """Raise a mapped exception with formatted message.
-
-        Args:
-            e: Original Oracle exception.
-            code: Oracle error code (ORA-XXXXX).
-            error_class: Exception class to raise.
-            description: Human-readable error description.
-
-        Raises:
-            SQLSpecError: The mapped exception.
-
-        """
-        msg = f"Oracle {description} [ORA-{code:05d}]: {e}" if code else f"Oracle {description}: {e}"
-        raise error_class(msg) from e
-
-
-class OracleSyncExceptionHandler(OracleExceptionHandler):
+class OracleSyncExceptionHandler:
     """Sync Context manager for handling Oracle database exceptions.
 
     Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
@@ -467,14 +278,14 @@ class OracleSyncExceptionHandler(OracleExceptionHandler):
             return False
         if issubclass(exc_type, oracledb.DatabaseError):
             try:
-                self._map_oracle_exception(exc_val)
+                raise_oracledb_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
         return False
 
 
-class OracleAsyncExceptionHandler(OracleExceptionHandler):
+class OracleAsyncExceptionHandler:
     """Async context manager for handling Oracle database exceptions.
 
     Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
@@ -499,7 +310,7 @@ class OracleAsyncExceptionHandler(OracleExceptionHandler):
             return False
         if issubclass(exc_type, oracledb.DatabaseError):
             try:
-                self._map_oracle_exception(exc_val)
+                raise_oracledb_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -532,7 +343,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
+        self._data_dictionary: OracledbSyncDataDictionary | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
@@ -773,7 +584,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            self._truncate_table_sync(table)
+            statement = oracle_truncate_statement(table)
+            with self.handle_database_exceptions():
+                self.connection.execute(statement)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             statement = oracle_insert_statement(table, columns)
@@ -943,7 +756,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "OracledbSyncDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
@@ -951,13 +764,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         """
         if self._data_dictionary is None:
-            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", OracledbSyncDataDictionary())
+            self._data_dictionary = OracledbSyncDataDictionary()
         return self._data_dictionary
-
-    def _truncate_table_sync(self, table: str) -> None:
-        statement = oracle_truncate_statement(table)
-        with self.handle_database_exceptions():
-            self.connection.execute(statement)
 
 
 class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
@@ -986,7 +794,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase[Any] | None = None
+        self._data_dictionary: OracledbAsyncDataDictionary | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
@@ -1228,7 +1036,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            await self._truncate_table_async(table)
+            statement = oracle_truncate_statement(table)
+            async with self.handle_database_exceptions():
+                await self.connection.execute(statement)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             statement = oracle_insert_statement(table, columns)
@@ -1400,7 +1210,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "OracledbAsyncDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
@@ -1408,13 +1218,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         """
         if self._data_dictionary is None:
-            self._data_dictionary = cast("AsyncDataDictionaryBase[Any]", OracledbAsyncDataDictionary())
+            self._data_dictionary = OracledbAsyncDataDictionary()
         return self._data_dictionary
-
-    async def _truncate_table_async(self, table: str) -> None:
-        statement = oracle_truncate_statement(table)
-        async with self.handle_database_exceptions():
-            await self.connection.execute(statement)
 
 
 _ORACLE_PROFILE = build_oracledb_profile()

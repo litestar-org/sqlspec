@@ -1,6 +1,7 @@
 """BigQuery adapter compiled helpers."""
 
 import datetime
+import io
 import os
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -12,7 +13,16 @@ from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
-from sqlspec.exceptions import SQLSpecError, StorageCapabilityError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    DataError,
+    NotFoundError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    StorageCapabilityError,
+    UniqueViolationError,
+)
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_errors, has_value_attribute
@@ -26,6 +36,7 @@ if TYPE_CHECKING:
 __all__ = (
     "apply_bigquery_driver_features",
     "bigquery_statement_config",
+    "build_bigquery_inlined_script",
     "build_bigquery_load_job_config",
     "build_bigquery_load_job_telemetry",
     "build_bigquery_profile",
@@ -36,12 +47,21 @@ __all__ = (
     "create_bq_parameters",
     "detect_bigquery_emulator",
     "extract_bigquery_insert_table",
+    "inline_bigquery_literals",
     "is_simple_bigquery_insert",
     "map_bigquery_source_format",
     "normalize_bigquery_driver_features",
+    "raise_bigquery_exception",
     "rows_to_results",
     "should_retry_bigquery_job",
+    "try_bigquery_bulk_insert",
 )
+
+HTTP_CONFLICT = 409
+HTTP_NOT_FOUND = 404
+HTTP_BAD_REQUEST = 400
+HTTP_FORBIDDEN = 403
+HTTP_SERVER_ERROR = 500
 
 
 def _identity(value: Any) -> Any:
@@ -70,6 +90,89 @@ _BQ_TYPE_MAP: "dict[type, tuple[str, str | None]]" = {
     datetime.time: ("TIME", None),
     dict: ("JSON", None),
 }
+
+
+def try_bigquery_bulk_insert(
+    connection: "BigQueryConnection",
+    sql: str,
+    parameters: "list[dict[str, Any]]",
+    expression: "exp.Expression | None" = None,
+    *,
+    allow_parse: bool = True,
+) -> "int | None":
+    """Attempt bulk insert via Parquet load.
+
+    Args:
+        connection: BigQuery connection instance.
+        sql: INSERT SQL statement.
+        parameters: Parameter dictionaries for the insert.
+        expression: Optional parsed expression to reuse.
+        allow_parse: Whether to parse SQL when expression is unavailable.
+
+    Returns:
+        Inserted row count if bulk insert succeeds, otherwise None.
+    """
+    table_name = extract_bigquery_insert_table(sql, expression, allow_parse=allow_parse)
+    if not table_name:
+        return None
+
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        arrow_table = pa.Table.from_pylist(parameters)
+
+        buffer = io.BytesIO()
+        pq.write_table(arrow_table, buffer)
+        buffer.seek(0)
+
+        job_config = build_bigquery_load_job_config("parquet", overwrite=False)
+        job = connection.load_table_from_file(buffer, table_name, job_config=job_config)
+        job.result()
+        return len(parameters)
+    except ImportError:
+        logger.debug("pyarrow not available, falling back to literal inlining")
+        return None
+    except Exception as exc:
+        logger.debug("Bulk insert failed, falling back to literal inlining: %s", exc)
+        return None
+
+
+def build_bigquery_inlined_script(
+    sql: str,
+    parameters: "list[dict[str, Any]]",
+    expression: "exp.Expression | None" = None,
+    *,
+    allow_parse: bool = True,
+    literal_inliner: "Callable[[Any, Any], tuple[Any, Any]]",
+) -> str:
+    """Build a BigQuery script with literal inlining.
+
+    Args:
+        sql: SQL statement to inline.
+        parameters: Parameter dictionaries to inline.
+        expression: Optional parsed expression to reuse.
+        allow_parse: Whether to parse SQL when expression is unavailable.
+        literal_inliner: Callable used to inline literal values.
+
+    Returns:
+        Script SQL with inlined parameters.
+    """
+    parsed_expression = expression
+    if parsed_expression is None and allow_parse:
+        try:
+            parsed_expression = sqlglot.parse_one(sql, dialect="bigquery")
+        except sqlglot.ParseError:
+            parsed_expression = None
+
+    if parsed_expression is None:
+        return ";\n".join([sql] * len(parameters))
+
+    script_statements: list[str] = []
+    for param_set in parameters:
+        expression_copy = parsed_expression.copy()
+        script_statements.append(inline_bigquery_literals(expression_copy, param_set, literal_inliner))
+    return ";\n".join(script_statements)
 
 
 def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQueryParam":
@@ -200,6 +303,17 @@ def create_bq_parameters(parameters: Any, json_serializer: "Callable[[Any], str]
     return bq_parameters
 
 
+def inline_bigquery_literals(
+    expression: "exp.Expression", parameters: Any, inliner: "Callable[[Any, Any], tuple[Any, Any]]"
+) -> str:
+    """Inline literal values into a parsed SQLGlot expression."""
+    if not parameters:
+        return str(expression.sql(dialect="bigquery"))
+
+    transformed_expression, _ = inliner(expression, parameters)
+    return str(transformed_expression.sql(dialect="bigquery"))
+
+
 def detect_bigquery_emulator(connection: "BigQueryConnection") -> bool:
     """Detect whether the BigQuery client targets an emulator endpoint."""
     emulator_host = os.getenv("BIGQUERY_EMULATOR_HOST") or os.getenv("BIGQUERY_EMULATOR_HOST_HTTP")
@@ -305,8 +419,18 @@ def build_bigquery_load_job_telemetry(job: QueryJob, table: str, *, format_label
     return telemetry
 
 
-def is_simple_bigquery_insert(sql: str, expression: "exp.Expression | None" = None) -> bool:
-    """Check if SQL is a simple INSERT VALUES statement."""
+def is_simple_bigquery_insert(
+    sql: str, expression: "exp.Expression | None" = None, *, allow_parse: bool = True
+) -> bool:
+    """Check if SQL is a simple INSERT VALUES statement.
+
+    Args:
+        sql: SQL string to inspect.
+        expression: Optional pre-parsed expression to reuse.
+        allow_parse: When False, skip parsing and return False if expression is missing.
+    """
+    if expression is None and not allow_parse:
+        return False
     try:
         parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
         if not isinstance(parsed, exp.Insert):
@@ -316,8 +440,18 @@ def is_simple_bigquery_insert(sql: str, expression: "exp.Expression | None" = No
         return False
 
 
-def extract_bigquery_insert_table(sql: str, expression: "exp.Expression | None" = None) -> str | None:
-    """Extract table name from INSERT statement using sqlglot."""
+def extract_bigquery_insert_table(
+    sql: str, expression: "exp.Expression | None" = None, *, allow_parse: bool = True
+) -> str | None:
+    """Extract table name from INSERT statement using sqlglot.
+
+    Args:
+        sql: SQL string to inspect.
+        expression: Optional pre-parsed expression to reuse.
+        allow_parse: When False, skip parsing and return None if expression is missing.
+    """
+    if expression is None and not allow_parse:
+        return None
     try:
         parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
         if isinstance(parsed, exp.Insert):
@@ -440,3 +574,36 @@ def apply_bigquery_driver_features(
 ) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
     """Apply BigQuery driver feature defaults and extract core options."""
     return normalize_bigquery_driver_features(driver_features)
+
+
+def _raise_bigquery_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:
+    code_str = f"[HTTP {code}]" if code else ""
+    msg = f"BigQuery {description} {code_str}: {error}" if code_str else f"BigQuery {description}: {error}"
+    raise error_class(msg) from error
+
+
+def raise_bigquery_exception(error: Any) -> None:
+    """Raise SQLSpec exceptions for BigQuery errors."""
+    try:
+        status_code = error.code
+    except AttributeError:
+        status_code = None
+    error_msg = str(error).lower()
+
+    if status_code == HTTP_CONFLICT or "already exists" in error_msg:
+        _raise_bigquery_error(error, status_code, UniqueViolationError, "resource already exists")
+    elif status_code == HTTP_NOT_FOUND or "not found" in error_msg:
+        _raise_bigquery_error(error, status_code, NotFoundError, "resource not found")
+    elif status_code == HTTP_BAD_REQUEST:
+        if "syntax" in error_msg or "invalid query" in error_msg:
+            _raise_bigquery_error(error, status_code, SQLParsingError, "query syntax error")
+        elif "type" in error_msg or "format" in error_msg:
+            _raise_bigquery_error(error, status_code, DataError, "data error")
+        else:
+            _raise_bigquery_error(error, status_code, SQLSpecError, "error")
+    elif status_code == HTTP_FORBIDDEN:
+        _raise_bigquery_error(error, status_code, DatabaseConnectionError, "permission denied")
+    elif status_code and status_code >= HTTP_SERVER_ERROR:
+        _raise_bigquery_error(error, status_code, OperationalError, "operational error")
+    else:
+        _raise_bigquery_error(error, status_code, SQLSpecError, "error")

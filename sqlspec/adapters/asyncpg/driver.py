@@ -13,6 +13,7 @@ from sqlspec.adapters.asyncpg.core import (
     collect_asyncpg_rows,
     configure_asyncpg_parameter_serializers,
     parse_asyncpg_status,
+    raise_asyncpg_exception,
 )
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.core import (
@@ -28,27 +29,14 @@ from sqlspec.core import (
 )
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.driver._common import StackExecutionObserver, describe_stack_statement
-from sqlspec.exceptions import (
-    CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
-    ForeignKeyViolationError,
-    IntegrityError,
-    NotNullViolationError,
-    OperationalError,
-    SQLParsingError,
-    SQLSpecError,
-    StackExecutionError,
-    TransactionError,
-    UniqueViolationError,
-)
+from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPreparedStatement
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig
-    from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
+    from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
@@ -111,118 +99,14 @@ class AsyncpgExceptionHandler:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_val is None:
             return False
-        if isinstance(exc_val, asyncpg.PostgresError):
+        if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
             try:
-                self._map_postgres_exception(exc_val)
+                raise_asyncpg_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
             return False
-        if has_sqlstate(exc_val):
-            try:
-                self._map_postgres_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
         return False
-
-    def _map_postgres_exception(self, e: Any) -> None:
-        """Map PostgreSQL exception to SQLSpec exception.
-
-        Args:
-            e: asyncpg.PostgresError instance
-
-        Raises:
-            Specific SQLSpec exception based on SQLSTATE code
-        """
-        if isinstance(e, asyncpg.exceptions.UniqueViolationError):
-            self._raise_unique_violation(e, "23505")
-            return
-        if isinstance(e, asyncpg.exceptions.ForeignKeyViolationError):
-            self._raise_foreign_key_violation(e, "23503")
-            return
-        if isinstance(e, asyncpg.exceptions.NotNullViolationError):
-            self._raise_not_null_violation(e, "23502")
-            return
-        if isinstance(e, asyncpg.exceptions.CheckViolationError):
-            self._raise_check_violation(e, "23514")
-            return
-        if isinstance(e, asyncpg.exceptions.PostgresSyntaxError):
-            self._raise_parsing_error(e, "42601")
-            return
-
-        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
-
-        if not error_code:
-            self._raise_generic_error(e, None)
-            return
-
-        if error_code == "23505":
-            self._raise_unique_violation(e, error_code)
-        elif error_code == "23503":
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == "23502":
-            self._raise_not_null_violation(e, error_code)
-        elif error_code == "23514":
-            self._raise_check_violation(e, error_code)
-        elif error_code.startswith("23"):
-            self._raise_integrity_error(e, error_code)
-        elif error_code.startswith("42"):
-            self._raise_parsing_error(e, error_code)
-        elif error_code.startswith("08"):
-            self._raise_connection_error(e, error_code)
-        elif error_code.startswith("40"):
-            self._raise_transaction_error(e, error_code)
-        elif error_code.startswith("22"):
-            self._raise_data_error(e, error_code)
-        elif error_code.startswith(("53", "54", "55", "57", "58")):
-            self._raise_operational_error(e, error_code)
-        else:
-            self._raise_generic_error(e, error_code)
-
-    def _raise_unique_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL unique constraint violation [{code}]: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL foreign key constraint violation [{code}]: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL not-null constraint violation [{code}]: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL check constraint violation [{code}]: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL integrity constraint violation [{code}]: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_parsing_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL SQL syntax error [{code}]: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL connection error [{code}]: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_transaction_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL transaction error [{code}]: {e}"
-        raise TransactionError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL data error [{code}]: {e}"
-        raise DataError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL operational error [{code}]: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_generic_error(self, e: Any, code: "str | None") -> None:
-        msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
@@ -255,7 +139,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase[Any] | None = None
+        self._data_dictionary: AsyncpgDataDictionary | None = None
         self._prepared_statements: OrderedDict[str, AsyncpgPreparedStatement] = OrderedDict()
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
@@ -403,11 +287,22 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
         for index, operation in enumerate(stack.operations):
             try:
-                normalized = None
+                normalized: _NormalizedStackOperation | None = None
                 if operation.method == "execute":
-                    normalized = self._normalize_stack_execute_operation(operation)
+                    kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+                    statement_config = kwargs.pop("statement_config", None)
+                    config = statement_config or self.statement_config
 
-                if normalized is not None and self._can_prepare_stack_operation(normalized):
+                    sql_statement = self.prepare_statement(
+                        operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
+                    )
+                    if not sql_statement.is_script and not sql_statement.is_many:
+                        sql_text, prepared_parameters = self._get_compiled_sql(sql_statement, config)
+                        normalized = _NormalizedStackOperation(
+                            operation=operation, statement=sql_statement, sql=sql_text, parameters=prepared_parameters
+                        )
+
+                if normalized is not None:
                     stack_result = await self._execute_stack_operation_prepared(normalized)
                 else:
                     result = await self._execute_stack_operation(operation)
@@ -456,10 +351,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    def _can_prepare_stack_operation(self, normalized: "_NormalizedStackOperation") -> bool:
-        statement = normalized.statement
-        return not statement.is_script and not statement.is_many
-
     async def _execute_stack_operation_prepared(self, normalized: "_NormalizedStackOperation") -> StackResult:
         prepared = await self._get_prepared_statement(normalized.sql)
         metadata = {"prepared_statement": True}
@@ -474,23 +365,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         rowcount = parse_asyncpg_status(status) if isinstance(status, str) else 0
         sql_result = create_sql_result(normalized.statement, rows_affected=rowcount, metadata=metadata)
         return StackResult.from_sql_result(sql_result)
-
-    def _normalize_stack_execute_operation(self, operation: "StackOperation") -> "_NormalizedStackOperation":
-        if operation.method != "execute":
-            msg = "Prepared execution only supports execute operations"
-            raise TypeError(msg)
-
-        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
-        statement_config = kwargs.pop("statement_config", None)
-        config = statement_config or self.statement_config
-
-        sql_statement = self.prepare_statement(
-            operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
-        )
-        sql_text, prepared_parameters = self._get_compiled_sql(sql_statement, config)
-        return _NormalizedStackOperation(
-            operation=operation, statement=sql_statement, sql=sql_text, parameters=prepared_parameters
-        )
 
     async def _invoke_prepared(
         self,
@@ -553,7 +427,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            await self._truncate_table(table)
+            try:
+                await self.connection.execute(f"TRUNCATE TABLE {table}")
+            except asyncpg.PostgresError as exc:
+                msg = f"Failed to truncate table '{table}': {exc}"
+                raise SQLSpecError(msg) from exc
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             await self.connection.copy_records_to_table(table, records=records, columns=columns)
@@ -619,22 +497,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return prepared
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "AsyncpgDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = cast("AsyncDataDictionaryBase[Any]", AsyncpgDataDictionary())
+            self._data_dictionary = AsyncpgDataDictionary()
         return self._data_dictionary
-
-    async def _truncate_table(self, table: str) -> None:
-        try:
-            await self.connection.execute(f"TRUNCATE TABLE {table}")
-        except asyncpg.PostgresError as exc:
-            msg = f"Failed to truncate table '{table}': {exc}"
-            raise SQLSpecError(msg) from exc
 
 
 _ASYNC_PG_PROFILE = build_asyncpg_profile()

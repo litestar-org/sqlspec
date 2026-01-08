@@ -61,6 +61,14 @@ class _FakeSyncOracleDriver:
             return self._service
         return None
 
+    def select_one_or_none(self, statement: str, *args: Any, **kwargs: Any) -> "dict[str, Any] | None":
+        """Return the first row dict when requested."""
+
+        _ = (statement, args, kwargs)
+        if not self._rows:
+            return None
+        return dict(self._rows[0])
+
 
 class _FakeAsyncOracleDriver:
     """Minimal async Oracle driver stub for data dictionary tests."""
@@ -93,6 +101,14 @@ class _FakeAsyncOracleDriver:
         if "sys_context" in statement.lower():
             return self._service
         return None
+
+    async def select_one_or_none(self, statement: str, *args: Any, **kwargs: Any) -> "dict[str, Any] | None":
+        """Return the first row dict when requested (async)."""
+
+        _ = (statement, args, kwargs)
+        if not self._rows:
+            return None
+        return dict(self._rows[0])
 
 
 @pytest.fixture

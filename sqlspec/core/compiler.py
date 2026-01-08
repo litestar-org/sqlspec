@@ -17,7 +17,12 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
-from sqlspec.core.parameters import ParameterProcessor, ParameterProfile, validate_parameter_alignment
+from sqlspec.core.parameters import (
+    ParameterProcessor,
+    ParameterProfile,
+    fingerprint_parameters,
+    validate_parameter_alignment,
+)
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import get_value_attribute
 
@@ -536,13 +541,13 @@ class SQLProcessor:
             Cache key string
         """
 
-        param_repr = repr(parameters)
+        param_fingerprint = fingerprint_parameters(parameters)
         dialect_str = str(self._config.dialect) if self._config.dialect else None
         param_style = self._config.parameter_config.default_parameter_style.value
 
         hash_data = (
             sql,
-            param_repr,
+            param_fingerprint,
             param_style,
             dialect_str,
             self._config.enable_parsing,
@@ -550,7 +555,7 @@ class SQLProcessor:
             is_many,
         )
 
-        hash_str = hashlib.sha256(str(hash_data).encode("utf-8")).hexdigest()[:16]
+        hash_str = hashlib.blake2b(repr(hash_data).encode("utf-8"), digest_size=8).hexdigest()
         return f"sql_{hash_str}"
 
     def _detect_operation_type(self, expression: "exp.Expression") -> "OperationType":

@@ -12,6 +12,7 @@ from sqlspec.adapters.spanner.core import (
     coerce_spanner_params,
     collect_spanner_rows,
     infer_spanner_param_types_for_params,
+    raise_spanner_exception,
     spanner_statement_config,
     supports_spanner_batch_update,
     supports_spanner_write,
@@ -20,15 +21,7 @@ from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
 from sqlspec.core import StatementConfig, create_arrow_result, register_driver_profile
 from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
-from sqlspec.exceptions import (
-    DatabaseConnectionError,
-    NotFoundError,
-    OperationalError,
-    SQLConversionError,
-    SQLParsingError,
-    SQLSpecError,
-    UniqueViolationError,
-)
+from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json
 
@@ -40,7 +33,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.spanner._typing import SpannerConnection
     from sqlspec.core import ArrowResult
     from sqlspec.core.statement import SQL
-    from sqlspec.driver import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
@@ -104,31 +96,11 @@ class SpannerExceptionHandler:
 
         if isinstance(exc_val, api_exceptions.GoogleAPICallError):
             try:
-                self._map_spanner_exception(exc_val)
+                raise_spanner_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
         return False
-
-    def _map_spanner_exception(self, exc: Any) -> None:
-        if isinstance(exc, api_exceptions.AlreadyExists):
-            msg = f"Spanner resource already exists: {exc}"
-            raise UniqueViolationError(msg) from exc
-        if isinstance(exc, api_exceptions.NotFound):
-            msg = f"Spanner resource not found: {exc}"
-            raise NotFoundError(msg) from exc
-        if isinstance(exc, api_exceptions.InvalidArgument):
-            msg = f"Invalid Spanner query or argument: {exc}"
-            raise SQLParsingError(msg) from exc
-        if isinstance(exc, api_exceptions.PermissionDenied):
-            msg = f"Spanner permission denied: {exc}"
-            raise DatabaseConnectionError(msg) from exc
-        if isinstance(exc, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests)):
-            msg = f"Spanner service unavailable or rate limited: {exc}"
-            raise OperationalError(msg) from exc
-
-        msg = f"Spanner error: {exc}"
-        raise SQLSpecError(msg) from exc
 
 
 class SpannerSyncCursor:
@@ -169,7 +141,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             enable_uuid_conversion=features.get("enable_uuid_conversion", True),
             json_deserializer=cast("Callable[[str], Any]", json_deserializer or from_json),
         )
-        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
+        self._data_dictionary: SpannerDataDictionary | None = None
 
     def with_cursor(self, connection: "SpannerConnection") -> "SpannerSyncCursor":
         return SpannerSyncCursor(connection)
@@ -286,9 +258,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "SpannerDataDictionary":
         if self._data_dictionary is None:
-            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", SpannerDataDictionary())
+            self._data_dictionary = SpannerDataDictionary()
         return self._data_dictionary
 
     def select_to_arrow(self, statement: "Any", /, *parameters: "Any", **kwargs: Any) -> "ArrowResult":
@@ -333,7 +305,13 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
 
         if overwrite:
-            self._truncate_table_sync(table)
+            delete_sql = f"DELETE FROM {table} WHERE TRUE"
+            if isinstance(self.connection, Transaction):
+                writer = cast("_SpannerWriteProtocol", self.connection)
+                writer.execute_update(delete_sql)
+            else:
+                msg = "Delete requires a Transaction context."
+                raise SQLConversionError(msg)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
@@ -368,16 +346,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """Load artifacts from storage into Spanner table."""
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-    def _truncate_table_sync(self, table: str) -> None:
-        """Delete all rows from table (Spanner doesn't have TRUNCATE)."""
-        delete_sql = f"DELETE FROM {table} WHERE TRUE"
-        if isinstance(self.connection, Transaction):
-            writer = cast("_SpannerWriteProtocol", self.connection)
-            writer.execute_update(delete_sql)
-        else:
-            msg = "Delete requires a Transaction context."
-            raise SQLConversionError(msg)
 
 
 _SPANNER_PROFILE = build_spanner_profile()

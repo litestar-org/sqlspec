@@ -3,9 +3,20 @@
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_guards import has_cursor_metadata, has_type_code
+from sqlspec.utils.type_guards import has_cursor_metadata, has_sqlstate, has_type_code
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -20,7 +31,12 @@ __all__ = (
     "deserialize_asyncmy_json_rows",
     "detect_asyncmy_json_columns",
     "format_mysql_identifier",
+    "map_asyncmy_exception",
 )
+
+MYSQL_ER_DUP_ENTRY = 1062
+MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
+MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
 
 
 def _bool_to_int(value: bool) -> int:
@@ -98,6 +114,56 @@ def apply_asyncmy_driver_features(
         statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, processed_driver_features
+
+
+def _raise_mysql_error(
+    error: Any, sqlstate: "str | None", code: "int | None", error_class: type[SQLSpecError], description: str
+) -> None:
+    code_str = f"[{sqlstate or code}]" if sqlstate or code else ""
+    msg = f"MySQL {description} {code_str}: {error}" if code_str else f"MySQL {description}: {error}"
+    raise error_class(msg) from error
+
+
+def map_asyncmy_exception(error: Any, *, logger: Any | None = None) -> "bool | None":
+    """Map AsyncMy exceptions to SQLSpec errors.
+
+    Returns True to suppress expected migration errors.
+    """
+    error_code = error.args[0] if len(error.args) >= 1 and isinstance(error.args[0], int) else None
+    sqlstate = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
+
+    if error_code in {1061, 1091}:
+        if logger is not None:
+            logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", error)
+        return True
+
+    if sqlstate == "23505" or error_code == MYSQL_ER_DUP_ENTRY:
+        _raise_mysql_error(error, sqlstate, error_code, UniqueViolationError, "unique constraint violation")
+    elif sqlstate == "23503" or error_code in {1216, 1217, 1451, 1452}:
+        _raise_mysql_error(error, sqlstate, error_code, ForeignKeyViolationError, "foreign key constraint violation")
+    elif sqlstate == "23502" or error_code in {1048, MYSQL_ER_NO_DEFAULT_FOR_FIELD}:
+        _raise_mysql_error(error, sqlstate, error_code, NotNullViolationError, "not-null constraint violation")
+    elif sqlstate == "23514" or error_code == MYSQL_ER_CHECK_CONSTRAINT_VIOLATED:
+        _raise_mysql_error(error, sqlstate, error_code, CheckViolationError, "check constraint violation")
+    elif sqlstate and sqlstate.startswith("23"):
+        _raise_mysql_error(error, sqlstate, error_code, IntegrityError, "integrity constraint violation")
+    elif sqlstate and sqlstate.startswith("42"):
+        _raise_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
+    elif sqlstate and sqlstate.startswith("08"):
+        _raise_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
+    elif sqlstate and sqlstate.startswith("40"):
+        _raise_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
+    elif sqlstate and sqlstate.startswith("22"):
+        _raise_mysql_error(error, sqlstate, error_code, DataError, "data error")
+    elif error_code in {2002, 2003, 2005, 2006, 2013}:
+        _raise_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
+    elif error_code in {1205, 1213}:
+        _raise_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
+    elif error_code in range(1064, 1100):
+        _raise_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
+    else:
+        _raise_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
+    return None
 
 
 def detect_asyncmy_json_columns(cursor: Any, json_type_codes: "set[int]") -> "list[int]":

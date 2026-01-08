@@ -6,6 +6,13 @@ SQLSpec provides a unified Data Dictionary API to introspect database schemas ac
 
 The `DataDictionary` is accessed via the `driver.data_dictionary` property. It provides methods to query the database catalog.
 
+### Centralized SQL Loader
+
+Dialect queries live in `sqlspec/data_dictionary/sql/<dialect>/*.sql` and are loaded through the
+`DataDictionaryLoader`. Each adapter data dictionary uses `DialectSQLMixin` to request queries by
+name (for example, `columns_by_schema` or `foreign_keys_by_table`). Dialect-specific defaults (such
+as the default schema or version parsing regex) live in `sqlspec/data_dictionary/dialects/`.
+
 ### Introspection Capabilities
 
 - **Tables**: List tables in a schema.

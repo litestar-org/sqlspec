@@ -5,17 +5,17 @@ Provides Google Cloud BigQuery connectivity with parameter style conversion,
 type coercion, error handling, and query job management.
 """
 
+import importlib
 import io
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
-import sqlglot
 from google.cloud.bigquery import QueryJob, QueryJobConfig
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
     bigquery_statement_config,
+    build_bigquery_inlined_script,
     build_bigquery_load_job_config,
     build_bigquery_load_job_telemetry,
     build_bigquery_profile,
@@ -25,8 +25,9 @@ from sqlspec.adapters.bigquery.core import (
     copy_bigquery_job_config,
     create_bq_parameters,
     detect_bigquery_emulator,
-    extract_bigquery_insert_table,
     is_simple_bigquery_insert,
+    raise_bigquery_exception,
+    try_bigquery_bulk_insert,
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
@@ -38,17 +39,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
-from sqlspec.exceptions import (
-    DatabaseConnectionError,
-    DataError,
-    MissingDependencyError,
-    NotFoundError,
-    OperationalError,
-    SQLParsingError,
-    SQLSpecError,
-    StorageCapabilityError,
-    UniqueViolationError,
-)
+from sqlspec.exceptions import MissingDependencyError, SQLSpecError, StorageCapabilityError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -56,12 +47,10 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlglot import exp
     from typing_extensions import Self
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementFilter
-    from sqlspec.driver import SyncDataDictionaryBase
     from sqlspec.storage import (
         StorageBridgeJob,
         StorageDestination,
@@ -81,12 +70,6 @@ __all__ = (
     "bigquery_statement_config",
     "build_bigquery_statement_config",
 )
-
-HTTP_CONFLICT = 409
-HTTP_NOT_FOUND = 404
-HTTP_BAD_REQUEST = 400
-HTTP_FORBIDDEN = 403
-HTTP_SERVER_ERROR = 500
 
 
 class BigQueryCursor:
@@ -139,85 +122,11 @@ class BigQueryExceptionHandler:
             return False
         if issubclass(exc_type, GoogleCloudError):
             try:
-                self._map_bigquery_exception(exc_val)
+                raise_bigquery_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
         return False
-
-    def _map_bigquery_exception(self, e: Any) -> None:
-        """Map BigQuery exception to SQLSpec exception.
-
-        Args:
-            e: Google API exception instance
-        """
-        try:
-            status_code = e.code
-        except AttributeError:
-            status_code = None
-        error_msg = str(e).lower()
-
-        if status_code == HTTP_CONFLICT or "already exists" in error_msg:
-            self._raise_unique_violation(e, status_code)
-        elif status_code == HTTP_NOT_FOUND or "not found" in error_msg:
-            self._raise_not_found_error(e, status_code)
-        elif status_code == HTTP_BAD_REQUEST:
-            self._handle_bad_request(e, status_code, error_msg)
-        elif status_code == HTTP_FORBIDDEN:
-            self._raise_connection_error(e, status_code)
-        elif status_code and status_code >= HTTP_SERVER_ERROR:
-            self._raise_operational_error(e, status_code)
-        else:
-            self._raise_generic_error(e, status_code)
-
-    def _handle_bad_request(self, e: Any, code: "int | None", error_msg: str) -> None:
-        """Handle 400 Bad Request errors.
-
-        Args:
-            e: Exception instance
-            code: HTTP status code
-            error_msg: Lowercase error message
-        """
-        if "syntax" in error_msg or "invalid query" in error_msg:
-            self._raise_parsing_error(e, code)
-        elif "type" in error_msg or "format" in error_msg:
-            self._raise_data_error(e, code)
-        else:
-            self._raise_generic_error(e, code)
-
-    def _raise_unique_violation(self, e: Any, code: "int | None") -> None:
-        code_str = f"[HTTP {code}]" if code else ""
-        msg = f"BigQuery resource already exists {code_str}: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_not_found_error(self, e: Any, code: "int | None") -> None:
-        code_str = f"[HTTP {code}]" if code else ""
-        msg = f"BigQuery resource not found {code_str}: {e}"
-        raise NotFoundError(msg) from e
-
-    def _raise_parsing_error(self, e: Any, code: "int | None") -> None:
-        code_str = f"[HTTP {code}]" if code else ""
-        msg = f"BigQuery query syntax error {code_str}: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: "int | None") -> None:
-        code_str = f"[HTTP {code}]" if code else ""
-        msg = f"BigQuery data error {code_str}: {e}"
-        raise DataError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: "int | None") -> None:
-        code_str = f"[HTTP {code}]" if code else ""
-        msg = f"BigQuery permission denied {code_str}: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: "int | None") -> None:
-        code_str = f"[HTTP {code}]" if code else ""
-        msg = f"BigQuery operational error {code_str}: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_generic_error(self, e: Any, code: "int | None") -> None:
-        msg = f"BigQuery error [HTTP {code}]: {e}" if code else f"BigQuery error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class BigQueryDriver(SyncDriverAdapterBase):
@@ -263,7 +172,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
-        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
+        self._data_dictionary: BigQueryDataDictionary | None = None
         self._using_emulator = detect_bigquery_emulator(connection)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry = build_bigquery_retry(self._job_retry_deadline, self._using_emulator)
@@ -288,14 +197,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
-
-    def _is_simple_insert_operation(self, sql: str, expression: "exp.Expression | None" = None) -> bool:
-        """Return True when the SQL matches a simple INSERT pattern."""
-        return is_simple_bigquery_insert(sql, expression)
-
-    def _extract_table_from_insert(self, sql: str, expression: "exp.Expression | None" = None) -> str | None:
-        """Extract table name from a simple INSERT statement."""
-        return extract_bigquery_insert_table(sql, expression)
 
     def _run_query_job(
         self,
@@ -330,15 +231,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         return conn.query(sql_str, job_config=final_job_config)
 
-    def _inline_literals(self, expression: "exp.Expression", parameters: Any) -> str:
-        """Inline literal values into a parsed SQLGlot expression."""
-
-        if not parameters:
-            return str(expression.sql(dialect="bigquery"))
-
-        transformed_expression, _ = self._literal_inliner(expression, parameters)
-        return str(transformed_expression.sql(dialect="bigquery"))
-
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
 
@@ -369,95 +261,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    def _execute_bulk_insert(
-        self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]", expression: "exp.Expression | None" = None
-    ) -> ExecutionResult | None:
-        """Execute INSERT using Parquet bulk load.
-
-        Leverages existing storage bridge infrastructure for optimized bulk inserts.
-
-        Args:
-            cursor: BigQuery cursor object
-            sql: INSERT SQL statement
-            parameters: List of parameter dictionaries
-            expression: Optional parsed expression to reuse
-
-        Returns:
-            ExecutionResult if successful, None to fall back to literal inlining
-        """
-        table_name = extract_bigquery_insert_table(sql, expression)
-        if not table_name:
-            return None
-
-        try:
-            import pyarrow as pa
-            import pyarrow.parquet as pq
-
-            arrow_table = pa.Table.from_pylist(parameters)
-
-            buffer = io.BytesIO()
-            pq.write_table(arrow_table, buffer)
-            buffer.seek(0)
-
-            job_config = build_bigquery_load_job_config("parquet", overwrite=False)
-            job = self.connection.load_table_from_file(buffer, table_name, job_config=job_config)
-            job.result()
-
-            return self.create_execution_result(cursor, rowcount_override=len(parameters), is_many_result=True)
-        except ImportError:
-            logger.debug("pyarrow not available, falling back to literal inlining")
-            return None
-        except Exception as e:
-            logger.debug("Bulk insert failed, falling back to literal inlining: %s", e)
-            return None
-
-    def _execute_many_with_inlining(
-        self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]", expression: "exp.Expression | None" = None
-    ) -> ExecutionResult:
-        """Execute many using literal inlining.
-
-        Fallback path for UPDATE/DELETE or when bulk insert unavailable.
-
-        Args:
-            cursor: BigQuery cursor object
-            sql: SQL statement
-            parameters: List of parameter dictionaries
-            expression: Optional parsed expression to reuse
-
-        Returns:
-            ExecutionResult with batch execution details
-        """
-        parsed_expression = expression
-        if parsed_expression is None:
-            try:
-                parsed_expression = sqlglot.parse_one(sql, dialect="bigquery")
-            except sqlglot.ParseError:
-                parsed_expression = None
-
-        if parsed_expression is None:
-            script_sql = ";\n".join([sql] * len(parameters))
-            cursor.job = self._run_query_job(script_sql, None, connection=cursor)
-            cursor.job.result(job_retry=self._job_retry)
-            affected_rows = (
-                cursor.job.num_dml_affected_rows if cursor.job.num_dml_affected_rows is not None else len(parameters)
-            )
-            return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
-
-        script_statements: list[str] = []
-        for param_set in parameters:
-            expression_copy = parsed_expression.copy()
-            script_statements.append(self._inline_literals(expression_copy, param_set))
-
-        script_sql = ";\n".join(script_statements)
-
-        cursor.job = self._run_query_job(script_sql, None, connection=cursor)
-        cursor.job.result(job_retry=self._job_retry)
-
-        affected_rows = (
-            cursor.job.num_dml_affected_rows if cursor.job.num_dml_affected_rows is not None else len(parameters)
-        )
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
-
     def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """BigQuery execute_many with Parquet bulk load optimization.
 
@@ -477,12 +280,25 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not prepared_parameters or not isinstance(prepared_parameters, list):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        if is_simple_bigquery_insert(sql, parsed_expression):
-            result = self._execute_bulk_insert(cursor, sql, prepared_parameters, parsed_expression)
-            if result is not None:
-                return result
+        allow_parse = statement.statement_config.enable_parsing
+        if is_simple_bigquery_insert(sql, parsed_expression, allow_parse=allow_parse):
+            rowcount = try_bigquery_bulk_insert(
+                self.connection, sql, prepared_parameters, parsed_expression, allow_parse=allow_parse
+            )
+            if rowcount is not None:
+                return self.create_execution_result(cursor, rowcount_override=rowcount, is_many_result=True)
 
-        return self._execute_many_with_inlining(cursor, sql, prepared_parameters, parsed_expression)
+        script_sql = build_bigquery_inlined_script(
+            sql, prepared_parameters, parsed_expression, allow_parse=allow_parse, literal_inliner=self._literal_inliner
+        )
+        cursor.job = self._run_query_job(script_sql, None, connection=cursor)
+        cursor.job.result(job_retry=self._job_retry)
+        affected_rows = (
+            cursor.job.num_dml_affected_rows
+            if cursor.job.num_dml_affected_rows is not None
+            else len(prepared_parameters)
+        )
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
@@ -527,32 +343,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "BigQueryDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", BigQueryDataDictionary())
+            self._data_dictionary = BigQueryDataDictionary()
         return self._data_dictionary
-
-    def _storage_api_available(self) -> bool:
-        """Check if BigQuery Storage API is available.
-
-        Returns:
-            True if Storage API is available and working, False otherwise
-        """
-        try:
-            from google.cloud import bigquery_storage_v1  # pyright: ignore
-        except ImportError:
-            # Package not installed
-            return False
-        except Exception:
-            # API not enabled or permissions issue
-            return False
-        else:
-            return True
 
     def select_to_arrow(
         self,
@@ -604,8 +403,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        # Check Storage API availability
-        if not self._storage_api_available():
+        storage_api_available = True
+        try:
+            importlib.import_module("google.cloud.bigquery_storage_v1")
+        except Exception:
+            storage_api_available = False
+
+        if not storage_api_available:
             if native_only:
                 msg = (
                     "BigQuery native Arrow requires Storage API.\n"

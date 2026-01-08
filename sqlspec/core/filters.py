@@ -584,6 +584,8 @@ class LimitOffsetFilter(PaginationFilter):
 
         if statement.statement_expression is not None:
             current_statement = statement.statement_expression.copy()
+        elif not statement.statement_config.enable_parsing:
+            current_statement = exp.Select().from_(f"({statement.raw_sql})")
         else:
             try:
                 current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
@@ -638,6 +640,8 @@ class OrderByFilter(StatementFilter):
 
         if statement.statement_expression is not None:
             current_statement = statement.statement_expression.copy()
+        elif not statement.statement_config.enable_parsing:
+            current_statement = exp.Select().from_(f"({statement.raw_sql})")
         else:
             try:
                 current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)

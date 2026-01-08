@@ -418,10 +418,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         config = statement_config or self.statement_config
 
         if isinstance(statement, SQL):
-            sql_statement = SQL(statement.raw_sql, parameters, statement_config=config, is_many=True, **kwargs)
+            statement_seed = statement.raw_expression or statement.raw_sql
+            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
         else:
             base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-            sql_statement = SQL(base_statement.raw_sql, parameters, statement_config=config, is_many=True, **kwargs)
+            statement_seed = base_statement.raw_expression or base_statement.raw_sql
+            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
 
         return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 

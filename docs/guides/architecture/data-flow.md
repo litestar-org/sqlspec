@@ -103,7 +103,7 @@ Before execution, the `SQL` object undergoes comprehensive processing through th
 
 The `SQL.compile()` method triggers the enhanced processing pipeline:
 
-1. **Namespaced Cache Architecture**: SQLSpec centralizes SQL artifact caching in a single namespaced cache:
+1. **Namespaced Cache Architecture**: SQLSpec centralizes SQL artifact caching in a single `NamespacedCache` backed by per-namespace `LRUCache` instances:
 
    ```python
    # Namespaced cache entries:
@@ -115,8 +115,10 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
    file_cache: SQLFileCacheEntry          # File loading with checksums (12x+ speedup)
    ```
 
-   The shared pipeline registry keeps per-config SQLProcessor caches (including parse caches)
-   so repeated compiles reuse both conversion and parsing work.
+   The shared `StatementPipelineRegistry` keeps per-config `SQLProcessor` caches (parse + parameter +
+   validator caches). Global cache sizing comes from `CacheConfig`—`sql_cache_size` controls the
+   statement/builder namespaces, while `fragment_cache_size` sizes the parse/parameter/validator caches.
+   Cache configuration updates reset both the namespaced caches and the pipeline registry.
 
 2. **Enhanced Pipeline Execution**: SQLSpec compiles statements through `SQLProcessor`:
 

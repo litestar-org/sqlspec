@@ -117,4 +117,5 @@ class DialectConfig:
         Returns:
             Dialect-specific type string.
         """
-        return self.type_mappings.get(logical_type, logical_type)
+        default_type = self.type_mappings.get("text", "TEXT")
+        return self.type_mappings.get(logical_type, default_type)

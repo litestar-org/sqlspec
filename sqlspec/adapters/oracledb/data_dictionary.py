@@ -201,7 +201,7 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
         if was_cached:
             return cast("OracleVersionInfo | None", cached_version)
 
-        version_row = driver.select_value_or_none(self.get_query_text("version"))
+        version_row = driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
             logger.warning("No Oracle version information found")
             self.cache_version_for_driver(driver, None)
@@ -317,7 +317,7 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
         if was_cached:
             return cast("OracleVersionInfo | None", cached_version)
 
-        version_row = await driver.select_value_or_none(self.get_query_text("version"))
+        version_row = await driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
             logger.warning("No Oracle version information found")
             self.cache_version_for_driver(driver, None)

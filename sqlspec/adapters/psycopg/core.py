@@ -6,10 +6,23 @@ from typing import TYPE_CHECKING, Any
 from psycopg import sql as psycopg_sql
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
+from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -26,6 +39,7 @@ __all__ = (
     "collect_psycopg_rows",
     "psycopg_pipeline_supported",
     "psycopg_statement_config",
+    "raise_psycopg_exception",
 )
 
 
@@ -162,3 +176,39 @@ def collect_psycopg_rows(
         return [], []
     column_names = [col.name for col in description]
     return fetched_data or [], column_names
+
+
+def _raise_postgres_error(error: Any, code: "str | None", error_class: type[SQLSpecError], description: str) -> None:
+    msg = f"PostgreSQL {description} [{code}]: {error}" if code else f"PostgreSQL {description}: {error}"
+    raise error_class(msg) from error
+
+
+def raise_psycopg_exception(error: Any) -> None:
+    """Raise SQLSpec exceptions for psycopg errors."""
+    error_code = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
+    if not error_code:
+        _raise_postgres_error(error, None, SQLSpecError, "database error")
+        return
+
+    if error_code == "23505":
+        _raise_postgres_error(error, error_code, UniqueViolationError, "unique constraint violation")
+    elif error_code == "23503":
+        _raise_postgres_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
+    elif error_code == "23502":
+        _raise_postgres_error(error, error_code, NotNullViolationError, "not-null constraint violation")
+    elif error_code == "23514":
+        _raise_postgres_error(error, error_code, CheckViolationError, "check constraint violation")
+    elif error_code.startswith("23"):
+        _raise_postgres_error(error, error_code, IntegrityError, "integrity constraint violation")
+    elif error_code.startswith("42"):
+        _raise_postgres_error(error, error_code, SQLParsingError, "SQL syntax error")
+    elif error_code.startswith("08"):
+        _raise_postgres_error(error, error_code, DatabaseConnectionError, "connection error")
+    elif error_code.startswith("40"):
+        _raise_postgres_error(error, error_code, TransactionError, "transaction error")
+    elif error_code.startswith("22"):
+        _raise_postgres_error(error, error_code, DataError, "data error")
+    elif error_code.startswith(("53", "54", "55", "57", "58")):
+        _raise_postgres_error(error, error_code, OperationalError, "operational error")
+    else:
+        _raise_postgres_error(error, error_code, SQLSpecError, "database error")

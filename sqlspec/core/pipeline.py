@@ -250,15 +250,9 @@ class StatementPipelineRegistry:
 
     def _fingerprint_config(self, config: "Any") -> str:
         param_config = config.parameter_config
-        supported_styles = sorted(style.value for style in param_config.supported_parameter_styles)
-        exec_styles = (
-            sorted(style.value for style in param_config.supported_execution_parameter_styles)
-            if param_config.supported_execution_parameter_styles
-            else None
-        )
-        converter_name = type(config.parameter_converter).__name__ if config.parameter_converter else "None"
-        validator_name = type(config.parameter_validator).__name__ if config.parameter_validator else "None"
-        output_name = type(config.output_transformer).__name__ if config.output_transformer else "None"
+        param_config_hash = param_config.hash()
+        converter_type = type(config.parameter_converter) if config.parameter_converter else None
+        validator_type = type(config.parameter_validator) if config.parameter_validator else None
         output_transformer_id = id(config.output_transformer) if config.output_transformer else None
         statement_transformer_ids = (
             tuple(id(transformer) for transformer in config.statement_transformers)
@@ -278,12 +272,9 @@ class StatementPipelineRegistry:
             str(config.dialect),
             param_config.default_parameter_style.value,
             param_config.default_execution_parameter_style.value,
-            param_config.hash(),
-            tuple(supported_styles),
-            tuple(exec_styles) if exec_styles else None,
-            converter_name,
-            validator_name,
-            output_name,
+            param_config_hash,
+            converter_type,
+            validator_type,
             output_transformer_id,
             statement_transformer_ids,
             bool(param_config.output_transformer),

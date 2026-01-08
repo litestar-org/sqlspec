@@ -266,6 +266,11 @@ expression = result.expression
 - Apply AST transforms without re-parsing
 - Convert to SQL once at the end
 
+**Cache alignment tips**:
+
+- `StatementPipelineRegistry` keeps per-config `SQLProcessor` caches sized by `CacheConfig.fragment_cache_size`.
+- Use `SQL` instances seeded with `sqlglot` expressions (or reuse `statement.statement_expression`) to avoid re-parsing.
+
 ### Parameter Style Conversion
 
 SQLSpec supports multiple parameter styles:

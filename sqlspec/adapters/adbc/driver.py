@@ -16,27 +16,16 @@ from sqlspec.adapters.adbc.core import (
     handle_postgres_rollback,
     normalize_postgres_empty_parameters,
     prepare_adbc_parameters_with_casts,
+    raise_adbc_exception,
     resolve_adbc_parameter_casts,
 )
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.core import SQL, StatementConfig, create_arrow_result, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.exceptions import (
-    CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
-    ForeignKeyViolationError,
-    IntegrityError,
-    NotNullViolationError,
-    SQLParsingError,
-    SQLSpecError,
-    TransactionError,
-    UniqueViolationError,
-)
+from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -47,7 +36,6 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._sync import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
@@ -99,119 +87,11 @@ class AdbcExceptionHandler:
         if exc_type is None:
             return False
         try:
-            self._map_adbc_exception(exc_val)
+            raise_adbc_exception(exc_val)
         except Exception as mapped:
             self.pending_exception = mapped
             return True
         return False
-
-    def _map_adbc_exception(self, e: Any) -> None:
-        """Map ADBC exception to SQLSpec exception.
-
-        ADBC drivers may expose SQLSTATE codes or driver-specific codes.
-
-        Args:
-            e: ADBC exception instance
-        """
-        sqlstate = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
-
-        if sqlstate:
-            self._map_sqlstate_exception(e, sqlstate)
-        else:
-            self._map_message_based_exception(e)
-
-    def _map_sqlstate_exception(self, e: Any, sqlstate: str) -> None:
-        """Map SQLSTATE code to exception.
-
-        Args:
-            e: Exception instance
-            sqlstate: SQLSTATE error code
-        """
-        if sqlstate == "23505":
-            self._raise_unique_violation(e)
-        elif sqlstate == "23503":
-            self._raise_foreign_key_violation(e)
-        elif sqlstate == "23502":
-            self._raise_not_null_violation(e)
-        elif sqlstate == "23514":
-            self._raise_check_violation(e)
-        elif sqlstate.startswith("23"):
-            self._raise_integrity_error(e)
-        elif sqlstate.startswith("42"):
-            self._raise_parsing_error(e)
-        elif sqlstate.startswith("08"):
-            self._raise_connection_error(e)
-        elif sqlstate.startswith("40"):
-            self._raise_transaction_error(e)
-        elif sqlstate.startswith("22"):
-            self._raise_data_error(e)
-        else:
-            self._raise_generic_error(e)
-
-    def _map_message_based_exception(self, e: Any) -> None:
-        """Map exception using message-based detection.
-
-        Args:
-            e: Exception instance
-        """
-        error_msg = str(e).lower()
-
-        if "unique" in error_msg or "duplicate" in error_msg:
-            self._raise_unique_violation(e)
-        elif "foreign key" in error_msg:
-            self._raise_foreign_key_violation(e)
-        elif "not null" in error_msg or "null value" in error_msg:
-            self._raise_not_null_violation(e)
-        elif "check constraint" in error_msg:
-            self._raise_check_violation(e)
-        elif "constraint" in error_msg:
-            self._raise_integrity_error(e)
-        elif "syntax" in error_msg:
-            self._raise_parsing_error(e)
-        elif "connection" in error_msg or "connect" in error_msg:
-            self._raise_connection_error(e)
-        else:
-            self._raise_generic_error(e)
-
-    def _raise_unique_violation(self, e: Any) -> None:
-        msg = f"ADBC unique constraint violation: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any) -> None:
-        msg = f"ADBC foreign key constraint violation: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any) -> None:
-        msg = f"ADBC not-null constraint violation: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any) -> None:
-        msg = f"ADBC check constraint violation: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any) -> None:
-        msg = f"ADBC integrity constraint violation: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_parsing_error(self, e: Any) -> None:
-        msg = f"ADBC SQL parsing error: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any) -> None:
-        msg = f"ADBC connection error: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_transaction_error(self, e: Any) -> None:
-        msg = f"ADBC transaction error: {e}"
-        raise TransactionError(msg) from e
-
-    def _raise_data_error(self, e: Any) -> None:
-        msg = f"ADBC data error: {e}"
-        raise DataError(msg) from e
-
-    def _raise_generic_error(self, e: Any) -> None:
-        msg = f"ADBC database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class AdbcDriver(SyncDriverAdapterBase):
@@ -240,7 +120,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.dialect = statement_config.dialect
-        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
+        self._data_dictionary: AdbcDataDictionary | None = None
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         """Create context manager for cursor.
@@ -260,14 +140,6 @@ class AdbcDriver(SyncDriverAdapterBase):
             Exception handler context manager
         """
         return AdbcExceptionHandler()
-
-    def _normalized_dialect(self) -> str:
-        dialect = self.dialect
-        if dialect is None:
-            return ""
-        if isinstance(dialect, str):
-            return dialect
-        return str(dialect)
 
     def prepare_driver_parameters(
         self,
@@ -292,7 +164,8 @@ class AdbcDriver(SyncDriverAdapterBase):
             Parameters with cast-aware type coercion applied
         """
         enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
-        dialect_name = self._normalized_dialect()
+        dialect = self.dialect
+        dialect_name = str(dialect) if dialect is not None else ""
 
         if enable_cast_detection and prepared_statement and dialect_name in {"postgres", "postgresql"} and not is_many:
             parameter_casts = resolve_adbc_parameter_casts(prepared_statement)
@@ -320,7 +193,10 @@ class AdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         parameter_casts = resolve_adbc_parameter_casts(statement)
-        dialect_name = self._normalized_dialect()
+        dialect = self.dialect
+        dialect_name = str(dialect) if dialect is not None else ""
+        is_postgres = dialect_name in {"postgres", "postgresql"}
+        json_serializer = cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json))
 
         try:
             if not prepared_parameters:
@@ -331,16 +207,14 @@ class AdbcDriver(SyncDriverAdapterBase):
                 for param_set in prepared_parameters:
                     postgres_compatible = normalize_postgres_empty_parameters(dialect_name, param_set)
 
-                    if dialect_name in {"postgres", "postgresql"}:
+                    if is_postgres:
                         # For postgres, always use cast-aware parameter preparation
                         formatted_params = prepare_adbc_parameters_with_casts(
                             postgres_compatible,
                             parameter_casts,
                             self.statement_config,
                             dialect=dialect_name,
-                            json_serializer=cast(
-                                "Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)
-                            ),
+                            json_serializer=json_serializer,
                         )
                     else:
                         formatted_params = self.prepare_driver_parameters(
@@ -373,18 +247,21 @@ class AdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         parameter_casts = resolve_adbc_parameter_casts(statement)
-        dialect_name = self._normalized_dialect()
+        dialect = self.dialect
+        dialect_name = str(dialect) if dialect is not None else ""
+        is_postgres = dialect_name in {"postgres", "postgresql"}
+        json_serializer = cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json))
 
         try:
             postgres_compatible_params = normalize_postgres_empty_parameters(dialect_name, prepared_parameters)
 
-            if dialect_name in {"postgres", "postgresql"}:
+            if is_postgres:
                 formatted_params = prepare_adbc_parameters_with_casts(
                     postgres_compatible_params,
                     parameter_casts,
                     self.statement_config,
                     dialect=dialect_name,
-                    json_serializer=cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)),
+                    json_serializer=json_serializer,
                 )
                 cursor.execute(sql, parameters=formatted_params)
             else:
@@ -430,7 +307,8 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         successful_count = 0
         last_rowcount = 0
-        dialect_name = self._normalized_dialect()
+        dialect = self.dialect
+        dialect_name = str(dialect) if dialect is not None else ""
 
         try:
             for stmt in statements:
@@ -492,14 +370,14 @@ class AdbcDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "AdbcDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", AdbcDataDictionary())
+            self._data_dictionary = AdbcDataDictionary()
         return self._data_dictionary
 
     def select_to_arrow(

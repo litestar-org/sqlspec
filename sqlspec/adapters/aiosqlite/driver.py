@@ -14,29 +14,17 @@ from sqlspec.adapters.aiosqlite.core import (
     build_sqlite_insert_statement,
     format_sqlite_identifier,
     process_sqlite_result,
+    raise_aiosqlite_exception,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.exceptions import (
-    CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
-    ForeignKeyViolationError,
-    IntegrityError,
-    NotNullViolationError,
-    OperationalError,
-    SQLParsingError,
-    SQLSpecError,
-    UniqueViolationError,
-)
-from sqlspec.utils.type_guards import has_sqlite_error
+from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteSessionContext
@@ -104,111 +92,12 @@ class AiosqliteExceptionHandler:
             return False
         if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):
             try:
-                self._map_sqlite_exception(exc_val)
+                raise_aiosqlite_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
             return False
         return False
-
-    def _map_sqlite_exception(self, e: BaseException) -> None:
-        """Map SQLite exception to SQLSpec exception.
-
-        Args:
-            e: aiosqlite.Error instance
-
-        Raises:
-            Specific SQLSpec exception based on error code
-        """
-        exc: BaseException = e
-        if has_sqlite_error(e):
-            error_code = e.sqlite_errorcode
-            error_name = e.sqlite_errorname
-        else:
-            error_code = None
-            error_name = None
-        error_msg = str(exc).lower()
-
-        if "locked" in error_msg:
-            msg = f"AIOSQLite database locked: {exc}. Consider enabling WAL mode or reducing concurrency."
-            raise SQLSpecError(msg) from exc
-
-        if not error_code:
-            if "unique constraint" in error_msg:
-                self._raise_unique_violation(e, 0)
-            elif "foreign key constraint" in error_msg:
-                self._raise_foreign_key_violation(e, 0)
-            elif "not null constraint" in error_msg:
-                self._raise_not_null_violation(e, 0)
-            elif "check constraint" in error_msg:
-                self._raise_check_violation(e, 0)
-            elif "syntax" in error_msg:
-                self._raise_parsing_error(e, None)
-            else:
-                self._raise_generic_error(e)
-            return
-
-        if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
-            self._raise_unique_violation(e, error_code)
-        elif error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
-            self._raise_not_null_violation(e, error_code)
-        elif error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
-            self._raise_check_violation(e, error_code)
-        elif error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
-            self._raise_integrity_error(e, error_code)
-        elif error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
-            self._raise_connection_error(e, error_code)
-        elif error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
-            self._raise_operational_error(e, error_code)
-        elif error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
-            self._raise_data_error(e, error_code)
-        elif error_code == 1 or "syntax" in error_msg:
-            self._raise_parsing_error(e, error_code)
-        else:
-            self._raise_generic_error(e)
-
-    def _raise_unique_violation(self, e: Any, code: int) -> None:
-        msg = f"SQLite unique constraint violation [code {code}]: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any, code: int) -> None:
-        msg = f"SQLite foreign key constraint violation [code {code}]: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any, code: int) -> None:
-        msg = f"SQLite not-null constraint violation [code {code}]: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any, code: int) -> None:
-        msg = f"SQLite check constraint violation [code {code}]: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any, code: int) -> None:
-        msg = f"SQLite integrity constraint violation [code {code}]: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_parsing_error(self, e: Any, code: "int | None") -> None:
-        code_str = f"[code {code}]" if code else ""
-        msg = f"SQLite SQL syntax error {code_str}: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: int) -> None:
-        msg = f"SQLite connection error [code {code}]: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: int) -> None:
-        msg = f"SQLite operational error [code {code}]: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: int) -> None:
-        msg = f"SQLite data error [code {code}]: {e}"
-        raise DataError(msg) from e
-
-    def _raise_generic_error(self, e: Any) -> None:
-        msg = f"SQLite database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class AiosqliteDriver(AsyncDriverAdapterBase):
@@ -228,7 +117,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             statement_config = aiosqlite_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase[Any] | None = None
+        self._data_dictionary: AiosqliteDataDictionary | None = None
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""
@@ -324,7 +213,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            await self._truncate_table_async(table)
+            statement = f"DELETE FROM {format_sqlite_identifier(table)}"
+            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+                await cursor.execute(statement)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
@@ -397,20 +288,15 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """
         return bool(self.connection.in_transaction)
 
-    async def _truncate_table_async(self, table: str) -> None:
-        statement = f"DELETE FROM {format_sqlite_identifier(table)}"
-        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
-            await cursor.execute(statement)
-
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "AiosqliteDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = cast("AsyncDataDictionaryBase[Any]", AiosqliteDataDictionary())
+            self._data_dictionary = AiosqliteDataDictionary()
         return self._data_dictionary
 
 

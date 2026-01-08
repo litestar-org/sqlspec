@@ -20,7 +20,7 @@ from sqlspec.core.parameters._types import (
 )
 from sqlspec.core.parameters._validator import ParameterValidator
 
-__all__ = ("ParameterProcessor",)
+__all__ = ("ParameterProcessor", "fingerprint_parameters")
 
 
 def _mapping_item_sort_key(item: "tuple[Any, Any]") -> str:
@@ -40,18 +40,34 @@ def _fingerprint_parameters(parameters: Any) -> str:
         return "none"
 
     if isinstance(parameters, Mapping):
+        if not parameters:
+            return f"{type(parameters).__name__}:empty"
         try:
             items = sorted(parameters.items(), key=_mapping_item_sort_key)
         except Exception:
             items = list(parameters.items())
         data = repr(tuple(items))
     elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+        if not parameters:
+            return f"{type(parameters).__name__}:empty"
         data = repr(tuple(parameters))
     else:
         data = repr(parameters)
 
-    digest = hashlib.sha256(data.encode("utf-8")).hexdigest()
+    digest = hashlib.blake2b(data.encode("utf-8"), digest_size=8).hexdigest()
     return f"{type(parameters).__name__}:{digest}"
+
+
+def fingerprint_parameters(parameters: Any) -> str:
+    """Return a stable fingerprint for parameter payloads.
+
+    Args:
+        parameters: Original parameter payload supplied by the caller.
+
+    Returns:
+        Deterministic fingerprint string derived from the parameter payload.
+    """
+    return _fingerprint_parameters(parameters)
 
 
 def _coerce_nested_value(value: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> Any:

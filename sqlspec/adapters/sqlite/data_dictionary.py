@@ -181,8 +181,9 @@ class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver
             query_text = self.get_query_text("foreign_keys_by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_type=ForeignKeyMetadata)
 
+        table_label = table.replace("'", "''")
         table_identifier = f"{schema_name}.{table}" if schema_name else table
         query_text = self.get_query_text("foreign_keys_by_table").format(
-            table_name=format_sqlite_identifier(table_identifier)
+            table_name=format_sqlite_identifier(table_identifier), table_label=table_label
         )
         return driver.select(query_text, schema_type=ForeignKeyMetadata)

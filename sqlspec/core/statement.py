@@ -496,7 +496,8 @@ class SQL:
         original_params = self._original_parameters
         config = self._statement_config
         is_many = self._is_many
-        new_sql = SQL(self._raw_sql, *original_params, statement_config=config, is_many=is_many)
+        statement_seed = self._raw_expression or self._raw_sql
+        new_sql = SQL(statement_seed, *original_params, statement_config=config, is_many=is_many)
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
@@ -555,7 +556,8 @@ class SQL:
         original_params = self._original_parameters
         config = self._statement_config
         is_many = self._is_many
-        new_sql = SQL(self._raw_sql, *original_params, statement_config=config, is_many=is_many)
+        statement_seed = self._raw_expression or self._raw_sql
+        new_sql = SQL(statement_seed, *original_params, statement_config=config, is_many=is_many)
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._named_parameters[name] = value
         new_sql._positional_parameters = self._positional_parameters.copy()
@@ -573,6 +575,8 @@ class SQL:
         """
         if self.statement_expression is not None:
             current_expr = self.statement_expression.copy()
+        elif not self._statement_config.enable_parsing:
+            current_expr = exp.Select().from_(f"({self._raw_sql})")
         else:
             try:
                 current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
@@ -582,10 +586,13 @@ class SQL:
 
         condition_expr: exp.Expression
         if isinstance(condition, str):
-            try:
-                condition_expr = sqlglot.parse_one(condition, dialect=self._dialect, into=exp.Condition)
-            except ParseError:
+            if not self._statement_config.enable_parsing:
                 condition_expr = exp.Condition(this=condition)
+            else:
+                try:
+                    condition_expr = sqlglot.parse_one(condition, dialect=self._dialect, into=exp.Condition)
+                except ParseError:
+                    condition_expr = exp.Condition(this=condition)
         else:
             condition_expr = condition
 
@@ -668,11 +675,14 @@ class SQL:
             self._raw_sql, raw_params, ParameterStyle.NAMED_COLON, is_many=False
         )
 
-        try:
-            expression = sqlglot.parse_one(converted_sql, dialect=builder_dialect)
-        except ParseError as exc:
-            msg = f"Failed to parse SQL for builder: {exc}"
-            raise sqlspec.exceptions.SQLBuilderError(msg) from exc
+        if self._raw_expression is not None and converted_sql == self._raw_sql and (builder_dialect == self._dialect):
+            expression = self._raw_expression.copy()
+        else:
+            try:
+                expression = sqlglot.parse_one(converted_sql, dialect=builder_dialect)
+            except ParseError as exc:
+                msg = f"Failed to parse SQL for builder: {exc}"
+                raise sqlspec.exceptions.SQLBuilderError(msg) from exc
 
         base_expression = expression
         ctes: list[exp.CTE] | None = None

@@ -3,8 +3,12 @@
 from typing import TYPE_CHECKING
 
 from sqlspec.adapters.sqlite.core import format_sqlite_identifier
-from sqlspec.data_dictionary._loader import get_data_dictionary_loader
-from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.data_dictionary import (
+    get_data_dictionary_loader,
+    get_dialect_config,
+    list_registered_dialects,
+    normalize_dialect_name,
+)
 from sqlspec.driver import (
     ColumnMetadata,
     ForeignKeyMetadata,
@@ -31,12 +35,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
     __slots__ = ()
 
     def _normalize_dialect(self, driver: "AdbcDriver") -> str:
-        dialect_value = str(driver.dialect).lower()
-        if dialect_value == "postgresql":
-            return "postgres"
-        if dialect_value == "mariadb":
-            return "mysql"
-        return dialect_value
+        dialect_value = str(driver.dialect)
+        return normalize_dialect_name(dialect_value)
 
     def _get_query(self, dialect: str, name: str) -> "SQL":
         loader = get_data_dictionary_loader()
@@ -76,12 +76,13 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
 
     def list_available_features(self) -> "list[str]":
         features = set(self.get_default_features())
-        try:
-            config = get_dialect_config("postgres")
-        except ValueError:
-            return sorted(features)
-        features.update(config.feature_flags.keys())
-        features.update(config.feature_versions.keys())
+        for dialect in list_registered_dialects():
+            try:
+                config = get_dialect_config(dialect)
+            except ValueError:
+                continue
+            features.update(config.feature_flags.keys())
+            features.update(config.feature_versions.keys())
         return sorted(features)
 
     def get_version(self, driver: "AdbcDriver") -> "VersionInfo | None":
@@ -300,9 +301,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
                 schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
                 query_text = self._get_query_text(dialect, "foreign_keys_by_schema").format(schema_prefix=schema_prefix)
                 return driver.select(query_text, schema_type=ForeignKeyMetadata)
+            table_label = table.replace("'", "''")
             table_identifier = f"{schema_name}.{table}" if schema_name else table
             query_text = self._get_query_text(dialect, "foreign_keys_by_table").format(
-                table_name=format_sqlite_identifier(table_identifier)
+                table_name=format_sqlite_identifier(table_identifier), table_label=table_label
             )
             return driver.select(query_text, schema_type=ForeignKeyMetadata)
 

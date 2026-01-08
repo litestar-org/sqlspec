@@ -38,6 +38,7 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
+from sqlspec.core.parameters import fingerprint_parameters
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime
@@ -1107,7 +1108,8 @@ class CommonDriverAttributesMixin:
                 if data_parameters
                 else sql_statement.positional_parameters
             )
-            return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
+            return SQL(statement_seed, *merged_parameters, statement_config=statement_config, **kwargs)
         return sql_statement
 
     def _prepare_from_sql(
@@ -1123,7 +1125,8 @@ class CommonDriverAttributesMixin:
                 if data_parameters
                 else sql_statement.positional_parameters
             )
-            return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
+            return SQL(statement_seed, *merged_parameters, statement_config=statement_config, **kwargs)
 
         needs_rebuild = False
         if statement_config.dialect and (
@@ -1139,12 +1142,12 @@ class CommonDriverAttributesMixin:
             needs_rebuild = True
 
         if needs_rebuild:
-            sql_text = sql_statement.raw_sql or sql_statement.sql
+            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql or sql_statement.sql
             if sql_statement.is_many and sql_statement.parameters:
-                return SQL(sql_text, sql_statement.parameters, statement_config=statement_config, is_many=True)
+                return SQL(statement_seed, sql_statement.parameters, statement_config=statement_config, is_many=True)
             if sql_statement.named_parameters:
-                return SQL(sql_text, statement_config=statement_config, **sql_statement.named_parameters)
-            return SQL(sql_text, *sql_statement.positional_parameters, statement_config=statement_config)
+                return SQL(statement_seed, statement_config=statement_config, **sql_statement.named_parameters)
+            return SQL(statement_seed, *sql_statement.positional_parameters, statement_config=statement_config)
         return sql_statement
 
     def _prepare_from_string(
@@ -1399,22 +1402,8 @@ class CommonDriverAttributesMixin:
             except TypeError:
                 pass
 
-        try:
-            if isinstance(params, dict):
-                params_key = make_cache_key_hashable(params)
-            elif isinstance(params, (list, tuple)) and params:
-                if isinstance(params[0], dict):
-                    params_key = tuple(make_cache_key_hashable(d) for d in params)
-                else:
-                    params_key = make_cache_key_hashable(params)
-            elif isinstance(params, (list, tuple)):
-                params_key = ()
-            else:
-                params_key = params
-        except (TypeError, AttributeError):
-            params_key = str(params)
-
-        base_hash = hash((statement.sql, params_key, statement.is_many, statement.is_script))
+        params_fingerprint = fingerprint_parameters(params)
+        base_hash = hash((statement.sql, params_fingerprint, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 
     def _get_dominant_parameter_style(self, parameters: "list[Any]") -> "ParameterStyle | None":

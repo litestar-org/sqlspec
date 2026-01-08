@@ -2,8 +2,18 @@
 
 from typing import TYPE_CHECKING, Any
 
+from google.api_core import exceptions as api_exceptions
+
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    NotFoundError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -16,6 +26,7 @@ __all__ = (
     "coerce_spanner_params",
     "collect_spanner_rows",
     "infer_spanner_param_types_for_params",
+    "raise_spanner_exception",
     "spanner_statement_config",
     "supports_spanner_batch_update",
     "supports_spanner_write",
@@ -116,3 +127,25 @@ def collect_spanner_rows(
             item[column] = converter.convert_if_detected(row[index])
         data.append(item)
     return data, column_names
+
+
+def raise_spanner_exception(error: Any) -> None:
+    """Raise SQLSpec exceptions for Spanner errors."""
+    if isinstance(error, api_exceptions.AlreadyExists):
+        msg = f"Spanner resource already exists: {error}"
+        raise UniqueViolationError(msg) from error
+    if isinstance(error, api_exceptions.NotFound):
+        msg = f"Spanner resource not found: {error}"
+        raise NotFoundError(msg) from error
+    if isinstance(error, api_exceptions.InvalidArgument):
+        msg = f"Invalid Spanner query or argument: {error}"
+        raise SQLParsingError(msg) from error
+    if isinstance(error, api_exceptions.PermissionDenied):
+        msg = f"Spanner permission denied: {error}"
+        raise DatabaseConnectionError(msg) from error
+    if isinstance(error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests)):
+        msg = f"Spanner service unavailable or rate limited: {error}"
+        raise OperationalError(msg) from error
+
+    msg = f"Spanner error: {error}"
+    raise SQLSpecError(msg) from error

@@ -12,8 +12,21 @@ from sqlspec.core import (
     build_null_pruning_transform,
     build_statement_config_from_profile,
 )
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 from sqlspec.typing import Empty
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -39,6 +52,7 @@ __all__ = (
     "normalize_driver_path",
     "normalize_postgres_empty_parameters",
     "prepare_adbc_parameters_with_casts",
+    "raise_adbc_exception",
     "resolve_adbc_parameter_casts",
 )
 
@@ -143,7 +157,7 @@ def detect_adbc_dialect(connection: Any, logger: Any | None = None) -> str:
     return "postgres"
 
 
-def _normalize_driver_path(driver_name: str) -> str:
+def normalize_driver_path(driver_name: str) -> str:
     """Normalize a driver name to an importable connect function path."""
     stripped = driver_name.strip()
     if stripped.endswith(".dbapi.connect"):
@@ -155,7 +169,7 @@ def _normalize_driver_path(driver_name: str) -> str:
     return f"{stripped}.dbapi.connect"
 
 
-def _driver_from_uri(uri: str) -> "str | None":
+def driver_from_uri(uri: str) -> "str | None":
     """Resolve a default driver connect path from a URI."""
     for prefix, driver_path in _URI_PREFIX_DRIVER:
         if uri.startswith(prefix):
@@ -163,7 +177,7 @@ def _driver_from_uri(uri: str) -> "str | None":
     return None
 
 
-def _driver_kind_from_driver_name(driver_name: str) -> "str | None":
+def driver_kind_from_driver_name(driver_name: str) -> "str | None":
     """Return a canonical driver kind based on driver name content."""
     resolved = _DRIVER_ALIASES.get(driver_name.lower(), driver_name)
     lowered = resolved.lower()
@@ -173,32 +187,12 @@ def _driver_kind_from_driver_name(driver_name: str) -> "str | None":
     return None
 
 
-def _driver_kind_from_uri(uri: str) -> "str | None":
+def driver_kind_from_uri(uri: str) -> "str | None":
     """Return a canonical driver kind based on URI scheme."""
     for prefix, driver_path in _URI_PREFIX_DRIVER:
         if uri.startswith(prefix):
-            return _driver_kind_from_driver_name(driver_path)
+            return driver_kind_from_driver_name(driver_path)
     return None
-
-
-def normalize_driver_path(driver_name: str) -> str:
-    """Normalize a driver name to an importable connect function path."""
-    return _normalize_driver_path(driver_name)
-
-
-def driver_from_uri(uri: str) -> "str | None":
-    """Resolve a default driver connect path from a URI."""
-    return _driver_from_uri(uri)
-
-
-def driver_kind_from_driver_name(driver_name: str) -> "str | None":
-    """Return a canonical driver kind based on driver name content."""
-    return _driver_kind_from_driver_name(driver_name)
-
-
-def driver_kind_from_uri(uri: str) -> "str | None":
-    """Return a canonical driver kind based on URI scheme."""
-    return _driver_kind_from_uri(uri)
 
 
 def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = None) -> None:
@@ -232,6 +226,58 @@ def normalize_postgres_empty_parameters(dialect: str, parameters: Any) -> Any:
     if dialect == "postgres" and isinstance(parameters, dict) and not parameters:
         return None
     return parameters
+
+
+def _raise_adbc_error(error: Any, error_class: type[SQLSpecError], description: str) -> None:
+    msg = f"ADBC {description}: {error}"
+    raise error_class(msg) from error
+
+
+def raise_adbc_exception(error: Any) -> None:
+    """Raise SQLSpec exceptions for ADBC errors."""
+    sqlstate = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
+
+    if sqlstate:
+        if sqlstate == "23505":
+            _raise_adbc_error(error, UniqueViolationError, "unique constraint violation")
+        elif sqlstate == "23503":
+            _raise_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+        elif sqlstate == "23502":
+            _raise_adbc_error(error, NotNullViolationError, "not-null constraint violation")
+        elif sqlstate == "23514":
+            _raise_adbc_error(error, CheckViolationError, "check constraint violation")
+        elif sqlstate.startswith("23"):
+            _raise_adbc_error(error, IntegrityError, "integrity constraint violation")
+        elif sqlstate.startswith("42"):
+            _raise_adbc_error(error, SQLParsingError, "SQL parsing error")
+        elif sqlstate.startswith("08"):
+            _raise_adbc_error(error, DatabaseConnectionError, "connection error")
+        elif sqlstate.startswith("40"):
+            _raise_adbc_error(error, TransactionError, "transaction error")
+        elif sqlstate.startswith("22"):
+            _raise_adbc_error(error, DataError, "data error")
+        else:
+            _raise_adbc_error(error, SQLSpecError, "database error")
+        return
+
+    error_msg = str(error).lower()
+
+    if "unique" in error_msg or "duplicate" in error_msg:
+        _raise_adbc_error(error, UniqueViolationError, "unique constraint violation")
+    elif "foreign key" in error_msg:
+        _raise_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    elif "not null" in error_msg or "null value" in error_msg:
+        _raise_adbc_error(error, NotNullViolationError, "not-null constraint violation")
+    elif "check constraint" in error_msg:
+        _raise_adbc_error(error, CheckViolationError, "check constraint violation")
+    elif "constraint" in error_msg:
+        _raise_adbc_error(error, IntegrityError, "integrity constraint violation")
+    elif "syntax" in error_msg:
+        _raise_adbc_error(error, SQLParsingError, "SQL parsing error")
+    elif "connection" in error_msg or "connect" in error_msg:
+        _raise_adbc_error(error, DatabaseConnectionError, "connection error")
+    else:
+        _raise_adbc_error(error, SQLSpecError, "database error")
 
 
 def _identity(value: Any) -> Any:

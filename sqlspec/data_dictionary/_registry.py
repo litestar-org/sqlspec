@@ -4,11 +4,26 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from sqlspec.data_dictionary._types import DialectConfig
 
-__all__ = ("get_dialect_config", "list_registered_dialects", "register_dialect")
+__all__ = ("get_dialect_config", "list_registered_dialects", "normalize_dialect_name", "register_dialect")
 
 
 _DIALECT_CONFIGS: dict[str, "DialectConfig"] = {}
 _DIALECTS_LOADED = False
+
+DIALECT_ALIASES: dict[str, str] = {"postgresql": "postgres", "mariadb": "mysql"}
+
+
+def normalize_dialect_name(dialect: str) -> str:
+    """Normalize dialect names to canonical registry keys.
+
+    Args:
+        dialect: Input dialect name.
+
+    Returns:
+        Canonical dialect key.
+    """
+    normalized = dialect.lower()
+    return DIALECT_ALIASES.get(normalized, normalized)
 
 
 def _load_default_dialects() -> None:
@@ -42,10 +57,11 @@ def get_dialect_config(dialect: str) -> "DialectConfig":
         ValueError: When the dialect is unknown.
     """
     _load_default_dialects()
-    if dialect not in _DIALECT_CONFIGS:
+    normalized = normalize_dialect_name(dialect)
+    if normalized not in _DIALECT_CONFIGS:
         msg = f"Unknown dialect: {dialect}. Available: {', '.join(sorted(_DIALECT_CONFIGS.keys()))}"
         raise ValueError(msg)
-    return _DIALECT_CONFIGS[dialect]
+    return _DIALECT_CONFIGS[normalized]
 
 
 def list_registered_dialects() -> "list[str]":

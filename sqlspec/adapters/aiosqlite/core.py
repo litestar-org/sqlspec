@@ -2,12 +2,24 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
+from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -20,11 +32,21 @@ __all__ = (
     "build_sqlite_insert_statement",
     "format_sqlite_identifier",
     "process_sqlite_result",
+    "raise_aiosqlite_exception",
 )
 
 
 _TIME_TO_ISO = build_time_iso_converter()
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
+
+SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
+SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
+SQLITE_CONSTRAINT_NOTNULL_CODE = 1811
+SQLITE_CONSTRAINT_CHECK_CODE = 531
+SQLITE_CONSTRAINT_CODE = 19
+SQLITE_CANTOPEN_CODE = 14
+SQLITE_IOERR_CODE = 10
+SQLITE_MISMATCH_CODE = 20
 
 
 def _bool_to_int(value: bool) -> int:
@@ -73,6 +95,65 @@ def process_sqlite_result(
     # compiled list comp and zip is faster in mypyc
     data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
     return data, column_names, len(data)
+
+
+def _raise_aiosqlite_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:
+    code_str = f"[code {code}]" if code else ""
+    msg = f"AIOSQLite {description} {code_str}: {error}" if code_str else f"AIOSQLite {description}: {error}"
+    raise error_class(msg) from cast("BaseException", error)
+
+
+def raise_aiosqlite_exception(error: BaseException) -> None:
+    """Raise SQLSpec exceptions for aiosqlite errors."""
+    if has_sqlite_error(error):
+        error_code = error.sqlite_errorcode
+        error_name = error.sqlite_errorname
+        error_exc = cast("BaseException", error)
+    else:
+        error_code = None
+        error_name = None
+        error_exc = error
+    error_msg = str(error).lower()
+
+    if "locked" in error_msg:
+        msg = f"AIOSQLite database locked: {error}. Consider enabling WAL mode or reducing concurrency."
+        raise SQLSpecError(msg) from error_exc
+
+    if not error_code:
+        if "unique constraint" in error_msg:
+            _raise_aiosqlite_error(error, 0, UniqueViolationError, "unique constraint violation")
+        elif "foreign key constraint" in error_msg:
+            _raise_aiosqlite_error(error, 0, ForeignKeyViolationError, "foreign key constraint violation")
+        elif "not null constraint" in error_msg:
+            _raise_aiosqlite_error(error, 0, NotNullViolationError, "not-null constraint violation")
+        elif "check constraint" in error_msg:
+            _raise_aiosqlite_error(error, 0, CheckViolationError, "check constraint violation")
+        elif "syntax" in error_msg:
+            _raise_aiosqlite_error(error, None, SQLParsingError, "SQL syntax error")
+        else:
+            _raise_aiosqlite_error(error, None, SQLSpecError, "database error")
+        return
+
+    if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
+        _raise_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
+    elif error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
+        _raise_aiosqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
+    elif error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
+        _raise_aiosqlite_error(error, error_code, NotNullViolationError, "not-null constraint violation")
+    elif error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
+        _raise_aiosqlite_error(error, error_code, CheckViolationError, "check constraint violation")
+    elif error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
+        _raise_aiosqlite_error(error, error_code, IntegrityError, "integrity constraint violation")
+    elif error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
+        _raise_aiosqlite_error(error, error_code, DatabaseConnectionError, "connection error")
+    elif error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
+        _raise_aiosqlite_error(error, error_code, OperationalError, "operational error")
+    elif error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
+        _raise_aiosqlite_error(error, error_code, DataError, "data error")
+    elif error_code == 1 or "syntax" in error_msg:
+        _raise_aiosqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
+    else:
+        _raise_aiosqlite_error(error, error_code, SQLSpecError, "database error")
 
 
 def build_aiosqlite_profile() -> "DriverParameterProfile":

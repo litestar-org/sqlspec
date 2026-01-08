@@ -12,24 +12,13 @@ from sqlspec.adapters.duckdb.core import (
     build_duckdb_statement_config,
     collect_duckdb_rows,
     duckdb_statement_config,
+    raise_duckdb_exception,
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import SQL, StatementConfig, create_arrow_result, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.exceptions import (
-    CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
-    ForeignKeyViolationError,
-    IntegrityError,
-    NotFoundError,
-    NotNullViolationError,
-    OperationalError,
-    SQLParsingError,
-    SQLSpecError,
-    UniqueViolationError,
-)
+from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.type_guards import has_rowcount
@@ -39,7 +28,6 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._sync import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
@@ -101,94 +89,11 @@ class DuckDBExceptionHandler:
         if exc_type is None:
             return False
         try:
-            self._map_duckdb_exception(exc_type, exc_val)
+            raise_duckdb_exception(exc_type, exc_val)
         except Exception as mapped:
             self.pending_exception = mapped
             return True
         return False
-
-    def _map_duckdb_exception(self, exc_type: Any, e: Any) -> None:
-        """Map DuckDB exception to SQLSpec exception.
-
-        Uses exception type and message-based detection.
-
-        Args:
-            exc_type: Exception type
-            e: Exception instance
-        """
-        error_msg = str(e).lower()
-        exc_name = exc_type.__name__
-
-        if "constraintexception" in exc_name.lower():
-            self._handle_constraint_exception(e, error_msg)
-        elif "catalogexception" in exc_name.lower():
-            self._raise_not_found_error(e)
-        elif "parserexception" in exc_name.lower() or "binderexception" in exc_name.lower():
-            self._raise_parsing_error(e)
-        elif "ioexception" in exc_name.lower():
-            self._raise_operational_error(e)
-        elif "conversionexception" in exc_name.lower() or "type mismatch" in error_msg:
-            self._raise_data_error(e)
-        else:
-            self._raise_generic_error(e)
-
-    def _handle_constraint_exception(self, e: Any, error_msg: str) -> None:
-        """Handle constraint exceptions using message-based detection.
-
-        Args:
-            e: Exception instance
-            error_msg: Lowercase error message
-        """
-        if "unique" in error_msg or "duplicate" in error_msg:
-            self._raise_unique_violation(e)
-        elif "foreign key" in error_msg or "violates foreign key" in error_msg:
-            self._raise_foreign_key_violation(e)
-        elif "not null" in error_msg or "null value" in error_msg:
-            self._raise_not_null_violation(e)
-        elif "check constraint" in error_msg or "check condition" in error_msg:
-            self._raise_check_violation(e)
-        else:
-            self._raise_integrity_error(e)
-
-    def _raise_unique_violation(self, e: Any) -> None:
-        msg = f"DuckDB unique constraint violation: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any) -> None:
-        msg = f"DuckDB foreign key constraint violation: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any) -> None:
-        msg = f"DuckDB not-null constraint violation: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any) -> None:
-        msg = f"DuckDB check constraint violation: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any) -> None:
-        msg = f"DuckDB integrity constraint violation: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_not_found_error(self, e: Any) -> None:
-        msg = f"DuckDB catalog error: {e}"
-        raise NotFoundError(msg) from e
-
-    def _raise_parsing_error(self, e: Any) -> None:
-        msg = f"DuckDB SQL parsing error: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_operational_error(self, e: Any) -> None:
-        msg = f"DuckDB operational error: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_data_error(self, e: Any) -> None:
-        msg = f"DuckDB data error: {e}"
-        raise DataError(msg) from e
-
-    def _raise_generic_error(self, e: Any) -> None:
-        msg = f"DuckDB database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class DuckDBDriver(SyncDriverAdapterBase):
@@ -224,7 +129,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         statement_config = apply_duckdb_driver_features(statement_config, driver_features)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase[Any] | None = None
+        self._data_dictionary: DuckDBDataDictionary | None = None
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.
@@ -376,14 +281,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return False
 
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "DuckDBDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = cast("SyncDataDictionaryBase[Any]", DuckDBDataDictionary())
+            self._data_dictionary = DuckDBDataDictionary()
         return self._data_dictionary
 
     def select_to_arrow(

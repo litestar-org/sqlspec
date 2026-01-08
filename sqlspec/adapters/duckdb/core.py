@@ -6,6 +6,18 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotFoundError,
+    NotNullViolationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
@@ -20,6 +32,7 @@ __all__ = (
     "coerce_duckdb_rows",
     "collect_duckdb_rows",
     "duckdb_statement_config",
+    "raise_duckdb_exception",
 )
 
 
@@ -115,6 +128,41 @@ def apply_duckdb_driver_features(
     if param_config is statement_config.parameter_config:
         return statement_config
     return statement_config.replace(parameter_config=param_config)
+
+
+def _raise_duckdb_error(error: Any, error_class: type[SQLSpecError], description: str) -> None:
+    msg = f"DuckDB {description}: {error}"
+    raise error_class(msg) from error
+
+
+def raise_duckdb_exception(exc_type: Any, error: Any) -> None:
+    """Raise SQLSpec exceptions for DuckDB errors."""
+    error_msg = str(error).lower()
+    exc_name = exc_type.__name__.lower()
+
+    if "constraintexception" in exc_name:
+        if "unique" in error_msg or "duplicate" in error_msg:
+            _raise_duckdb_error(error, UniqueViolationError, "unique constraint violation")
+        elif "foreign key" in error_msg or "violates foreign key" in error_msg:
+            _raise_duckdb_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+        elif "not null" in error_msg or "null value" in error_msg:
+            _raise_duckdb_error(error, NotNullViolationError, "not-null constraint violation")
+        elif "check constraint" in error_msg or "check condition" in error_msg:
+            _raise_duckdb_error(error, CheckViolationError, "check constraint violation")
+        else:
+            _raise_duckdb_error(error, IntegrityError, "integrity constraint violation")
+        return
+
+    if "catalogexception" in exc_name:
+        _raise_duckdb_error(error, NotFoundError, "catalog error")
+    elif "parserexception" in exc_name or "binderexception" in exc_name:
+        _raise_duckdb_error(error, SQLParsingError, "SQL parsing error")
+    elif "ioexception" in exc_name:
+        _raise_duckdb_error(error, OperationalError, "operational error")
+    elif "conversionexception" in exc_name or "type mismatch" in error_msg:
+        _raise_duckdb_error(error, DataError, "data error")
+    else:
+        _raise_duckdb_error(error, SQLSpecError, "database error")
 
 
 def build_duckdb_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:

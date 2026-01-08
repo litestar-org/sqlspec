@@ -5,10 +5,26 @@ import importlib
 import re
 from typing import TYPE_CHECKING, Any
 
+import asyncpg
+
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -23,6 +39,7 @@ __all__ = (
     "collect_asyncpg_rows",
     "configure_asyncpg_parameter_serializers",
     "parse_asyncpg_status",
+    "raise_asyncpg_exception",
     "register_asyncpg_json_codecs",
     "register_asyncpg_pgvector_support",
 )
@@ -195,6 +212,58 @@ def parse_asyncpg_status(status: str) -> int:
                 pass
 
     return 0
+
+
+def _raise_postgres_error(error: Any, code: "str | None", error_class: type[SQLSpecError], description: str) -> None:
+    msg = f"PostgreSQL {description} [{code}]: {error}" if code else f"PostgreSQL {description}: {error}"
+    raise error_class(msg) from error
+
+
+def raise_asyncpg_exception(error: Any) -> None:
+    """Raise SQLSpec exceptions for asyncpg errors."""
+    if isinstance(error, asyncpg.exceptions.UniqueViolationError):
+        _raise_postgres_error(error, "23505", UniqueViolationError, "unique constraint violation")
+        return
+    if isinstance(error, asyncpg.exceptions.ForeignKeyViolationError):
+        _raise_postgres_error(error, "23503", ForeignKeyViolationError, "foreign key constraint violation")
+        return
+    if isinstance(error, asyncpg.exceptions.NotNullViolationError):
+        _raise_postgres_error(error, "23502", NotNullViolationError, "not-null constraint violation")
+        return
+    if isinstance(error, asyncpg.exceptions.CheckViolationError):
+        _raise_postgres_error(error, "23514", CheckViolationError, "check constraint violation")
+        return
+    if isinstance(error, asyncpg.exceptions.PostgresSyntaxError):
+        _raise_postgres_error(error, "42601", SQLParsingError, "SQL syntax error")
+        return
+
+    error_code = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
+    if not error_code:
+        _raise_postgres_error(error, None, SQLSpecError, "database error")
+        return
+
+    if error_code == "23505":
+        _raise_postgres_error(error, error_code, UniqueViolationError, "unique constraint violation")
+    elif error_code == "23503":
+        _raise_postgres_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
+    elif error_code == "23502":
+        _raise_postgres_error(error, error_code, NotNullViolationError, "not-null constraint violation")
+    elif error_code == "23514":
+        _raise_postgres_error(error, error_code, CheckViolationError, "check constraint violation")
+    elif error_code.startswith("23"):
+        _raise_postgres_error(error, error_code, IntegrityError, "integrity constraint violation")
+    elif error_code.startswith("42"):
+        _raise_postgres_error(error, error_code, SQLParsingError, "SQL syntax error")
+    elif error_code.startswith("08"):
+        _raise_postgres_error(error, error_code, DatabaseConnectionError, "connection error")
+    elif error_code.startswith("40"):
+        _raise_postgres_error(error, error_code, TransactionError, "transaction error")
+    elif error_code.startswith("22"):
+        _raise_postgres_error(error, error_code, DataError, "data error")
+    elif error_code.startswith(("53", "54", "55", "57", "58")):
+        _raise_postgres_error(error, error_code, OperationalError, "operational error")
+    else:
+        _raise_postgres_error(error, error_code, SQLSpecError, "database error")
 
 
 def collect_asyncpg_rows(records: "list[Any] | None") -> "tuple[list[dict[str, Any]], list[str]]":

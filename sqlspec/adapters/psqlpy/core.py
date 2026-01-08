@@ -8,15 +8,27 @@ import uuid
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
-from sqlspec.exceptions import SQLSpecError
-from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
+from sqlspec.typing import PGVECTOR_INSTALLED, Empty
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer
+from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import ParameterStyleConfig
+    from sqlspec.core import SQL, ParameterStyleConfig, StatementConfig
 
 __all__ = (
     "apply_psqlpy_driver_features",
@@ -29,13 +41,17 @@ __all__ = (
     "coerce_records_for_execute_many",
     "collect_psqlpy_rows",
     "encode_records_for_binary_copy",
+    "extract_psqlpy_rows_affected",
     "format_table_identifier",
+    "get_psqlpy_parameter_casts",
     "normalize_scalar_parameter",
     "parse_psqlpy_command_tag",
     "prepare_dict_parameter",
     "prepare_list_parameter",
+    "prepare_psqlpy_parameters_with_casts",
     "prepare_tuple_parameter",
     "psqlpy_statement_config",
+    "raise_psqlpy_exception",
     "split_schema_and_table",
 )
 
@@ -52,6 +68,8 @@ _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 _JSONB_TYPE: "type[Any] | None" = None
 _JSONB_RESOLVED: bool = False
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+
+logger = get_logger("adapters.psqlpy.core")
 
 
 def _get_jsonb_type() -> "type[Any] | None":
@@ -321,6 +339,81 @@ def parse_psqlpy_command_tag(tag: str) -> int:
         if command in {"UPDATE", "DELETE"} and match.group(3):
             return int(match.group(3))
     return -1
+
+
+def extract_psqlpy_rows_affected(result: Any) -> int:
+    """Extract rows affected from psqlpy results."""
+    try:
+        if has_query_result_metadata(result):
+            if result.tag:
+                return parse_psqlpy_command_tag(result.tag)
+            if result.status:
+                return parse_psqlpy_command_tag(result.status)
+        if isinstance(result, str):
+            return parse_psqlpy_command_tag(result)
+    except Exception as error:
+        logger.debug("Failed to parse psqlpy command tag: %s", error)
+    return -1
+
+
+def get_psqlpy_parameter_casts(statement: "SQL") -> "dict[int, str]":
+    """Get parameter cast metadata from compiled statements."""
+    processed_state = statement.get_processed_state()
+    if processed_state is not Empty:
+        return processed_state.parameter_casts or {}
+    return {}
+
+
+def prepare_psqlpy_parameters_with_casts(
+    parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
+) -> Any:
+    """Prepare parameters with cast-aware type coercion."""
+    if isinstance(parameters, (list, tuple)):
+        result: list[Any] = []
+        serializer = statement_config.parameter_config.json_serializer or to_json
+        type_map = statement_config.parameter_config.type_coercion_map
+        for idx, param in enumerate(parameters, start=1):
+            cast_type = parameter_casts.get(idx, "")
+            prepared_value = param
+            if type_map:
+                for type_check, converter in type_map.items():
+                    if isinstance(prepared_value, type_check):
+                        prepared_value = converter(prepared_value)
+                        break
+            if cast_type:
+                prepared_value = coerce_parameter_for_cast(prepared_value, cast_type, serializer)
+            result.append(prepared_value)
+        return tuple(result) if isinstance(parameters, tuple) else result
+    return parameters
+
+
+def _raise_postgres_error(error: Any, error_class: type[SQLSpecError], description: str) -> None:
+    msg = f"PostgreSQL {description}: {error}"
+    raise error_class(msg) from error
+
+
+def raise_psqlpy_exception(error: Any) -> None:
+    """Raise SQLSpec exceptions for psqlpy errors."""
+    error_msg = str(error).lower()
+
+    if "unique" in error_msg or "duplicate key" in error_msg:
+        _raise_postgres_error(error, UniqueViolationError, "unique constraint violation")
+    elif "foreign key" in error_msg or "violates foreign key" in error_msg:
+        _raise_postgres_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    elif "not null" in error_msg or ("null value" in error_msg and "violates not-null" in error_msg):
+        _raise_postgres_error(error, NotNullViolationError, "not-null constraint violation")
+    elif "check constraint" in error_msg or "violates check constraint" in error_msg:
+        _raise_postgres_error(error, CheckViolationError, "check constraint violation")
+    elif "constraint" in error_msg:
+        _raise_postgres_error(error, IntegrityError, "integrity constraint violation")
+    elif "syntax error" in error_msg or "parse" in error_msg:
+        _raise_postgres_error(error, SQLParsingError, "SQL syntax error")
+    elif "connection" in error_msg or "could not connect" in error_msg:
+        _raise_postgres_error(error, DatabaseConnectionError, "connection error")
+    elif "deadlock" in error_msg or "serialization failure" in error_msg:
+        _raise_postgres_error(error, TransactionError, "transaction error")
+    else:
+        _raise_postgres_error(error, SQLSpecError, "database error")
 
 
 def _quote_identifier(identifier: str) -> str:
