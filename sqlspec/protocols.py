@@ -47,7 +47,6 @@ __all__ = (
     "HasNotifiesProtocol",
     "HasParameterBuilderProtocol",
     "HasRowcountProtocol",
-    "HasRowsAffectedProtocol",
     "HasSQLGlotExpressionProtocol",
     "HasSqlStateProtocol",
     "HasSqliteErrorProtocol",
@@ -227,13 +226,6 @@ class HasDataProtocol(Protocol):
     """Protocol for results exposing a data attribute."""
 
     data: "Sequence[object] | None"
-
-
-@runtime_checkable
-class HasRowsAffectedProtocol(Protocol):
-    """Protocol for results exposing rows_affected attribute."""
-
-    rows_affected: int
 
 
 @runtime_checkable

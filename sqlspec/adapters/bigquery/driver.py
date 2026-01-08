@@ -15,6 +15,7 @@ from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessio
 from sqlspec.adapters.bigquery.core import (
     bigquery_statement_config,
     bigquery_storage_api_available,
+    build_bigquery_dml_rowcount,
     build_bigquery_inlined_script,
     build_bigquery_load_job_config,
     build_bigquery_load_job_telemetry,
@@ -26,6 +27,7 @@ from sqlspec.adapters.bigquery.core import (
     create_bq_parameters,
     detect_bigquery_emulator,
     is_simple_bigquery_insert,
+    normalize_bigquery_script_rowcount,
     raise_bigquery_exception,
     try_bigquery_bulk_insert,
 )
@@ -33,8 +35,8 @@ from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
     StatementConfig,
+    build_arrow_result_from_table,
     build_literal_inlining_transform,
-    create_arrow_result,
     get_cache_config,
     register_driver_profile,
 )
@@ -248,17 +250,23 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         successful_count = 0
         last_job = None
+        last_rowcount = 0
 
         for stmt in statements:
             job = self._run_query_job(stmt, prepared_parameters or {}, connection=cursor)
             job.result(job_retry=self._job_retry)
             last_job = job
+            last_rowcount = normalize_bigquery_script_rowcount(last_rowcount, job)
             successful_count += 1
 
         cursor.job = last_job
 
         return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            cursor,
+            statement_count=len(statements),
+            successful_statements=successful_count,
+            rowcount_override=last_rowcount,
+            is_script_result=True,
         )
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -300,11 +308,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
         cursor.job = self._run_query_job(script_sql, None, connection=cursor)
         cursor.job.result(job_retry=self._job_retry)
-        affected_rows = (
-            cursor.job.num_dml_affected_rows
-            if cursor.job.num_dml_affected_rows is not None
-            else len(prepared_parameters)
-        )
+        affected_rows = build_bigquery_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -336,7 +340,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        affected_rows = cursor.job.num_dml_affected_rows or 0
+        affected_rows = build_bigquery_dml_rowcount(cursor.job, 0)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def _connection_in_transaction(self) -> bool:
@@ -436,8 +440,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return result
 
         # Use native path with Storage API
-        import pyarrow as pa
-
         # Prepare statement
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
@@ -453,27 +455,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
             # Native Arrow via Storage API
             arrow_table = query_job.to_arrow()
 
-            # Apply schema casting if requested
-            if arrow_schema is not None:
-                if not isinstance(arrow_schema, pa.Schema):
-                    msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
-                    raise TypeError(msg)
-                arrow_table = arrow_table.cast(arrow_schema)
-
-            if return_format == "batch":
-                batches = arrow_table.to_batches(max_chunksize=batch_size)
-                arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
-            elif return_format == "batches":
-                arrow_data = arrow_table.to_batches(max_chunksize=batch_size)
-            elif return_format == "reader":
-                batches = arrow_table.to_batches(max_chunksize=batch_size)
-                arrow_data = pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
-            else:
-                arrow_data = arrow_table
-
-            # Create ArrowResult
-            return create_arrow_result(
-                statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows
+            return build_arrow_result_from_table(
+                prepared_statement,
+                arrow_table,
+                return_format=return_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
             )
         msg = "Unreachable"
         raise RuntimeError(msg)  # pragma: no cover

@@ -29,7 +29,6 @@ __all__ = (
     "apply_duckdb_driver_features",
     "build_duckdb_profile",
     "build_duckdb_statement_config",
-    "coerce_duckdb_rows",
     "collect_duckdb_rows",
     "duckdb_statement_config",
     "raise_duckdb_exception",
@@ -44,7 +43,7 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def coerce_duckdb_rows(fetched_data: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]] | list[Any]":
+def _coerce_duckdb_rows(fetched_data: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]] | list[Any]":
     """Convert row tuples into dictionaries keyed by column names.
 
     Args:
@@ -76,7 +75,7 @@ def collect_duckdb_rows(
     column_names = [col[0] for col in description]
     if not fetched_data:
         return [], column_names
-    return coerce_duckdb_rows(fetched_data, column_names), column_names
+    return _coerce_duckdb_rows(fetched_data, column_names), column_names
 
 
 def build_duckdb_profile() -> "DriverParameterProfile":

@@ -19,6 +19,8 @@ from sqlspec.adapters.asyncmy.core import (
     detect_asyncmy_json_columns,
     format_mysql_identifier,
     map_asyncmy_exception,
+    normalize_asyncmy_lastrowid,
+    normalize_asyncmy_rowcount,
 )
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
@@ -26,7 +28,7 @@ from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
-from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, supports_json_type
+from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -245,10 +247,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                 cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
             )
 
-        affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
-        last_id = None
-        if has_rowcount(cursor) and cursor.rowcount and cursor.rowcount > 0 and has_lastrowid(cursor):
-            last_id = cursor.lastrowid
+        affected_rows = normalize_asyncmy_rowcount(cursor)
+        last_id = normalize_asyncmy_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     async def select_to_storage(

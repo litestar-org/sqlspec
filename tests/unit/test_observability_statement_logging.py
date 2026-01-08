@@ -2,7 +2,7 @@
 
 import logging
 
-from sqlspec.observability._observer import create_event, default_statement_observer
+from sqlspec import create_event, default_statement_observer
 
 
 def test_default_statement_observer_info_excludes_parameters(caplog) -> None:

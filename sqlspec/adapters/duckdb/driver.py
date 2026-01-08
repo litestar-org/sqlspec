@@ -16,7 +16,13 @@ from sqlspec.adapters.duckdb.core import (
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
-from sqlspec.core import SQL, StatementConfig, create_arrow_result, get_cache_config, register_driver_profile
+from sqlspec.core import (
+    SQL,
+    StatementConfig,
+    build_arrow_result_from_table,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
@@ -329,8 +335,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        import pyarrow as pa
-
         # Prepare statement
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
@@ -351,27 +355,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
             arrow_reader = cursor.arrow()
             arrow_table = arrow_reader.read_all()
 
-            # Apply schema casting if requested
-            if arrow_schema is not None:
-                if not isinstance(arrow_schema, pa.Schema):
-                    msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
-                    raise TypeError(msg)
-                arrow_table = arrow_table.cast(arrow_schema)
-
-            if return_format == "batch":
-                batches = arrow_table.to_batches(max_chunksize=batch_size)
-                arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
-            elif return_format == "batches":
-                arrow_data = arrow_table.to_batches(max_chunksize=batch_size)
-            elif return_format == "reader":
-                batches = arrow_table.to_batches(max_chunksize=batch_size)
-                arrow_data = pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
-            else:
-                arrow_data = arrow_table
-
-            # Create ArrowResult
-            return create_arrow_result(
-                statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows
+            return build_arrow_result_from_table(
+                prepared_statement,
+                arrow_table,
+                return_format=return_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
             )
         msg = "Unreachable"
         raise RuntimeError(msg)  # pragma: no cover

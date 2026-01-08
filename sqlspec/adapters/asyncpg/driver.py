@@ -347,7 +347,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         result = await cursor.execute(sql, *prepared_parameters) if prepared_parameters else await cursor.execute(sql)
 
-        affected_rows = parse_asyncpg_status(result) if isinstance(result, str) else 0
+        affected_rows = parse_asyncpg_status(result)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
@@ -357,12 +357,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         if normalized.statement.returns_rows():
             rows = await self._invoke_prepared(prepared, normalized.parameters, fetch=True)
-            data = [dict(row) for row in rows]
+            data, _ = collect_asyncpg_rows(rows)
             sql_result = create_sql_result(normalized.statement, data=data, rows_affected=len(data), metadata=metadata)
             return StackResult.from_sql_result(sql_result)
 
         status = await self._invoke_prepared(prepared, normalized.parameters, fetch=False)
-        rowcount = parse_asyncpg_status(status) if isinstance(status, str) else 0
+        rowcount = parse_asyncpg_status(status)
         sql_result = create_sql_result(normalized.statement, rows_affected=rowcount, metadata=metadata)
         return StackResult.from_sql_result(sql_result)
 

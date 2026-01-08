@@ -1,6 +1,6 @@
 """Unit tests for observability helper extensions."""
 
-from sqlspec.observability._observer import create_event
+from sqlspec import create_event
 from sqlspec.utils import module_loader
 
 

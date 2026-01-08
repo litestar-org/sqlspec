@@ -16,7 +16,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_guards import has_cursor_metadata, has_sqlstate, has_type_code
+from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate, has_type_code
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -28,10 +28,11 @@ __all__ = (
     "build_asyncmy_profile",
     "build_asyncmy_statement_config",
     "collect_asyncmy_rows",
-    "deserialize_asyncmy_json_rows",
     "detect_asyncmy_json_columns",
     "format_mysql_identifier",
     "map_asyncmy_exception",
+    "normalize_asyncmy_lastrowid",
+    "normalize_asyncmy_rowcount",
 )
 
 MYSQL_ER_DUP_ENTRY = 1062
@@ -195,7 +196,7 @@ def detect_asyncmy_json_columns(cursor: Any, json_type_codes: "set[int]") -> "li
     return json_indexes
 
 
-def deserialize_asyncmy_json_rows(
+def _deserialize_asyncmy_json_rows(
     column_names: "list[str]",
     rows: "list[dict[str, Any]]",
     json_indexes: "list[int]",
@@ -270,5 +271,40 @@ def collect_asyncmy_rows(
         rows = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
     else:
         rows = [dict(row) for row in fetched_data]
-    rows = deserialize_asyncmy_json_rows(column_names, rows, json_indexes, deserializer, logger=logger)
+    rows = _deserialize_asyncmy_json_rows(column_names, rows, json_indexes, deserializer, logger=logger)
     return rows, column_names
+
+
+def normalize_asyncmy_rowcount(cursor: Any) -> int:
+    """Normalize rowcount from an AsyncMy cursor.
+
+    Args:
+        cursor: AsyncMy cursor with optional rowcount metadata.
+
+    Returns:
+        Rowcount value or 0 when unknown.
+    """
+    if not has_rowcount(cursor):
+        return 0
+    rowcount = cursor.rowcount
+    if isinstance(rowcount, int) and rowcount >= 0:
+        return rowcount
+    return 0
+
+
+def normalize_asyncmy_lastrowid(cursor: Any) -> int | None:
+    """Normalize lastrowid for AsyncMy when rowcount indicates success.
+
+    Args:
+        cursor: AsyncMy cursor with optional lastrowid metadata.
+
+    Returns:
+        Last inserted id or None when unavailable.
+    """
+    if not has_rowcount(cursor) or not has_lastrowid(cursor):
+        return None
+    rowcount = cursor.rowcount
+    if not isinstance(rowcount, int) or rowcount <= 0:
+        return None
+    last_id = cursor.lastrowid
+    return last_id if isinstance(last_id, int) else None

@@ -19,7 +19,7 @@ There are three ways to enable observability today:
 3. **`driver_features` Compatibility** – existing keys such as `"on_connection_create"`, `"on_pool_destroy"`, and `"on_session_start"` are automatically promoted into lifecycle observers, so user-facing APIs do **not** change.
 
 ```python
-from sqlspec import SQLSpec
+from sqlspec import ObservabilityConfig, SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 
 def ensure_extensions(connection):
@@ -62,6 +62,8 @@ Statement observers receive `StatementEvent` objects. Typical uses:
 * forward events to bespoke loggers or telemetry exporters.
 
 ```python
+from sqlspec import ObservabilityConfig, RedactionConfig, StatementEvent
+
 def log_statement(event: StatementEvent) -> None:
     logger.info("%s (%s) -> %ss", event.operation, event.driver, event.duration_s)
 

@@ -44,6 +44,7 @@ __all__ = (
     "apply_bigquery_driver_features",
     "bigquery_statement_config",
     "bigquery_storage_api_available",
+    "build_bigquery_dml_rowcount",
     "build_bigquery_inlined_script",
     "build_bigquery_load_job_config",
     "build_bigquery_load_job_telemetry",
@@ -55,13 +56,9 @@ __all__ = (
     "create_bq_parameters",
     "detect_bigquery_emulator",
     "extract_bigquery_insert_table",
-    "inline_bigquery_literals",
     "is_simple_bigquery_insert",
-    "map_bigquery_source_format",
-    "normalize_bigquery_driver_features",
+    "normalize_bigquery_script_rowcount",
     "raise_bigquery_exception",
-    "rows_to_results",
-    "should_retry_bigquery_job",
     "try_bigquery_bulk_insert",
 )
 
@@ -188,7 +185,7 @@ def build_bigquery_inlined_script(
     script_statements: list[str] = []
     for param_set in parameters:
         expression_copy = parsed_expression.copy()
-        script_statements.append(inline_bigquery_literals(expression_copy, param_set, literal_inliner))
+        script_statements.append(_inline_bigquery_literals(expression_copy, param_set, literal_inliner))
     return ";\n".join(script_statements)
 
 
@@ -320,7 +317,7 @@ def create_bq_parameters(parameters: Any, json_serializer: "Callable[[Any], str]
     return bq_parameters
 
 
-def inline_bigquery_literals(
+def _inline_bigquery_literals(
     expression: "exp.Expression", parameters: Any, inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]"
 ) -> str:
     """Inline literal values into a parsed SQLGlot expression."""
@@ -352,7 +349,7 @@ def detect_bigquery_emulator(connection: "BigQueryConnection") -> bool:
     return "googleapis.com" not in api_base_url
 
 
-def should_retry_bigquery_job(exception: Exception) -> bool:
+def _should_retry_bigquery_job(exception: Exception) -> bool:
     """Return True when a BigQuery job exception is safe to retry."""
     if not isinstance(exception, GoogleCloudError):
         return False
@@ -381,7 +378,7 @@ def build_bigquery_retry(deadline: float, using_emulator: bool) -> "Retry | None
     """Build retry policy for job restarts based on error reason codes."""
     if using_emulator:
         return None
-    return Retry(predicate=should_retry_bigquery_job, deadline=deadline)
+    return Retry(predicate=_should_retry_bigquery_job, deadline=deadline)
 
 
 def _should_copy_job_attribute(attr: str, source_config: QueryJobConfig) -> bool:
@@ -410,7 +407,7 @@ def copy_bigquery_job_config(source_config: QueryJobConfig, target_config: Query
 
 def build_bigquery_load_job_config(file_format: "StorageFormat", overwrite: bool) -> "LoadJobConfig":
     job_config = LoadJobConfig()
-    job_config.source_format = map_bigquery_source_format(file_format)
+    job_config.source_format = _map_bigquery_source_format(file_format)
     job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
     return job_config
 
@@ -486,7 +483,7 @@ def extract_bigquery_insert_table(
     return None
 
 
-def map_bigquery_source_format(file_format: "StorageFormat") -> str:
+def _map_bigquery_source_format(file_format: "StorageFormat") -> str:
     if file_format == "parquet":
         return "PARQUET"
     if file_format in {"json", "jsonl"}:
@@ -495,14 +492,14 @@ def map_bigquery_source_format(file_format: "StorageFormat") -> str:
     raise StorageCapabilityError(msg, capability="parquet_import_enabled")
 
 
-def rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
+def _rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
     """Convert BigQuery rows to dictionary format.
 
     Args:
-        rows_iterator: BigQuery rows iterator
+        rows_iterator: BigQuery rows iterator.
 
     Returns:
-        List of dictionaries representing the rows
+        List of dictionaries representing the rows.
     """
     return [dict(row) for row in rows_iterator]
 
@@ -517,9 +514,43 @@ def collect_bigquery_rows(job_result: Any, schema: Any | None) -> "tuple[list[di
     Returns:
         Tuple of (rows_list, column_names).
     """
-    rows_list = rows_to_results(iter(job_result))
+    rows_list = _rows_to_results(iter(job_result))
     column_names = [field.name for field in schema] if schema else []
     return rows_list, column_names
+
+
+def build_bigquery_dml_rowcount(job: Any, fallback: int) -> int:
+    """Resolve affected rowcount for BigQuery DML jobs.
+
+    Args:
+        job: BigQuery job object with optional num_dml_affected_rows.
+        fallback: Fallback rowcount when job does not expose metadata.
+
+    Returns:
+        Resolved rowcount.
+    """
+    try:
+        rowcount = job.num_dml_affected_rows
+    except AttributeError:
+        return fallback
+    if rowcount is None:
+        return fallback
+    if isinstance(rowcount, int):
+        return rowcount
+    return fallback
+
+
+def normalize_bigquery_script_rowcount(previous: int, job: Any) -> int:
+    """Normalize BigQuery script rowcount from the latest job metadata.
+
+    Args:
+        previous: Previously recorded rowcount value.
+        job: BigQuery job with optional num_dml_affected_rows metadata.
+
+    Returns:
+        Updated rowcount value.
+    """
+    return build_bigquery_dml_rowcount(job, previous)
 
 
 def build_bigquery_profile() -> "DriverParameterProfile":
@@ -566,7 +597,7 @@ def build_bigquery_statement_config(*, json_serializer: "Callable[[Any], str] | 
 bigquery_statement_config = build_bigquery_statement_config()
 
 
-def normalize_bigquery_driver_features(
+def _normalize_bigquery_driver_features(
     driver_features: "Mapping[str, Any] | None",
 ) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
     """Normalize driver feature defaults and extract core options."""
@@ -590,7 +621,7 @@ def apply_bigquery_driver_features(
     driver_features: "Mapping[str, Any] | None",
 ) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
     """Apply BigQuery driver feature defaults and extract core options."""
-    return normalize_bigquery_driver_features(driver_features)
+    return _normalize_bigquery_driver_features(driver_features)
 
 
 def _raise_bigquery_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:

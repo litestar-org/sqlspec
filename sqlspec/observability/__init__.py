@@ -9,7 +9,12 @@ from sqlspec.observability._config import (
 )
 from sqlspec.observability._diagnostics import DiagnosticsPayload, TelemetryDiagnostics
 from sqlspec.observability._dispatcher import LifecycleContext, LifecycleDispatcher
-from sqlspec.observability._observer import StatementEvent, default_statement_observer, format_statement_event
+from sqlspec.observability._observer import (
+    StatementEvent,
+    create_event,
+    default_statement_observer,
+    format_statement_event,
+)
 from sqlspec.observability._runtime import ObservabilityRuntime
 from sqlspec.observability._spans import SpanManager
 
@@ -26,6 +31,7 @@ __all__ = (
     "StatementObserver",
     "TelemetryConfig",
     "TelemetryDiagnostics",
+    "create_event",
     "default_statement_observer",
     "format_statement_event",
 )

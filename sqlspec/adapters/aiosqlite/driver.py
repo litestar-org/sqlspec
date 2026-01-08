@@ -13,6 +13,7 @@ from sqlspec.adapters.aiosqlite.core import (
     build_aiosqlite_profile,
     build_sqlite_insert_statement,
     format_sqlite_identifier,
+    normalize_aiosqlite_rowcount,
     process_sqlite_result,
     raise_aiosqlite_exception,
 )
@@ -153,7 +154,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         await cursor.executemany(sql, prepared_parameters)
 
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        affected_rows = normalize_aiosqlite_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -173,7 +174,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
             )
 
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        affected_rows = normalize_aiosqlite_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(

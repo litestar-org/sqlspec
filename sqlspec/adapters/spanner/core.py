@@ -6,6 +6,7 @@ from google.api_core import exceptions as api_exceptions
 
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     NotFoundError,
@@ -19,12 +20,14 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, ArrowTable
+
 __all__ = (
     "apply_spanner_driver_features",
     "build_spanner_profile",
-    "build_spanner_statement_config",
     "coerce_spanner_params",
     "collect_spanner_rows",
+    "create_spanner_arrow_data",
     "infer_spanner_param_types_for_params",
     "raise_spanner_exception",
     "spanner_statement_config",
@@ -54,13 +57,13 @@ def build_spanner_profile() -> "DriverParameterProfile":
     )
 
 
-def build_spanner_statement_config() -> StatementConfig:
+def _build_spanner_statement_config() -> StatementConfig:
     """Construct the Spanner statement configuration."""
     profile = build_spanner_profile()
     return build_statement_config_from_profile(profile, statement_overrides={"dialect": "spanner"})
 
 
-spanner_statement_config = build_spanner_statement_config()
+spanner_statement_config = _build_spanner_statement_config()
 
 
 def apply_spanner_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
@@ -127,6 +130,21 @@ def collect_spanner_rows(
             item[column] = converter.convert_if_detected(row[index])
         data.append(item)
     return data, column_names
+
+
+def create_spanner_arrow_data(
+    data: "list[dict[str, Any]]", return_format: "ArrowReturnFormat"
+) -> "ArrowTable | ArrowRecordBatch | ArrowRecordBatchReader | list[ArrowRecordBatch]":
+    """Create Arrow data from Spanner row dictionaries.
+
+    Args:
+        data: Row dictionaries from Spanner results.
+        return_format: Arrow return format.
+
+    Returns:
+        Arrow data in the requested format.
+    """
+    return convert_dict_to_arrow(data, return_format=return_format)
 
 
 def raise_spanner_exception(error: Any) -> None:

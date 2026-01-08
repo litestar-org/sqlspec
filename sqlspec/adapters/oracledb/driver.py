@@ -19,6 +19,7 @@ from sqlspec.adapters.oracledb.core import (
     build_oracledb_profile,
     collect_oracledb_async_rows,
     collect_oracledb_sync_rows,
+    normalize_oracledb_rowcount,
     normalize_column_names,
     oracle_insert_statement,
     oracle_truncate_statement,
@@ -31,7 +32,7 @@ from sqlspec.core import (
     StackResult,
     StatementConfig,
     StatementStack,
-    create_arrow_result,
+    build_arrow_result_from_table,
     get_cache_config,
     register_driver_profile,
 )
@@ -507,7 +508,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             )
 
         # Non-SELECT result processing
-        affected_rows = cursor.rowcount if cursor.rowcount is not None else 0
+        affected_rows = normalize_oracledb_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def select_to_storage(
@@ -730,26 +731,13 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if column_names != arrow_table.column_names:
             arrow_table = arrow_table.rename_columns(column_names)
 
-        if arrow_schema is not None:
-            if not isinstance(arrow_schema, pa.Schema):
-                msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
-                raise TypeError(msg)
-            arrow_table = arrow_table.cast(arrow_schema)
-
-        if return_format == "batch":
-            batches = arrow_table.to_batches(max_chunksize=batch_size)
-            arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
-        elif return_format == "batches":
-            arrow_data = arrow_table.to_batches(max_chunksize=batch_size)
-        elif return_format == "reader":
-            batches = arrow_table.to_batches(max_chunksize=batch_size)
-            arrow_data = pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
-        else:
-            arrow_data = arrow_table
-
-        rows_affected = arrow_table.num_rows
-
-        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=rows_affected)
+        return build_arrow_result_from_table(
+            prepared_statement,
+            arrow_table,
+            return_format=return_format,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
@@ -998,7 +986,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             )
 
         # Non-SELECT result processing
-        affected_rows = cursor.rowcount if cursor.rowcount is not None else 0
+        affected_rows = normalize_oracledb_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(
@@ -1184,26 +1172,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if column_names != arrow_table.column_names:
             arrow_table = arrow_table.rename_columns(column_names)
 
-        if arrow_schema is not None:
-            if not isinstance(arrow_schema, pa.Schema):
-                msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
-                raise TypeError(msg)
-            arrow_table = arrow_table.cast(arrow_schema)
-
-        if return_format == "batch":
-            batches = arrow_table.to_batches(max_chunksize=batch_size)
-            arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
-        elif return_format == "batches":
-            arrow_data = arrow_table.to_batches(max_chunksize=batch_size)
-        elif return_format == "reader":
-            batches = arrow_table.to_batches(max_chunksize=batch_size)
-            arrow_data = pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
-        else:
-            arrow_data = arrow_table
-
-        rows_affected = arrow_table.num_rows
-
-        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=rows_affected)
+        return build_arrow_result_from_table(
+            prepared_statement,
+            arrow_table,
+            return_format=return_format,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

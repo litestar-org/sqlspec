@@ -11,6 +11,7 @@ from sqlspec.adapters.spanner.core import (
     build_spanner_profile,
     coerce_spanner_params,
     collect_spanner_rows,
+    create_spanner_arrow_data,
     infer_spanner_param_types_for_params,
     raise_spanner_exception,
     spanner_statement_config,
@@ -22,7 +23,6 @@ from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
 from sqlspec.core import StatementConfig, create_arrow_result, register_driver_profile
 from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.spanner._typing import SpannerConnection
     from sqlspec.core import ArrowResult
+    from sqlspec.typing import ArrowReturnFormat
     from sqlspec.core.statement import SQL
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
@@ -266,7 +267,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def select_to_arrow(self, statement: "Any", /, *parameters: "Any", **kwargs: Any) -> "ArrowResult":
         result = self.execute(statement, *parameters, **kwargs)
 
-        arrow_data = convert_dict_to_arrow(result.data or [], return_format=kwargs.get("return_format", "table"))
+        return_format = cast("ArrowReturnFormat", kwargs.get("return_format", "table"))
+        arrow_data = create_spanner_arrow_data(result.data or [], return_format)
         return create_arrow_result(result.statement, arrow_data, rows_affected=result.rows_affected)
 
     def select_to_storage(

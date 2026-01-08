@@ -177,12 +177,11 @@ def default_statement_observer(event: StatementEvent) -> None:
 
     rows_label = event.rows_affected if event.rows_affected is not None else "unknown"
     logger.info(
-        "[%s] %s duration=%.3fms rows=%s sql=%s",
+        "[%s] %s duration=%.3fms rows=%s",
         event.driver,
         event.operation,
         event.duration_s * 1000,
         rows_label,
-        sql_preview,
         extra=extra,
     )
 

@@ -33,11 +33,9 @@ if TYPE_CHECKING:
 __all__ = (
     "apply_psqlpy_driver_features",
     "build_psqlpy_insert_statement",
-    "build_psqlpy_parameter_config",
     "build_psqlpy_profile",
     "build_psqlpy_statement_config",
     "coerce_numeric_for_write",
-    "coerce_parameter_for_cast",
     "coerce_records_for_execute_many",
     "collect_psqlpy_rows",
     "encode_records_for_binary_copy",
@@ -45,11 +43,7 @@ __all__ = (
     "format_table_identifier",
     "get_psqlpy_parameter_casts",
     "normalize_scalar_parameter",
-    "parse_psqlpy_command_tag",
-    "prepare_dict_parameter",
-    "prepare_list_parameter",
     "prepare_psqlpy_parameters_with_casts",
-    "prepare_tuple_parameter",
     "psqlpy_statement_config",
     "raise_psqlpy_exception",
     "split_schema_and_table",
@@ -143,7 +137,7 @@ def _coerce_timestamp_parameter(value: Any) -> Any:
     return value
 
 
-def coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
+def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
     """Apply cast-aware coercion for psqlpy parameters."""
 
     upper_cast = cast_type.upper()
@@ -156,16 +150,16 @@ def coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[
     return value
 
 
-def prepare_dict_parameter(value: "dict[str, Any]") -> "dict[str, Any]":
+def _prepare_dict_parameter(value: "dict[str, Any]") -> "dict[str, Any]":
     normalized = _DECIMAL_NORMALIZER(value)
     return normalized if isinstance(normalized, dict) else value
 
 
-def prepare_list_parameter(value: "list[Any]") -> "list[Any]":
+def _prepare_list_parameter(value: "list[Any]") -> "list[Any]":
     return [_DECIMAL_NORMALIZER(item) for item in value]
 
 
-def prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
+def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
     return tuple(_DECIMAL_NORMALIZER(item) for item in value)
 
 
@@ -189,7 +183,7 @@ def build_psqlpy_profile() -> "DriverParameterProfile":
     )
 
 
-def build_psqlpy_parameter_config(
+def _build_psqlpy_parameter_config(
     profile: "DriverParameterProfile", serializer: "Callable[[Any], str]"
 ) -> "ParameterStyleConfig":
     """Construct parameter configuration for psqlpy.
@@ -205,9 +199,9 @@ def build_psqlpy_parameter_config(
     base_config = build_statement_config_from_profile(profile, json_serializer=serializer).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[dict] = prepare_dict_parameter
-    updated_type_map[list] = prepare_list_parameter
-    updated_type_map[tuple] = prepare_tuple_parameter
+    updated_type_map[dict] = _prepare_dict_parameter
+    updated_type_map[list] = _prepare_list_parameter
+    updated_type_map[tuple] = _prepare_tuple_parameter
 
     return base_config.replace(type_coercion_map=updated_type_map)
 
@@ -216,7 +210,7 @@ def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str] | No
     """Construct the psqlpy statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
     profile = build_psqlpy_profile()
-    parameter_config = build_psqlpy_parameter_config(profile, serializer)
+    parameter_config = _build_psqlpy_parameter_config(profile, serializer)
     base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
     return base_config.replace(parameter_config=parameter_config)
 
@@ -233,7 +227,7 @@ def apply_psqlpy_driver_features(
     processed_driver_features.setdefault("json_serializer", serializer)
     processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
-    parameter_config = build_psqlpy_parameter_config(build_psqlpy_profile(), serializer)
+    parameter_config = _build_psqlpy_parameter_config(build_psqlpy_profile(), serializer)
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, processed_driver_features
@@ -319,7 +313,7 @@ def split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
     return schema_name or None, table_name
 
 
-def parse_psqlpy_command_tag(tag: str) -> int:
+def _parse_psqlpy_command_tag(tag: str) -> int:
     """Parse PostgreSQL command tag to extract rows affected.
 
     Args:
@@ -346,11 +340,11 @@ def extract_psqlpy_rows_affected(result: Any) -> int:
     try:
         if has_query_result_metadata(result):
             if result.tag:
-                return parse_psqlpy_command_tag(result.tag)
+                return _parse_psqlpy_command_tag(result.tag)
             if result.status:
-                return parse_psqlpy_command_tag(result.status)
+                return _parse_psqlpy_command_tag(result.status)
         if isinstance(result, str):
-            return parse_psqlpy_command_tag(result)
+            return _parse_psqlpy_command_tag(result)
     except Exception as error:
         logger.debug("Failed to parse psqlpy command tag: %s", error)
     return -1
@@ -381,7 +375,7 @@ def prepare_psqlpy_parameters_with_casts(
                         prepared_value = converter(prepared_value)
                         break
             if cast_type:
-                prepared_value = coerce_parameter_for_cast(prepared_value, cast_type, serializer)
+                prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
             result.append(prepared_value)
         return tuple(result) if isinstance(parameters, tuple) else result
     return parameters

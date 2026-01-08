@@ -19,7 +19,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
-from sqlspec.utils.type_guards import has_sqlite_error
+from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 __all__ = (
     "apply_sqlite_driver_features",
     "build_sqlite_profile",
-    "build_sqlite_statement_config",
     "format_sqlite_identifier",
+    "normalize_sqlite_rowcount",
     "process_sqlite_result",
     "raise_sqlite_exception",
     "sqlite_statement_config",
@@ -96,6 +96,23 @@ def process_sqlite_result(
     # compiled list comp and zip is faster in mypyc
     data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
     return data, column_names, len(data)
+
+
+def normalize_sqlite_rowcount(cursor: Any) -> int:
+    """Normalize rowcount from a SQLite cursor.
+
+    Args:
+        cursor: SQLite cursor with optional rowcount metadata.
+
+    Returns:
+        Positive rowcount value or 0 when unknown.
+    """
+    if not has_rowcount(cursor):
+        return 0
+    rowcount = cursor.rowcount
+    if isinstance(rowcount, int) and rowcount > 0:
+        return rowcount
+    return 0
 
 
 def _raise_sqlite_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:
@@ -179,7 +196,7 @@ def build_sqlite_profile() -> "DriverParameterProfile":
     )
 
 
-def build_sqlite_statement_config(
+def _build_sqlite_statement_config(
     *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> "StatementConfig":
     """Construct the SQLite statement configuration with optional JSON codecs."""
@@ -191,7 +208,7 @@ def build_sqlite_statement_config(
     )
 
 
-sqlite_statement_config = build_sqlite_statement_config()
+sqlite_statement_config = _build_sqlite_statement_config()
 
 
 def apply_sqlite_driver_features(

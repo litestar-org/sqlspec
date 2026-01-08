@@ -26,7 +26,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import Empty
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_sqlstate
+from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -39,7 +39,6 @@ __all__ = (
     "DRIVER_PATH_KEYWORDS_TO_DIALECT",
     "PARAMETER_STYLES_BY_KEYWORD",
     "apply_adbc_driver_features",
-    "apply_adbc_json_serializer",
     "build_adbc_profile",
     "collect_adbc_rows",
     "detect_adbc_dialect",
@@ -47,9 +46,10 @@ __all__ = (
     "driver_kind_from_driver_name",
     "driver_kind_from_uri",
     "get_adbc_statement_config",
-    "get_type_coercion_map",
     "handle_postgres_rollback",
     "normalize_driver_path",
+    "normalize_adbc_rowcount",
+    "normalize_adbc_script_rowcount",
     "normalize_postgres_empty_parameters",
     "prepare_adbc_parameters_with_casts",
     "raise_adbc_exception",
@@ -292,7 +292,7 @@ def _convert_array_for_postgres_adbc(value: Any) -> Any:
     return value
 
 
-def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
+def _get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     """Return dialect-aware type coercion mapping for Arrow parameter handling."""
 
     return {
@@ -350,7 +350,7 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
     )
 
-    type_map = get_type_coercion_map(detected_dialect)
+    type_map = _get_type_coercion_map(detected_dialect)
 
     sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
     profile = build_adbc_profile()
@@ -389,7 +389,7 @@ def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "di
     return processed_features
 
 
-def apply_adbc_json_serializer(
+def _apply_adbc_json_serializer(
     statement_config: "StatementConfig", json_serializer: "Callable[[Any], str]"
 ) -> "StatementConfig":
     """Apply a JSON serializer to statement config while preserving list/tuple converters.
@@ -439,7 +439,7 @@ def apply_adbc_driver_features(
     processed_features.setdefault("enable_arrow_extension_types", processed_features["arrow_extension_types"])
 
     if json_serializer is not None:
-        statement_config = apply_adbc_json_serializer(statement_config, json_serializer)
+        statement_config = _apply_adbc_json_serializer(statement_config, json_serializer)
 
     return statement_config, processed_features
 
@@ -465,6 +465,37 @@ def collect_adbc_rows(
         dict_rows = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
         return dict_rows, column_names
     return cast("list[dict[str, Any]]", fetched_data), column_names
+
+
+def normalize_adbc_rowcount(cursor: Any) -> int:
+    """Normalize rowcount from an ADBC cursor.
+
+    Args:
+        cursor: ADBC cursor with optional rowcount metadata.
+
+    Returns:
+        Rowcount value or -1 when unavailable.
+    """
+    if not has_rowcount(cursor):
+        return -1
+    rowcount = cursor.rowcount
+    if isinstance(rowcount, int):
+        return rowcount
+    return -1
+
+
+def normalize_adbc_script_rowcount(previous: int, cursor: Any) -> int:
+    """Normalize script rowcount using the latest cursor value when present.
+
+    Args:
+        previous: Previously recorded rowcount.
+        cursor: ADBC cursor with optional rowcount metadata.
+
+    Returns:
+        Updated rowcount value.
+    """
+    rowcount = normalize_adbc_rowcount(cursor)
+    return rowcount if rowcount != -1 else previous
 
 
 def resolve_adbc_parameter_casts(statement: "SQL") -> "dict[int, str]":

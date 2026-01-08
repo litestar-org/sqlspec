@@ -5,19 +5,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from sqlspec import SQLSpec
+from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, SQLSpec, StatementObserver
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
 from sqlspec.driver import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
-from sqlspec.observability import (
-    LifecycleDispatcher,
-    ObservabilityConfig,
-    ObservabilityRuntime,
-    RedactionConfig,
-    StatementObserver,
-)
+from sqlspec.observability import LifecycleDispatcher
 from sqlspec.storage import StorageTelemetry
 from sqlspec.storage.pipeline import (
     record_storage_diagnostic_event,

@@ -16,9 +16,8 @@ from typing import TYPE_CHECKING, Any, cast, overload
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
-from sqlspec.core.compiler import OperationType
+from sqlspec.core.result._io import rows_to_pandas, rows_to_polars
 from sqlspec.core.statement import SQL
-from sqlspec.protocols import HasRowsAffectedProtocol
 from sqlspec.storage import (
     AsyncStoragePipeline,
     StorageDestination,
@@ -34,13 +33,15 @@ from sqlspec.utils.arrow_impl import (
     arrow_table_to_pandas,
     arrow_table_to_polars,
     arrow_table_to_pylist,
+    arrow_table_to_return_format,
+    cast_arrow_table_schema,
     ensure_arrow_table,
 )
-from sqlspec.utils.module_loader import ensure_pandas, ensure_polars
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
-    from sqlspec.typing import ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
+    from sqlspec.core.compiler import OperationType
+    from sqlspec.typing import ArrowReturnFormat, ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
 
 __all__ = ("ArrowResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
@@ -95,7 +96,7 @@ class StatementResult(ABC, Iterable[Any]):
         self.metadata = metadata if metadata is not None else {}
 
     @abstractmethod
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> "Iterator[Any]":
         """Iterate over result rows."""
 
     @abstractmethod
@@ -136,7 +137,7 @@ class StatementResult(ABC, Iterable[Any]):
         self.metadata[key] = value
 
     @property
-    def operation_type(self) -> OperationType:
+    def operation_type(self) -> "OperationType":
         """Get operation type from the statement.
 
         Returns:
@@ -171,7 +172,7 @@ class SQLResult(StatementResult):
         "total_statements",
     )
 
-    _operation_type: OperationType
+    _operation_type: "OperationType"
 
     def __init__(
         self,
@@ -182,7 +183,7 @@ class SQLResult(StatementResult):
         execution_time: float | None = None,
         metadata: "dict[str, Any] | None" = None,
         error: Exception | None = None,
-        operation_type: OperationType = "SELECT",
+        operation_type: "OperationType" = "SELECT",
         operation_index: int | None = None,
         parameters: Any | None = None,
         column_names: "list[str] | None" = None,
@@ -244,7 +245,7 @@ class SQLResult(StatementResult):
             self.total_count = len(data) if data is not None else 0
 
     @property
-    def operation_type(self) -> OperationType:
+    def operation_type(self) -> "OperationType":
         """Get operation type for this result.
 
         Returns:
@@ -641,11 +642,7 @@ class SQLResult(StatementResult):
             msg = "No data available"
             raise ValueError(msg)
 
-        ensure_pandas()
-
-        import pandas as pd
-
-        return pd.DataFrame(self.data)
+        return rows_to_pandas(self.data)
 
     def to_polars(self) -> "PolarsDataFrame":
         """Convert result data to Polars DataFrame.
@@ -665,11 +662,7 @@ class SQLResult(StatementResult):
             msg = "No data available"
             raise ValueError(msg)
 
-        ensure_polars()
-
-        import polars as pl
-
-        return pl.DataFrame(self.data)
+        return rows_to_polars(self.data)
 
     def write_to_storage_sync(
         self,
@@ -932,7 +925,7 @@ class EmptyResult(StatementResult):
     def __init__(self) -> None:
         super().__init__(statement=_EMPTY_RESULT_STATEMENT, data=[], rows_affected=0)
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> "Iterator[Any]":
         return iter(())
 
     def is_success(self) -> bool:
@@ -959,10 +952,13 @@ class StackResult:
         self.result: StatementResult | ArrowResult = result if result is not None else EmptyResult()
         if rows_affected is not None:
             self.rows_affected = rows_affected
-        elif isinstance(self.result, HasRowsAffectedProtocol):
-            self.rows_affected = int(self.result.rows_affected)
         else:
-            self.rows_affected = 0
+            try:
+                result_rows = object.__getattribute__(self.result, "rows_affected")
+            except AttributeError:
+                self.rows_affected = 0
+            else:
+                self.rows_affected = int(result_rows)
         self.error = error
         self.warning = warning
         self.metadata = dict(metadata) if metadata else None
@@ -1062,6 +1058,33 @@ def create_sql_result(
         metadata=metadata,
         **kwargs,
     )
+
+
+def build_arrow_result_from_table(
+    statement: "SQL",
+    table: "ArrowTable",
+    *,
+    return_format: "ArrowReturnFormat" = "table",
+    batch_size: int | None = None,
+    arrow_schema: Any = None,
+) -> ArrowResult:
+    """Create ArrowResult from a pyarrow table with optional formatting.
+
+    Args:
+        statement: SQL statement that produced the table.
+        table: Arrow table to wrap.
+        return_format: Output format for the Arrow data.
+        batch_size: Batch size hint for batch-based formats.
+        arrow_schema: Optional pyarrow.Schema for casting.
+
+    Returns:
+        ArrowResult instance.
+    """
+
+    coerced_table = cast_arrow_table_schema(table, arrow_schema)
+    arrow_data = arrow_table_to_return_format(coerced_table, return_format=return_format, batch_size=batch_size)
+    rows_affected = arrow_table_num_rows(coerced_table)
+    return create_arrow_result(statement=statement, data=arrow_data, rows_affected=rows_affected)
 
 
 def create_arrow_result(

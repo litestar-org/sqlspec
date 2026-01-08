@@ -14,13 +14,21 @@ from sqlspec.adapters.adbc.core import (
     detect_adbc_dialect,
     get_adbc_statement_config,
     handle_postgres_rollback,
+    normalize_adbc_rowcount,
+    normalize_adbc_script_rowcount,
     normalize_postgres_empty_parameters,
     prepare_adbc_parameters_with_casts,
     raise_adbc_exception,
     resolve_adbc_parameter_casts,
 )
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.core import SQL, StatementConfig, create_arrow_result, get_cache_config, register_driver_profile
+from sqlspec.core import (
+    SQL,
+    StatementConfig,
+    build_arrow_result_from_table,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
@@ -223,10 +231,10 @@ class AdbcDriver(SyncDriverAdapterBase):
                     processed_params.append(formatted_params)
 
                 cursor.executemany(sql, processed_params)
-                row_count = cursor.rowcount if cursor.rowcount is not None else -1
+                row_count = normalize_adbc_rowcount(cursor)
             else:
                 cursor.executemany(sql, prepared_parameters)
-                row_count = cursor.rowcount if cursor.rowcount is not None else -1
+                row_count = normalize_adbc_rowcount(cursor)
 
         except Exception:
             handle_postgres_rollback(dialect_name, cursor, logger)
@@ -284,7 +292,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        row_count = cursor.rowcount if cursor.rowcount is not None else -1
+        row_count = normalize_adbc_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
@@ -318,8 +326,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 else:
                     cursor.execute(stmt)
                 successful_count += 1
-                if cursor.rowcount is not None:
-                    last_rowcount = cursor.rowcount
+                last_rowcount = normalize_adbc_script_rowcount(last_rowcount, cursor)
         except Exception:
             handle_postgres_rollback(dialect_name, cursor, logger)
             raise
@@ -419,8 +426,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        import pyarrow as pa
-
         # Prepare statement
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
@@ -440,27 +445,12 @@ class AdbcDriver(SyncDriverAdapterBase):
             # Fetch as Arrow table (zero-copy!)
             arrow_table = cursor.fetch_arrow_table()
 
-            # Apply schema casting if requested
-            if arrow_schema is not None:
-                if not isinstance(arrow_schema, pa.Schema):
-                    msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
-                    raise TypeError(msg)
-                arrow_table = arrow_table.cast(arrow_schema)
-
-            if return_format == "batch":
-                batches = arrow_table.to_batches(max_chunksize=batch_size)
-                arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
-            elif return_format == "batches":
-                arrow_data = arrow_table.to_batches(max_chunksize=batch_size)
-            elif return_format == "reader":
-                batches = arrow_table.to_batches(max_chunksize=batch_size)
-                arrow_data = pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
-            else:
-                arrow_data = arrow_table
-
-            # Create ArrowResult
-            return create_arrow_result(
-                statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows
+            return build_arrow_result_from_table(
+                prepared_statement,
+                arrow_table,
+                return_format=return_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
             )
         msg = "Unreachable"
         raise RuntimeError(msg)  # pragma: no cover

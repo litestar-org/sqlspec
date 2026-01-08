@@ -13,10 +13,13 @@ from sqlspec.adapters.psycopg._typing import (
 )
 from sqlspec.adapters.psycopg.core import (
     build_copy_from_command,
+    build_psycopg_async_pipeline_execution_result,
+    build_psycopg_pipeline_execution_result,
     build_psycopg_profile,
     build_psycopg_statement_config,
     build_truncate_command,
     collect_psycopg_rows,
+    normalize_psycopg_rowcount,
     psycopg_pipeline_supported,
     psycopg_statement_config,
     raise_psycopg_exception,
@@ -389,22 +392,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                         statement = entry.prepared.statement
                         cursor = entry.cursor
 
-                        if statement.returns_rows():
-                            fetched_data = cursor.fetchall()
-                            fetched_data, column_names = collect_psycopg_rows(
-                                cast("list[Any] | None", fetched_data), cursor.description
-                            )
-                            execution_result = self.create_execution_result(
-                                cursor,
-                                selected_data=fetched_data,
-                                column_names=column_names,
-                                data_row_count=len(fetched_data),
-                                is_select_result=True,
-                            )
-                        else:
-                            affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-                            execution_result = self.create_execution_result(cursor, rowcount_override=affected_rows)
-
+                        execution_result = build_psycopg_pipeline_execution_result(statement, cursor)
                         sql_result = self.build_statement_result(statement, execution_result)
                         results.append(StackResult.from_sql_result(sql_result))
 
@@ -437,7 +425,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         cursor.executemany(sql, prepared_parameters)
 
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        affected_rows = normalize_psycopg_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -472,7 +460,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        affected_rows = normalize_psycopg_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def select_to_storage(
@@ -832,22 +820,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                         statement = entry.prepared.statement
                         cursor = entry.cursor
 
-                        if statement.returns_rows():
-                            fetched_data = await cursor.fetchall()
-                            fetched_data, column_names = collect_psycopg_rows(
-                                cast("list[Any] | None", fetched_data), cursor.description
-                            )
-                            execution_result = self.create_execution_result(
-                                cursor,
-                                selected_data=fetched_data,
-                                column_names=column_names,
-                                data_row_count=len(fetched_data),
-                                is_select_result=True,
-                            )
-                        else:
-                            affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-                            execution_result = self.create_execution_result(cursor, rowcount_override=affected_rows)
-
+                        execution_result = await build_psycopg_async_pipeline_execution_result(statement, cursor)
                         sql_result = self.build_statement_result(statement, execution_result)
                         results.append(StackResult.from_sql_result(sql_result))
 
@@ -880,7 +853,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         await cursor.executemany(sql, prepared_parameters)
 
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        affected_rows = normalize_psycopg_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -915,7 +888,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        affected_rows = normalize_psycopg_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(

@@ -10,11 +10,10 @@ from uuid import uuid4
 
 import pytest
 
-from sqlspec import SQLSpec
+from sqlspec import ObservabilityConfig, SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQLResult
-from sqlspec.observability import ObservabilityConfig
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 

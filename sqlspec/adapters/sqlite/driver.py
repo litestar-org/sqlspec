@@ -9,6 +9,7 @@ from sqlspec.adapters.sqlite.core import (
     build_sqlite_insert_statement,
     build_sqlite_profile,
     format_sqlite_identifier,
+    normalize_sqlite_rowcount,
     process_sqlite_result,
     raise_sqlite_exception,
     sqlite_statement_config,
@@ -193,7 +194,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         cursor.executemany(sql, prepared_parameters)
 
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        affected_rows = normalize_sqlite_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -218,7 +219,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
             )
 
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        affected_rows = normalize_sqlite_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def select_to_storage(

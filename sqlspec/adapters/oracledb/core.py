@@ -28,7 +28,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import is_readable
+from sqlspec.utils.type_guards import has_rowcount, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -39,11 +39,10 @@ __all__ = (
     "apply_oracledb_driver_features",
     "build_oracledb_pipeline_stack_result",
     "build_oracledb_profile",
-    "build_oracledb_statement_config",
-    "coerce_async_row_values",
     "coerce_sync_row_values",
     "collect_oracledb_async_rows",
     "collect_oracledb_sync_rows",
+    "normalize_oracledb_rowcount",
     "normalize_column_names",
     "oracle_insert_statement",
     "oracle_truncate_statement",
@@ -224,6 +223,23 @@ def build_oracledb_pipeline_stack_result(
     return StackResult.from_sql_result(sql_result)
 
 
+def normalize_oracledb_rowcount(cursor: Any) -> int:
+    """Normalize rowcount from an Oracle cursor.
+
+    Args:
+        cursor: Oracle cursor with optional rowcount metadata.
+
+    Returns:
+        Rowcount value or 0 when unavailable.
+    """
+    if not has_rowcount(cursor):
+        return 0
+    rowcount = cursor.rowcount
+    if isinstance(rowcount, int):
+        return rowcount
+    return 0
+
+
 def apply_oracledb_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
     """Apply OracleDB driver feature defaults."""
     processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
@@ -269,7 +285,7 @@ def coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     return coerced_values
 
 
-async def coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     """Coerce LOB handles to concrete values for asynchronous execution.
 
     Processes each value in the row, reading LOB objects asynchronously
@@ -342,7 +358,7 @@ async def collect_oracledb_async_rows(
         return [], column_names
     data: list[dict[str, Any]] = []
     for row in fetched_data:
-        coerced_row = await coerce_async_row_values(row)
+        coerced_row = await _coerce_async_row_values(row)
         data.append(dict(zip(column_names, coerced_row, strict=False)))
     return data, column_names
 
@@ -399,7 +415,7 @@ def build_oracledb_profile() -> "DriverParameterProfile":
     )
 
 
-def build_oracledb_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
+def _build_oracledb_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the OracleDB statement configuration with optional JSON serializer."""
     serializer = json_serializer or to_json
     profile = build_oracledb_profile()
@@ -408,4 +424,4 @@ def build_oracledb_statement_config(*, json_serializer: "Callable[[Any], str] | 
     )
 
 
-oracledb_statement_config = build_oracledb_statement_config()
+oracledb_statement_config = _build_oracledb_statement_config()

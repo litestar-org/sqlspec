@@ -56,7 +56,7 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.core.stack import StatementStack
@@ -349,10 +349,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
 
             # Push children
             for i in range(len(items_list) - 1, -1, -1):
-                # items_list[i] is [k, v]. We want to transform items_list[i][1].
-                # items_list[i] needs to become (k, v').
-                stack.append((_CONVERT_TO_TUPLE, items_list, i))  # Convert [k, v'] to (k, v')
-                stack.append((items_list[i][1], items_list[i], 1))  # Transform v
+                stack.extend(((_CONVERT_TO_TUPLE, items_list, i), (items_list[i][1], items_list[i], 1)))
 
             continue
 
@@ -498,7 +495,7 @@ def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     """Return a readable representation of a stack statement for diagnostics."""
     if isinstance(statement, str):
         return statement
-    if isinstance(statement, StatementProtocol):
+    if isinstance(statement, StatementProtocol):  # pyright: ignore[reportUnnecessaryIsInstance]
         return statement.raw_sql or statement.sql
     return repr(statement)
 
@@ -1223,20 +1220,20 @@ class CommonDriverAttributesMixin:
             return [self._format_parameter_set_for_many(parameters, statement_config)]
         return self._format_parameter_set(parameters, statement_config)
 
-    def _apply_coercion(self, value: object, statement_config: "StatementConfig") -> object:
+    def _apply_coercion(self, value: object, type_coercion_map: "dict[type, Callable[[Any], Any]] | None") -> object:
         """Apply type coercion to a single value.
 
         Args:
             value: Value to coerce (may be TypedParameter or raw value)
-            statement_config: Statement configuration for type coercion map
+            type_coercion_map: Optional type coercion map
 
         Returns:
             Coerced value with TypedParameter unwrapped
 
         """
         unwrapped_value = value.value if isinstance(value, TypedParameter) else value
-        if statement_config.parameter_config.type_coercion_map:
-            for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
+        if type_coercion_map:
+            for type_check, converter in type_coercion_map.items():
                 if isinstance(unwrapped_value, type_check):
                     return converter(unwrapped_value)
         return unwrapped_value
@@ -1260,13 +1257,16 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
 
+        type_coercion_map = statement_config.parameter_config.type_coercion_map
+        coerce_value = self._apply_coercion
+
         if not isinstance(parameters, (dict, list, tuple)):
-            return self._apply_coercion(parameters, statement_config)
+            return coerce_value(parameters, type_coercion_map)
 
         if isinstance(parameters, dict):
-            return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
+            return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
 
-        coerced_params = [self._apply_coercion(p, statement_config) for p in parameters]
+        coerced_params = [coerce_value(p, type_coercion_map) for p in parameters]
         return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
 
     def _format_parameter_set(self, parameters: "StatementParameters", statement_config: "StatementConfig") -> object:
@@ -1283,26 +1283,29 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
 
+        type_coercion_map = statement_config.parameter_config.type_coercion_map
+        coerce_value = self._apply_coercion
+
         if not isinstance(parameters, (dict, list, tuple)):
-            return [self._apply_coercion(parameters, statement_config)]
+            return [coerce_value(parameters, type_coercion_map)]
 
         if isinstance(parameters, dict):
             if statement_config.parameter_config.supported_execution_parameter_styles and (
                 ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
                 or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
             ):
-                return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
+                return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
             if statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
             }:
                 sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
-                return [self._apply_coercion(value, statement_config) for _, value in sorted_items]
+                return [coerce_value(value, type_coercion_map) for _, value in sorted_items]
 
-            return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
+            return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
 
-        coerced_params = [self._apply_coercion(p, statement_config) for p in parameters]
+        coerced_params = [coerce_value(p, type_coercion_map) for p in parameters]
         if statement_config.parameter_config.preserve_parameter_format and isinstance(parameters, tuple):
             return tuple(coerced_params)
         return coerced_params
@@ -1472,6 +1475,12 @@ class CommonDriverAttributesMixin:
             raise ImproperConfigurationError(msg)
 
         expr = original_sql.expression
+        cte: exp.Expression | None = None
+        if isinstance(expr, exp.Expression):  # pyright: ignore
+            cte = expr.args.get("with")
+            if cte is not None:
+                expr = expr.copy()
+                expr.set("with", None)
 
         if isinstance(expr, exp.Select):
             from_clause = expr.args.get("from")
@@ -1505,8 +1514,12 @@ class CommonDriverAttributesMixin:
             count_expr.set("limit", None)
             count_expr.set("offset", None)
 
+            if cte is not None:
+                count_expr.set("with", cte.copy())
             return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)
 
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
+        if cte is not None:
+            count_expr.set("with", cte.copy())
         return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)

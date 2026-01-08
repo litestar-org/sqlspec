@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from sqlspec import ObservabilityRuntime
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
-from sqlspec.observability import ObservabilityRuntime
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig

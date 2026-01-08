@@ -20,9 +20,11 @@ __all__ = (
     "arrow_table_num_rows",
     "arrow_table_to_pandas",
     "arrow_table_to_polars",
+    "arrow_table_to_return_format",
     "arrow_table_to_pylist",
     "arrow_table_to_rows",
     "build_ingest_telemetry",
+    "cast_arrow_table_schema",
     "coerce_arrow_table",
     "convert_dict_to_arrow",
     "convert_dict_to_arrow_with_schema",
@@ -161,6 +163,62 @@ def ensure_arrow_table(data: Any) -> "ArrowTable":
         return data
     msg = f"Expected an Arrow Table, but got {type(data).__name__}"
     raise TypeError(msg)
+
+
+def cast_arrow_table_schema(table: "ArrowTable", arrow_schema: Any) -> "ArrowTable":
+    """Cast an Arrow table to a provided schema.
+
+    Args:
+        table: Arrow table to cast.
+        arrow_schema: Optional pyarrow.Schema for casting.
+
+    Returns:
+        Arrow table with updated schema.
+
+    Raises:
+        TypeError: If arrow_schema is not a pyarrow.Schema instance.
+    """
+
+    if arrow_schema is None:
+        return table
+
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if not isinstance(arrow_schema, pa.Schema):
+        msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
+        raise TypeError(msg)
+    return table.cast(arrow_schema)
+
+
+def arrow_table_to_return_format(
+    table: "ArrowTable",
+    return_format: Literal["table", "reader", "batch", "batches"] = "table",
+    batch_size: int | None = None,
+) -> "ArrowTable | ArrowRecordBatch | ArrowRecordBatchReader | list[ArrowRecordBatch]":
+    """Convert an Arrow table into the requested return format.
+
+    Args:
+        table: Arrow table to convert.
+        return_format: Output format (table, reader, batch, batches).
+        batch_size: Batch size for reader/batch outputs.
+
+    Returns:
+        Converted Arrow data in the requested format.
+    """
+
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if return_format == "table":
+        return table
+
+    batches = table.to_batches(max_chunksize=batch_size)
+    if return_format == "reader":
+        return pa.RecordBatchReader.from_batches(table.schema, batches)
+    if return_format == "batches":
+        return batches
+    return batches[0] if batches else pa.RecordBatch.from_pydict({})
 
 
 def arrow_table_to_rows(

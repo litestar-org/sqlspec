@@ -182,7 +182,6 @@ include = [
   "sqlspec/utils/singleton.py",            # Lightweight singleton helpers
   "sqlspec/utils/schema.py",               # Schema transformation (refactored for mypyc)
   "sqlspec/utils/uuids.py",                # UUID utilities
-
 ]
 mypy-args = [
   "--ignore-missing-imports",

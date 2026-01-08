@@ -187,7 +187,7 @@ def apply_asyncpg_driver_features(
     return statement_config, processed_features
 
 
-def parse_asyncpg_status(status: str) -> int:
+def parse_asyncpg_status(status: Any) -> int:
     """Parse AsyncPG status string to extract row count.
 
     AsyncPG returns status strings like "INSERT 0 1", "UPDATE 3", "DELETE 2"
@@ -199,7 +199,7 @@ def parse_asyncpg_status(status: str) -> int:
     Returns:
         Number of affected rows, or 0 if cannot parse.
     """
-    if not status:
+    if not status or not isinstance(status, str):
         return 0
 
     match = ASYNC_PG_STATUS_REGEX.match(status.strip())
