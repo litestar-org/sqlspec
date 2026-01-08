@@ -21,24 +21,19 @@ if TYPE_CHECKING:
 
 __all__ = (
     "ArrowTableStatsProtocol",
-    "AsyncConnectionProtocol",
-    "AsyncCursorProtocol",
     "AsyncDeleteProtocol",
     "AsyncReadBytesProtocol",
     "AsyncReadableProtocol",
     "AsyncWriteBytesProtocol",
-    "ConnectionProtocol",
-    "ConnectionStateProtocol",
     "CursorMetadataProtocol",
-    "CursorProtocol",
     "DictProtocol",
     "HasAddListenerProtocol",
-    "HasArrowStoreProtocol",
-    "HasBindKeyProtocol",
     "HasConfigProtocol",
     "HasConnectionConfigProtocol",
+    "HasDataProtocol",
     "HasDatabaseUrlAndBindKeyProtocol",
     "HasErrorsProtocol",
+    "HasExecuteProtocol",
     "HasExpressionAndParametersProtocol",
     "HasExpressionAndSQLProtocol",
     "HasExpressionProtocol",
@@ -51,25 +46,21 @@ __all__ = (
     "HasNameProtocol",
     "HasNotifiesProtocol",
     "HasParameterBuilderProtocol",
-    "HasReadArrowProtocol",
     "HasRowcountProtocol",
+    "HasRowsAffectedProtocol",
     "HasSQLGlotExpressionProtocol",
-    "HasSQLMethodProtocol",
     "HasSqlStateProtocol",
     "HasSqliteErrorProtocol",
     "HasStatementConfigFactoryProtocol",
     "HasStatementConfigProtocol",
     "HasStatementTypeProtocol",
-    "HasToStatementProtocol",
     "HasTracerProviderProtocol",
     "HasTypeCodeProtocol",
     "HasTypecodeProtocol",
     "HasTypecodeSizedProtocol",
     "HasValueProtocol",
     "HasWhereProtocol",
-    "MigrationModuleProtocol",
     "NotificationProtocol",
-    "ObjectStoreItemProtocol",
     "ObjectStoreProtocol",
     "PipelineCapableProtocol",
     "QueryResultProtocol",
@@ -83,7 +74,6 @@ __all__ = (
     "SupportsCloseProtocol",
     "SupportsDtypeStrProtocol",
     "SupportsJsonTypeProtocol",
-    "ToSchemaProtocol",
     "WithMethodProtocol",
 )
 
@@ -155,13 +145,6 @@ class PipelineCapableProtocol(Protocol):
     """Protocol for connections supporting pipeline execution."""
 
     def run_pipeline(self, pipeline: Any, *, continue_on_error: bool = False) -> Any: ...
-
-
-@runtime_checkable
-class ConnectionStateProtocol(Protocol):
-    """Protocol for checking connection state."""
-
-    def is_in_transaction(self) -> bool: ...
 
 
 @runtime_checkable
@@ -237,6 +220,27 @@ class HasErrorsProtocol(Protocol):
     """Protocol for exceptions exposing structured errors."""
 
     errors: "list[dict[str, Any]] | None"
+
+
+@runtime_checkable
+class HasDataProtocol(Protocol):
+    """Protocol for results exposing a data attribute."""
+
+    data: "Sequence[object] | None"
+
+
+@runtime_checkable
+class HasRowsAffectedProtocol(Protocol):
+    """Protocol for results exposing rows_affected attribute."""
+
+    rows_affected: int
+
+
+@runtime_checkable
+class HasExecuteProtocol(Protocol):
+    """Protocol for drivers exposing execute method returning data results."""
+
+    def execute(self, sql: str, *parameters: object, **kwargs: object) -> "HasDataProtocol": ...
 
 
 @runtime_checkable
@@ -343,82 +347,6 @@ class AsyncDeleteProtocol(Protocol):
 
 
 @runtime_checkable
-class CursorProtocol(Protocol):
-    """Protocol for DB-API 2.0 cursor operations."""
-
-    def execute(self, sql: str, parameters: Any = None) -> Any: ...
-
-    def executemany(self, sql: str, parameters: Any) -> Any: ...
-
-    def fetchall(self) -> Any: ...
-
-    def fetchone(self) -> Any: ...
-
-    @property
-    def description(self) -> "Sequence[Any] | None": ...
-
-    @property
-    def rowcount(self) -> int: ...
-
-    def close(self) -> None: ...
-
-
-@runtime_checkable
-class AsyncCursorProtocol(Protocol):
-    """Protocol for async cursor operations."""
-
-    async def execute(self, sql: str, parameters: Any = None) -> Any: ...
-
-    async def executemany(self, sql: str, parameters: Any) -> Any: ...
-
-    async def fetchall(self) -> Any: ...
-
-    async def fetchone(self) -> Any: ...
-
-    @property
-    def description(self) -> "Sequence[Any] | None": ...
-
-    @property
-    def rowcount(self) -> int: ...
-
-    async def close(self) -> None: ...
-
-
-@runtime_checkable
-class ConnectionProtocol(Protocol):
-    """Protocol for connection lifecycle and transaction state."""
-
-    def cursor(self) -> Any: ...
-
-    def commit(self) -> None: ...
-
-    def rollback(self) -> None: ...
-
-    def close(self) -> None: ...
-
-    in_transaction: "bool | None"
-    transaction_status: "str | None"
-
-    def is_in_transaction(self) -> bool: ...
-
-
-@runtime_checkable
-class AsyncConnectionProtocol(Protocol):
-    """Protocol for async connection lifecycle and transaction state."""
-
-    async def commit(self) -> None: ...
-
-    async def rollback(self) -> None: ...
-
-    async def close(self) -> None: ...
-
-    in_transaction: "bool | None"
-    transaction_status: "str | None"
-
-    async def is_in_transaction(self) -> bool: ...
-
-
-@runtime_checkable
 class StatementProtocol(Protocol):
     """Protocol for statement attribute access."""
 
@@ -451,15 +379,6 @@ class HasWhereProtocol(Protocol):
 
 
 @runtime_checkable
-class HasSQLMethodProtocol(Protocol):
-    """Protocol for objects that have a sql() method for rendering SQL."""
-
-    def sql(self, *args: Any, **kwargs: Any) -> str:
-        """Render object to SQL string."""
-        ...
-
-
-@runtime_checkable
 class DictProtocol(Protocol):
     """Protocol for objects with a __dict__ attribute."""
 
@@ -477,14 +396,7 @@ class HasConfigProtocol(Protocol):
 class HasConnectionConfigProtocol(Protocol):
     """Protocol for configs exposing connection_config mapping."""
 
-    connection_config: "Mapping[str, Any]"
-
-
-@runtime_checkable
-class HasBindKeyProtocol(Protocol):
-    """Protocol for configs exposing bind_key."""
-
-    bind_key: "str | None"
+    connection_config: "Mapping[str, object]"
 
 
 @runtime_checkable
@@ -526,28 +438,6 @@ class HasGetDataProtocol(Protocol):
     """Protocol for results exposing get_data()."""
 
     def get_data(self) -> Any: ...
-
-
-@runtime_checkable
-class ObjectStoreItemProtocol(Protocol):
-    """Protocol for object store items with path/key attributes."""
-
-    path: str
-    key: "str | None"
-
-
-@runtime_checkable
-class HasReadArrowProtocol(Protocol):
-    """Protocol for stores exposing native Arrow read support."""
-
-    def read_arrow(self, path: "str | Path", **kwargs: Any) -> Any: ...
-
-
-@runtime_checkable
-class HasArrowStoreProtocol(Protocol):
-    """Protocol for backends exposing a store with Arrow support."""
-
-    store: "HasReadArrowProtocol"
 
 
 @runtime_checkable
@@ -799,15 +689,6 @@ class HasExpressionProtocol(Protocol):
 
 
 @runtime_checkable
-class HasToStatementProtocol(Protocol):
-    """Protocol for objects with a to_statement method."""
-
-    def to_statement(self) -> Any:
-        """Convert to SQL statement."""
-        ...
-
-
-@runtime_checkable
 class SQLBuilderProtocol(Protocol):
     """Protocol for SQL query builders."""
 
@@ -928,15 +809,6 @@ class SupportsArrowResults(Protocol):
 
 
 @runtime_checkable
-class ToSchemaProtocol(Protocol):
-    """Protocol for objects that can convert results to schema models."""
-
-    def to_schema(self, schema_type: Any, rows: Any, **kwargs: Any) -> Any:
-        """Convert rows to schema model instances."""
-        ...
-
-
-@runtime_checkable
 class HasExpressionAndSQLProtocol(Protocol):
     """Protocol for objects with both expression and sql attributes (like SQL class)."""
 
@@ -972,17 +844,3 @@ class HasMigrationConfigProtocol(Protocol):
     """
 
     migration_config: "Mapping[str, Any] | None"
-
-
-@runtime_checkable
-class MigrationModuleProtocol(Protocol):
-    """Protocol for Python migration modules.
-
-    Migration modules must have at least an 'up' or 'migrate_up' function.
-    Optionally they may have 'down' or 'migrate_down' for downgrades.
-    """
-
-    up: "Callable[..., str | list[str]] | None"
-    migrate_up: "Callable[..., str | list[str]] | None"
-    down: "Callable[..., str | list[str]] | None"
-    migrate_down: "Callable[..., str | list[str]] | None"

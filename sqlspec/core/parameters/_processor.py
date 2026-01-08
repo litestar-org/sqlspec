@@ -11,6 +11,7 @@ from sqlspec.core.parameters._alignment import looks_like_execute_many
 from sqlspec.core.parameters._converter import ParameterConverter
 from sqlspec.core.parameters._types import (
     ParameterInfo,
+    ParameterPayload,
     ParameterProcessingResult,
     ParameterProfile,
     ParameterStyle,
@@ -23,11 +24,11 @@ from sqlspec.core.parameters._validator import ParameterValidator
 __all__ = ("ParameterProcessor", "fingerprint_parameters")
 
 
-def _mapping_item_sort_key(item: "tuple[Any, Any]") -> str:
+def _mapping_item_sort_key(item: "tuple[object, object]") -> str:
     return repr(item[0])
 
 
-def _fingerprint_parameters(parameters: Any) -> str:
+def _fingerprint_parameters(parameters: "ParameterPayload") -> str:
     """Return a stable fingerprint for caching parameter payloads.
 
     Args:
@@ -58,7 +59,7 @@ def _fingerprint_parameters(parameters: Any) -> str:
     return f"{type(parameters).__name__}:{digest}"
 
 
-def fingerprint_parameters(parameters: Any) -> str:
+def fingerprint_parameters(parameters: "ParameterPayload") -> str:
     """Return a stable fingerprint for parameter payloads.
 
     Args:
@@ -70,7 +71,7 @@ def fingerprint_parameters(parameters: Any) -> str:
     return _fingerprint_parameters(parameters)
 
 
-def _coerce_nested_value(value: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> Any:
+def _coerce_nested_value(value: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
     if isinstance(value, (list, tuple)) and not isinstance(value, (str, bytes)):
         return [_coerce_parameter_value(item, type_coercion_map) for item in value]
     if isinstance(value, dict):
@@ -78,12 +79,12 @@ def _coerce_nested_value(value: Any, type_coercion_map: "dict[type, Callable[[An
     return value
 
 
-def _coerce_parameter_value(value: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> Any:
+def _coerce_parameter_value(value: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
     if value is None:
         return value
 
     if isinstance(value, TypedParameter):
-        wrapped_value: Any = value.value
+        wrapped_value: object = value.value
         if wrapped_value is None:
             return wrapped_value
         original_type = value.original_type
@@ -99,7 +100,7 @@ def _coerce_parameter_value(value: Any, type_coercion_map: "dict[type, Callable[
     return value
 
 
-def _coerce_parameter_set(param_set: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> Any:
+def _coerce_parameter_set(param_set: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
     if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
         return [_coerce_parameter_value(item, type_coercion_map) for item in param_set]
     if isinstance(param_set, Mapping):
@@ -108,8 +109,8 @@ def _coerce_parameter_set(param_set: Any, type_coercion_map: "dict[type, Callabl
 
 
 def _coerce_parameters_payload(
-    parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool
-) -> Any:
+    parameters: "ParameterPayload", type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool
+) -> object:
     if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
         return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in parameters]
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
@@ -189,7 +190,7 @@ class ParameterProcessor:
         return stats
 
     def _compile_static_script(
-        self, sql: str, parameters: Any, config: "ParameterStyleConfig", is_many: bool, cache_key: str
+        self, sql: str, parameters: "ParameterPayload", config: "ParameterStyleConfig", is_many: bool, cache_key: str
     ) -> "ParameterProcessingResult":
         coerced_params = parameters
         if config.type_coercion_map and parameters:
@@ -210,7 +211,7 @@ class ParameterProcessor:
                 return original_style
         return config.default_execution_parameter_style or config.default_parameter_style
 
-    def _wrap_parameter_types(self, parameters: Any) -> Any:
+    def _wrap_parameter_types(self, parameters: "ParameterPayload") -> object:
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             return [wrap_with_type(p) for p in parameters]
         if isinstance(parameters, Mapping):
@@ -218,8 +219,11 @@ class ParameterProcessor:
         return wrap_with_type(parameters)
 
     def _coerce_parameter_types(
-        self, parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool = False
-    ) -> Any:
+        self,
+        parameters: "ParameterPayload",
+        type_coercion_map: "dict[type, Callable[[Any], Any]]",
+        is_many: bool = False,
+    ) -> object:
         return _coerce_parameters_payload(parameters, type_coercion_map, is_many)
 
     def _store_cached_result(self, cache_key: str, result: "ParameterProcessingResult") -> "ParameterProcessingResult":
@@ -231,7 +235,9 @@ class ParameterProcessor:
             self._cache.popitem(last=False)
         return result
 
-    def _needs_mapping_normalization(self, payload: Any, param_info: "list[ParameterInfo]", is_many: bool) -> bool:
+    def _needs_mapping_normalization(
+        self, payload: "ParameterPayload", param_info: "list[ParameterInfo]", is_many: bool
+    ) -> bool:
         if not payload or not param_info:
             return False
 
@@ -269,7 +275,7 @@ class ParameterProcessor:
     def _make_processor_cache_key(
         self,
         sql: str,
-        parameters: Any,
+        parameters: "ParameterPayload",
         config: "ParameterStyleConfig",
         is_many: bool,
         dialect: str | None,
@@ -286,7 +292,7 @@ class ParameterProcessor:
     def process(
         self,
         sql: str,
-        parameters: Any,
+        parameters: "ParameterPayload",
         config: "ParameterStyleConfig",
         dialect: str | None = None,
         is_many: bool = False,
@@ -299,7 +305,7 @@ class ParameterProcessor:
     def process_for_execution(
         self,
         sql: str,
-        parameters: Any,
+        parameters: "ParameterPayload",
         config: "ParameterStyleConfig",
         dialect: str | None = None,
         is_many: bool = False,
@@ -331,7 +337,7 @@ class ParameterProcessor:
     def _process_internal(
         self,
         sql: str,
-        parameters: Any,
+        parameters: "ParameterPayload",
         config: "ParameterStyleConfig",
         *,
         dialect: str | None,
@@ -453,12 +459,12 @@ class ParameterProcessor:
     def _convert_placeholders_for_execution(
         self,
         sql: str,
-        parameters: Any,
+        parameters: "ParameterPayload",
         config: "ParameterStyleConfig",
         original_styles: "set[ParameterStyle]",
         needs_execution_conversion: bool,
         is_many: bool,
-    ) -> "tuple[str, Any]":
+    ) -> "tuple[str, object]":
         if not needs_execution_conversion:
             return sql, parameters
 

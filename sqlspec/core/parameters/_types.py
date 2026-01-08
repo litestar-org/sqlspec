@@ -6,21 +6,36 @@ from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from mypy_extensions import mypyc_attr
 
 __all__ = (
     "DriverParameterProfile",
     "ParameterInfo",
+    "ParameterMapping",
+    "ParameterPayload",
     "ParameterProcessingResult",
     "ParameterProfile",
+    "ParameterSequence",
     "ParameterStyle",
     "ParameterStyleConfig",
     "TypedParameter",
     "is_iterable_parameters",
     "wrap_with_type",
 )
+
+
+ParameterMapping: TypeAlias = "Mapping[str, object]"
+"""Type alias for mapping-based parameter payloads."""
+
+
+ParameterSequence: TypeAlias = "Sequence[object]"
+"""Type alias for sequence-based parameter payloads."""
+
+
+ParameterPayload: TypeAlias = "ParameterMapping | ParameterSequence | object | None"
+"""Type alias for parameter payloads accepted by the processing pipeline."""
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -329,9 +344,9 @@ class DriverParameterProfile:
         custom_type_coercions: "Mapping[type, Callable[[Any], Any]] | None" = None,
         default_output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
         default_ast_transformer: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]] | None" = None,
-        extras: "Mapping[str, Any] | None" = None,
+        extras: "Mapping[str, object] | None" = None,
         default_dialect: "str | None" = None,
-        statement_kwargs: "Mapping[str, Any] | None" = None,
+        statement_kwargs: "Mapping[str, object] | None" = None,
         strict_named_parameters: bool = True,
     ) -> None:
         self.name = name

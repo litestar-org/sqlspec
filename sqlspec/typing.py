@@ -112,13 +112,14 @@ SupportedSchemaModel: TypeAlias = (
 
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
 """
-StatementParameters: TypeAlias = "Any | dict[str, Any] | list[Any] | tuple[Any, ...] | None"
+StatementParameters: TypeAlias = "dict[str, object] | list[object] | tuple[object, ...] | object | None"
 """Type alias for statement parameters.
 
 Represents:
-- :type:`dict[str, Any]`
-- :type:`list[Any]`
-- :type:`tuple[Any, ...]`
+- :type:`dict[str, object]`
+- :type:`list[object]`
+- :type:`tuple[object, ...]`
+- :type:`object`
 - :type:`None`
 """
 ArrowReturnFormat: TypeAlias = Literal["table", "reader", "batch", "batches"]

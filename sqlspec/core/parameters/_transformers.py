@@ -12,7 +12,7 @@ from sqlspec.core.parameters._alignment import (
     normalize_parameter_key,
     validate_parameter_alignment,
 )
-from sqlspec.core.parameters._types import ParameterProfile
+from sqlspec.core.parameters._types import ParameterMapping, ParameterPayload, ParameterProfile
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.type_guards import get_value_attribute
 
@@ -33,7 +33,9 @@ class _NullPruningTransform:
         self._dialect = dialect
         self._validator = validator
 
-    def __call__(self, expression: Any, parameters: Any, parameter_profile: "ParameterProfile") -> "tuple[Any, Any]":
+    def __call__(
+        self, expression: Any, parameters: "ParameterPayload", parameter_profile: "ParameterProfile"
+    ) -> "tuple[Any, object]":
         return replace_null_parameters_with_literals(
             expression,
             parameters,
@@ -49,7 +51,9 @@ class _LiteralInliningTransform:
     def __init__(self, json_serializer: "Callable[[Any], str]") -> None:
         self._json_serializer = json_serializer
 
-    def __call__(self, expression: Any, parameters: Any, _parameter_profile: "ParameterProfile") -> "tuple[Any, Any]":
+    def __call__(
+        self, expression: Any, parameters: "ParameterPayload", _parameter_profile: "ParameterProfile"
+    ) -> "tuple[Any, object]":
         literal_expression = replace_placeholders_with_literals(
             expression, parameters, json_serializer=self._json_serializer
         )
@@ -101,12 +105,12 @@ class _NullPlaceholderTransformer:
 class _PlaceholderLiteralTransformer:
     __slots__ = ("_json_serializer", "_parameters", "_placeholder_index")
 
-    def __init__(self, parameters: Any, json_serializer: "Callable[[Any], str]") -> None:
+    def __init__(self, parameters: "ParameterPayload", json_serializer: "Callable[[Any], str]") -> None:
         self._parameters = parameters
         self._json_serializer = json_serializer
         self._placeholder_index = 0
 
-    def _resolve_mapping_value(self, param_name: str, payload: "Mapping[str, Any]") -> Any | None:
+    def _resolve_mapping_value(self, param_name: str, payload: "ParameterMapping") -> object | None:
         candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
         for candidate in candidate_names:
             if candidate in payload:
@@ -160,26 +164,26 @@ class _PlaceholderLiteralTransformer:
 
 def build_null_pruning_transform(
     *, dialect: str = "postgres", validator: "ParameterValidator | None" = None
-) -> "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]":
+) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, object]]":
     """Return a callable that prunes NULL placeholders from an expression."""
     return _NullPruningTransform(dialect, validator)
 
 
 def build_literal_inlining_transform(
     *, json_serializer: "Callable[[Any], str]"
-) -> "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]":
+) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, object]]":
     """Return a callable that replaces placeholders with SQL literals."""
     return _LiteralInliningTransform(json_serializer)
 
 
 def replace_null_parameters_with_literals(
     expression: Any,
-    parameters: Any,
+    parameters: "ParameterPayload",
     *,
     dialect: str = "postgres",
     validator: "ParameterValidator | None" = None,
     parameter_profile: "ParameterProfile | None" = None,
-) -> "tuple[Any, Any]":
+) -> "tuple[Any, object]":
     """Rewrite placeholders representing ``NULL`` values and prune parameters.
 
     Args:
@@ -214,10 +218,11 @@ def replace_null_parameters_with_literals(
     transformer = _NullPlaceholderTransformer(null_positions, sorted_null_positions)
     transformed_expression = expression.transform(transformer)
 
+    cleaned_parameters: object
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
         cleaned_parameters = [value for index, value in enumerate(parameters) if index not in null_positions]
     elif isinstance(parameters, Mapping):
-        cleaned_dict: dict[str, Any] = {}
+        cleaned_dict: dict[str, object] = {}
         next_numeric_index = 1
 
         for key, value in parameters.items():
@@ -229,7 +234,7 @@ def replace_null_parameters_with_literals(
                 next_numeric_index += 1
             else:
                 cleaned_dict[str(normalized_key)] = value
-        cleaned_parameters = cleaned_dict  # type: ignore[assignment]
+        cleaned_parameters = cleaned_dict
     else:
         cleaned_parameters = parameters
 
@@ -256,7 +261,7 @@ def _create_literal_expression(value: Any, json_serializer: "Callable[[Any], str
 
 
 def replace_placeholders_with_literals(
-    expression: Any, parameters: Any, *, json_serializer: "Callable[[Any], str]"
+    expression: Any, parameters: "ParameterPayload", *, json_serializer: "Callable[[Any], str]"
 ) -> Any:
     """Replace placeholders in an expression tree with literal values."""
     if not parameters:

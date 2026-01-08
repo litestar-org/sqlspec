@@ -18,6 +18,7 @@ from typing_extensions import TypeVar
 
 from sqlspec.core.compiler import OperationType
 from sqlspec.core.statement import SQL
+from sqlspec.protocols import HasRowsAffectedProtocol
 from sqlspec.storage import (
     AsyncStoragePipeline,
     StorageDestination,
@@ -958,13 +959,10 @@ class StackResult:
         self.result: StatementResult | ArrowResult = result if result is not None else EmptyResult()
         if rows_affected is not None:
             self.rows_affected = rows_affected
+        elif isinstance(self.result, HasRowsAffectedProtocol):
+            self.rows_affected = int(self.result.rows_affected)
         else:
-            try:
-                result_rows = object.__getattribute__(self.result, "rows_affected")
-            except AttributeError:
-                self.rows_affected = 0
-            else:
-                self.rows_affected = int(result_rows)
+            self.rows_affected = 0
         self.error = error
         self.warning = warning
         self.metadata = dict(metadata) if metadata else None

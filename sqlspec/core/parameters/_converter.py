@@ -5,7 +5,13 @@ from typing import Any
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
+from sqlspec.core.parameters._types import (
+    ParameterInfo,
+    ParameterMapping,
+    ParameterPayload,
+    ParameterSequence,
+    ParameterStyle,
+)
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.exceptions import SQLSpecError
 
@@ -114,12 +120,12 @@ class ParameterConverter:
     def convert_placeholder_style(
         self,
         sql: str,
-        parameters: Any,
-        target_style: ParameterStyle,
+        parameters: "ParameterPayload",
+        target_style: "ParameterStyle",
         is_many: bool = False,
         *,
         strict_named_parameters: bool = True,
-    ) -> "tuple[str, Any]":
+    ) -> "tuple[str, object]":
         param_info = self.validator.extract_parameters(sql)
 
         if target_style == ParameterStyle.STATIC:
@@ -203,9 +209,9 @@ class ParameterConverter:
         return converted_sql
 
     def _convert_sequence_to_dict(
-        self, parameters: Sequence[Any], param_info: "list[ParameterInfo]"
-    ) -> "dict[str, Any]":
-        param_dict: dict[str, Any] = {}
+        self, parameters: "ParameterSequence", param_info: "list[ParameterInfo]"
+    ) -> "dict[str, object]":
+        param_dict: dict[str, object] = {}
         for i, param in enumerate(param_info):
             if i < len(parameters):
                 name = param.name or f"param_{param.ordinal}"
@@ -213,8 +219,8 @@ class ParameterConverter:
         return param_dict
 
     def _extract_param_value_mixed_styles(
-        self, param: "ParameterInfo", parameters: Mapping[str, Any], param_keys: "list[str]"
-    ) -> "tuple[Any, bool]":
+        self, param: "ParameterInfo", parameters: "ParameterMapping", param_keys: "list[str]"
+    ) -> "tuple[object | None, bool]":
         if param.name and param.name in parameters:
             return parameters[param.name], True
         if param.placeholder_text in parameters:
@@ -248,8 +254,8 @@ class ParameterConverter:
         return None, False
 
     def _extract_param_value_single_style(
-        self, param: "ParameterInfo", parameters: Mapping[str, Any]
-    ) -> "tuple[Any, bool]":
+        self, param: "ParameterInfo", parameters: "ParameterMapping"
+    ) -> "tuple[object | None, bool]":
         if param.name and param.name in parameters:
             return parameters[param.name], True
         if param.placeholder_text in parameters:
@@ -273,7 +279,7 @@ class ParameterConverter:
         return None, False
 
     def _collect_missing_named_parameters(
-        self, param_info: "list[ParameterInfo]", parameters: Mapping[str, Any]
+        self, param_info: "list[ParameterInfo]", parameters: "ParameterMapping"
     ) -> "list[str]":
         named_styles = {
             ParameterStyle.NAMED_COLON,
@@ -290,32 +296,26 @@ class ParameterConverter:
             missing.append(param.name)
         return sorted(set(missing))
 
-    def _preserve_original_format(self, param_values: "list[Any]", original_parameters: Any) -> Any:
+    def _preserve_original_format(self, param_values: "list[object]", original_parameters: object) -> object:
         if isinstance(original_parameters, tuple):
             return tuple(param_values)
         if isinstance(original_parameters, list):
             return param_values
         if isinstance(original_parameters, Mapping):
             return tuple(param_values)
-
-        try:
-            return original_parameters.__class__(param_values)
-        except (TypeError, ValueError, AttributeError):
-            return tuple(param_values)
-
-        return param_values
+        return tuple(param_values)
 
     def _convert_parameter_format(
         self,
-        parameters: Any,
+        parameters: "ParameterPayload",
         param_info: "list[ParameterInfo]",
         target_style: "ParameterStyle",
-        original_parameters: Any = None,
+        original_parameters: object | None = None,
         preserve_parameter_format: bool = False,
         is_many: bool = False,
         *,
         strict_named_parameters: bool = True,
-    ) -> Any:
+    ) -> object:
         if not parameters or not param_info:
             return parameters
 
@@ -366,11 +366,11 @@ class ParameterConverter:
                 if missing_names:
                     msg = f"Missing named parameter(s): {', '.join(missing_names)}"
                     raise SQLSpecError(msg)
-            param_values: list[Any] = []
+            param_values: list[object] = []
             parameter_styles = {p.style for p in param_info}
             has_mixed_styles = len(parameter_styles) > 1
 
-            unique_params: dict[str, Any] = {}
+            unique_params: dict[str, object] = {}
             param_order: list[str] = []
 
             if has_mixed_styles:
@@ -401,8 +401,8 @@ class ParameterConverter:
         return parameters
 
     def _embed_static_parameters(
-        self, sql: str, parameters: Any, param_info: "list[ParameterInfo]"
-    ) -> "tuple[str, Any]":
+        self, sql: str, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
+    ) -> "tuple[str, object]":
         if not param_info:
             return sql, None
 
@@ -440,7 +440,7 @@ class ParameterConverter:
 
         return static_sql, None
 
-    def _get_parameter_value(self, parameters: Any, param: "ParameterInfo") -> Any:
+    def _get_parameter_value(self, parameters: "ParameterPayload", param: "ParameterInfo") -> object | None:
         if isinstance(parameters, Mapping):
             if param.name and param.name in parameters:
                 return parameters[param.name]
@@ -455,8 +455,8 @@ class ParameterConverter:
         return None
 
     def _get_parameter_value_with_reuse(
-        self, parameters: Any, param: "ParameterInfo", unique_params: "dict[str, int]"
-    ) -> Any:
+        self, parameters: "ParameterPayload", param: "ParameterInfo", unique_params: "dict[str, int]"
+    ) -> object | None:
         if param.style in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}:
             param_key = f"{param.placeholder_text}_{param.ordinal}"
         elif (param.style == ParameterStyle.NUMERIC and param.name) or param.name:
@@ -481,28 +481,36 @@ class ParameterConverter:
 
         return None
 
-    def _convert_to_positional_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
+    def _convert_to_positional_format(
+        self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
+    ) -> object:
         return self._convert_parameter_format(
             parameters, param_info, ParameterStyle.QMARK, parameters, preserve_parameter_format=False
         )
 
-    def _convert_to_named_colon_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
+    def _convert_to_named_colon_format(
+        self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
+    ) -> object:
         return self._convert_parameter_format(
             parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
         )
 
-    def _convert_to_positional_colon_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
+    def _convert_to_positional_colon_format(
+        self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
+    ) -> object:
         if isinstance(parameters, Mapping):
             return parameters
 
-        param_dict: dict[str, Any] = {}
+        param_dict: dict[str, object] = {}
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             for index, value in enumerate(parameters):
                 param_dict[str(index + 1)] = value
 
         return param_dict
 
-    def _convert_to_named_pyformat_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
+    def _convert_to_named_pyformat_format(
+        self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
+    ) -> object:
         return self._convert_parameter_format(
             parameters, param_info, ParameterStyle.NAMED_PYFORMAT, parameters, preserve_parameter_format=False
         )

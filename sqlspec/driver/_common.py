@@ -21,7 +21,7 @@ from typing import (
     overload,
 )
 
-from mypy_extensions import mypyc_attr, trait
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
@@ -42,7 +42,7 @@ from sqlspec.core.parameters import fingerprint_parameters
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime
-from sqlspec.protocols import StatementProtocol
+from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.type_guards import (
@@ -88,7 +88,7 @@ __all__ = (
 )
 
 
-def _parameter_sort_key(item: "tuple[str, Any]") -> float:
+def _parameter_sort_key(item: "tuple[str, object]") -> float:
     key = item[0]
     if key.isdigit():
         return float(int(key))
@@ -572,7 +572,6 @@ class VersionInfo:
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-@trait
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality.
 
@@ -664,11 +663,11 @@ class DataDictionaryMixin:
         patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2] else 0
         return VersionInfo(major, minor, patch)
 
-    def detect_version_with_queries(self, driver: Any, queries: "list[str]") -> "VersionInfo | None":
+    def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version.
 
         Args:
-            driver: Database driver instance
+            driver: Database driver with execute support
             queries: List of SQL queries to try
 
         Returns:
@@ -677,13 +676,15 @@ class DataDictionaryMixin:
         """
         for query in queries:
             with suppress(Exception):
-                result = driver.execute(query)
-                if result.data:
-                    version_str = str(result.data[0])
-                    if isinstance(result.data[0], dict):
-                        version_str = str(next(iter(result.data[0].values())))
-                    elif isinstance(result.data[0], (list, tuple)):
-                        version_str = str(result.data[0][0])
+                result: HasDataProtocol = driver.execute(query)
+                result_data = result.data
+                if result_data:
+                    first_row = result_data[0]
+                    version_str = str(first_row)
+                    if isinstance(first_row, dict):
+                        version_str = str(next(iter(first_row.values())))
+                    elif isinstance(first_row, (list, tuple)):
+                        version_str = str(first_row[0])
 
                     parsed_version = self.parse_version_string(version_str)
                     if parsed_version:
@@ -773,10 +774,9 @@ class ExecutionResult(NamedTuple):
 EXEC_CURSOR_RESULT: Final[int] = 0
 EXEC_ROWCOUNT_OVERRIDE: Final[int] = 1
 EXEC_SPECIAL_DATA: Final[int] = 2
-DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None)
+DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
 
 
-@trait
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
@@ -1016,7 +1016,7 @@ class CommonDriverAttributesMixin:
             metadata=execution_result.special_data or {"status_message": "OK"},
         )
 
-    def _should_force_select(self, statement: "SQL", cursor: Any) -> bool:
+    def _should_force_select(self, statement: "SQL", cursor: object) -> bool:
         """Determine if a statement with unknown type should be treated as SELECT.
 
         Uses driver metadata (statement_type, description/schema) as a safety net when
@@ -1191,11 +1191,11 @@ class CommonDriverAttributesMixin:
 
     def prepare_driver_parameters(
         self,
-        parameters: Any,
+        parameters: "StatementParameters | list[StatementParameters] | tuple[StatementParameters, ...]",
         statement_config: "StatementConfig",
         is_many: bool = False,
         prepared_statement: Any | None = None,  # pyright: ignore[reportUnusedParameter]
-    ) -> Any:
+    ) -> object:
         """Prepare parameters for database driver consumption.
 
         Normalizes parameter structure and unwraps TypedParameter objects
@@ -1223,7 +1223,7 @@ class CommonDriverAttributesMixin:
             return [self._format_parameter_set_for_many(parameters, statement_config)]
         return self._format_parameter_set(parameters, statement_config)
 
-    def _apply_coercion(self, value: Any, statement_config: "StatementConfig") -> Any:
+    def _apply_coercion(self, value: object, statement_config: "StatementConfig") -> object:
         """Apply type coercion to a single value.
 
         Args:
@@ -1241,7 +1241,9 @@ class CommonDriverAttributesMixin:
                     return converter(unwrapped_value)
         return unwrapped_value
 
-    def _format_parameter_set_for_many(self, parameters: Any, statement_config: "StatementConfig") -> Any:
+    def _format_parameter_set_for_many(
+        self, parameters: "StatementParameters", statement_config: "StatementConfig"
+    ) -> object:
         """Prepare a single parameter set for execute_many operations.
 
         Handles parameter sets without converting the structure to array format,
@@ -1267,7 +1269,7 @@ class CommonDriverAttributesMixin:
         coerced_params = [self._apply_coercion(p, statement_config) for p in parameters]
         return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
 
-    def _format_parameter_set(self, parameters: Any, statement_config: "StatementConfig") -> Any:
+    def _format_parameter_set(self, parameters: "StatementParameters", statement_config: "StatementConfig") -> object:
         """Prepare a single parameter set for database driver consumption.
 
         Args:
@@ -1307,7 +1309,7 @@ class CommonDriverAttributesMixin:
 
     def _get_compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
-    ) -> "tuple[str, Any]":
+    ) -> "tuple[str, object]":
         """Get compiled SQL with parameter style conversion and caching.
 
         Compiles the SQL statement and applies parameter style conversion.
@@ -1329,7 +1331,7 @@ class CommonDriverAttributesMixin:
 
     def _get_compiled_statement(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
-    ) -> "tuple[CachedStatement, Any]":
+    ) -> "tuple[CachedStatement, object]":
         """Compile SQL and return cached statement metadata plus prepared parameters."""
         cache_config = get_cache_config()
         dialect_key = str(statement.dialect) if statement.dialect else None
@@ -1354,13 +1356,7 @@ class CommonDriverAttributesMixin:
 
         cached_statement = CachedStatement(
             compiled_sql=compiled_sql,
-            parameters=tuple(prepared_parameters)
-            if isinstance(prepared_parameters, list)
-            else (
-                prepared_parameters
-                if prepared_parameters is None or isinstance(prepared_parameters, dict)
-                else (tuple(prepared_parameters) if not isinstance(prepared_parameters, tuple) else prepared_parameters)
-            ),
+            parameters=tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters,
             expression=prepared_statement.expression,
         )
 

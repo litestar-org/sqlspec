@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
     from sqlspec.driver._common import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
+    from sqlspec.protocols import HasExecuteProtocol
     from sqlspec.typing import ArrowReturnFormat, ArrowTable, SchemaT, StatementParameters
 
 
@@ -1311,7 +1312,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin, Generic[AsyncDriverT]):
         """Parse a version string into VersionInfo."""
         return DataDictionaryMixin.parse_version_string(self, version_str)
 
-    def detect_version_with_queries(self, driver: Any, queries: "list[str]") -> "VersionInfo | None":
+    def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version."""
         return DataDictionaryMixin.detect_version_with_queries(self, driver, queries)
 
