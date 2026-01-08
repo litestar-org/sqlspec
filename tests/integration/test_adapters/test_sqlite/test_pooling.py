@@ -213,7 +213,7 @@ def test_pool_transaction_rollback(sqlite_config_shared_memory: SqliteConfig) ->
         config.close_pool()
 
 
-def test_config_with_pool_config_parameter(tmp_path: Path) -> None:
+def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
     """Test that SqliteConfig correctly accepts connection_config parameter."""
 
     db_path = tmp_path / "test.sqlite"

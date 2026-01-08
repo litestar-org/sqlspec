@@ -12,6 +12,7 @@ SQLSpec 0.33.0 standardizes configuration parameter naming across all database a
 - `pool_instance` → `connection_instance` (pre-created pool/connection instance)
 
 This change affects **all 11 database adapters** and provides a consistent, intuitive API.
+Legacy `pool_config` and `pool_instance` arguments are now rejected; pass the standardized names instead.
 
 ## Why This Change?
 

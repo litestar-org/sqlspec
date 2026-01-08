@@ -465,7 +465,7 @@ class SQLProcessor:
                             expression, final_parameters = transformer(expression, final_parameters)
                         ast_was_transformed = True
                     if ast_transformer:
-                        expression, final_parameters = ast_transformer(expression, final_parameters)
+                        expression, final_parameters = ast_transformer(expression, final_parameters, parameter_profile)
                         ast_was_transformed = True
                     if ast_was_transformed:
                         operation_type = self._detect_operation_type(expression)

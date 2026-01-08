@@ -28,7 +28,7 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
+from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -204,11 +204,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             driver_features: Optional driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
-            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance).
+            **kwargs: Additional keyword arguments.
         """
-        connection_config, connection_instance = apply_pool_deprecations(
-            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
-        )
+        reject_pool_aliases(kwargs)
 
         processed_connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or oracledb_statement_config
@@ -421,11 +419,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             driver_features: Optional driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
-            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance).
+            **kwargs: Additional keyword arguments.
         """
-        connection_config, connection_instance = apply_pool_deprecations(
-            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
-        )
+        reject_pool_aliases(kwargs)
 
         processed_connection_config = normalize_connection_config(connection_config)
 

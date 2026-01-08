@@ -17,7 +17,7 @@ def oracle_aq_config(oracle_23ai_service: OracleService) -> Generator[OracleSync
     """Provision Oracle config and ensure AQ queue exists for tests."""
 
     config = OracleSyncConfig(
-        pool_config={
+        connection_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
             "service_name": oracle_23ai_service.service_name,

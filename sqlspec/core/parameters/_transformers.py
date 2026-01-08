@@ -33,9 +33,13 @@ class _NullPruningTransform:
         self._dialect = dialect
         self._validator = validator
 
-    def __call__(self, expression: Any, parameters: Any) -> "tuple[Any, Any]":
+    def __call__(self, expression: Any, parameters: Any, parameter_profile: "ParameterProfile") -> "tuple[Any, Any]":
         return replace_null_parameters_with_literals(
-            expression, parameters, dialect=self._dialect, validator=self._validator
+            expression,
+            parameters,
+            dialect=self._dialect,
+            validator=self._validator,
+            parameter_profile=parameter_profile,
         )
 
 
@@ -45,7 +49,7 @@ class _LiteralInliningTransform:
     def __init__(self, json_serializer: "Callable[[Any], str]") -> None:
         self._json_serializer = json_serializer
 
-    def __call__(self, expression: Any, parameters: Any) -> "tuple[Any, Any]":
+    def __call__(self, expression: Any, parameters: Any, _parameter_profile: "ParameterProfile") -> "tuple[Any, Any]":
         literal_expression = replace_placeholders_with_literals(
             expression, parameters, json_serializer=self._json_serializer
         )
@@ -156,20 +160,25 @@ class _PlaceholderLiteralTransformer:
 
 def build_null_pruning_transform(
     *, dialect: str = "postgres", validator: "ParameterValidator | None" = None
-) -> "Callable[[Any, Any], tuple[Any, Any]]":
+) -> "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]":
     """Return a callable that prunes NULL placeholders from an expression."""
     return _NullPruningTransform(dialect, validator)
 
 
 def build_literal_inlining_transform(
     *, json_serializer: "Callable[[Any], str]"
-) -> "Callable[[Any, Any], tuple[Any, Any]]":
+) -> "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]":
     """Return a callable that replaces placeholders with SQL literals."""
     return _LiteralInliningTransform(json_serializer)
 
 
 def replace_null_parameters_with_literals(
-    expression: Any, parameters: Any, *, dialect: str = "postgres", validator: "ParameterValidator | None" = None
+    expression: Any,
+    parameters: Any,
+    *,
+    dialect: str = "postgres",
+    validator: "ParameterValidator | None" = None,
+    parameter_profile: "ParameterProfile | None" = None,
 ) -> "tuple[Any, Any]":
     """Rewrite placeholders representing ``NULL`` values and prune parameters.
 
@@ -178,6 +187,7 @@ def replace_null_parameters_with_literals(
         parameters: Parameter payload provided by the caller.
         dialect: SQLGlot dialect for serializing the expression.
         validator: Optional validator instance for parameter extraction.
+        parameter_profile: Optional parameter profile to reuse for validation.
 
     Returns:
         Tuple containing the transformed expression and updated parameters.
@@ -189,11 +199,13 @@ def replace_null_parameters_with_literals(
         return expression, parameters
 
     validator_instance = validator or _AST_TRANSFORMER_VALIDATOR
-    parameter_info = validator_instance.extract_parameters(expression.sql(dialect=dialect))
-    parameter_profile = ParameterProfile(parameter_info)
-    validate_parameter_alignment(parameter_profile, parameters)
+    profile = parameter_profile
+    if profile is None:
+        parameter_info = validator_instance.extract_parameters(expression.sql(dialect=dialect))
+        profile = ParameterProfile(parameter_info)
+    validate_parameter_alignment(profile, parameters)
 
-    null_positions = collect_null_parameter_ordinals(parameters, parameter_profile)
+    null_positions = collect_null_parameter_ordinals(parameters, profile)
     if not null_positions:
         return expression, parameters
 

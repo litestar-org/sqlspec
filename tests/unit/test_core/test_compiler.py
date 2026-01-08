@@ -30,6 +30,7 @@ from sqlspec.core import (
     CompiledSQL,
     OperationType,
     ParameterProcessor,
+    ParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
     SQLProcessor,
@@ -464,7 +465,9 @@ def test_statement_transformers_apply(basic_statement_config: "StatementConfig")
 def test_ast_transformer_single_parse(basic_statement_config: "StatementConfig") -> None:
     """AST transformers should not trigger a second parse."""
 
-    def pass_through(expression: exp.Expression, parameters: Any) -> "tuple[exp.Expression, Any]":
+    def pass_through(
+        expression: exp.Expression, parameters: Any, _parameter_profile: "ParameterProfile"
+    ) -> "tuple[exp.Expression, Any]":
         return expression, parameters
 
     parameter_config = basic_statement_config.parameter_config.replace(ast_transformer=pass_through)
@@ -475,6 +478,25 @@ def test_ast_transformer_single_parse(basic_statement_config: "StatementConfig")
         processor.compile("SELECT * FROM users WHERE id = ?", [123])
 
     assert mock_parse.call_count == 1
+
+
+def test_ast_transformer_receives_parameter_profile(basic_statement_config: "StatementConfig") -> None:
+    """AST transformers should receive the detected parameter profile."""
+    captured: dict[str, int] = {}
+
+    def capture_profile(
+        expression: exp.Expression, parameters: Any, parameter_profile: "ParameterProfile"
+    ) -> "tuple[exp.Expression, Any]":
+        captured["count"] = parameter_profile.total_count
+        return expression, parameters
+
+    parameter_config = basic_statement_config.parameter_config.replace(ast_transformer=capture_profile)
+    config = basic_statement_config.replace(parameter_config=parameter_config)
+    processor = SQLProcessor(config)
+
+    processor.compile("SELECT * FROM users WHERE id = ?", [123])
+
+    assert captured["count"] == 1
 
 
 def test_statement_transformer_updates_operation_type(basic_statement_config: "StatementConfig") -> None:

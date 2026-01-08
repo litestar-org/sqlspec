@@ -11,46 +11,24 @@ from sqlspec.exceptions import ImproperConfigurationError
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ("apply_pool_deprecations", "normalize_connection_config")
+__all__ = ("normalize_connection_config", "reject_pool_aliases")
 
 
-def apply_pool_deprecations(
-    *,
-    kwargs: dict[str, Any],
-    connection_config: "Any | None",
-    connection_instance: "Any | None",
-    version: str = "0.33.0",
-    removal_in: str = "0.34.0",
-) -> "tuple[Any | None, Any | None]":
-    """Apply legacy pool_config/pool_instance aliases.
-
-    Several adapters historically accepted ``pool_config`` and ``pool_instance``. SQLSpec standardized
-    these to ``connection_config`` and ``connection_instance``. This helper preserves the prior
-    behavior without emitting deprecation warnings.
+def reject_pool_aliases(kwargs: "dict[str, Any]") -> None:
+    """Reject legacy pool_config/pool_instance aliases.
 
     Args:
-        kwargs: Keyword arguments passed to the adapter config constructor (mutated in-place).
-        connection_config: Current connection_config value.
-        connection_instance: Current connection_instance value.
-        version: Version the parameters were deprecated in.
-        removal_in: Version the parameters are scheduled for removal.
+        kwargs: Keyword arguments passed to the adapter config constructor.
 
-    Returns:
-        Updated (connection_config, connection_instance).
+    Raises:
+        ImproperConfigurationError: If deprecated pool aliases are supplied.
     """
-    if "pool_config" in kwargs:
-        if connection_config is None:
-            connection_config = kwargs.pop("pool_config")
-        else:
-            kwargs.pop("pool_config")
-
-    if "pool_instance" in kwargs:
-        if connection_instance is None:
-            connection_instance = kwargs.pop("pool_instance")
-        else:
-            kwargs.pop("pool_instance")
-
-    return connection_config, connection_instance
+    if "pool_config" in kwargs or "pool_instance" in kwargs:
+        msg = (
+            "pool_config and pool_instance are no longer supported. "
+            "Use connection_config and connection_instance instead."
+        )
+        raise ImproperConfigurationError(msg)
 
 
 def normalize_connection_config(

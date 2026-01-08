@@ -12,6 +12,7 @@ from sqlspec.extensions.events import EventMessage
 from sqlspec.extensions.events._payload import decode_notify_payload, encode_notify_payload
 from sqlspec.extensions.events._queue import AsyncTableEventQueue, build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name as _normalize_channel
+from sqlspec.protocols import NotificationProtocol
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.uuids import uuid4
@@ -46,8 +47,9 @@ class _PsqlpyNotifyCapture:
 
         if len(args) == 1:
             message = args[0]
-            notified_channel = cast("str | None", getattr(message, "channel", None))
-            payload = cast("str | None", getattr(message, "payload", None))
+            if isinstance(message, NotificationProtocol):
+                notified_channel = message.channel
+                payload = message.payload
         elif len(args) >= _PSQLPY_CALLBACK_MIN_ARGS:
             value1 = cast("str", args[1])
             value2 = cast("str", args[2])
@@ -79,7 +81,8 @@ class _PsqlpyNotifySignal:
         notified_channel: str | None = None
         if len(args) == 1:
             message = args[0]
-            notified_channel = cast("str | None", getattr(message, "channel", None))
+            if isinstance(message, NotificationProtocol):
+                notified_channel = message.channel
         elif len(args) >= _PSQLPY_CALLBACK_MIN_ARGS:
             value1 = cast("str", args[1])
             value2 = cast("str", args[2])

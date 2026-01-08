@@ -366,24 +366,6 @@ def test_namespaced_cache_expression_operations() -> None:
     assert result_missing is None
 
 
-def test_namespaced_cache_parameter_operations() -> None:
-    """Test NamespacedCache parameter namespace operations."""
-    cache = get_cache()
-
-    original_params = {"user_id": 1, "name": "John"}
-    processed_params = [1, "John"]
-    config_hash = hash("config")
-    cache_key = f"{hash(str(original_params))}::{config_hash}"
-
-    cache.put_parameter(cache_key, processed_params)
-
-    result = cache.get_parameter(cache_key)
-    assert result == processed_params
-
-    cache.delete_parameter(cache_key)
-    assert cache.get_parameter(cache_key) is None
-
-
 def test_namespaced_cache_additional_namespaces() -> None:
     """Test NamespacedCache optimized, builder, and file namespaces."""
     cache = get_cache()
@@ -420,14 +402,12 @@ def test_namespaced_cache_respects_config_flags() -> None:
         cache.put_statement("stmt", "value")
         cache.put_builder("builder", "value")
         cache.put_expression("expr", "value")
-        cache.put_parameter("param", "value")
         cache.put_file("file", "value")
         cache.put_optimized("opt", "value")
 
         assert cache.get_statement("stmt") is None
         assert cache.get_builder("builder") is None
         assert cache.get_expression("expr") is None
-        assert cache.get_parameter("param") is None
         assert cache.get_file("file") is None
         assert cache.get_optimized("opt") is None
     finally:
@@ -444,14 +424,12 @@ def test_namespaced_cache_respects_compiled_flag() -> None:
 
         cache.put_statement("stmt", "value")
         cache.put_expression("expr", "value")
-        cache.put_parameter("param", "value")
         cache.put_builder("builder", "value")
         cache.put_file("file", "value")
         cache.put_optimized("opt", "value")
 
         assert cache.get_statement("stmt") is None
         assert cache.get_expression("expr") is None
-        assert cache.get_parameter("param") is None
         assert cache.get_builder("builder") is None
         assert cache.get_file("file") is None
         assert cache.get_optimized("opt") is None
@@ -570,16 +548,16 @@ def test_namespaced_cache_namespace_isolation() -> None:
 
     cache.put_statement("key1", "value1")
     cache.put_expression("key1", "value2")
-    cache.put_parameter("key1", "value3")
+    cache.put_builder("key1", "value3")
 
     assert cache.get_statement("key1") == "value1"
     assert cache.get_expression("key1") == "value2"
-    assert cache.get_parameter("key1") == "value3"
+    assert cache.get_builder("key1") == "value3"
 
     cache.delete_statement("key1")
     assert cache.get_statement("key1") is None
     assert cache.get_expression("key1") == "value2"
-    assert cache.get_parameter("key1") == "value3"
+    assert cache.get_builder("key1") == "value3"
 
 
 def test_get_cache_stats_aggregation() -> None:

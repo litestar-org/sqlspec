@@ -117,10 +117,12 @@ StatementConfig(
 
 - **statement**: Compiled SQL + parameters (`CachedStatement`)
 - **expression**: Parsed SQLGlot expressions (also used by static builder expressions)
-- **parameter**: Parameter conversion results
 - **optimized**: Optimized SQLGlot expressions
 - **builder**: Built SQL statements from builders
 - **file**: SQLFile loader entries with checksum validation
+
+Parameter conversion caching is handled inside the per-config `SQLProcessor` pipeline rather than a dedicated
+namespaced cache and is sized by `fragment_cache_size`.
 
 **StatementConfig-Aware Caching:**
 

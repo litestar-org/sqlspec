@@ -1322,6 +1322,15 @@ class CommonDriverAttributesMixin:
             Tuple of (compiled_sql, parameters)
 
         """
+        compiled_statement, prepared_parameters = self._get_compiled_statement(
+            statement, statement_config, flatten_single_parameters=flatten_single_parameters
+        )
+        return compiled_statement.compiled_sql, prepared_parameters
+
+    def _get_compiled_statement(
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
+    ) -> "tuple[CachedStatement, Any]":
+        """Compile SQL and return cached statement metadata plus prepared parameters."""
         cache_config = get_cache_config()
         dialect_key = str(statement.dialect) if statement.dialect else None
         cache_key = None
@@ -1331,7 +1340,7 @@ class CommonDriverAttributesMixin:
             cache = get_cache()
             cached_result = cache.get_statement(cache_key, dialect_key)
             if cached_result is not None and isinstance(cached_result, CachedStatement):
-                return cached_result.compiled_sql, cached_result.parameters
+                return cached_result, cached_result.parameters
 
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
@@ -1343,25 +1352,22 @@ class CommonDriverAttributesMixin:
             prepared_statement=prepared_statement,
         )
 
+        cached_statement = CachedStatement(
+            compiled_sql=compiled_sql,
+            parameters=tuple(prepared_parameters)
+            if isinstance(prepared_parameters, list)
+            else (
+                prepared_parameters
+                if prepared_parameters is None or isinstance(prepared_parameters, dict)
+                else (tuple(prepared_parameters) if not isinstance(prepared_parameters, tuple) else prepared_parameters)
+            ),
+            expression=prepared_statement.expression,
+        )
+
         if cache_key is not None and cache is not None:
-            cached_statement = CachedStatement(
-                compiled_sql=compiled_sql,
-                parameters=tuple(prepared_parameters)
-                if isinstance(prepared_parameters, list)
-                else (
-                    prepared_parameters
-                    if prepared_parameters is None or isinstance(prepared_parameters, dict)
-                    else (
-                        tuple(prepared_parameters)
-                        if not isinstance(prepared_parameters, tuple)
-                        else prepared_parameters
-                    )
-                ),
-                expression=prepared_statement.expression,
-            )
             cache.put_statement(cache_key, cached_statement, dialect_key)
 
-        return compiled_sql, prepared_parameters
+        return cached_statement, prepared_parameters
 
     def _generate_compilation_cache_key(
         self, statement: "SQL", config: "StatementConfig", flatten_single_parameters: bool

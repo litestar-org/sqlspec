@@ -1,7 +1,7 @@
 """Caching system for SQL statement processing.
 
 This module provides a caching system with LRU eviction and TTL support for
-SQL statement processing, parameter processing, and expression caching.
+SQL statement processing and SQLGlot expression caching.
 
 Components:
 - CacheKey: Immutable cache key
@@ -37,7 +37,6 @@ __all__ = (
     "FiltersView",
     "LRUCache",
     "NamespacedCache",
-    "ParametersView",
     "canonicalize_filters",
     "create_cache_key",
     "get_cache",
@@ -529,70 +528,6 @@ def log_cache_stats() -> None:
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class ParametersView:
-    """Read-only view of parameters without copying.
-
-    Provides read-only access to parameters without making copies,
-    enabling zero-copy parameter access patterns.
-    """
-
-    __slots__ = ("_named_ref", "_positional_ref")
-
-    def __init__(self, positional: "list[Any]", named: "dict[str, Any]") -> None:
-        """Initialize parameters view.
-
-        Args:
-            positional: List of positional parameters (will be referenced, not copied)
-            named: Dictionary of named parameters (will be referenced, not copied)
-        """
-        self._positional_ref = positional
-        self._named_ref = named
-
-    def get_positional(self, index: int) -> Any:
-        """Get positional parameter by index.
-
-        Args:
-            index: Parameter index
-
-        Returns:
-            Parameter value
-        """
-        return self._positional_ref[index]
-
-    def get_named(self, key: str) -> Any:
-        """Get named parameter by key.
-
-        Args:
-            key: Parameter name
-
-        Returns:
-            Parameter value
-        """
-        return self._named_ref[key]
-
-    def has_named(self, key: str) -> bool:
-        """Check if named parameter exists.
-
-        Args:
-            key: Parameter name
-
-        Returns:
-            True if parameter exists
-        """
-        return key in self._named_ref
-
-    @property
-    def positional_count(self) -> int:
-        """Number of positional parameters."""
-        return len(self._positional_ref)
-
-    @property
-    def named_count(self) -> int:
-        """Number of named parameters."""
-        return len(self._named_ref)
-
-
-@mypyc_attr(allow_interpreted_subclasses=False)
 class CachedStatement:
     """Immutable cached statement result.
 
@@ -632,18 +567,6 @@ class CachedStatement:
 
     def __hash__(self) -> int:
         return hash((self.compiled_sql, self.parameters, self.expression))
-
-    def get_parameters_view(self) -> "ParametersView":
-        """Get read-only parameter view.
-
-        Returns:
-            View object that provides read-only access to parameters
-        """
-        if self.parameters is None:
-            return ParametersView([], {})
-        if isinstance(self.parameters, dict):
-            return ParametersView([], self.parameters)
-        return ParametersView(list(self.parameters), {})
 
 
 def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> str:
@@ -688,7 +611,6 @@ NAMESPACED_CACHE_CONFIG: "dict[str, tuple[Callable[[CacheConfig], bool], Callabl
     "statement": (_sql_cache_enabled, _sql_cache_size),
     "builder": (_sql_cache_enabled, _sql_cache_size),
     "expression": (_fragment_cache_enabled, _fragment_cache_size),
-    "parameter": (_fragment_cache_enabled, _fragment_cache_size),
     "file": (_fragment_cache_enabled, _fragment_cache_size),
     "optimized": (_optimized_cache_enabled, _optimized_cache_size),
 }
@@ -847,40 +769,6 @@ class NamespacedCache:
             True when the key was found and deleted.
         """
         return self._delete("expression", key, dialect)
-
-    def get_parameter(self, key: str, dialect: str | None = None) -> Any | None:
-        """Get cached parameter data.
-
-        Args:
-            key: Cache key.
-            dialect: Optional SQL dialect.
-
-        Returns:
-            Cached value or None if not found.
-        """
-        return self._get("parameter", key, dialect)
-
-    def put_parameter(self, key: str, value: Any, dialect: str | None = None) -> None:
-        """Cache processed parameter data.
-
-        Args:
-            key: Cache key.
-            value: Value to cache.
-            dialect: Optional SQL dialect.
-        """
-        self._put("parameter", key, value, dialect)
-
-    def delete_parameter(self, key: str, dialect: str | None = None) -> bool:
-        """Delete cached parameter data.
-
-        Args:
-            key: Cache key.
-            dialect: Optional SQL dialect.
-
-        Returns:
-            True when the key was found and deleted.
-        """
-        return self._delete("parameter", key, dialect)
 
     def get_optimized(self, key: str, dialect: str | None = None) -> Any | None:
         """Get cached optimized expression data.

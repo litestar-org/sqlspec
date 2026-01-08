@@ -23,7 +23,7 @@ from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, reg
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints
-from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
+from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -193,11 +193,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
-            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance)
+            **kwargs: Additional keyword arguments
         """
-        connection_config, connection_instance = apply_pool_deprecations(
-            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
-        )
+        reject_pool_aliases(kwargs)
 
         processed_connection_config = normalize_connection_config(connection_config)
 
@@ -429,11 +427,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
-            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance)
+            **kwargs: Additional keyword arguments
         """
-        connection_config, connection_instance = apply_pool_deprecations(
-            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
-        )
+        reject_pool_aliases(kwargs)
 
         processed_connection_config = normalize_connection_config(connection_config)
 

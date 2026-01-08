@@ -5,7 +5,6 @@ Provides Google Cloud BigQuery connectivity with parameter style conversion,
 type coercion, error handling, and query job management.
 """
 
-import importlib
 import io
 from typing import TYPE_CHECKING, Any, cast
 
@@ -15,6 +14,7 @@ from google.cloud.exceptions import GoogleCloudError
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
     bigquery_statement_config,
+    bigquery_storage_api_available,
     build_bigquery_inlined_script,
     build_bigquery_load_job_config,
     build_bigquery_load_job_telemetry,
@@ -274,10 +274,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        parsed_expression = statement.statement_expression
+        compiled_statement, prepared_parameters = self._get_compiled_statement(statement, self.statement_config)
+        sql = compiled_statement.compiled_sql
+        parsed_expression = compiled_statement.expression
 
-        if not prepared_parameters or not isinstance(prepared_parameters, list):
+        if not prepared_parameters:
+            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
+
+        if isinstance(prepared_parameters, tuple):
+            prepared_parameters = list(prepared_parameters)
+
+        if not isinstance(prepared_parameters, list):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         allow_parse = statement.statement_config.enable_parsing
@@ -403,13 +410,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        storage_api_available = True
-        try:
-            importlib.import_module("google.cloud.bigquery_storage_v1")
-        except Exception:
-            storage_api_available = False
-
-        if not storage_api_available:
+        if not bigquery_storage_api_available():
             if native_only:
                 msg = (
                     "BigQuery native Arrow requires Storage API.\n"

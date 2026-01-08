@@ -281,7 +281,7 @@ def test_multiple_concurrent_connections() -> None:
             pass
 
 
-def test_config_with_pool_config_parameter(tmp_path: Path) -> None:
+def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
     """Test that DuckDBConfig correctly accepts connection_config parameter."""
 
     db_path = tmp_path / "test.duckdb"

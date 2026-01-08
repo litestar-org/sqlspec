@@ -47,7 +47,7 @@ Key Components:
 
     cache.py: Caching system with LRU eviction
         - LRUCache with configurable TTL and size limits
-        - NamespacedCache for statement, expression, and parameter caching
+        - NamespacedCache for statement, expression, optimized, builder, and file caching
         - Thread-safe operations with fine-grained locking
         - Cache statistics and monitoring
 
@@ -96,7 +96,6 @@ from sqlspec.core.cache import (
     FiltersView,
     LRUCache,
     NamespacedCache,
-    ParametersView,
     canonicalize_filters,
     clear_all_caches,
     create_cache_key,
@@ -250,7 +249,6 @@ __all__ = (
     "ParameterStyle",
     "ParameterStyleConfig",
     "ParameterValidator",
-    "ParametersView",
     "ProcessedState",
     "SQLProcessor",
     "SQLResult",

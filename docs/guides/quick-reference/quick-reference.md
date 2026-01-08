@@ -96,7 +96,6 @@ graph TD
 
 - **Statement Cache**: Compiled SQL + parameters with StatementConfig-aware keys
 - **Expression Cache**: Parsed SQLGlot expressions (also used for static builder expressions)
-- **Parameter Cache**: Parameter conversion results
 - **Optimized Cache**: Post-optimization AST expressions for reuse
 - **Builder Cache**: Builder → SQL statement results
 - **File Cache**: SQLFileLoader entries with checksum validation (12x+ speedup)

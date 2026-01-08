@@ -109,11 +109,13 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
    # Namespaced cache entries:
    statement_cache: CachedStatement       # Compiled SQL + execution parameters
    expression_cache: Expression           # Parsed SQLGlot expressions
-   parameter_cache: Any                   # Parameter conversion results
    optimized_cache: Expression            # Optimized SQLGlot expressions
    builder_cache: SQL                     # Builder → SQL statement results
    file_cache: SQLFileCacheEntry          # File loading with checksums (12x+ speedup)
    ```
+
+   Parameter conversion caching is handled inside the `SQLProcessor`/`ParameterProcessor` pipeline and sized by
+   `fragment_cache_size` rather than a separate namespaced cache.
 
    The shared `StatementPipelineRegistry` keeps per-config `SQLProcessor` caches (parse + parameter +
    validator caches). Global cache sizing comes from `CacheConfig`—`sql_cache_size` controls the

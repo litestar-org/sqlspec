@@ -1,6 +1,7 @@
 """BigQuery adapter compiled helpers."""
 
 import datetime
+import importlib
 import io
 import os
 from decimal import Decimal
@@ -12,7 +13,13 @@ from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterProfile,
+    ParameterStyle,
+    StatementConfig,
+    build_statement_config_from_profile,
+)
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
@@ -36,6 +43,7 @@ if TYPE_CHECKING:
 __all__ = (
     "apply_bigquery_driver_features",
     "bigquery_statement_config",
+    "bigquery_storage_api_available",
     "build_bigquery_inlined_script",
     "build_bigquery_load_job_config",
     "build_bigquery_load_job_telemetry",
@@ -76,6 +84,15 @@ def _tuple_to_list(value: Any) -> Any:
 
 def _return_none(_: Any) -> None:
     return None
+
+
+def bigquery_storage_api_available() -> bool:
+    """Return True when the BigQuery Storage API client can be imported."""
+    try:
+        importlib.import_module("google.cloud.bigquery_storage_v1")
+    except Exception:
+        return False
+    return True
 
 
 _BIGQUERY_MODULE: Any | None = None
@@ -144,7 +161,7 @@ def build_bigquery_inlined_script(
     expression: "exp.Expression | None" = None,
     *,
     allow_parse: bool = True,
-    literal_inliner: "Callable[[Any, Any], tuple[Any, Any]]",
+    literal_inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]",
 ) -> str:
     """Build a BigQuery script with literal inlining.
 
@@ -304,13 +321,13 @@ def create_bq_parameters(parameters: Any, json_serializer: "Callable[[Any], str]
 
 
 def inline_bigquery_literals(
-    expression: "exp.Expression", parameters: Any, inliner: "Callable[[Any, Any], tuple[Any, Any]]"
+    expression: "exp.Expression", parameters: Any, inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]"
 ) -> str:
     """Inline literal values into a parsed SQLGlot expression."""
     if not parameters:
         return str(expression.sql(dialect="bigquery"))
 
-    transformed_expression, _ = inliner(expression, parameters)
+    transformed_expression, _ = inliner(expression, parameters, ParameterProfile.empty())
     return str(transformed_expression.sql(dialect="bigquery"))
 
 
