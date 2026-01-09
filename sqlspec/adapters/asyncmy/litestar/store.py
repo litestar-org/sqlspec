@@ -9,7 +9,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 
-logger = get_logger("adapters.asyncmy.litestar.store")
+logger = get_logger("sqlspec.adapters.asyncmy.litestar.store")
 
 __all__ = ("AsyncmyStore",)
 

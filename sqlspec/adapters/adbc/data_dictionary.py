@@ -147,6 +147,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
         """Get tables for the current dialect."""
         dialect = self._normalize_dialect(driver)
         schema_name: str | None = self._resolve_schema(dialect, schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
 
         if dialect == "bigquery":
             if schema_name:
@@ -177,6 +178,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
         """Get column information for a table or schema."""
         dialect = self._normalize_dialect(driver)
         schema_name: str | None = self._resolve_schema(dialect, schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
 
         if dialect == "bigquery":
             schema_prefix = f"`{schema_name}`." if schema_name else ""
@@ -214,6 +219,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
         """Get index information for a table or schema."""
         dialect = self._normalize_dialect(driver)
         schema_name: str | None = self._resolve_schema(dialect, schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
 
         if dialect == "sqlite":
             if table is None:
@@ -276,6 +285,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
         """Get foreign key metadata."""
         dialect = self._normalize_dialect(driver)
         schema_name: str | None = self._resolve_schema(dialect, schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
 
         if dialect == "bigquery":
             if schema_name:

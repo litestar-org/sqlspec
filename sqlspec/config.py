@@ -58,7 +58,7 @@ ConnectionT = TypeVar("ConnectionT")
 PoolT = TypeVar("PoolT")
 DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBase")
 
-logger = get_logger("config")
+logger = get_logger("sqlspec.config")
 
 DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
     "on_connection_create": "connection",

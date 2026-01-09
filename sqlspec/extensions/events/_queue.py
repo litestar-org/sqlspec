@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from sqlspec.driver._async import AsyncDriverAdapterBase
     from sqlspec.driver._sync import SyncDriverAdapterBase
 
-logger = get_logger("events.queue")
+logger = get_logger("sqlspec.events.queue")
 
 __all__ = ("AsyncTableEventQueue", "SyncTableEventQueue", "build_queue_backend")
 

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 ConfigT = TypeVar("ConfigT")
 
 
-logger = get_logger("extensions.litestar.store")
+logger = get_logger("sqlspec.extensions.litestar.store")
 
 __all__ = ("BaseSQLSpecStore",)
 

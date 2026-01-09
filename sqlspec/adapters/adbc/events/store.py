@@ -11,17 +11,18 @@ ADBC supports the following database backends:
 For unsupported databases (Oracle, Spanner, MySQL), use their native adapters instead.
 """
 
+import logging
 from typing import TYPE_CHECKING, Final
 
 from sqlspec.extensions.events._store import BaseEventQueueStore
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
 
 __all__ = ("AdbcEventQueueStore",)
 
-logger = get_logger("adapters.adbc.events.store")
+logger = get_logger("sqlspec.adapters.adbc.events.store")
 
 DIALECT_POSTGRESQL: Final = "postgres"
 DIALECT_SQLITE: Final = "sqlite"
@@ -124,7 +125,15 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             if dialect_str in {DIALECT_POSTGRESQL, DIALECT_SQLITE, DIALECT_DUCKDB, DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
                 return dialect_str
 
-        logger.debug("Unknown ADBC driver, defaulting to SQLite dialect: driver=%s uri=%s", driver_lower, uri_lower)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "events.queue.dialect.fallback",
+            adapter_name="adbc",
+            driver_name=driver_lower,
+            uri=uri_lower,
+            dialect=DIALECT_SQLITE,
+        )
         return DIALECT_SQLITE
 
     def _column_types(self) -> "tuple[str, str, str]":

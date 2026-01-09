@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 import inspect
+import logging
 import threading
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._protocols import AsyncEventBackendProtocol, SyncEventBackendProtocol
 from sqlspec.extensions.events._queue import build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_span_attribute
 from sqlspec.utils.uuids import uuid4
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.extensions.events._protocols import AsyncEventHandler, SyncEventHandler
     from sqlspec.observability import ObservabilityRuntime
 
-logger = get_logger("events.channel")
+logger = get_logger("sqlspec.events.channel")
 
 __all__ = ("AsyncEventChannel", "AsyncEventListener", "EventMessage", "SyncEventChannel", "SyncEventListener")
 
@@ -73,6 +74,17 @@ def _resolve_poll_interval(poll_interval: "float | None", default: float) -> flo
     return poll_interval
 
 
+def _resolve_event_type(payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> "str | None":
+    """Resolve event type from payload or metadata."""
+    if metadata and metadata.get("event_type"):
+        return str(metadata["event_type"])
+    if payload.get("event_type") is not None:
+        return str(payload["event_type"])
+    if payload.get("type") is not None:
+        return str(payload["type"])
+    return None
+
+
 _POSTGRES_ADAPTERS = frozenset({"asyncpg", "psycopg", "psqlpy"})
 
 
@@ -96,24 +108,62 @@ def _load_native_backend(config: Any, backend_name: str | None, extension_settin
     try:
         backend_module = importlib.import_module(backend_module_name)
     except ModuleNotFoundError:
-        logger.debug("Adapter %s has no events backend module", adapter_name)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name=adapter_name,
+            backend_module=backend_module_name,
+            status="backend_missing",
+        )
         return None
     except ImportError as error:
-        logger.warning("Failed to import %s: %s", backend_module_name, error)
+        log_with_context(
+            logger,
+            logging.WARNING,
+            "event.listen",
+            adapter_name=adapter_name,
+            backend_module=backend_module_name,
+            error_type=type(error).__name__,
+            status="backend_import_failed",
+        )
         return None
 
     try:
         factory = backend_module.create_event_backend
     except AttributeError:
-        logger.debug("Adapter %s missing create_event_backend()", adapter_name)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name=adapter_name,
+            backend_module=backend_module_name,
+            status="backend_factory_missing",
+        )
         return None
     try:
         backend = factory(config, backend_name, extension_settings)
     except MissingDependencyError as error:
-        logger.warning("Events backend %s missing dependency: %s", backend_name, error)
+        log_with_context(
+            logger,
+            logging.WARNING,
+            "event.listen",
+            adapter_name=adapter_name,
+            backend_name=backend_name,
+            error_type=type(error).__name__,
+            status="backend_dependency_missing",
+        )
         return None
     except ImproperConfigurationError as error:
-        logger.warning("Events backend %s rejected configuration: %s", backend_name, error)
+        log_with_context(
+            logger,
+            logging.WARNING,
+            "event.listen",
+            adapter_name=adapter_name,
+            backend_name=backend_name,
+            error_type=type(error).__name__,
+            status="backend_config_rejected",
+        )
         return None
     return backend
 
@@ -180,7 +230,15 @@ class SyncEventChannel:
         native_backend = _load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
-                logger.warning("Events backend %s unavailable; defaulting to table_queue", backend_name)
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "event.listen",
+                    adapter_name=self._adapter_name,
+                    backend_name=backend_name,
+                    fallback_backend="table_queue",
+                    status="backend_unavailable",
+                )
             self._backend = cast("SyncEventBackendProtocol", queue_backend)
             backend_label = "table_queue"
         else:
@@ -207,6 +265,17 @@ class SyncEventChannel:
             _end_event_span(self._runtime, span, error=error)
             raise
         _end_event_span(self._runtime, span, result="published")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.publish",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            channel=channel,
+            event_id=event_id,
+            event_type=_resolve_event_type(payload, metadata),
+            mode="sync",
+        )
         return event_id
 
     def iter_events(self, channel: str, *, poll_interval: float | None = None) -> Iterator[EventMessage]:
@@ -230,6 +299,17 @@ class SyncEventChannel:
                 continue
             _end_event_span(self._runtime, span, result="delivered")
             self._runtime.increment_metric("events.deliver")
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "event.receive",
+                adapter_name=self._adapter_name,
+                backend_name=self._backend_name,
+                channel=channel,
+                event_id=event.event_id,
+                event_type=_resolve_event_type(event.payload, event.metadata),
+                mode="sync",
+            )
             yield event
 
     def listen(
@@ -249,6 +329,17 @@ class SyncEventChannel:
         listener = SyncEventListener(listener_id, channel, thread, stop_event, interval)
         self._listeners[listener_id] = listener
         self._runtime.increment_metric("events.listener.start")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            channel=channel,
+            listener_id=listener_id,
+            mode="sync",
+            status="start",
+        )
         thread.start()
         return listener
 
@@ -259,6 +350,17 @@ class SyncEventChannel:
             return
         listener.stop()
         self._runtime.increment_metric("events.listener.stop")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            channel=listener.channel,
+            listener_id=listener_id,
+            mode="sync",
+            status="stop",
+        )
 
     def ack(self, event_id: str) -> None:
         """Acknowledge an event."""
@@ -325,7 +427,20 @@ class SyncEventChannel:
                     if auto_ack:
                         self._backend.ack(event.event_id)
                 except Exception as error:
-                    logger.warning("sync listener %s handler error: %s", listener_id, error)
+                    log_with_context(
+                        logger,
+                        logging.WARNING,
+                        "event.listen",
+                        adapter_name=self._adapter_name,
+                        backend_name=self._backend_name,
+                        channel=channel,
+                        listener_id=listener_id,
+                        mode="sync",
+                        error_type=type(error).__name__,
+                        status="handler_error",
+                        event_id=event.event_id,
+                        event_type=_resolve_event_type(event.payload, event.metadata),
+                    )
         finally:
             self._listeners.pop(listener_id, None)
 
@@ -358,7 +473,15 @@ class AsyncEventChannel:
         native_backend = _load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
-                logger.warning("Events backend %s unavailable; defaulting to table_queue", backend_name)
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "event.listen",
+                    adapter_name=self._adapter_name,
+                    backend_name=backend_name,
+                    fallback_backend="table_queue",
+                    status="backend_unavailable",
+                )
             self._backend = cast("AsyncEventBackendProtocol", queue_backend)
             backend_label = "table_queue"
         else:
@@ -387,6 +510,17 @@ class AsyncEventChannel:
             _end_event_span(self._runtime, span, error=error)
             raise
         _end_event_span(self._runtime, span, result="published")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.publish",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            channel=channel,
+            event_id=event_id,
+            event_type=_resolve_event_type(payload, metadata),
+            mode="async",
+        )
         return event_id
 
     async def iter_events(self, channel: str, *, poll_interval: float | None = None) -> AsyncIterator[EventMessage]:
@@ -410,6 +544,17 @@ class AsyncEventChannel:
                 continue
             _end_event_span(self._runtime, span, result="delivered")
             self._runtime.increment_metric("events.deliver")
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "event.receive",
+                adapter_name=self._adapter_name,
+                backend_name=self._backend_name,
+                channel=channel,
+                event_id=event.event_id,
+                event_type=_resolve_event_type(event.payload, event.metadata),
+                mode="async",
+            )
             yield event
 
     def listen(
@@ -433,6 +578,17 @@ class AsyncEventChannel:
         listener = AsyncEventListener(listener_id, channel, task, stop_event, interval)
         self._listeners[listener_id] = listener
         self._runtime.increment_metric("events.listener.start")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            channel=channel,
+            listener_id=listener_id,
+            mode="async",
+            status="start",
+        )
         return listener
 
     async def stop_listener(self, listener_id: str) -> None:
@@ -442,6 +598,17 @@ class AsyncEventChannel:
             return
         await listener.stop()
         self._runtime.increment_metric("events.listener.stop")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            channel=listener.channel,
+            listener_id=listener_id,
+            mode="async",
+            status="stop",
+        )
 
     async def ack(self, event_id: str) -> None:
         """Acknowledge an event."""
@@ -510,6 +677,19 @@ class AsyncEventChannel:
                     if auto_ack:
                         await self._backend.ack(event.event_id)
                 except Exception as error:
-                    logger.warning("async listener %s handler error: %s", listener_id, error)
+                    log_with_context(
+                        logger,
+                        logging.WARNING,
+                        "event.listen",
+                        adapter_name=self._adapter_name,
+                        backend_name=self._backend_name,
+                        channel=channel,
+                        listener_id=listener_id,
+                        mode="async",
+                        error_type=type(error).__name__,
+                        status="handler_error",
+                        event_id=event.event_id,
+                        event_type=_resolve_event_type(event.payload, event.metadata),
+                    )
         finally:
             self._listeners.pop(listener_id, None)

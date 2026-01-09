@@ -1,6 +1,5 @@
 """Psqlpy ADK store module."""
 
-from sqlspec.adapters.psqlpy.adk.memory_store import PsqlpyADKMemoryStore
-from sqlspec.adapters.psqlpy.adk.store import PsqlpyADKStore
+from sqlspec.adapters.psqlpy.adk.store import PsqlpyADKMemoryStore, PsqlpyADKStore
 
 __all__ = ("PsqlpyADKMemoryStore", "PsqlpyADKStore")

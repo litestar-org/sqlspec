@@ -1,13 +1,14 @@
 """Oracle Advanced Queuing backend for EventChannel."""
 
 import contextlib
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._payload import parse_event_timestamp
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ try:  # pragma: no cover - optional dependency path
 except ImportError:  # pragma: no cover - optional dependency path
     oracledb = None  # type: ignore[assignment]
 
-logger = get_logger("events.oracle")
+logger = get_logger("sqlspec.events.oracle")
 
 __all__ = ("OracleAsyncAQEventBackend", "OracleSyncAQEventBackend", "create_event_backend")
 
@@ -81,6 +82,24 @@ class OracleSyncAQEventBackend:
         self._queue_name = settings.get("aq_queue", _DEFAULT_QUEUE_NAME)
         self._visibility: int | None = _resolve_visibility_setting(settings.get("aq_visibility"))
         self._wait_seconds: int = int(settings.get("aq_wait_seconds", 5))
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="oracledb",
+            backend_name=self.backend_name,
+            mode="async",
+            status="backend_ready",
+        )
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="oracledb",
+            backend_name=self.backend_name,
+            mode="sync",
+            status="backend_ready",
+        )
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
@@ -116,7 +135,16 @@ class OracleSyncAQEventBackend:
             except Exception as error:  # pragma: no cover - driver surfaced runtime
                 if oracledb is None or not isinstance(error, oracledb.DatabaseError):
                     raise
-                logger.warning("Oracle AQ dequeue failed: %s", error)
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "event.receive",
+                    adapter_name="oracledb",
+                    backend_name=self.backend_name,
+                    mode="sync",
+                    error_type=type(error).__name__,
+                    status="failed",
+                )
                 driver.rollback()
                 return None
             if message is None:
@@ -204,7 +232,16 @@ class OracleAsyncAQEventBackend:
             except Exception as error:  # pragma: no cover - driver surfaced runtime
                 if oracledb is None or not isinstance(error, oracledb.DatabaseError):
                     raise
-                logger.warning("Oracle AQ dequeue failed: %s", error)
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "event.receive",
+                    adapter_name="oracledb",
+                    backend_name=self.backend_name,
+                    mode="async",
+                    error_type=type(error).__name__,
+                    status="failed",
+                )
                 await driver.rollback()
                 return None
             if message is None:

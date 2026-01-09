@@ -88,7 +88,7 @@ __all__ = (
     "sql",
 )
 
-logger = get_logger("builder.factory")
+logger = get_logger("sqlspec.builder.factory")
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2

@@ -7,7 +7,7 @@ from litestar import Litestar, get
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
-from sqlspec.adapters.aiosqlite.adk.memory_store import AiosqliteADKMemoryStore
+from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore
 from sqlspec.extensions.adk import SQLSpecSessionService
 from sqlspec.extensions.adk.memory import SQLSpecMemoryService
 

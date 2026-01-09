@@ -72,6 +72,7 @@ class SpannerDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SpannerSync
     def get_tables(self, driver: "SpannerSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables using INFORMATION_SCHEMA."""
         schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         return driver.select(self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata)
 
     def get_columns(
@@ -80,10 +81,12 @@ class SpannerDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SpannerSync
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return driver.select(
                 self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
 
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return driver.select(
             self.get_query("columns_by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
         )
@@ -94,10 +97,12 @@ class SpannerDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SpannerSync
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return driver.select(
                 self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
 
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return driver.select(
             self.get_query("indexes_by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
         )
@@ -108,9 +113,11 @@ class SpannerDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SpannerSync
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return driver.select(
                 self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return driver.select(
             self.get_query("foreign_keys_by_table"),
             table_name=table,

@@ -233,7 +233,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         adapter_name = config_module.split(".")[2]
         store_class_name = config_name.replace("Config", "ADKMemoryStore")
-        store_path = f"sqlspec.adapters.{adapter_name}.adk.memory_store.{store_class_name}"
+        store_path = f"sqlspec.adapters.{adapter_name}.adk.store.{store_class_name}"
 
         try:
             return cast("type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]]", import_string(store_path))

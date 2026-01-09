@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from types import ModuleType
 
 __all__ = (
-    "ensure_aiosql",
     "ensure_attrs",
     "ensure_cattrs",
     "ensure_fsspec",
@@ -139,11 +138,6 @@ def import_string(dotted_path: str) -> "Any":
     except Exception as e:  # pylint: disable=broad-exception-caught
         _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
     return obj
-
-
-def ensure_aiosql() -> None:
-    """Ensure aiosql is available."""
-    _require_dependency("aiosql")
 
 
 def ensure_attrs() -> None:

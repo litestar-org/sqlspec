@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 __all__ = ("OracleAsyncMigrationTracker", "OracleSyncMigrationTracker")
 
-logger = get_logger("migrations.oracle")
+logger = get_logger("sqlspec.migrations.oracle")
 console = Console()
 
 

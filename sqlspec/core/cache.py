@@ -9,6 +9,7 @@ Components:
 - NamespacedCache: Namespace-aware cache wrapper for statement processing
 """
 
+import logging
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Final
@@ -21,7 +22,7 @@ from sqlspec.core.pipeline import (
     get_statement_pipeline_metrics,
     reset_statement_pipeline_cache,
 )
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_field_name, has_filter_attributes
 
 if TYPE_CHECKING:
@@ -47,6 +48,8 @@ __all__ = (
     "reset_pipeline_registry",
     "set_cache_instances",
 )
+
+logger = get_logger("sqlspec.cache")
 
 T = TypeVar("T")
 CacheValueT = TypeVar("CacheValueT")
@@ -227,6 +230,8 @@ class LRUCache:
             node = self._cache.get(key)
             if node is None:
                 self._stats.record_miss()
+                if logger.isEnabledFor(logging.DEBUG):
+                    log_with_context(logger, logging.DEBUG, "cache.miss", cache_size=len(self._cache))
                 return None
 
             ttl = self._ttl
@@ -237,11 +242,17 @@ class LRUCache:
                     del self._cache[key]
                     self._stats.record_miss()
                     self._stats.record_eviction()
+                    if logger.isEnabledFor(logging.DEBUG):
+                        log_with_context(
+                            logger, logging.DEBUG, "cache.evict", cache_size=len(self._cache), reason="expired"
+                        )
                     return None
 
             self._move_to_head(node)
             node.access_count += 1
             self._stats.record_hit()
+            if logger.isEnabledFor(logging.DEBUG):
+                log_with_context(logger, logging.DEBUG, "cache.hit", cache_size=len(self._cache))
             return node.value
 
     def put(self, key: CacheKey, value: Any) -> None:
@@ -270,6 +281,10 @@ class LRUCache:
                     self._remove_node(tail_node)
                     del self._cache[tail_node.key]
                     self._stats.record_eviction()
+                    if logger.isEnabledFor(logging.DEBUG):
+                        log_with_context(
+                            logger, logging.DEBUG, "cache.evict", cache_size=len(self._cache), reason="max_size"
+                        )
 
     def delete(self, key: CacheKey) -> bool:
         """Delete entry from cache.
@@ -480,7 +495,18 @@ def update_cache_config(config: CacheConfig) -> None:
         config: New cache configuration to apply globally
     """
     logger = get_logger("sqlspec.cache")
-    logger.debug("Cache configuration updated: %s", config)
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "cache.config.updated",
+        compiled_cache_enabled=config.compiled_cache_enabled,
+        sql_cache_enabled=config.sql_cache_enabled,
+        fragment_cache_enabled=config.fragment_cache_enabled,
+        optimized_cache_enabled=config.optimized_cache_enabled,
+        sql_cache_size=config.sql_cache_size,
+        fragment_cache_size=config.fragment_cache_size,
+        optimized_cache_size=config.optimized_cache_size,
+    )
 
     global _default_cache, _global_cache_config, _namespaced_cache
     _global_cache_config = config
@@ -494,15 +520,14 @@ def update_cache_config(config: CacheConfig) -> None:
     _default_cache = None
     _namespaced_cache = None
 
-    logger = get_logger("sqlspec.cache")
-    logger.debug(
-        "Cache configuration updated - all caches cleared",
-        extra={
-            "compiled_cache_enabled": config.compiled_cache_enabled,
-            "sql_cache_enabled": config.sql_cache_enabled,
-            "fragment_cache_enabled": config.fragment_cache_enabled,
-            "optimized_cache_enabled": config.optimized_cache_enabled,
-        },
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "cache.config.cleared",
+        compiled_cache_enabled=config.compiled_cache_enabled,
+        sql_cache_enabled=config.sql_cache_enabled,
+        fragment_cache_enabled=config.fragment_cache_enabled,
+        optimized_cache_enabled=config.optimized_cache_enabled,
     )
 
 
@@ -524,7 +549,17 @@ def log_cache_stats() -> None:
     """Log cache statistics."""
     logger = get_logger("sqlspec.cache")
     stats = get_cache_stats()
-    logger.debug("Cache Statistics: %s", stats)
+    stats_summary = {
+        name: {
+            "hits": stat.hits,
+            "misses": stat.misses,
+            "evictions": stat.evictions,
+            "total_operations": stat.total_operations,
+            "memory_usage": stat.memory_usage,
+        }
+        for name, stat in stats.items()
+    }
+    log_with_context(logger, logging.DEBUG, "cache.stats", stats=stats_summary)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

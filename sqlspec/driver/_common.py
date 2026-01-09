@@ -42,7 +42,7 @@ from sqlspec.core.parameters import fingerprint_parameters
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime
-from sqlspec.observability._common import resolve_db_system
+from sqlspec.observability._common import get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
@@ -145,7 +145,7 @@ class AsyncExceptionHandler(Protocol):
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
 
 
-logger = get_logger("driver")
+logger = get_logger("sqlspec.driver")
 
 DriverT = TypeVar("DriverT")
 VERSION_GROUPS_MIN_FOR_MINOR = 1
@@ -444,6 +444,7 @@ class StackExecutionObserver:
 
     def __enter__(self) -> "StackExecutionObserver":
         self.started = perf_counter()
+        trace_id, span_id = get_trace_context()
         attributes = {
             "sqlspec.stack.statement_count": len(self.stack.operations),
             "sqlspec.stack.continue_on_error": self.continue_on_error,
@@ -456,11 +457,14 @@ class StackExecutionObserver:
             logging.DEBUG,
             "stack.execute.start",
             driver=type(self.driver).__name__,
+            db_system=resolve_db_system(type(self.driver).__name__),
             stack_size=len(self.stack.operations),
             continue_on_error=self.continue_on_error,
             native_pipeline=self.native_pipeline,
             forced_disable=self.driver.stack_native_disabled,
             hashed_operations=self.hashed_operations,
+            trace_id=trace_id,
+            span_id=span_id,
         )
         return self
 
@@ -472,18 +476,22 @@ class StackExecutionObserver:
         self.runtime.span_manager.end_span(self.span, error=exc if exc is not None else None)
         self.metrics.emit(self.runtime)
         level = logging.ERROR if exc is not None else logging.DEBUG
+        trace_id, span_id = get_trace_context()
         log_with_context(
             logger,
             level,
             "stack.execute.failed" if exc is not None else "stack.execute.complete",
             driver=type(self.driver).__name__,
+            db_system=resolve_db_system(type(self.driver).__name__),
             stack_size=len(self.stack.operations),
             continue_on_error=self.continue_on_error,
             native_pipeline=self.native_pipeline,
             forced_disable=self.driver.stack_native_disabled,
             hashed_operations=self.hashed_operations,
-            duration_s=duration,
+            duration_ms=duration * 1000,
             error_type=type(exc).__name__ if exc is not None else None,
+            trace_id=trace_id,
+            span_id=span_id,
         )
         return False
 
@@ -699,6 +707,32 @@ class DataDictionaryMixin:
         """Log that database version could not be determined."""
 
         logger.debug("Database version unavailable", extra={"db.system": resolve_db_system(adapter), "reason": reason})
+
+    def _log_schema_introspect(
+        self, driver: Any, *, schema_name: "str | None", table_name: "str | None", operation: str
+    ) -> None:
+        """Log schema-level introspection activity."""
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "schema.introspect",
+            db_system=resolve_db_system(type(driver).__name__),
+            schema_name=schema_name,
+            table_name=table_name,
+            operation=operation,
+        )
+
+    def _log_table_describe(self, driver: Any, *, schema_name: "str | None", table_name: str, operation: str) -> None:
+        """Log table-level introspection activity."""
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "table.describe",
+            db_system=resolve_db_system(type(driver).__name__),
+            schema_name=schema_name,
+            table_name=table_name,
+            operation=operation,
+        )
 
     def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version.

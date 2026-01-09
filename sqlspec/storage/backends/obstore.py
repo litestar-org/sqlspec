@@ -6,6 +6,7 @@ and local file storage.
 
 import fnmatch
 import io
+import logging
 import re
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
@@ -19,7 +20,7 @@ from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_obstore
 
 __all__ = ("ObStoreBackend",)
@@ -28,6 +29,34 @@ logger = get_logger(__name__)
 
 
 DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}
+
+
+def _log_storage_event(
+    event: str,
+    *,
+    backend_type: str,
+    protocol: str,
+    operation: str | None = None,
+    mode: str | None = "sync",
+    path: str | None = None,
+    source_path: str | None = None,
+    destination_path: str | None = None,
+    count: int | None = None,
+    exists: bool | None = None,
+) -> None:
+    fields: dict[str, Any] = {
+        "backend_type": backend_type,
+        "protocol": protocol,
+        "mode": mode,
+        "path": path,
+        "source_path": source_path,
+        "destination_path": destination_path,
+        "count": count,
+        "exists": exists,
+    }
+    if operation is not None:
+        fields["operation"] = operation
+    log_with_context(logger, logging.DEBUG, event, **fields)
 
 
 def _read_obstore_bytes(store: Any, resolved_path: str) -> bytes:
@@ -104,7 +133,13 @@ class ObStoreBackend:
 
                 self.store = from_url(uri, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
 
-            logger.debug("ObStore backend initialized for %s", uri)
+            _log_storage_event(
+                "storage.backend.ready",
+                backend_type=self.backend_type,
+                protocol=self.protocol,
+                operation="init",
+                path=uri,
+            )
 
         except Exception as exc:
             msg = f"Failed to initialize obstore backend for {uri}"
@@ -150,12 +185,20 @@ class ObStoreBackend:
         """Read bytes using obstore."""
         resolved_path = self._resolve_path(path)
 
-        return execute_sync_storage_operation(
+        result = execute_sync_storage_operation(
             partial(_read_obstore_bytes, self.store, resolved_path),
             backend=self.backend_type,
             operation="read_bytes",
             path=resolved_path,
         )
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="read_bytes",
+            path=resolved_path,
+        )
+        return result
 
     def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
@@ -164,6 +207,13 @@ class ObStoreBackend:
         execute_sync_storage_operation(
             partial(self.store.put, resolved_path, data),
             backend=self.backend_type,
+            operation="write_bytes",
+            path=resolved_path,
+        )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
             operation="write_bytes",
             path=resolved_path,
         )
@@ -184,7 +234,16 @@ class ObStoreBackend:
             else self.base_path or ""
         )
         items = self.store.list_with_delimiter(resolved_prefix) if not recursive else self.store.list(resolved_prefix)
-        return sorted(item["path"] for batch in items for item in batch)
+        paths = sorted(item["path"] for batch in items for item in batch)
+        _log_storage_event(
+            "storage.list",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="list_objects",
+            path=resolved_prefix,
+            count=len(paths),
+        )
+        return paths
 
     def exists(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists using obstore."""
@@ -192,7 +251,23 @@ class ObStoreBackend:
             resolved_path = self._resolve_path(path)
             self.store.head(resolved_path)  # pyright: ignore[reportUnknownMemberType]
         except Exception:
+            _log_storage_event(
+                "storage.read",
+                backend_type=self.backend_type,
+                protocol=self.protocol,
+                operation="exists",
+                path=str(path),
+                exists=False,
+            )
             return False
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="exists",
+            path=resolved_path,
+            exists=True,
+        )
         return True
 
     def delete(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
@@ -200,6 +275,13 @@ class ObStoreBackend:
         resolved_path = self._resolve_path(path)
         execute_sync_storage_operation(
             partial(self.store.delete, resolved_path), backend=self.backend_type, operation="delete", path=resolved_path
+        )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="delete",
+            path=resolved_path,
         )
 
     def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
@@ -212,6 +294,14 @@ class ObStoreBackend:
             operation="copy",
             path=f"{source_path}->{dest_path}",
         )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="copy",
+            source_path=source_path,
+            destination_path=dest_path,
+        )
 
     def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object using obstore."""
@@ -222,6 +312,14 @@ class ObStoreBackend:
             backend=self.backend_type,
             operation="move",
             path=f"{source_path}->{dest_path}",
+        )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="move",
+            source_path=source_path,
+            destination_path=dest_path,
         )
 
     def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
@@ -248,9 +346,18 @@ class ObStoreBackend:
                     obj_path = PurePosixPath(obj)
                     if obj_path.match(resolved_pattern):
                         matching_objects.append(obj)
-
-            return matching_objects
-        return [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
+            results = matching_objects
+        else:
+            results = [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
+        _log_storage_event(
+            "storage.list",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="glob",
+            path=resolved_pattern,
+            count=len(results),
+        )
+        return results
 
     def get_metadata(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore."""
@@ -311,7 +418,7 @@ class ObStoreBackend:
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         data = self.read_bytes(resolved_path)
-        return cast(
+        result = cast(
             "ArrowTable",
             execute_sync_storage_operation(
                 partial(pq.read_table, io.BytesIO(data), **kwargs),
@@ -320,6 +427,14 @@ class ObStoreBackend:
                 path=resolved_path,
             ),
         )
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="read_arrow",
+            path=resolved_path,
+        )
+        return result
 
     def write_arrow(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table using obstore."""
@@ -351,6 +466,13 @@ class ObStoreBackend:
         )
         buffer.seek(0)
         self.write_bytes(resolved_path, buffer.read())
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_arrow",
+            path=resolved_path,
+        )
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
         """Stream Arrow record batches.
@@ -458,8 +580,17 @@ class ObStoreBackend:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         result = await self.store.get_async(resolved_path)
-        bytes_obj = await result.bytes_async()
-        return bytes_obj.to_bytes()  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
+        bytes_obj = await result.bytes_async()  # pyright: ignore[reportAttributeAccessIssue]
+        data = cast("bytes", bytes_obj.to_bytes())
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="read_bytes",
+            mode="async",
+            path=resolved_path,
+        )
+        return data
 
     async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes to storage asynchronously."""
@@ -469,6 +600,14 @@ class ObStoreBackend:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         await self.store.put_async(resolved_path, data)
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_bytes",
+            mode="async",
+            path=resolved_path,
+        )
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""
@@ -486,7 +625,17 @@ class ObStoreBackend:
             base_depth = resolved_prefix.count("/")
             objects = [obj for obj in objects if obj.count("/") <= base_depth + 1]
 
-        return sorted(objects)
+        results = sorted(objects)
+        _log_storage_event(
+            "storage.list",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="list_objects",
+            mode="async",
+            path=resolved_prefix,
+            count=len(results),
+        )
+        return results
 
     async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""
@@ -508,7 +657,25 @@ class ObStoreBackend:
         try:
             await self.store.head_async(resolved_path)
         except Exception:
+            _log_storage_event(
+                "storage.read",
+                backend_type=self.backend_type,
+                protocol=self.protocol,
+                operation="exists",
+                mode="async",
+                path=str(path),
+                exists=False,
+            )
             return False
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="exists",
+            mode="async",
+            path=resolved_path,
+            exists=True,
+        )
         return True
 
     async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
@@ -519,6 +686,14 @@ class ObStoreBackend:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         await self.store.delete_async(resolved_path)
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="delete",
+            mode="async",
+            path=resolved_path,
+        )
 
     async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object in storage asynchronously."""
@@ -530,6 +705,15 @@ class ObStoreBackend:
             dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
 
         await self.store.copy_async(source_path, dest_path)
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="copy",
+            mode="async",
+            source_path=source_path,
+            destination_path=dest_path,
+        )
 
     async def move_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object in storage asynchronously."""
@@ -541,6 +725,15 @@ class ObStoreBackend:
             dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
 
         await self.store.rename_async(source_path, dest_path)
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="move",
+            mode="async",
+            source_path=source_path,
+            destination_path=dest_path,
+        )
 
     async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
         """Get object metadata from storage asynchronously."""
@@ -573,7 +766,16 @@ class ObStoreBackend:
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         data = await self.read_bytes_async(resolved_path)
-        return cast("ArrowTable", pq.read_table(io.BytesIO(data), **kwargs))
+        result = cast("ArrowTable", pq.read_table(io.BytesIO(data), **kwargs))
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="read_arrow",
+            mode="async",
+            path=resolved_path,
+        )
+        return result
 
     async def write_arrow_async(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""
@@ -583,6 +785,14 @@ class ObStoreBackend:
         pq.write_table(table, buffer, **kwargs)
         buffer.seek(0)
         await self.write_bytes_async(resolved_path, buffer.read())
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_arrow",
+            mode="async",
+            path=resolved_path,
+        )
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.

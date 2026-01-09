@@ -45,7 +45,7 @@ from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
 
 __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "AsyncpgSessionContext")
 
-logger = get_logger("adapters.asyncpg")
+logger = get_logger("sqlspec.adapters.asyncpg")
 
 
 class AsyncpgCursor:

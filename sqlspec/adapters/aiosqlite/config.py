@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatures", "AiosqlitePoolParams")
 
-logger = get_logger("adapters.aiosqlite")
+logger = get_logger("sqlspec.adapters.aiosqlite")
 
 
 class AiosqliteConnectionParams(TypedDict):

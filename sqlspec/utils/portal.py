@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 __all__ = ("Portal", "PortalManager", "PortalProvider", "get_global_portal")
 
-logger = get_logger("utils.portal")
+logger = get_logger("sqlspec.utils.portal")
 
 _R = TypeVar("_R")
 

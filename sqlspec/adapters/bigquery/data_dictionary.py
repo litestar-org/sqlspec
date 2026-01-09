@@ -71,6 +71,7 @@ class BigQueryDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["BigQueryDr
 
     def get_tables(self, driver: "BigQueryDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by topological dependency order using BigQuery catalog."""
+        self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="tables")
         if schema:
             tables_table = f"`{schema}.INFORMATION_SCHEMA.TABLES`"
             kcu_table = f"`{schema}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
@@ -91,9 +92,11 @@ class BigQueryDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["BigQueryDr
         """Get column information for a table or schema."""
         schema_prefix = f"`{schema}`." if schema else ""
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="columns")
             query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_name=schema, schema_type=ColumnMetadata)
 
+        self._log_table_describe(driver, schema_name=schema, table_name=table, operation="columns")
         query_text = self.get_query_text("columns_by_table").format(schema_prefix=schema_prefix)
         return driver.select(query_text, table_name=table, schema_name=schema, schema_type=ColumnMetadata)
 
@@ -101,16 +104,21 @@ class BigQueryDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["BigQueryDr
         self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[IndexMetadata]":
         """Get index metadata for a table or schema."""
-        _ = schema
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="indexes")
             return driver.select(self.get_query("indexes_by_schema"), schema_type=IndexMetadata)
 
+        self._log_table_describe(driver, schema_name=schema, table_name=table, operation="indexes")
         return driver.select(self.get_query("indexes_by_table"), schema_type=IndexMetadata)
 
     def get_foreign_keys(
         self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="foreign_keys")
+        else:
+            self._log_table_describe(driver, schema_name=schema, table_name=table, operation="foreign_keys")
         if schema:
             kcu_table = f"`{schema}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
             rc_table = f"`{schema}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"

@@ -8,13 +8,15 @@ Spanner requires:
 - PRIMARY KEY declared inline in CREATE TABLE
 """
 
+import logging
+
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.extensions.events._store import BaseEventQueueStore
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 __all__ = ("SpannerSyncEventQueueStore",)
 
-logger = get_logger("adapters.spanner.events.store")
+logger = get_logger("sqlspec.adapters.spanner.events.store")
 
 
 class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
@@ -148,7 +150,14 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
 
         database = config.get_database()
         statements = self.create_statements()
-        logger.debug("Creating event queue table with %d DDL statements", len(statements))
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "events.queue.create",
+            adapter_name="spanner",
+            table_name=self.table_name,
+            statement_count=len(statements),
+        )
         database.update_ddl(statements).result()  # type: ignore[no-untyped-call]
 
     def drop_table(self) -> None:
@@ -167,5 +176,12 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
 
         database = config.get_database()
         statements = self.drop_statements()
-        logger.debug("Dropping event queue table with %d DDL statements", len(statements))
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "events.queue.drop",
+            adapter_name="spanner",
+            table_name=self.table_name,
+            statement_count=len(statements),
+        )
         database.update_ddl(statements).result()  # type: ignore[no-untyped-call]

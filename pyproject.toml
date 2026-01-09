@@ -18,7 +18,6 @@ Source = "https://github.com/litestar-org/sqlspec"
 adbc = ["adbc_driver_manager", "pyarrow"]
 adk = ["google-adk"]
 aioodbc = ["aioodbc"]
-aiosql = ["aiosql"]
 aiosqlite = ["aiosqlite"]
 alloydb = ["google-cloud-alloydb-connector"]
 asyncmy = ["asyncmy"]
@@ -377,8 +376,6 @@ module = [
   "opentelemetry",
   "prometheus_client",
   "prometheus_client.*",
-  "aiosql",
-  "aiosql.*",
   "fsspec",
   "fsspec.*",
   "sqlglot",

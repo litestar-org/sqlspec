@@ -1,5 +1,6 @@
 """SQLSpec-backed session service for Google ADK."""
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -7,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from google.adk.sessions.base_session_service import BaseSessionService, GetSessionConfig, ListSessionsResponse
 
 from sqlspec.extensions.adk.converters import event_to_record, record_to_session
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from google.adk.events.event import Event
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.adk.store import BaseAsyncADKStore
 
-logger = get_logger("extensions.adk.service")
+logger = get_logger("sqlspec.extensions.adk.service")
 
 __all__ = ("SQLSpecSessionService",)
 
@@ -82,6 +83,9 @@ class SQLSpecSessionService(BaseSessionService):
         record = await self._store.create_session(
             session_id=session_id, app_name=app_name, user_id=user_id, state=state
         )
+        log_with_context(
+            logger, logging.DEBUG, "adk.session.create", app_name=app_name, session_id=session_id, has_state=bool(state)
+        )
 
         return record_to_session(record, events=[])
 
@@ -102,9 +106,15 @@ class SQLSpecSessionService(BaseSessionService):
         record = await self._store.get_session(session_id)
 
         if not record:
+            log_with_context(
+                logger, logging.DEBUG, "adk.session.get", app_name=app_name, session_id=session_id, found=False
+            )
             return None
 
         if record["app_name"] != app_name or record["user_id"] != user_id:
+            log_with_context(
+                logger, logging.DEBUG, "adk.session.get", app_name=app_name, session_id=session_id, found=False
+            )
             return None
 
         after_timestamp = None
@@ -116,6 +126,15 @@ class SQLSpecSessionService(BaseSessionService):
             limit = config.num_recent_events
 
         events = await self._store.get_events(session_id=session_id, after_timestamp=after_timestamp, limit=limit)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.session.get",
+            app_name=app_name,
+            session_id=session_id,
+            found=True,
+            event_count=len(events),
+        )
 
         return record_to_session(record, events)
 
@@ -132,6 +151,14 @@ class SQLSpecSessionService(BaseSessionService):
         records = await self._store.list_sessions(app_name=app_name, user_id=user_id)
 
         sessions = [record_to_session(record, events=[]) for record in records]
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.session.list",
+            app_name=app_name,
+            has_user_id=user_id is not None,
+            count=len(sessions),
+        )
 
         return ListSessionsResponse(sessions=sessions)
 
@@ -146,12 +173,21 @@ class SQLSpecSessionService(BaseSessionService):
         record = await self._store.get_session(session_id)
 
         if not record:
+            log_with_context(
+                logger, logging.DEBUG, "adk.session.delete", app_name=app_name, session_id=session_id, deleted=False
+            )
             return
 
         if record["app_name"] != app_name or record["user_id"] != user_id:
+            log_with_context(
+                logger, logging.DEBUG, "adk.session.delete", app_name=app_name, session_id=session_id, deleted=False
+            )
             return
 
         await self._store.delete_session(session_id)
+        log_with_context(
+            logger, logging.DEBUG, "adk.session.delete", app_name=app_name, session_id=session_id, deleted=True
+        )
 
     async def append_event(self, session: "Session", event: "Event") -> "Event":
         """Append an event to a session.
@@ -173,6 +209,14 @@ class SQLSpecSessionService(BaseSessionService):
         )
 
         await self._store.append_event(event_record)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.session.event.append",
+            app_name=session.app_name,
+            session_id=session.id,
+            partial=bool(event.partial),
+        )
 
         session_record = await self._store.get_session(session.id)
         if session_record:

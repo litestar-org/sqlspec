@@ -5,6 +5,7 @@ This module provides the main command interface for database migrations.
 
 import functools
 import inspect
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
@@ -19,7 +20,8 @@ from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
-from sqlspec.utils.logging import get_logger
+from sqlspec.observability._common import resolve_db_system
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version, parse_version
 
 if TYPE_CHECKING:
@@ -29,7 +31,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncMigrationCommands", "SyncMigrationCommands", "create_migration_commands")
 
-logger = get_logger("migrations.commands")
+logger = get_logger("sqlspec.migrations.commands")
 console = Console()
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -202,11 +204,22 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             current = self.tracker.get_current_version(driver)
             if not current:
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.list",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    current_version=None,
+                    applied_count=0,
+                    verbose=verbose,
+                    status="empty",
+                )
                 console.print("[yellow]No migrations applied yet[/]")
                 return None
 
             console.print(f"[green]Current version:[/] {current}")
 
+            applied: list[dict[str, Any]] = []
             if verbose:
                 applied = self.tracker.get_applied_migrations(driver)
 
@@ -228,6 +241,17 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
                 console.print(table)
 
+            applied_count = len(applied) if verbose else None
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(driver).__name__),
+                current_version=current,
+                applied_count=applied_count,
+                verbose=verbose,
+                status="complete",
+            )
             return cast("str | None", current)
 
     def _load_single_migration_checksum(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
@@ -243,8 +267,18 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         try:
             migration = self.runner.load_migration(file_path, version)
             return (version, (migration["checksum"], file_path))
-        except Exception as e:
-            logger.debug("Could not load migration %s for auto-sync: %s", version, e)
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(self.config).__name__),
+                version=version,
+                file_path=str(file_path),
+                error_type=type(exc).__name__,
+                status="failed",
+                operation="load_checksum",
+            )
             return None
 
     def _load_migration_checksums(self, all_migrations: "list[tuple[str, Path]]") -> "dict[str, tuple[str, Path]]":
@@ -282,8 +316,16 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
         try:
             applied_migrations = self.tracker.get_applied_migrations(driver)
-        except Exception:
-            logger.debug("Could not fetch applied migrations for synchronization (table schema may be migrating)")
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(driver).__name__),
+                error_type=type(exc).__name__,
+                status="failed",
+                operation="applied_fetch",
+            )
             return 0
 
         applied_map = {m["version_num"]: m for m in applied_migrations}
@@ -544,6 +586,16 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             config=self.config,
             template_settings=self._template_settings,
         )
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.create",
+            db_system=resolve_db_system(type(self.config).__name__),
+            version=version,
+            file_path=str(file_path),
+            file_type=selected_format,
+            description=message,
+        )
         console.print(f"[green]Created migration:[/] {file_path}")
 
     def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
@@ -680,10 +732,21 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             current = await self.tracker.get_current_version(driver)
             if not current:
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.list",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    current_version=None,
+                    applied_count=0,
+                    verbose=verbose,
+                    status="empty",
+                )
                 console.print("[yellow]No migrations applied yet[/]")
                 return None
 
             console.print(f"[green]Current version:[/] {current}")
+            applied: list[dict[str, Any]] = []
             if verbose:
                 applied = await self.tracker.get_applied_migrations(driver)
                 table = Table(title="Applied Migrations")
@@ -702,6 +765,17 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     )
                 console.print(table)
 
+            applied_count = len(applied) if verbose else None
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(driver).__name__),
+                current_version=current,
+                applied_count=applied_count,
+                verbose=verbose,
+                status="complete",
+            )
             return cast("str | None", current)
 
     async def _load_single_migration_checksum(
@@ -719,8 +793,18 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         try:
             migration = await self.runner.load_migration(file_path, version)
             return (version, (migration["checksum"], file_path))
-        except Exception as e:
-            logger.debug("Could not load migration %s for auto-sync: %s", version, e)
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(self.config).__name__),
+                version=version,
+                file_path=str(file_path),
+                error_type=type(exc).__name__,
+                status="failed",
+                operation="load_checksum",
+            )
             return None
 
     async def _load_migration_checksums(
@@ -760,8 +844,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
         try:
             applied_migrations = await self.tracker.get_applied_migrations(driver)
-        except Exception:
-            logger.debug("Could not fetch applied migrations for synchronization (table schema may be migrating)")
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(driver).__name__),
+                error_type=type(exc).__name__,
+                status="failed",
+                operation="applied_fetch",
+            )
             return 0
 
         applied_map = {m["version_num"]: m for m in applied_migrations}
@@ -1025,6 +1117,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             selected_format,
             config=self.config,
             template_settings=self._template_settings,
+        )
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.create",
+            db_system=resolve_db_system(type(self.config).__name__),
+            version=version,
+            file_path=str(file_path),
+            file_type=selected_format,
+            description=message,
         )
         console.print(f"[green]Created migration:[/] {file_path}")
 

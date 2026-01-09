@@ -51,7 +51,7 @@ __all__ = (
 ASYNC_PG_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 EXPECTED_REGEX_GROUPS = 3
 
-logger = get_logger("adapters.asyncpg.core")
+logger = get_logger("sqlspec.adapters.asyncpg.core")
 _PGVECTOR_MISSING_LOGGED = False
 
 

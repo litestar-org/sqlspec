@@ -6,7 +6,6 @@ from typing import Annotated, Any, Literal, Protocol, TypeAlias, _TypedDict  # p
 from typing_extensions import TypeVar
 
 from sqlspec._typing import (
-    AIOSQL_INSTALLED,
     ALLOYDB_CONNECTOR_INSTALLED,
     ATTRS_INSTALLED,
     CATTRS_INSTALLED,
@@ -27,10 +26,6 @@ from sqlspec._typing import (
     PYDANTIC_INSTALLED,
     UNSET,
     UUID_UTILS_INSTALLED,
-    AiosqlAsyncProtocol,
-    AiosqlParamType,
-    AiosqlSQLOperationType,
-    AiosqlSyncProtocol,
     ArrowRecordBatch,
     ArrowRecordBatchReader,
     ArrowRecordBatchReaderProtocol,
@@ -61,7 +56,6 @@ from sqlspec._typing import (
     Tracer,
     TypeAdapter,
     UnsetType,
-    aiosql,
     attrs_asdict,
     attrs_define,
     attrs_field,
@@ -149,7 +143,6 @@ def get_type_adapter(f: "type[T]") -> Any:
 
 
 __all__ = (
-    "AIOSQL_INSTALLED",
     "ALLOYDB_CONNECTOR_INSTALLED",
     "ATTRS_INSTALLED",
     "CATTRS_INSTALLED",
@@ -171,10 +164,6 @@ __all__ = (
     "PYDANTIC_USE_FAILFAST",
     "UNSET",
     "UUID_UTILS_INSTALLED",
-    "AiosqlAsyncProtocol",
-    "AiosqlParamType",
-    "AiosqlSQLOperationType",
-    "AiosqlSyncProtocol",
     "ArrowRecordBatch",
     "ArrowRecordBatchReader",
     "ArrowRecordBatchReaderProtocol",
@@ -209,7 +198,6 @@ __all__ = (
     "Tracer",
     "TypeAdapter",
     "UnsetType",
-    "aiosql",
     "attrs_asdict",
     "attrs_define",
     "attrs_field",

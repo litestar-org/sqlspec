@@ -1,4 +1,5 @@
 # pyright: reportPrivateUsage=false
+import logging
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
@@ -9,7 +10,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.storage._utils import import_pyarrow_parquet, resolve_storage_path
 from sqlspec.storage.errors import execute_sync_storage_operation
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
@@ -19,6 +20,32 @@ if TYPE_CHECKING:
 __all__ = ("FSSpecBackend",)
 
 logger = get_logger(__name__)
+
+
+def _log_storage_event(
+    event: str,
+    *,
+    backend_type: str,
+    protocol: str,
+    operation: str | None = None,
+    path: str | None = None,
+    source_path: str | None = None,
+    destination_path: str | None = None,
+    count: int | None = None,
+    exists: bool | None = None,
+) -> None:
+    fields: dict[str, Any] = {
+        "backend_type": backend_type,
+        "protocol": protocol,
+        "path": path,
+        "source_path": source_path,
+        "destination_path": destination_path,
+        "count": count,
+        "exists": exists,
+    }
+    if operation is not None:
+        fields["operation"] = operation
+    log_with_context(logger, logging.DEBUG, event, **fields)
 
 
 def _write_fsspec_bytes(fs: Any, resolved_path: str, data: bytes, options: "dict[str, Any]") -> None:
@@ -74,6 +101,14 @@ class FSSpecBackend:
         self.fs = fsspec.filesystem(self.protocol, **kwargs)
         self.backend_type = "fsspec"
 
+        _log_storage_event(
+            "storage.backend.ready",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="init",
+            path=self._fs_uri,
+        )
+
         super().__init__()
 
     @classmethod
@@ -99,7 +134,7 @@ class FSSpecBackend:
     def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from an object."""
         resolved_path = self._resolve_path(path)
-        return cast(
+        result = cast(
             "bytes",
             execute_sync_storage_operation(
                 partial(self.fs.cat, resolved_path, **kwargs),
@@ -108,6 +143,14 @@ class FSSpecBackend:
                 path=resolved_path,
             ),
         )
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="read_bytes",
+            path=resolved_path,
+        )
+        return result
 
     def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
@@ -124,6 +167,13 @@ class FSSpecBackend:
             operation="write_bytes",
             path=resolved_path,
         )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_bytes",
+            path=resolved_path,
+        )
 
     def read_text(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from an object."""
@@ -137,7 +187,16 @@ class FSSpecBackend:
     def exists(self, path: str | Path, **kwargs: Any) -> bool:
         """Check if an object exists."""
         resolved_path = self._resolve_path(path)
-        return self.fs.exists(resolved_path, **kwargs)  # type: ignore[no-any-return]
+        exists = bool(self.fs.exists(resolved_path, **kwargs))
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="exists",
+            path=resolved_path,
+            exists=bool(exists),
+        )
+        return exists
 
     def delete(self, path: str | Path, **kwargs: Any) -> None:
         """Delete an object."""
@@ -145,6 +204,13 @@ class FSSpecBackend:
         execute_sync_storage_operation(
             partial(self.fs.rm, resolved_path, **kwargs),
             backend=self.backend_type,
+            operation="delete",
+            path=resolved_path,
+        )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
             operation="delete",
             path=resolved_path,
         )
@@ -159,6 +225,14 @@ class FSSpecBackend:
             operation="copy",
             path=f"{source_path}->{dest_path}",
         )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="copy",
+            source_path=source_path,
+            destination_path=dest_path,
+        )
 
     def move(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Move an object."""
@@ -170,13 +244,21 @@ class FSSpecBackend:
             operation="move",
             path=f"{source_path}->{dest_path}",
         )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="move",
+            source_path=source_path,
+            destination_path=dest_path,
+        )
 
     def read_arrow(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
         """Read an Arrow table from storage."""
         pq = import_pyarrow_parquet()
 
         resolved_path = self._resolve_path(path)
-        return cast(
+        result = cast(
             "ArrowTable",
             execute_sync_storage_operation(
                 partial(self._read_parquet_table, resolved_path, pq, kwargs),
@@ -185,6 +267,14 @@ class FSSpecBackend:
                 path=resolved_path,
             ),
         )
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="read_arrow",
+            path=resolved_path,
+        )
+        return result
 
     def write_arrow(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
         """Write an Arrow table to storage."""
@@ -198,6 +288,13 @@ class FSSpecBackend:
             operation="write_arrow",
             path=resolved_path,
         )
+        _log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_arrow",
+            path=resolved_path,
+        )
 
     def _read_parquet_table(self, resolved_path: str, pq: Any, options: "dict[str, Any]") -> Any:
         with self.fs.open(resolved_path, mode="rb", **options) as file_obj:
@@ -207,13 +304,32 @@ class FSSpecBackend:
         """List objects with optional prefix."""
         resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=False)
         if recursive:
-            return sorted(self.fs.find(resolved_prefix, **kwargs))
-        return sorted(self.fs.ls(resolved_prefix, detail=False, **kwargs))
+            results = sorted(self.fs.find(resolved_prefix, **kwargs))
+        else:
+            results = sorted(self.fs.ls(resolved_prefix, detail=False, **kwargs))
+        _log_storage_event(
+            "storage.list",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="list_objects",
+            path=resolved_prefix,
+            count=len(results),
+        )
+        return results
 
     def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching a glob pattern."""
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
-        return sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
+        results = sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
+        _log_storage_event(
+            "storage.list",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="glob",
+            path=resolved_pattern,
+            count=len(results),
+        )
+        return results
 
     def is_object(self, path: str | Path) -> bool:
         """Check if path points to an object."""

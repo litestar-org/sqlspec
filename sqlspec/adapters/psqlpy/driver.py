@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
 
-logger = get_logger("adapters.psqlpy")
+logger = get_logger("sqlspec.adapters.psqlpy")
 
 _type_converter = PostgreSQLOutputConverter()
 

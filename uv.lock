@@ -314,15 +314,6 @@ wheels = [
 ]
 
 [[package]]
-name = "aiosql"
-version = "15.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/dc/31/97ebbd15ead5cf9c3951d6e8dfafc5e7b7e8c52148768cb7b95cd443fc8a/aiosql-15.0.tar.gz", hash = "sha256:744939fdfb3e0c36d88ccaf1f73cb1cf8cc38e7052666b884502db99aff8f3fd", size = 77429, upload-time = "2026-01-04T19:14:41.239Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/a4/67a07ed3e827a50671d7248624c1d3666243c580b0b0567c62d12e1c6de7/aiosql-15.0-py3-none-any.whl", hash = "sha256:ba659870914258790da77a999902c0b7712d58754ca2bd335cf2be34a8433b42", size = 26145, upload-time = "2026-01-04T19:14:39.792Z" },
-]
-
-[[package]]
 name = "aiosqlite"
 version = "0.22.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1351,7 +1342,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -6197,9 +6188,6 @@ adk = [
 aioodbc = [
     { name = "aioodbc" },
 ]
-aiosql = [
-    { name = "aiosql" },
-]
 aiosqlite = [
     { name = "aiosqlite" },
 ]
@@ -6452,7 +6440,6 @@ test = [
 requires-dist = [
     { name = "adbc-driver-manager", marker = "extra == 'adbc'" },
     { name = "aioodbc", marker = "extra == 'aioodbc'" },
-    { name = "aiosql", marker = "extra == 'aiosql'" },
     { name = "aiosqlite", marker = "extra == 'aiosqlite'" },
     { name = "asyncmy", marker = "extra == 'asyncmy'" },
     { name = "asyncpg", marker = "extra == 'asyncpg'" },
@@ -6497,7 +6484,7 @@ requires-dist = [
     { name = "typing-extensions" },
     { name = "uuid-utils", marker = "extra == 'uuid'" },
 ]
-provides-extras = ["adbc", "adk", "aioodbc", "aiosql", "aiosqlite", "alloydb", "asyncmy", "asyncpg", "attrs", "bigquery", "cli", "cloud-sql", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mypyc", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "uuid"]
+provides-extras = ["adbc", "adk", "aioodbc", "aiosqlite", "alloydb", "asyncmy", "asyncpg", "attrs", "bigquery", "cli", "cloud-sql", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mypyc", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "uuid"]
 
 [package.metadata.requires-dev]
 benchmarks = [

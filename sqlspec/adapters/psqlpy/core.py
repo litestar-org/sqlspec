@@ -65,7 +65,7 @@ _JSONB_TYPE: "type[Any] | None" = None
 _JSONB_RESOLVED: bool = False
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
-logger = get_logger("adapters.psqlpy.core")
+logger = get_logger("sqlspec.adapters.psqlpy.core")
 
 
 def _get_jsonb_type() -> "type[Any] | None":

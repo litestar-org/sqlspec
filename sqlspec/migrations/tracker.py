@@ -3,6 +3,7 @@
 This module provides functionality to track applied migrations in the database.
 """
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -10,7 +11,8 @@ from rich.console import Console
 
 from sqlspec.builder import sql
 from sqlspec.migrations.base import BaseMigrationTracker
-from sqlspec.utils.logging import get_logger
+from sqlspec.observability._common import resolve_db_system
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
@@ -18,7 +20,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 
-logger = get_logger("migrations.tracker")
+logger = get_logger("sqlspec.migrations.tracker")
 
 
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
@@ -36,14 +38,30 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         try:
             columns_data = driver.data_dictionary.get_columns(driver, self.version_table)
             if not columns_data:
-                logger.debug("Migration tracking table does not exist yet")
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.track",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    table=self.version_table,
+                    operation="table_check",
+                    status="missing",
+                )
                 return
 
             existing_columns = {col["column_name"] for col in columns_data}
             missing_columns = self._detect_missing_columns(existing_columns)
 
             if not missing_columns:
-                logger.debug("Migration tracking table schema is up-to-date")
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.track",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    table=self.version_table,
+                    operation="schema_check",
+                    status="current",
+                )
                 return
 
             console = Console()
@@ -57,8 +75,17 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver.commit()
             console.print("[green]Migration tracking table schema updated successfully[/]")
 
-        except Exception:
-            logger.exception("Could not check or migrate tracking table schema")
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.ERROR,
+                "migration.track",
+                db_system=resolve_db_system(type(driver).__name__),
+                table=self.version_table,
+                operation="schema_check",
+                status="failed",
+                error_type=type(exc).__name__,
+            )
 
     def _add_column(self, driver: "SyncDriverAdapterBase", column_name: str) -> None:
         """Add a single column to the tracking table.
@@ -77,7 +104,16 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             name=column_def.name, dtype=column_def.dtype, default=column_def.default, not_null=column_def.not_null
         )
         driver.execute(alter_sql)
-        logger.debug("Added column %s to tracking table", column_name)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            table=self.version_table,
+            column_name=column_name,
+            operation="schema_update",
+            status="column_added",
+        )
 
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -102,7 +138,16 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             The current version number or None if no migrations applied.
         """
         result = driver.execute(self._get_current_version_sql())
-        return result.data[0]["version_num"] if result.data else None
+        current = result.data[0]["version_num"] if result.data else None
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.history",
+            db_system=resolve_db_system(type(driver).__name__),
+            current_version=current,
+            status="current",
+        )
+        return current
 
     def get_applied_migrations(self, driver: "SyncDriverAdapterBase") -> "list[dict[str, Any]]":
         """Get all applied migrations in order.
@@ -114,7 +159,16 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             List of migration records.
         """
         result = driver.execute(self._get_applied_migrations_sql())
-        return result.data or []
+        applied = result.data or []
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.history",
+            db_system=resolve_db_system(type(driver).__name__),
+            applied_count=len(applied),
+            status="listed",
+        )
+        return applied
 
     def record_migration(
         self, driver: "SyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
@@ -149,6 +203,15 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             )
         )
         self._safe_commit(driver)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=version,
+            operation="record",
+            status="recorded",
+        )
 
     def remove_migration(self, driver: "SyncDriverAdapterBase", version: str) -> None:
         """Remove a migration record (used during downgrade).
@@ -159,6 +222,15 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         """
         driver.execute(self._get_remove_migration_sql(version))
         self._safe_commit(driver)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=version,
+            operation="remove",
+            status="removed",
+        )
 
     def update_version_record(self, driver: "SyncDriverAdapterBase", old_version: str, new_version: str) -> None:
         """Update migration version record from timestamp to sequential.
@@ -187,14 +259,32 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
 
             if new_version in applied_versions:
-                logger.debug("Version already updated: %s -> %s", old_version, new_version)
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.track",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    old_version=old_version,
+                    new_version=new_version,
+                    operation="version_update",
+                    status="skipped",
+                )
                 return
 
             msg = f"Migration version {old_version} not found in database"
             raise ValueError(msg)
 
         self._safe_commit(driver)
-        logger.debug("Updated version record: %s -> %s", old_version, new_version)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            old_version=old_version,
+            new_version=new_version,
+            operation="version_update",
+            status="updated",
+        )
 
     def _safe_commit(self, driver: "SyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
@@ -207,8 +297,17 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
 
         try:
             driver.commit()
-        except Exception:
-            logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.track",
+                db_system=resolve_db_system(type(driver).__name__),
+                operation="commit",
+                status="skipped",
+                reason="autocommit",
+                error_type=type(exc).__name__,
+            )
 
 
 class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
@@ -226,14 +325,30 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         try:
             columns_data = await driver.data_dictionary.get_columns(driver, self.version_table)
             if not columns_data:
-                logger.debug("Migration tracking table does not exist yet")
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.track",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    table=self.version_table,
+                    operation="table_check",
+                    status="missing",
+                )
                 return
 
             existing_columns = {col["column_name"] for col in columns_data}
             missing_columns = self._detect_missing_columns(existing_columns)
 
             if not missing_columns:
-                logger.debug("Migration tracking table schema is up-to-date")
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.track",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    table=self.version_table,
+                    operation="schema_check",
+                    status="current",
+                )
                 return
 
             console = Console()
@@ -247,8 +362,17 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             await driver.commit()
             console.print("[green]Migration tracking table schema updated successfully[/]")
 
-        except Exception:
-            logger.exception("Could not check or migrate tracking table schema")
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.ERROR,
+                "migration.track",
+                db_system=resolve_db_system(type(driver).__name__),
+                table=self.version_table,
+                operation="schema_check",
+                status="failed",
+                error_type=type(exc).__name__,
+            )
 
     async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
         """Add a single column to the tracking table.
@@ -267,7 +391,16 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             name=column_def.name, dtype=column_def.dtype, default=column_def.default, not_null=column_def.not_null
         )
         await driver.execute(alter_sql)
-        logger.debug("Added column %s to tracking table", column_name)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            table=self.version_table,
+            column_name=column_name,
+            operation="schema_update",
+            status="column_added",
+        )
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -292,7 +425,16 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             The current version number or None if no migrations applied.
         """
         result = await driver.execute(self._get_current_version_sql())
-        return result.data[0]["version_num"] if result.data else None
+        current = result.data[0]["version_num"] if result.data else None
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.history",
+            db_system=resolve_db_system(type(driver).__name__),
+            current_version=current,
+            status="current",
+        )
+        return current
 
     async def get_applied_migrations(self, driver: "AsyncDriverAdapterBase") -> "list[dict[str, Any]]":
         """Get all applied migrations in order.
@@ -304,7 +446,16 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             List of migration records.
         """
         result = await driver.execute(self._get_applied_migrations_sql())
-        return result.data or []
+        applied = result.data or []
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.history",
+            db_system=resolve_db_system(type(driver).__name__),
+            applied_count=len(applied),
+            status="listed",
+        )
+        return applied
 
     async def record_migration(
         self, driver: "AsyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
@@ -339,6 +490,15 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             )
         )
         await self._safe_commit_async(driver)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=version,
+            operation="record",
+            status="recorded",
+        )
 
     async def remove_migration(self, driver: "AsyncDriverAdapterBase", version: str) -> None:
         """Remove a migration record (used during downgrade).
@@ -349,6 +509,15 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """
         await driver.execute(self._get_remove_migration_sql(version))
         await self._safe_commit_async(driver)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=version,
+            operation="remove",
+            status="removed",
+        )
 
     async def update_version_record(self, driver: "AsyncDriverAdapterBase", old_version: str, new_version: str) -> None:
         """Update migration version record from timestamp to sequential.
@@ -377,14 +546,32 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
 
             if new_version in applied_versions:
-                logger.debug("Version already updated: %s -> %s", old_version, new_version)
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.track",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    old_version=old_version,
+                    new_version=new_version,
+                    operation="version_update",
+                    status="skipped",
+                )
                 return
 
             msg = f"Migration version {old_version} not found in database"
             raise ValueError(msg)
 
         await self._safe_commit_async(driver)
-        logger.debug("Updated version record: %s -> %s", old_version, new_version)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            old_version=old_version,
+            new_version=new_version,
+            operation="version_update",
+            status="updated",
+        )
 
     async def _safe_commit_async(self, driver: "AsyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
@@ -397,5 +584,14 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
 
         try:
             await driver.commit()
-        except Exception:
-            logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.track",
+                db_system=resolve_db_system(type(driver).__name__),
+                operation="commit",
+                status="skipped",
+                reason="autocommit",
+                error_type=type(exc).__name__,
+            )

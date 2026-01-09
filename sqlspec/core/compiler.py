@@ -7,6 +7,7 @@ Components:
 """
 
 import hashlib
+import logging
 from collections import OrderedDict
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
@@ -23,12 +24,10 @@ from sqlspec.core.parameters import (
     fingerprint_parameters,
     validate_parameter_alignment,
 )
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import get_value_attribute
 
 if TYPE_CHECKING:
-    import logging
-
     from sqlspec.core.statement import StatementConfig
 
 
@@ -81,6 +80,8 @@ COPY_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM", "COPY_
 COPY_FROM_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM")
 
 COPY_TO_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY_TO",)
+
+ParseCacheEntry = tuple[exp.Expression | None, OperationType, dict[int, str], tuple[bool, bool]]
 
 
 def is_copy_operation(operation_type: "OperationType") -> bool:
@@ -362,6 +363,299 @@ class SQLProcessor:
         self._cache[cache_key] = result
         return result
 
+    def _prepare_parameters(
+        self, sql: str, parameters: Any, is_many: bool, dialect_str: "str | None"
+    ) -> "tuple[str, Any, ParameterProfile, str]":
+        """Process SQL parameters for compilation.
+
+        Args:
+            sql: SQL string.
+            parameters: Raw parameters.
+            is_many: Whether this is for execute_many.
+            dialect_str: Dialect name.
+
+        Returns:
+            Tuple of processed SQL, processed parameters, parameter profile, and SQLGlot SQL.
+        """
+        process_result = self._parameter_processor.process(
+            sql=sql,
+            parameters=parameters,
+            config=self._config.parameter_config,
+            dialect=dialect_str,
+            is_many=is_many,
+            wrap_types=self._config.enable_parameter_type_wrapping,
+        )
+        return (
+            process_result.sql,
+            process_result.parameters,
+            process_result.parameter_profile,
+            process_result.sqlglot_sql,
+        )
+
+    def _normalize_expression_override(
+        self, expression_override: "exp.Expression | None", sqlglot_sql: str, sql: str
+    ) -> "exp.Expression | None":
+        """Validate expression overrides against the input SQL.
+
+        Args:
+            expression_override: Pre-parsed SQLGlot expression.
+            sqlglot_sql: SQL passed to SQLGlot.
+            sql: Original SQL string.
+
+        Returns:
+            Expression override when it is safe to reuse.
+        """
+        if expression_override is None:
+            return None
+        if sqlglot_sql != sql:
+            return None
+        return expression_override
+
+    def _parse_expression_uncached(
+        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expression | None"
+    ) -> "tuple[exp.Expression | None, OperationType, dict[int, str], OperationProfile]":
+        """Parse SQL into an expression without cache.
+
+        Args:
+            sqlglot_sql: SQL string for SQLGlot.
+            dialect_str: Dialect name.
+            expression_override: Pre-parsed SQLGlot expression.
+
+        Returns:
+            Expression details and derived metadata.
+        """
+        try:
+            if expression_override is not None:
+                expression = expression_override
+            else:
+                expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
+        except ParseError:
+            return None, "EXECUTE", {}, OperationProfile.empty()
+        else:
+            operation_type = self._detect_operation_type(expression)
+            parameter_casts = self._detect_parameter_casts(expression)
+            operation_profile = self._build_operation_profile(expression, operation_type)
+            return expression, operation_type, parameter_casts, operation_profile
+
+    def _store_parse_cache(
+        self,
+        parse_cache_key: str,
+        expression: "exp.Expression | None",
+        operation_type: "OperationType",
+        parameter_casts: "dict[int, str]",
+        operation_profile: "OperationProfile",
+    ) -> None:
+        """Store parsed expression details in cache.
+
+        Args:
+            parse_cache_key: Cache key for the parsed SQL.
+            expression: Parsed SQLGlot expression.
+            operation_type: Detected operation type.
+            parameter_casts: Parameter cast mappings.
+            operation_profile: Operation metadata.
+        """
+        if len(self._parse_cache) >= self._parse_cache_max_size:
+            self._parse_cache.popitem(last=False)
+        cache_expression = expression.copy() if expression is not None else None
+        self._parse_cache[parse_cache_key] = (
+            cache_expression,
+            operation_type,
+            parameter_casts,
+            (operation_profile.returns_rows, operation_profile.modifies_rows),
+        )
+
+    def _unpack_parse_cache_entry(
+        self, parse_cache_entry: "ParseCacheEntry"
+    ) -> "tuple[exp.Expression | None, OperationType, dict[int, str], OperationProfile]":
+        """Expand cached parse results into runtime objects.
+
+        Args:
+            parse_cache_entry: Cached parse entry.
+
+        Returns:
+            Parsed expression metadata.
+        """
+        cached_expression, cached_operation, cached_casts, cached_profile = parse_cache_entry
+        expression = cached_expression.copy() if cached_expression is not None else None
+        operation_profile = OperationProfile(returns_rows=cached_profile[0], modifies_rows=cached_profile[1])
+        return expression, cached_operation, dict(cached_casts), operation_profile
+
+    def _resolve_expression(
+        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expression | None"
+    ) -> "tuple[exp.Expression | None, OperationType, dict[int, str], OperationProfile, str | None, ParseCacheEntry | None]":
+        """Resolve an SQLGlot expression with caching.
+
+        Args:
+            sqlglot_sql: SQL string for SQLGlot.
+            dialect_str: Dialect name.
+            expression_override: Pre-parsed SQLGlot expression.
+
+        Returns:
+            Expression metadata and parse cache information.
+        """
+        parse_cache_key = None
+        parse_cache_entry = None
+        if self._config.enable_caching and self._parse_cache_max_size > 0:
+            parse_cache_key = self._make_parse_cache_key(sqlglot_sql, dialect_str)
+            parse_cache_entry = self._parse_cache.get(parse_cache_key)
+            if parse_cache_entry is not None:
+                self._parse_cache_hits += 1
+                self._parse_cache.move_to_end(parse_cache_key)
+        if parse_cache_entry is None:
+            self._parse_cache_misses += 1
+            expression, operation_type, parameter_casts, operation_profile = self._parse_expression_uncached(
+                sqlglot_sql, dialect_str, expression_override
+            )
+            if parse_cache_key is not None:
+                self._store_parse_cache(parse_cache_key, expression, operation_type, parameter_casts, operation_profile)
+        else:
+            expression, operation_type, parameter_casts, operation_profile = self._unpack_parse_cache_entry(
+                parse_cache_entry
+            )
+        return expression, operation_type, parameter_casts, operation_profile, parse_cache_key, parse_cache_entry
+
+    def _apply_ast_transformers(
+        self,
+        expression: "exp.Expression | None",
+        parameters: Any,
+        parameter_profile: "ParameterProfile",
+        operation_type: "OperationType",
+        parameter_casts: "dict[int, str]",
+        operation_profile: "OperationProfile",
+        parse_cache_key: "str | None",
+        parse_cache_entry: "ParseCacheEntry | None",
+        expression_override: "exp.Expression | None",
+    ) -> "tuple[exp.Expression | None, Any, bool, OperationType, dict[int, str], OperationProfile]":
+        """Apply AST transformers and update metadata.
+
+        Args:
+            expression: SQLGlot expression to transform.
+            parameters: Execution parameters.
+            parameter_profile: Parameter profile metadata.
+            operation_type: Current operation type.
+            parameter_casts: Current parameter cast mapping.
+            operation_profile: Current operation profile.
+            parse_cache_key: Parse cache key when used.
+            parse_cache_entry: Cached parse entry when available.
+            expression_override: Expression override reference.
+
+        Returns:
+            Updated expression metadata and transformation state.
+        """
+        statement_transformers = self._config.statement_transformers
+        ast_transformer = self._config.parameter_config.ast_transformer
+        if expression is None or (not statement_transformers and not ast_transformer):
+            return expression, parameters, False, operation_type, parameter_casts, operation_profile
+
+        should_copy = False
+        if parse_cache_key is not None and parse_cache_entry is None:
+            should_copy = True
+        if expression_override is not None and expression is expression_override:
+            should_copy = True
+        if should_copy:
+            expression = expression.copy()
+
+        ast_was_transformed = False
+        if statement_transformers:
+            for transformer in statement_transformers:
+                expression, parameters = transformer(expression, parameters)
+            ast_was_transformed = True
+        if ast_transformer:
+            expression, parameters = ast_transformer(expression, parameters, parameter_profile)
+            ast_was_transformed = True
+        if ast_was_transformed:
+            if expression is None:
+                return expression, parameters, ast_was_transformed, operation_type, parameter_casts, operation_profile
+            operation_type = self._detect_operation_type(expression)
+            parameter_casts = self._detect_parameter_casts(expression)
+            operation_profile = self._build_operation_profile(expression, operation_type)
+
+        return expression, parameters, ast_was_transformed, operation_type, parameter_casts, operation_profile
+
+    def _finalize_compilation(
+        self,
+        processed_sql: str,
+        processed_params: Any,
+        expression: "exp.Expression | None",
+        parameters: Any,
+        parameter_profile: "ParameterProfile",
+        is_many: bool,
+        dialect_str: "str | None",
+        ast_was_transformed: bool,
+    ) -> "tuple[str, Any, ParameterProfile]":
+        """Finalize SQL and parameter conversion for execution.
+
+        Args:
+            processed_sql: SQL after parameter processing.
+            processed_params: Parameters after initial processing.
+            expression: SQLGlot expression if available.
+            parameters: Parameters to compile for execution.
+            parameter_profile: Parameter profile metadata.
+            is_many: Whether this is for execute_many.
+            dialect_str: Dialect name.
+            ast_was_transformed: Whether AST transformations ran.
+
+        Returns:
+            Final SQL, execution parameters, and parameter profile.
+        """
+        if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
+            return processed_sql, processed_params, parameter_profile
+        if ast_was_transformed and expression is not None:
+            transformed_result = self._parameter_processor.process_for_execution(
+                sql=expression.sql(dialect=dialect_str),
+                parameters=parameters,
+                config=self._config.parameter_config,
+                dialect=dialect_str,
+                is_many=is_many,
+                wrap_types=self._config.enable_parameter_type_wrapping,
+            )
+            final_sql = transformed_result.sql
+            final_params = transformed_result.parameters
+            parameter_profile = transformed_result.parameter_profile
+            output_transformer = self._config.output_transformer
+            if output_transformer:
+                final_sql, final_params = output_transformer(final_sql, final_params)
+            return final_sql, final_params, parameter_profile
+
+        final_sql, final_params = self._apply_final_transformations(expression, processed_sql, parameters, dialect_str)
+        return final_sql, final_params, parameter_profile
+
+    def _should_validate_parameters(self, final_params: Any, raw_parameters: Any, is_many: bool) -> bool:
+        """Determine if parameter alignment should be validated.
+
+        Args:
+            final_params: Parameters after compilation.
+            raw_parameters: Original parameters.
+            is_many: Whether this is for execute_many.
+
+        Returns:
+            True when validation should run.
+        """
+        if not self._config.enable_validation:
+            return False
+        return not (
+            _is_effectively_empty_parameters(final_params)
+            and _is_effectively_empty_parameters(raw_parameters)
+            and not is_many
+        )
+
+    def _validate_parameters(self, parameter_profile: "ParameterProfile", final_params: Any, is_many: bool) -> None:
+        """Validate parameter alignment and log failures.
+
+        Args:
+            parameter_profile: Parameter metadata.
+            final_params: Execution parameters.
+            is_many: Whether this is for execute_many.
+
+        Raises:
+            Exception: Re-raises validation errors from parameter alignment.
+        """
+        try:
+            validate_parameter_alignment(parameter_profile, final_params, is_many=is_many)
+        except Exception as exc:
+            log_with_context(logger, logging.ERROR, "sql.validate", error_type=type(exc).__name__)
+            raise
+
     def _compile_uncached(
         self, sql: str, parameters: Any, is_many: bool = False, expression_override: "exp.Expression | None" = None
     ) -> CompiledSQL:
@@ -381,128 +675,55 @@ class SQLProcessor:
 
         try:
             dialect_str = str(self._config.dialect) if self._config.dialect else None
-
-            processed_sql: str
-            processed_params: Any
-            process_result = self._parameter_processor.process(
-                sql=sql,
-                parameters=parameters,
-                config=self._config.parameter_config,
-                dialect=dialect_str,
-                is_many=is_many,
-                wrap_types=self._config.enable_parameter_type_wrapping,
+            processed_sql, processed_params, parameter_profile, sqlglot_sql = self._prepare_parameters(
+                sql, parameters, is_many, dialect_str
             )
-            processed_sql = process_result.sql
-            processed_params = process_result.parameters
-            parameter_profile = process_result.parameter_profile
-
-            sqlglot_sql = process_result.sqlglot_sql
-            if expression_override is not None and sqlglot_sql != sql:
-                expression_override = None
+            expression_override = self._normalize_expression_override(expression_override, sqlglot_sql, sql)
 
             final_parameters = processed_params
             ast_was_transformed = False
             expression = None
             operation_type: OperationType = "EXECUTE"
             parameter_casts: dict[int, str] = {}
+            parse_cache_key = None
+            parse_cache_entry = None
 
             if self._config.enable_parsing:
-                parse_cache_key = None
-                parse_cache_entry = None
-                if self._config.enable_caching and self._parse_cache_max_size > 0:
-                    parse_cache_key = self._make_parse_cache_key(sqlglot_sql, dialect_str)
-                    parse_cache_entry = self._parse_cache.get(parse_cache_key)
-                    if parse_cache_entry is not None:
-                        self._parse_cache_hits += 1
-                        self._parse_cache.move_to_end(parse_cache_key)
-                if parse_cache_entry is None:
-                    self._parse_cache_misses += 1
-                    try:
-                        if expression_override is not None:
-                            expression = expression_override
-                        else:
-                            expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
-                        operation_type = self._detect_operation_type(expression)
-                        parameter_casts = self._detect_parameter_casts(expression)
-                        operation_profile = self._build_operation_profile(expression, operation_type)
-                    except ParseError:
-                        expression = None
-                        operation_type = "EXECUTE"
-                        parameter_casts = {}
-                        operation_profile = OperationProfile.empty()
-
-                    if parse_cache_key is not None:
-                        if len(self._parse_cache) >= self._parse_cache_max_size:
-                            self._parse_cache.popitem(last=False)
-                        cache_expression = expression.copy() if expression is not None else None
-                        self._parse_cache[parse_cache_key] = (
-                            cache_expression,
-                            operation_type,
-                            parameter_casts,
-                            (operation_profile.returns_rows, operation_profile.modifies_rows),
-                        )
-                else:
-                    cached_expression, cached_operation, cached_casts, cached_profile = parse_cache_entry
-                    expression = cached_expression.copy() if cached_expression is not None else None
-                    operation_type = cached_operation
-                    parameter_casts = dict(cached_casts)
-                    operation_profile = OperationProfile(
-                        returns_rows=cached_profile[0], modifies_rows=cached_profile[1]
-                    )
-
-                statement_transformers = self._config.statement_transformers
-                ast_transformer = self._config.parameter_config.ast_transformer
-                if expression is not None and (statement_transformers or ast_transformer):
-                    should_copy = False
-                    if parse_cache_key is not None and parse_cache_entry is None:
-                        should_copy = True
-                    if expression_override is not None and expression is expression_override:
-                        should_copy = True
-                    if should_copy:
-                        expression = expression.copy()
-                    if statement_transformers:
-                        for transformer in statement_transformers:
-                            expression, final_parameters = transformer(expression, final_parameters)
-                        ast_was_transformed = True
-                    if ast_transformer:
-                        expression, final_parameters = ast_transformer(expression, final_parameters, parameter_profile)
-                        ast_was_transformed = True
-                    if ast_was_transformed:
-                        operation_type = self._detect_operation_type(expression)
-                        parameter_casts = self._detect_parameter_casts(expression)
-                        operation_profile = self._build_operation_profile(expression, operation_type)
-
-            if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
-                final_sql, final_params = processed_sql, processed_params
-            elif ast_was_transformed and expression is not None:
-                transformed_result = self._parameter_processor.process_for_execution(
-                    sql=expression.sql(dialect=dialect_str),
-                    parameters=final_parameters,
-                    config=self._config.parameter_config,
-                    dialect=dialect_str,
-                    is_many=is_many,
-                    wrap_types=self._config.enable_parameter_type_wrapping,
+                (expression, operation_type, parameter_casts, operation_profile, parse_cache_key, parse_cache_entry) = (
+                    self._resolve_expression(sqlglot_sql, dialect_str, expression_override)
                 )
-                final_sql = transformed_result.sql
-                final_params = transformed_result.parameters
-                parameter_profile = transformed_result.parameter_profile
-                output_transformer = self._config.output_transformer
-                if output_transformer:
-                    final_sql, final_params = output_transformer(final_sql, final_params)
-            else:
-                final_sql, final_params = self._apply_final_transformations(
-                    expression, processed_sql, final_parameters, dialect_str
+                (
+                    expression,
+                    final_parameters,
+                    ast_was_transformed,
+                    operation_type,
+                    parameter_casts,
+                    operation_profile,
+                ) = self._apply_ast_transformers(
+                    expression,
+                    final_parameters,
+                    parameter_profile,
+                    operation_type,
+                    parameter_casts,
+                    operation_profile,
+                    parse_cache_key,
+                    parse_cache_entry,
+                    expression_override,
                 )
 
-            should_validate = True
-            if (
-                _is_effectively_empty_parameters(final_params)
-                and _is_effectively_empty_parameters(parameters)
-                and not is_many
-            ):
-                should_validate = False
-            if self._config.enable_validation and should_validate:
-                validate_parameter_alignment(parameter_profile, final_params, is_many=is_many)
+            final_sql, final_params, parameter_profile = self._finalize_compilation(
+                processed_sql,
+                processed_params,
+                expression,
+                final_parameters,
+                parameter_profile,
+                is_many,
+                dialect_str,
+                ast_was_transformed,
+            )
+
+            if self._should_validate_parameters(final_params, parameters, is_many):
+                self._validate_parameters(parameter_profile, final_params, is_many)
 
             return CompiledSQL(
                 compiled_sql=final_sql,
@@ -518,8 +739,8 @@ class SQLProcessor:
 
         except sqlspec.exceptions.SQLSpecError:
             raise
-        except Exception as e:
-            logger.debug("Compilation failed, using fallback: %s", e)
+        except Exception as exc:
+            log_with_context(logger, logging.DEBUG, "sql.compile", error_type=type(exc).__name__, status="fallback")
             return CompiledSQL(
                 compiled_sql=sql,
                 execution_parameters=parameters,

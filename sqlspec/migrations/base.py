@@ -28,7 +28,7 @@ __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker
 DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
-logger = get_logger("migrations.base")
+logger = get_logger("sqlspec.migrations.base")
 
 
 class BaseMigrationTracker(ABC, Generic[DriverT]):

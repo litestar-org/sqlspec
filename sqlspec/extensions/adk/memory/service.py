@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 
-logger = get_logger("extensions.adk.memory.service")
+logger = get_logger("sqlspec.extensions.adk.memory.service")
 
 __all__ = ("SQLSpecMemoryService", "SQLSpecSyncMemoryService")
 
@@ -33,7 +33,7 @@ class SQLSpecMemoryService(BaseMemoryService):
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+        from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKMemoryStore
         from sqlspec.extensions.adk.memory.service import SQLSpecMemoryService
 
         config = AsyncpgConfig(
@@ -138,7 +138,7 @@ class SQLSpecSyncMemoryService:
 
     Example:
         from sqlspec.adapters.sqlite import SqliteConfig
-        from sqlspec.adapters.sqlite.adk.memory_store import SqliteADKMemoryStore
+        from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore
         from sqlspec.extensions.adk.memory.service import SQLSpecSyncMemoryService
 
         config = SqliteConfig(

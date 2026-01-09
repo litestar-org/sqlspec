@@ -81,7 +81,7 @@ SQLSpecMemoryService
 
    .. code-block:: python
 
-      from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+      from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKMemoryStore
       from sqlspec.extensions.adk.memory import SQLSpecMemoryService
 
       store = AsyncpgADKMemoryStore(config)

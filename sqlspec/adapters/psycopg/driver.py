@@ -67,7 +67,7 @@ __all__ = (
     "PsycopgSyncSessionContext",
 )
 
-logger = get_logger("adapters.psycopg")
+logger = get_logger("sqlspec.adapters.psycopg")
 
 
 class PsycopgPipelineMixin:

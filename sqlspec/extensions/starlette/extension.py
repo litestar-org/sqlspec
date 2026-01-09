@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -6,7 +7,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 
 __all__ = ("SQLSpecPlugin",)
 
-logger = get_logger("extensions.starlette")
+logger = get_logger("sqlspec.extensions.starlette")
 
 DEFAULT_COMMIT_MODE = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
@@ -77,6 +78,14 @@ class SQLSpecPlugin:
 
         if app is not None:
             self.init_app(app)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "extension.init",
+            framework="starlette",
+            stage="init",
+            config_count=len(self._config_states),
+        )
 
     def _extract_starlette_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Starlette settings from config.extension_config.
@@ -150,6 +159,14 @@ class SQLSpecPlugin:
         for config_state in self._config_states:
             if not config_state.disable_di:
                 self._add_middleware(app, config_state)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "extension.init",
+            framework="starlette",
+            stage="configured",
+            config_count=len(self._config_states),
+        )
 
     def _validate_unique_keys(self) -> None:
         """Validate that all state keys are unique across configs.
@@ -197,6 +214,14 @@ class SQLSpecPlugin:
             if config_state.config.supports_connection_pooling:
                 pool = await config_state.config.create_pool()
                 setattr(app.state, config_state.pool_key, pool)
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "session.create",
+                    framework="starlette",
+                    session_key=config_state.session_key,
+                    pool_key=config_state.pool_key,
+                )
 
         try:
             yield
@@ -206,6 +231,14 @@ class SQLSpecPlugin:
                     close_result = config_state.config.close_pool()
                     if close_result is not None:
                         await close_result
+                    log_with_context(
+                        logger,
+                        logging.DEBUG,
+                        "session.close",
+                        framework="starlette",
+                        session_key=config_state.session_key,
+                        pool_key=config_state.pool_key,
+                    )
 
     def get_session(self, request: "Request", key: "str | None" = None) -> Any:
         """Get or create database session for request.

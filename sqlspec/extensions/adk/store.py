@@ -1,11 +1,12 @@
 """Base store classes for ADK session backend (sync and async)."""
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.observability._common import resolve_db_system
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
-logger = get_logger("extensions.adk.store")
+logger = get_logger("sqlspec.extensions.adk.store")
 
 __all__ = ("BaseAsyncADKStore", "BaseSyncADKStore")
 
@@ -309,13 +310,13 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     def _log_tables_created(self) -> None:
-        logger.debug(
-            "ADK tables ready",
-            extra={
-                "db.system": resolve_db_system(type(self).__name__),
-                "session_table": self._session_table,
-                "events_table": self._events_table,
-            },
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.ready",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
         )
 
 
@@ -546,13 +547,13 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     def _log_tables_created(self) -> None:
-        logger.debug(
-            "ADK tables ready",
-            extra={
-                "db.system": resolve_db_system(type(self).__name__),
-                "session_table": self._session_table,
-                "events_table": self._events_table,
-            },
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.ready",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
         )
 
     @abstractmethod

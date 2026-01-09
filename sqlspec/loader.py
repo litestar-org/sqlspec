@@ -1,10 +1,11 @@
 """SQL file loader for managing SQL statements from files.
 
 Provides functionality to load, cache, and manage SQL statements
-from files using aiosql-style named queries.
+from files using named SQL queries.
 """
 
 import hashlib
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -21,7 +22,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 __all__ = ("NamedStatement", "SQLFile", "SQLFileCacheEntry", "SQLFileLoader")
 
-logger = get_logger("loader")
+logger = get_logger("sqlspec.loader")
 
 # Matches: -- name: query_name (supports hyphens and special suffixes)
 # We capture the name plus any trailing special characters
@@ -156,7 +157,7 @@ class SQLFileCacheEntry:
 
 
 class SQLFileLoader:
-    """Loads and parses SQL files with aiosql-style named queries.
+    """Loads and parses SQL files with named SQL queries.
 
     Loads SQL files containing named queries (using -- name: syntax)
     and retrieves them by name.
@@ -366,6 +367,9 @@ class SQLFileLoader:
                 statements[normalized_name] = NamedStatement(
                     name=normalized_name, sql=clean_sql, dialect=dialect, start_line=statement_start_line
                 )
+                log_with_context(
+                    logger, logging.DEBUG, "sql.parse", file_path=file_path, query_name=normalized_name, dialect=dialect
+                )
 
         if not statements:
             raise SQLFileParseError(file_path, file_path, ValueError("No valid SQL statements found after parsing"))
@@ -525,10 +529,8 @@ class SQLFileLoader:
         statements = self._parse_sql_content(content, path_str)
 
         if not statements:
-            logger.debug(
-                "Skipping SQL file without named statements: %s",
-                path_str,
-                extra={"file_path": path_str, "correlation_id": CorrelationContext.get()},
+            log_with_context(
+                logger, logging.DEBUG, "sql.load", file_path=path_str, status="skipped", reason="no_named_statements"
             )
             return
 
@@ -547,6 +549,9 @@ class SQLFileLoader:
                     )
             self._queries[namespaced_name] = statement
             self._query_to_file[namespaced_name] = path_str
+        log_with_context(
+            logger, logging.DEBUG, "sql.load", file_path=path_str, statement_count=len(statements), status="loaded"
+        )
         if runtime is not None:
             runtime.increment_metric("loader.files.loaded")
             runtime.increment_metric("loader.statements.loaded", len(statements))

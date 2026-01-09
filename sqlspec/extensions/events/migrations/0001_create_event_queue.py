@@ -1,16 +1,17 @@
 """Create the SQLSpec events queue tables."""
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
     from sqlspec.extensions.events._store import BaseEventQueueStore
     from sqlspec.migrations.context import MigrationContext
 
-logger = get_logger("events.migrations.queue")
+logger = get_logger("sqlspec.events.migrations.queue")
 
 __all__ = ("down", "up")
 
@@ -20,7 +21,7 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
 
     store = _load_store(context)
     statements = store.create_statements()
-    logger.debug("Prepared events extension create statements for %s", store.table_name)
+    log_with_context(logger, logging.DEBUG, "events.migration.create.prepared", table_name=store.table_name)
     return statements
 
 
@@ -29,7 +30,7 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
 
     store = _load_store(context)
     statements = store.drop_statements()
-    logger.debug("Prepared events extension drop statements for %s", store.table_name)
+    log_with_context(logger, logging.DEBUG, "events.migration.drop.prepared", table_name=store.table_name)
     return statements
 
 

@@ -245,7 +245,7 @@ def _get_bigquery_module() -> Any:
     return _BIGQUERY_MODULE
 
 
-logger = get_logger("adapters.bigquery.core")
+logger = get_logger("sqlspec.adapters.bigquery.core")
 
 
 def _get_bq_param_type(value: Any) -> "tuple[str | None, str | None]":

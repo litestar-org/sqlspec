@@ -5,6 +5,7 @@ pattern with automatic backend detection, ObStore preferred with FSSpec fallback
 scheme-based routing, and named aliases for common configurations.
 """
 
+import logging
 import re
 from pathlib import Path
 from typing import Any, Final, cast
@@ -14,7 +15,7 @@ from mypy_extensions import mypyc_attr
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import is_local_path
 
 __all__ = ("StorageRegistry", "storage_registry")
@@ -89,6 +90,15 @@ class StorageRegistry:
         test_config = dict(backend_config)
         test_config["uri"] = uri
         self._aliases[alias] = test_config
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "storage.alias.register",
+            alias=alias,
+            uri=uri,
+            backend_type=backend_cls.__name__,
+            base_path=base_path or None,
+        )
 
     def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
         """Get backend instance using URI-first routing with automatic backend selection.
@@ -116,6 +126,7 @@ class StorageRegistry:
             cache_params["__backend__"] = backend
         cache_key = (uri_or_alias, self._make_hashable(cache_params)) if cache_params else uri_or_alias
         if cache_key in self._instances:
+            log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=str(uri_or_alias), cached=True)
             return self._instances[cache_key]
         scheme = self._get_scheme(uri_or_alias)
         if not scheme and is_local_path(uri_or_alias):
@@ -133,6 +144,7 @@ class StorageRegistry:
             msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
             raise ImproperConfigurationError(msg)
         self._instances[cache_key] = instance
+        log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=str(uri_or_alias), cached=False)
         return instance
 
     def _resolve_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:

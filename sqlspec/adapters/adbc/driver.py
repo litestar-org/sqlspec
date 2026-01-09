@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext")
 
-logger = get_logger("adapters.adbc")
+logger = get_logger("sqlspec.adapters.adbc")
 
 
 class AdbcCursor:

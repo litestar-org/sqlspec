@@ -35,7 +35,7 @@ from sqlspec.adapters.duckdb._typing import DuckDBSessionContext
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
-logger = get_logger("adapters.duckdb")
+logger = get_logger("sqlspec.adapters.duckdb")
 
 _type_converter = DuckDBOutputConverter()
 

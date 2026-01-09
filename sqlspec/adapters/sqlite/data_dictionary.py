@@ -102,6 +102,7 @@ class SqliteDataDictionary(SyncDataDictionaryBase, DialectSQLMixin):
     def get_tables(self, driver: "SqliteDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by topological dependency order using SQLite catalog."""
         schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         query_text = self.get_query_text("tables_by_schema").format(schema_prefix=schema_prefix)
         return driver.select(query_text, schema_type=TableMetadata)
@@ -113,10 +114,12 @@ class SqliteDataDictionary(SyncDataDictionaryBase, DialectSQLMixin):
         schema_name = self.resolve_schema(schema)
         schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_type=ColumnMetadata)
 
         assert table is not None
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         table_name = table
         table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
         query_text = self.get_query_text("columns_by_table").format(table_name=format_identifier(table_identifier))
@@ -129,6 +132,7 @@ class SqliteDataDictionary(SyncDataDictionaryBase, DialectSQLMixin):
         schema_name = self.resolve_schema(schema)
         indexes: list[IndexMetadata] = []
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             for table_info in self.get_tables(driver, schema=schema_name):
                 table_name = table_info.get("table_name")
                 if not table_name:
@@ -137,6 +141,7 @@ class SqliteDataDictionary(SyncDataDictionaryBase, DialectSQLMixin):
             return indexes
 
         assert table is not None
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         table_name = table
         table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
         index_list_sql = self.get_query_text("indexes_by_table").format(table_name=format_identifier(table_identifier))
@@ -178,9 +183,11 @@ class SqliteDataDictionary(SyncDataDictionaryBase, DialectSQLMixin):
         schema_name = self.resolve_schema(schema)
         schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             query_text = self.get_query_text("foreign_keys_by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_type=ForeignKeyMetadata)
 
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         table_label = table.replace("'", "''")
         table_identifier = f"{schema_name}.{table}" if schema_name else table
         query_text = self.get_query_text("foreign_keys_by_table").format(

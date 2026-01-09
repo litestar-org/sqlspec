@@ -244,6 +244,7 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
     def get_tables(self, driver: "OracleSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by dependency order with full coverage."""
         schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered_rows = driver.select(
             self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
         )
@@ -258,9 +259,11 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return driver.select(
                 self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return driver.select(
             self.get_query("columns_by_table"), schema_name=schema_name, table_name=table, schema_type=ColumnMetadata
         )
@@ -271,9 +274,11 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return driver.select(
                 self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return driver.select(
             self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
         )
@@ -284,9 +289,11 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return driver.select(
                 self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return driver.select(
             self.get_query("foreign_keys_by_table"),
             schema_name=schema_name,
@@ -366,6 +373,7 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
     async def get_tables(self, driver: "OracleAsyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by dependency order with full coverage."""
         schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered_rows = await driver.select(
             self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
         )
@@ -380,9 +388,11 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return await driver.select(
                 self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return await driver.select(
             self.get_query("columns_by_table"), schema_name=schema_name, table_name=table, schema_type=ColumnMetadata
         )
@@ -393,9 +403,11 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return await driver.select(
                 self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return await driver.select(
             self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
         )
@@ -406,9 +418,11 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)
         if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return await driver.select(
                 self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return await driver.select(
             self.get_query("foreign_keys_by_table"),
             schema_name=schema_name,

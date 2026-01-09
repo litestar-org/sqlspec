@@ -13,7 +13,7 @@ from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.utils.logging import get_logger
 
-logger = get_logger("adapters.sqlite")
+logger = get_logger("sqlspec.adapters.sqlite")
 
 if TYPE_CHECKING:
     from collections.abc import Callable

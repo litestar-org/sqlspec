@@ -2,6 +2,7 @@
 """Psycopg LISTEN/NOTIFY and hybrid event backends."""
 
 import contextlib
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
@@ -11,14 +12,14 @@ from sqlspec.extensions.events import EventMessage
 from sqlspec.extensions.events._payload import decode_notify_payload, encode_notify_payload
 from sqlspec.extensions.events._queue import AsyncTableEventQueue, SyncTableEventQueue, build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
-logger = get_logger("events.psycopg")
+logger = get_logger("sqlspec.events.psycopg")
 
 __all__ = (
     "PsycopgAsyncEventsBackend",
@@ -59,6 +60,24 @@ class PsycopgSyncEventsBackend:
         self._runtime = config.get_observability_runtime()
         self._listen_connection: Any | None = None
         self._listen_connection_cm: Any | None = None
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="psycopg",
+            backend_name=self.backend_name,
+            mode="async",
+            status="backend_ready",
+        )
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="psycopg",
+            backend_name=self.backend_name,
+            mode="sync",
+            status="backend_ready",
+        )
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
@@ -198,6 +217,24 @@ class PsycopgSyncHybridEventsBackend:
         self._runtime = config.get_observability_runtime()
         self._listen_connection: Any | None = None
         self._listen_connection_cm: Any | None = None
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="psycopg",
+            backend_name=self.backend_name,
+            mode="async",
+            status="backend_ready",
+        )
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="psycopg",
+            backend_name=self.backend_name,
+            mode="sync",
+            status="backend_ready",
+        )
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex

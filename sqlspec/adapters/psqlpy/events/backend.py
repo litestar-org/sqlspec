@@ -3,6 +3,7 @@
 # pyright: ignore=reportPrivateUsage
 import asyncio
 import contextlib
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
@@ -13,7 +14,7 @@ from sqlspec.extensions.events._payload import decode_notify_payload, encode_not
 from sqlspec.extensions.events._queue import AsyncTableEventQueue, build_queue_backend
 from sqlspec.extensions.events._store import normalize_event_channel_name as _normalize_channel
 from sqlspec.protocols import NotificationProtocol
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.uuids import uuid4
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
 
-logger = get_logger("events.psqlpy")
+logger = get_logger("sqlspec.events.psqlpy")
 
 __all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
 
@@ -116,6 +117,15 @@ class PsqlpyEventsBackend:
         self._runtime = config.get_observability_runtime()
         self._listener: Any | None = None
         self._listener_started: bool = False
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="psqlpy",
+            backend_name=self.backend_name,
+            mode="async",
+            status="backend_ready",
+        )
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
@@ -191,6 +201,15 @@ class PsqlpyHybridEventsBackend:
         self._runtime = config.get_observability_runtime()
         self._listener: Any | None = None
         self._listener_started: bool = False
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="psqlpy",
+            backend_name=self.backend_name,
+            mode="async",
+            status="backend_ready",
+        )
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
