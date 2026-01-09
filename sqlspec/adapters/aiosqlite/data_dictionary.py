@@ -25,12 +25,16 @@ __all__ = ("AiosqliteDataDictionary",)
 
 
 @mypyc_attr(native_class=False)
-class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["AiosqliteDriver"]):
+class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase):  # type: ignore[type-arg]
     """SQLite-specific async data dictionary."""
 
     __slots__ = ()
 
     dialect = "sqlite"
+
+    def get_cached_version_for_driver(self, driver: "AiosqliteDriver") -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver instance."""
+        return self.get_cached_version(id(driver))
 
     async def get_version(self, driver: "AiosqliteDriver") -> "VersionInfo | None":
         """Get SQLite database version information.

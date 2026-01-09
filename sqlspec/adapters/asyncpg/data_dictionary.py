@@ -24,12 +24,16 @@ __all__ = ("AsyncpgDataDictionary",)
 
 
 @mypyc_attr(native_class=False)
-class AsyncpgDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["AsyncpgDriver"]):
+class AsyncpgDataDictionary(AsyncDataDictionaryBase, DialectSQLMixin):  # type: ignore[type-arg]
     """PostgreSQL-specific async data dictionary."""
 
     __slots__ = ()
 
     dialect = "postgres"
+
+    def get_cached_version_for_driver(self, driver: "AsyncpgDriver") -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver instance."""
+        return self.get_cached_version(id(driver))
 
     async def get_version(self, driver: "AsyncpgDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
@@ -150,3 +154,7 @@ class AsyncpgDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["AsyncpgDri
             table_name=table,
             schema_type=ForeignKeyMetadata,
         )
+
+    def list_available_features(self) -> "list[str]":
+        """List all features available for the dialect."""
+        return DialectSQLMixin.list_available_features(self)

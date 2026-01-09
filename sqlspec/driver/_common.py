@@ -612,6 +612,28 @@ class DataDictionaryMixin:
         if version is not None:
             self._version_cache[driver_id] = version
 
+    def get_cached_version_for_driver(self, driver: Any) -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver instance.
+
+        Args:
+            driver: Database driver instance.
+
+        Returns:
+            Tuple of (was_cached, version_info).
+
+        """
+        return self.get_cached_version(id(driver))
+
+    def cache_version_for_driver(self, driver: Any, version: "VersionInfo | None") -> None:
+        """Cache version info for a driver instance.
+
+        Args:
+            driver: Database driver instance.
+            version: Parsed version info or None.
+
+        """
+        self.cache_version(id(driver), version)
+
     def parse_version_string(self, version_str: str) -> "VersionInfo | None":
         """Parse version string into VersionInfo.
 

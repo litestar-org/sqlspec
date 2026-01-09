@@ -25,12 +25,16 @@ if TYPE_CHECKING:
 
 
 @mypyc_attr(native_class=False)
-class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver"]):
+class SqliteDataDictionary(SyncDataDictionaryBase, DialectSQLMixin):  # type: ignore[type-arg]
     """SQLite-specific sync data dictionary."""
 
     __slots__ = ()
 
     dialect = "sqlite"
+
+    def get_cached_version_for_driver(self, driver: "SqliteDriver") -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver instance."""
+        return self.get_cached_version(id(driver))
 
     def get_version(self, driver: "SqliteDriver") -> "VersionInfo | None":
         """Get SQLite database version information.
@@ -186,3 +190,7 @@ class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver
             table_name=format_identifier(table_identifier), table_label=table_label
         )
         return driver.select(query_text, schema_type=ForeignKeyMetadata)
+
+    def list_available_features(self) -> "list[str]":
+        """List all features available for the dialect."""
+        return DialectSQLMixin.list_available_features(self)

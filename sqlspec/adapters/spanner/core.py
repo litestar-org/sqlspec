@@ -18,7 +18,7 @@ from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, ArrowTable
 
@@ -100,7 +100,7 @@ def supports_batch_update(cursor: Any) -> bool:
 
 def infer_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
     """Infer Spanner param_types from Python values."""
-    if isinstance(params, (list, tuple)):
+    if isinstance(params, (list, tuple)) or not isinstance(params, dict):
         return {}
     return infer_spanner_param_types(params)
 
@@ -109,12 +109,14 @@ def coerce_params(
     params: "dict[str, Any] | None", *, json_serializer: "Callable[[Any], str] | None" = None
 ) -> "dict[str, Any] | None":
     """Coerce Python types to Spanner-compatible formats."""
-    if isinstance(params, (list, tuple)):
+    if isinstance(params, (list, tuple)) or not isinstance(params, dict):
         return None
     return coerce_params_for_spanner(params, json_serializer=json_serializer)
 
 
-def collect_rows(rows: "list[Any]", fields: "list[Any]", converter: Any) -> "tuple[list[dict[str, Any]], list[str]]":
+def collect_rows(
+    rows: "Sequence[Any]", fields: "Sequence[Any]", converter: Any
+) -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect Spanner rows into dictionaries.
 
     Args:

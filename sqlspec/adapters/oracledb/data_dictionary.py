@@ -177,10 +177,14 @@ class OracleDataDictionaryMixin(DialectSQLMixin):
 
 
 @mypyc_attr(native_class=False)
-class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase["OracleSyncDriver"]):
+class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase):  # type: ignore[type-arg]
     """Oracle-specific sync data dictionary."""
 
     __slots__ = ()
+
+    def get_cached_version_for_driver(self, driver: "OracleSyncDriver") -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver instance."""
+        return self.get_cached_version(id(driver))
 
     def _get_compatible_value(self, driver: "OracleSyncDriver") -> "str | None":
         query_text = self.get_query_text("compatible")
@@ -294,10 +298,14 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
 
 
 @mypyc_attr(native_class=False)
-class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBase["OracleAsyncDriver"]):
+class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBase):  # type: ignore[type-arg]
     """Oracle-specific async data dictionary."""
 
     __slots__ = ()
+
+    def get_cached_version_for_driver(self, driver: "OracleAsyncDriver") -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver instance."""
+        return self.get_cached_version(id(driver))
 
     async def _get_compatible_value(self, driver: "OracleAsyncDriver") -> "str | None":
         query_text = self.get_query_text("compatible")

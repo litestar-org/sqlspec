@@ -101,8 +101,16 @@ def _detect_schema_type(schema_type: type) -> "str | None":
 
 
 def _is_foreign_key_metadata_type(schema_type: type) -> bool:
+    if schema_type.__name__ != "ForeignKeyMetadata":
+        return False
+
+    # Check module for stronger guarantee without importing
+    module = getattr(schema_type, "__module__", "")
+    if "sqlspec" in module and "driver" in module:
+        return True
+
     slots = getattr(schema_type, "__slots__", None)
-    if schema_type.__name__ != "ForeignKeyMetadata" or not slots:
+    if not slots:
         return False
     return {"table_name", "column_name", "referenced_table", "referenced_column"}.issubset(set(slots))
 
