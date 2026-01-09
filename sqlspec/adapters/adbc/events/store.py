@@ -14,7 +14,7 @@ For unsupported databases (Oracle, Spanner, MySQL), use their native adapters in
 import logging
 from typing import TYPE_CHECKING, Final
 
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:

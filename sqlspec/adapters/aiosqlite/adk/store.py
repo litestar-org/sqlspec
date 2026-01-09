@@ -9,7 +9,7 @@ from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 
 
 SECONDS_PER_DAY = 86400.0

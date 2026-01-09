@@ -2,8 +2,7 @@ from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
 from sqlspec.config import NoPoolSyncConfig
-from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDataDictionaryBase
+from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
 from tests.conftest import requires_interpreted
 
 pytestmark = requires_interpreted

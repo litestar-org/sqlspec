@@ -41,8 +41,7 @@ from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import fingerprint_parameters
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, StorageCapabilityError
-from sqlspec.observability import ObservabilityRuntime
-from sqlspec.observability._common import get_trace_context, resolve_db_system
+from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl

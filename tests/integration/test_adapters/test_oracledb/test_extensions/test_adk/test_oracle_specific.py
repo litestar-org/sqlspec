@@ -56,7 +56,7 @@ class TestOracleAsyncLOBHandling:
 
     async def test_event_content_lob_deserialization(self, oracle_store_async: Any) -> None:
         """Test event content CLOB is correctly deserialized."""
-        from sqlspec.extensions.adk._types import EventRecord
+        from sqlspec.extensions.adk import EventRecord
 
         session_id = "event-lob-session"
         app_name = "test-app"
@@ -99,7 +99,7 @@ class TestOracleAsyncLOBHandling:
 
     async def test_actions_blob_handling(self, oracle_store_async: Any) -> None:
         """Test actions BLOB is correctly read and unpickled."""
-        from sqlspec.extensions.adk._types import EventRecord
+        from sqlspec.extensions.adk import EventRecord
 
         session_id = "actions-blob-session"
         app_name = "test-app"
@@ -195,7 +195,7 @@ class TestOracleBooleanConversion:
 
     async def test_boolean_fields_conversion(self, oracle_store_async: Any) -> None:
         """Test partial, turn_complete, interrupted converted to NUMBER(1)."""
-        from sqlspec.extensions.adk._types import EventRecord
+        from sqlspec.extensions.adk import EventRecord
 
         session_id = "bool-session"
         app_name = "test-app"
@@ -234,7 +234,7 @@ class TestOracleBooleanConversion:
 
     async def test_boolean_fields_none_values(self, oracle_store_async: Any) -> None:
         """Test None values for boolean fields."""
-        from sqlspec.extensions.adk._types import EventRecord
+        from sqlspec.extensions.adk import EventRecord
 
         session_id = "bool-none-session"
         app_name = "test-app"

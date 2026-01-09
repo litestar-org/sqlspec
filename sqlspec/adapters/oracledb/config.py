@@ -6,7 +6,7 @@ import oracledb
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers
+from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,

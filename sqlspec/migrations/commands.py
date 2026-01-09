@@ -20,7 +20,7 @@ from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
-from sqlspec.observability._common import resolve_db_system
+from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version, parse_version
 

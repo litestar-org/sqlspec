@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from sqlspec.adapters.asyncmy.config import AsyncmyConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 
 
 __all__ = ("AsyncmyADKMemoryStore", "AsyncmyADKStore")

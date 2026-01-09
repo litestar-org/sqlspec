@@ -11,7 +11,7 @@ Tests the hook-based pattern introduced for DDL generation standardization:
 
 import pytest
 
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 
 def test_base_store_string_type_default() -> None:

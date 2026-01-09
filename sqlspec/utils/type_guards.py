@@ -1216,7 +1216,7 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[TypedParameter]":
     Returns:
         True if the object is a TypedParameter, False otherwise
     """
-    from sqlspec.core.parameters._types import TypedParameter
+    from sqlspec.core.parameters import TypedParameter
 
     return isinstance(obj, TypedParameter)
 

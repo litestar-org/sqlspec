@@ -11,7 +11,7 @@ from rich.console import Console
 
 from sqlspec.builder import sql
 from sqlspec.migrations.base import BaseMigrationTracker
-from sqlspec.observability._common import resolve_db_system
+from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.version import parse_version
 

@@ -15,6 +15,7 @@ This section provides comprehensive guides on using SQLSpec for database operati
    cli
    migrations
    framework_integrations
+   ../guides/observability/index
 
 Overview
 --------

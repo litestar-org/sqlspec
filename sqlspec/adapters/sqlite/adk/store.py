@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     import logging
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 
 
 SECONDS_PER_DAY = 86400.0

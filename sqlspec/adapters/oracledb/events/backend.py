@@ -6,8 +6,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, MissingDependencyError
-from sqlspec.extensions.events._models import EventMessage
-from sqlspec.extensions.events._payload import parse_event_timestamp
+from sqlspec.extensions.events import EventMessage, parse_event_timestamp
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 

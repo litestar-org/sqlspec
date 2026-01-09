@@ -21,7 +21,7 @@ from sqlspec.core import (
     SearchFilter,
     apply_filter,
 )
-from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver import CommonDriverAttributesMixin
 
 pytestmark = pytest.mark.xdist_group("core")
 

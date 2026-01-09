@@ -1,7 +1,6 @@
 import re
 
-from sqlspec.data_dictionary._registry import register_dialect
-from sqlspec.data_dictionary._types import DialectConfig, FeatureFlags, FeatureVersions
+from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
 
 SPANNER_VERSION_PATTERN = re.compile(r".*")
 

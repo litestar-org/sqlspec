@@ -1243,7 +1243,7 @@ Graceful Degradation
 
 Type handlers gracefully degrade when optional dependencies are not installed:
 
-- Detection via ``sqlspec._typing`` constants (``NUMPY_INSTALLED``, ``PGVECTOR_INSTALLED``)
+- Detection via ``sqlspec.typing`` constants (``NUMPY_INSTALLED``, ``PGVECTOR_INSTALLED``)
 - Auto-enable in ``driver_features`` when dependency available
 - No errors if dependency missing - simply returns unconverted values
 
@@ -1304,7 +1304,7 @@ Type handlers are configured via the ``driver_features`` parameter:
 
 .. code-block:: python
 
-   from sqlspec._typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
+   from sqlspec.typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
 
    print(f"NumPy available: {NUMPY_INSTALLED}")
    print(f"pgvector available: {PGVECTOR_INSTALLED}")
@@ -1403,7 +1403,7 @@ To add type handlers for a new optional feature:
 
    .. code-block:: python
 
-      from sqlspec._typing import OPTIONAL_PACKAGE_INSTALLED
+      from sqlspec.typing import OPTIONAL_PACKAGE_INSTALLED
 
       def register_handlers(connection):
           if not OPTIONAL_PACKAGE_INSTALLED:
@@ -1415,7 +1415,7 @@ To add type handlers for a new optional feature:
 
    .. code-block:: python
 
-      from sqlspec._typing import OPTIONAL_PACKAGE_INSTALLED
+      from sqlspec.typing import OPTIONAL_PACKAGE_INSTALLED
 
       class Config(AsyncDatabaseConfig):
           def __init__(self, *, driver_features=None, **kwargs):
@@ -1435,7 +1435,7 @@ To add type handlers for a new optional feature:
    .. code-block:: python
 
       import pytest
-      from sqlspec._typing import OPTIONAL_PACKAGE_INSTALLED
+      from sqlspec.typing import OPTIONAL_PACKAGE_INSTALLED
 
       @pytest.mark.skipif(not OPTIONAL_PACKAGE_INSTALLED, reason="Package not installed")
       async def test_feature_roundtrip(session):

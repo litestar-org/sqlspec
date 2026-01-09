@@ -9,9 +9,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.observability import ObservabilityConfig
-from sqlspec.observability._config import LoggingConfig
-from sqlspec.observability._formatting import OTelConsoleFormatter
+from sqlspec.observability import LoggingConfig, ObservabilityConfig, OTelConsoleFormatter
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 

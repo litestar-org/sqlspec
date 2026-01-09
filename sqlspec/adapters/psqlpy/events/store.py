@@ -1,7 +1,7 @@
 """Psqlpy event queue store."""
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("PsqlpyEventQueueStore",)
 

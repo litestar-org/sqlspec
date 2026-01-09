@@ -633,7 +633,7 @@ class SQL:
             With options:
                 explain_stmt = stmt.explain(analyze=True, format="json")
         """
-        from sqlspec.builder._explain import Explain
+        from sqlspec.builder import Explain
 
         fmt = None
         if format is not None:

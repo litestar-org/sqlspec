@@ -14,7 +14,7 @@ from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.config import BigQueryConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 
 
 __all__ = ("BigQueryADKMemoryStore", "BigQueryADKStore")

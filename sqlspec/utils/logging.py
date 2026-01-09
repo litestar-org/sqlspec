@@ -43,7 +43,7 @@ def _get_trace_context() -> "tuple[str | None, str | None]":
         Tuple of (trace_id, span_id) or (None, None) if unavailable.
     """
     try:
-        from sqlspec.observability._common import get_trace_context
+        from sqlspec.observability import get_trace_context
     except Exception:
         return (None, None)
     return get_trace_context()

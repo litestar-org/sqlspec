@@ -1,6 +1,6 @@
 """Unit tests for SQL builder parsing utilities.
 
-This module tests the parsing utilities in sqlspec.builder._parsing_utils,
+This module tests the parsing utilities in sqlspec.builder,
 specifically focusing on the parameter style conversion functionality that
 was added to fix QueryBuilder parameter handling issues.
 """
@@ -8,7 +8,7 @@ was added to fix QueryBuilder parameter handling issues.
 import pytest
 from sqlglot import exp
 
-from sqlspec.builder._parsing_utils import parse_column_expression, parse_condition_expression
+from sqlspec.builder import parse_column_expression, parse_condition_expression
 
 pytestmark = pytest.mark.xdist_group("utils")
 

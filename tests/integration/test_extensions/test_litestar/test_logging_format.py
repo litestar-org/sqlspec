@@ -15,11 +15,7 @@ async def health_check() -> dict[str, str]:
 
 
 def _find_log_record(
-    records: "list[logging.LogRecord]",
-    message: str,
-    logger_name: str,
-    *,
-    stage: str | None = None,
+    records: "list[logging.LogRecord]", message: str, logger_name: str, *, stage: str | None = None
 ) -> "logging.LogRecord":
     for record in records:
         if record.name != logger_name:
@@ -42,9 +38,7 @@ def test_litestar_extension_logging_format(caplog) -> None:
 
     Litestar(route_handlers=[health_check], plugins=[SQLSpecPlugin(sqlspec=spec)])
 
-    record = _find_log_record(
-        caplog.records, "extension.init", "sqlspec.extensions.litestar", stage="configured"
-    )
+    record = _find_log_record(caplog.records, "extension.init", "sqlspec.extensions.litestar", stage="configured")
     extra_fields = record.__dict__.get("extra_fields")
     assert isinstance(extra_fields, dict)
     assert extra_fields.get("framework") == "litestar"

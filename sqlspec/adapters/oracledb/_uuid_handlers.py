@@ -12,7 +12,13 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
-__all__ = ("register_uuid_handlers", "uuid_converter_in", "uuid_converter_out")
+__all__ = (
+    "register_uuid_handlers",
+    "uuid_converter_in",
+    "uuid_converter_out",
+    "uuid_input_type_handler",
+    "uuid_output_type_handler",
+)
 
 
 logger = get_logger(__name__)
@@ -96,6 +102,16 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     if type_code is oracledb.DB_TYPE_RAW and internal_size == UUID_BINARY_SIZE:
         return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=uuid_converter_out)
     return None
+
+
+def uuid_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
+    """Public input type handler for UUID values."""
+    return _input_type_handler(cursor, value, arraysize)
+
+
+def uuid_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+    """Public output type handler for RAW(16) UUID values."""
+    return _output_type_handler(cursor, metadata)
 
 
 def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:

@@ -10,7 +10,7 @@ MySQL requires:
 from typing import Final
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("AsyncmyEventQueueStore",)
 

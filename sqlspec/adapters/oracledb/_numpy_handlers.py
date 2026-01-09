@@ -14,10 +14,10 @@ if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
 __all__ = (
-    "_input_type_handler",
-    "_output_type_handler",
     "numpy_converter_in",
     "numpy_converter_out",
+    "numpy_input_type_handler",
+    "numpy_output_type_handler",
     "register_numpy_handlers",
 )
 
@@ -115,6 +115,16 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     return None
 
 
+def numpy_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
+    """Public input type handler for NumPy arrays."""
+    return _input_type_handler(cursor, value, arraysize)
+
+
+def numpy_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+    """Public output type handler for NumPy VECTOR columns."""
+    return _output_type_handler(cursor, metadata)
+
+
 def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
     """Register NumPy type handlers on Oracle connection.
 
@@ -127,5 +137,5 @@ def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
     if not NUMPY_INSTALLED:
         return
 
-    connection.inputtypehandler = _input_type_handler
-    connection.outputtypehandler = _output_type_handler
+    connection.inputtypehandler = numpy_input_type_handler
+    connection.outputtypehandler = numpy_output_type_handler

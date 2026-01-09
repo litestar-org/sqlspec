@@ -12,7 +12,7 @@ Configuration (optional):
 """
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("DuckDBEventQueueStore",)
 

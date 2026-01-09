@@ -18,7 +18,7 @@ import string
 import pytest
 
 from sqlspec import sql
-from sqlspec.builder._parsing_utils import parse_condition_expression
+from sqlspec.builder import parse_condition_expression
 
 pytestmark = pytest.mark.xdist_group("builder")
 

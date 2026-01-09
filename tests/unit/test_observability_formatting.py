@@ -2,7 +2,7 @@
 
 import logging
 
-from sqlspec.observability._formatting import OTelConsoleFormatter, OTelJSONFormatter
+from sqlspec.observability import OTelConsoleFormatter, OTelJSONFormatter
 
 
 def test_otel_console_formatter_orders_fields() -> None:
@@ -16,17 +16,15 @@ def test_otel_console_formatter_orders_fields() -> None:
         args=(),
         exc_info=None,
     )
-    record.__dict__.update(
-        {
-            "db.system": "sqlite",
-            "db.operation": "SELECT",
-            "trace_id": "trace",
-            "span_id": "span",
-            "correlation_id": "cid",
-            "duration_ms": 12.5,
-            "db.statement": "SELECT 1",
-        }
-    )
+    record.__dict__.update({
+        "db.system": "sqlite",
+        "db.operation": "SELECT",
+        "trace_id": "trace",
+        "span_id": "span",
+        "correlation_id": "cid",
+        "duration_ms": 12.5,
+        "db.statement": "SELECT 1",
+    })
     output = formatter.format(record)
     assert output.index("db.system=sqlite") < output.index("db.operation=SELECT")
     assert output.index("db.operation=SELECT") < output.index("trace_id=trace")
@@ -67,5 +65,5 @@ def test_otel_json_formatter_includes_fields() -> None:
     record.funcName = "test_func"
     record.__dict__.update({"db.system": "sqlite", "db.operation": "SELECT"})
     output = formatter.format(record)
-    assert "\"db.system\":\"sqlite\"" in output
-    assert "\"db.operation\":\"SELECT\"" in output
+    assert '"db.system":"sqlite"' in output
+    assert '"db.operation":"SELECT"' in output

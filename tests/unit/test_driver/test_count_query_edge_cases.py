@@ -7,7 +7,7 @@ where SELECT statements are missing required clauses (FROM, etc.).
 import pytest
 
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.conftest import requires_interpreted
 

@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from sqlspec._typing import NUMPY_INSTALLED
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver, OracleSyncConfig
+from sqlspec.typing import NUMPY_INSTALLED
 
 rng = np.random.default_rng(42)
 

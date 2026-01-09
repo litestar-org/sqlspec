@@ -13,8 +13,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("driver")

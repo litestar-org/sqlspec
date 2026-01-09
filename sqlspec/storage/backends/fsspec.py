@@ -402,7 +402,7 @@ class FSSpecBackend:
         """Stream bytes from storage."""
         resolved_path = self._resolve_path(path)
         chunk_size = chunk_size or 65536
-        
+
         with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
             while True:
                 chunk = f.read(chunk_size)

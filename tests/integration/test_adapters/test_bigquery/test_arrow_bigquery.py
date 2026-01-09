@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from sqlspec._typing import PYARROW_INSTALLED
 from sqlspec.adapters.bigquery.core import storage_api_available
+from sqlspec.typing import PYARROW_INSTALLED
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery import BigQueryConfig

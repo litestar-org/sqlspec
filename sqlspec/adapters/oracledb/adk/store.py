@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 
 logger = get_logger("sqlspec.adapters.oracledb.adk.store")
 

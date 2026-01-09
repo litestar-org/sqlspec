@@ -9,8 +9,14 @@ from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
-from sqlspec.driver import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
-from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
+from sqlspec.driver import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    SyncDataDictionaryBase,
+    SyncDriverAdapterBase,
+    TableMetadata,
+)
 from sqlspec.observability import LifecycleDispatcher
 from sqlspec.storage import StorageTelemetry
 from sqlspec.storage.pipeline import (

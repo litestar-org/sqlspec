@@ -12,6 +12,7 @@ from sqlspec.driver._common import (
     TableMetadata,
     VersionInfo,
     describe_stack_statement,
+    hash_stack_operations,
 )
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 
@@ -31,6 +32,7 @@ __all__ = (
     "TableMetadata",
     "VersionInfo",
     "describe_stack_statement",
+    "hash_stack_operations",
 )
 
 DriverAdapterProtocol = SyncDriverAdapterBase | AsyncDriverAdapterBase

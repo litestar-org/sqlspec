@@ -484,7 +484,7 @@ class ObStoreBackend:
         """
         resolved_path = self._resolve_path(path)
         data = self.read_bytes(resolved_path)
-        
+
         if chunk_size:
             for i in range(0, len(data), chunk_size):
                 yield data[i : i + chunk_size]

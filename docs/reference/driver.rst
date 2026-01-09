@@ -23,7 +23,7 @@ Base Driver Classes
 Synchronous Driver
 ------------------
 
-.. currentmodule:: sqlspec.driver._sync
+.. currentmodule:: sqlspec.driver
 
 .. autoclass:: SyncDriverAdapterBase
    :members:
@@ -44,7 +44,7 @@ Synchronous Driver
 Asynchronous Driver
 -------------------
 
-.. currentmodule:: sqlspec.driver._async
+.. currentmodule:: sqlspec.driver
 
 .. autoclass:: AsyncDriverAdapterBase
    :members:
@@ -96,9 +96,9 @@ Both sync and async drivers support transaction context managers:
 Connection Pooling
 ==================
 
-.. currentmodule:: sqlspec.driver._common
+.. currentmodule:: sqlspec.driver
 
-.. automodule:: sqlspec.driver._common
+.. automodule:: sqlspec.driver
    :members:
    :undoc-members:
    :show-inheritance:

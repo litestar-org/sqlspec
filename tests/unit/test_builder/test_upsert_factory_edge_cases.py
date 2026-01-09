@@ -1,8 +1,7 @@
 """Unit tests for sql.upsert() factory method edge cases."""
 
 from sqlspec import sql
-from sqlspec.builder._insert import Insert
-from sqlspec.builder._merge import Merge
+from sqlspec.builder import Insert, Merge
 
 
 def test_upsert_with_empty_table_name_passes() -> None:

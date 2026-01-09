@@ -9,10 +9,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import SQL
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events import EventMessage
-from sqlspec.extensions.events._payload import decode_notify_payload, encode_notify_payload
-from sqlspec.extensions.events._queue import AsyncTableEventQueue, build_queue_backend
-from sqlspec.extensions.events._store import normalize_event_channel_name as _normalize_channel
+from sqlspec.extensions.events import (
+    AsyncTableEventQueue,
+    EventMessage,
+    build_queue_backend,
+    decode_notify_payload,
+    encode_notify_payload,
+)
+from sqlspec.extensions.events import normalize_event_channel_name as _normalize_channel
 from sqlspec.protocols import NotificationProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import to_json

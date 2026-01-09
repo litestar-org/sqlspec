@@ -7,9 +7,7 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 
 
-def _find_log_record(
-    records: "list[logging.LogRecord]", message: str, logger_name: str
-) -> "logging.LogRecord":
+def _find_log_record(records: "list[logging.LogRecord]", message: str, logger_name: str) -> "logging.LogRecord":
     for record in records:
         if record.name != logger_name:
             continue
@@ -24,8 +22,7 @@ def test_migration_list_logging_format(tmp_path, caplog) -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
-            connection_config={"database": tmp.name},
-            migration_config={"script_location": str(tmp_path)},
+            connection_config={"database": tmp.name}, migration_config={"script_location": str(tmp_path)}
         )
         commands = SyncMigrationCommands(config)
         current = commands.current(verbose=False)

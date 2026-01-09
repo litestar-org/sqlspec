@@ -1,7 +1,7 @@
 """AioSQLite event queue store."""
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("AiosqliteEventQueueStore",)
 

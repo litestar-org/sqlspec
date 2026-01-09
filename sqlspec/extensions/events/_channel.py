@@ -10,11 +10,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
-from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_name
-from sqlspec.extensions.events._models import EventMessage
+from sqlspec.extensions.events import (
+    EventMessage,
+    build_queue_backend,
+    get_runtime_hints,
+    normalize_event_channel_name,
+    resolve_adapter_name,
+)
 from sqlspec.extensions.events._protocols import AsyncEventBackendProtocol, SyncEventBackendProtocol
-from sqlspec.extensions.events._queue import build_queue_backend
-from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_span_attribute
 from sqlspec.utils.uuids import uuid4
@@ -26,7 +29,15 @@ if TYPE_CHECKING:
 
 logger = get_logger("sqlspec.events.channel")
 
-__all__ = ("AsyncEventChannel", "AsyncEventListener", "EventMessage", "SyncEventChannel", "SyncEventListener")
+__all__ = (
+    "AsyncEventChannel",
+    "AsyncEventListener",
+    "EventMessage",
+    "SyncEventChannel",
+    "SyncEventListener",
+    "load_native_backend",
+    "resolve_poll_interval",
+)
 
 _ADAPTER_MODULE_PARTS = 3
 
@@ -64,7 +75,7 @@ class SyncEventListener:
         self.thread.join()
 
 
-def _resolve_poll_interval(poll_interval: "float | None", default: float) -> float:
+def resolve_poll_interval(poll_interval: "float | None", default: float) -> float:
     """Resolve poll interval with validation."""
     if poll_interval is None:
         return default
@@ -95,7 +106,7 @@ def _get_default_backend(adapter_name: "str | None") -> str:
     return "table_queue"
 
 
-def _load_native_backend(config: Any, backend_name: str | None, extension_settings: "dict[str, Any]") -> Any | None:
+def load_native_backend(config: Any, backend_name: str | None, extension_settings: "dict[str, Any]") -> Any | None:
     """Load adapter-specific native backend if available."""
     if backend_name in {None, "table_queue"}:
         return None
@@ -227,7 +238,7 @@ class SyncEventChannel:
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
         backend_name = extension_settings.get("backend") or _get_default_backend(self._adapter_name)
-        native_backend = _load_native_backend(config, backend_name, extension_settings)
+        native_backend = load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
                 log_with_context(
@@ -284,7 +295,7 @@ class SyncEventChannel:
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync consumption"
             raise ImproperConfigurationError(msg)
-        interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
+        interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
         while True:
             span = _start_event_span(
                 self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="sync"
@@ -320,7 +331,7 @@ class SyncEventChannel:
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync listeners"
             raise ImproperConfigurationError(msg)
-        interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
+        interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
         listener_id = uuid4().hex
         stop_event = threading.Event()
         thread = threading.Thread(
@@ -470,7 +481,7 @@ class AsyncEventChannel:
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
         backend_name = extension_settings.get("backend") or _get_default_backend(self._adapter_name)
-        native_backend = _load_native_backend(config, backend_name, extension_settings)
+        native_backend = load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
                 log_with_context(
@@ -529,7 +540,7 @@ class AsyncEventChannel:
         if not self._backend.supports_async:
             msg = "Current events backend does not support async consumption"
             raise ImproperConfigurationError(msg)
-        interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
+        interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
         while True:
             span = _start_event_span(
                 self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="async"
@@ -572,7 +583,7 @@ class AsyncEventChannel:
             raise ImproperConfigurationError(msg)
         loop = asyncio.get_running_loop()
         stop_event = asyncio.Event()
-        interval = _resolve_poll_interval(poll_interval, self._poll_interval_default)
+        interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
         listener_id = uuid4().hex
         task = loop.create_task(self._run_listener(listener_id, channel, handler, stop_event, interval, auto_ack))
         listener = AsyncEventListener(listener_id, channel, task, stop_event, interval)

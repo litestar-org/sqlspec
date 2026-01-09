@@ -27,8 +27,7 @@ from sqlspec.core import (
     is_copy_operation,
     register_driver_profile,
 )
-from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.driver._common import StackExecutionObserver, describe_stack_statement
+from sqlspec.driver import AsyncDriverAdapterBase, StackExecutionObserver, describe_stack_statement
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate

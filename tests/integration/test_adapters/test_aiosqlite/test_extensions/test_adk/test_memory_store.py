@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore
-from sqlspec.extensions.adk.memory._types import MemoryRecord
+from sqlspec.extensions.adk import MemoryRecord
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 

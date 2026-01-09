@@ -8,9 +8,7 @@ from sqlspec.exceptions import FileNotFoundInStorageError
 from sqlspec.storage.errors import execute_sync_storage_operation
 
 
-def _find_log_record(
-    records: "list[logging.LogRecord]", message: str, logger_name: str
-) -> "logging.LogRecord":
+def _find_log_record(records: "list[logging.LogRecord]", message: str, logger_name: str) -> "logging.LogRecord":
     for record in records:
         if record.name != logger_name:
             continue

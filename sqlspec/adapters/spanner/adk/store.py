@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1.transaction import Transaction
 
     from sqlspec.config import ADKConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 
 __all__ = ("SpannerSyncADKMemoryStore", "SpannerSyncADKStore")

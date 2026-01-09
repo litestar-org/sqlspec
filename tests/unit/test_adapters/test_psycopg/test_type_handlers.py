@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sqlspec._typing import PGVECTOR_INSTALLED
+from sqlspec.typing import PGVECTOR_INSTALLED
 
 
 def test_register_pgvector_sync_with_pgvector_installed() -> None:

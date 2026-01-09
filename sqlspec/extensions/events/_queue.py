@@ -6,10 +6,14 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
-from sqlspec.extensions.events._models import EventMessage
-from sqlspec.extensions.events._payload import parse_event_timestamp
-from sqlspec.extensions.events._store import normalize_queue_table_name
+from sqlspec.extensions.events import (
+    EventMessage,
+    EventRuntimeHints,
+    get_runtime_hints,
+    normalize_queue_table_name,
+    parse_event_timestamp,
+    resolve_adapter_name,
+)
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
@@ -18,8 +22,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.driver._async import AsyncDriverAdapterBase
-    from sqlspec.driver._sync import SyncDriverAdapterBase
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
 logger = get_logger("sqlspec.events.queue")
 

@@ -2,8 +2,8 @@
 
 import pytest
 
-from sqlspec._typing import PYARROW_INSTALLED
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig
+from sqlspec.typing import PYARROW_INSTALLED
 
 pytestmark = [
     pytest.mark.xdist_group("postgres"),

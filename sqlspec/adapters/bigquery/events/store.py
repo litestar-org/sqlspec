@@ -13,7 +13,7 @@ Configuration:
 """
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("BigQueryEventQueueStore",)
 

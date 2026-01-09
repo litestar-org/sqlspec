@@ -2,7 +2,7 @@
 
 import pytest
 
-from sqlspec.observability._config import LoggingConfig
+from sqlspec.observability import LoggingConfig
 
 
 def test_logging_config_defaults() -> None:
@@ -15,10 +15,7 @@ def test_logging_config_defaults() -> None:
 
 def test_logging_config_custom_values() -> None:
     config = LoggingConfig(
-        include_sql_hash=False,
-        sql_truncation_length=512,
-        parameter_truncation_count=25,
-        include_trace_context=False,
+        include_sql_hash=False, sql_truncation_length=512, parameter_truncation_count=25, include_trace_context=False
     )
     assert config.include_sql_hash is False
     assert config.sql_truncation_length == 512
@@ -28,10 +25,7 @@ def test_logging_config_custom_values() -> None:
 
 def test_logging_config_copy_and_equality() -> None:
     config = LoggingConfig(
-        include_sql_hash=False,
-        sql_truncation_length=128,
-        parameter_truncation_count=10,
-        include_trace_context=False,
+        include_sql_hash=False, sql_truncation_length=128, parameter_truncation_count=10, include_trace_context=False
     )
     clone = config.copy()
     assert clone == config

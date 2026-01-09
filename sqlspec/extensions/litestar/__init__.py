@@ -1,3 +1,4 @@
+from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.channels import SQLSpecChannelsBackend
 from sqlspec.extensions.litestar.cli import database_group
 from sqlspec.extensions.litestar.config import LitestarConfig
@@ -22,4 +23,6 @@ __all__ = (
     "SQLSpecChannelsBackend",
     "SQLSpecPlugin",
     "database_group",
+    "get_sqlspec_scope_state",
+    "set_sqlspec_scope_state",
 )

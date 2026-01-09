@@ -1,7 +1,6 @@
 """Storage pipeline scaffolding for driver-aware storage bridge."""
 
 from collections import deque
-from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
 from time import perf_counter, time
@@ -20,6 +19,8 @@ from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import supports_async_delete, supports_async_read_bytes, supports_async_write_bytes
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
     from sqlspec.protocols import ObjectStoreProtocol
     from sqlspec.typing import ArrowTable
 

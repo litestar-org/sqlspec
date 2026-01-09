@@ -12,8 +12,6 @@ __all__ = ("OTelConsoleFormatter", "OTelJSONFormatter")
 class OTelConsoleFormatter(logging.Formatter):
     """Console formatter that orders OTel-aligned fields consistently."""
 
-    __slots__ = ("_field_order",)
-
     def __init__(self, datefmt: str | None = None) -> None:
         super().__init__(datefmt=datefmt)
         self._field_order = (
@@ -58,5 +56,3 @@ class OTelConsoleFormatter(logging.Formatter):
 
 class OTelJSONFormatter(StructuredFormatter):
     """Structured JSON formatter for OTel-aligned log fields."""
-
-    __slots__ = ()

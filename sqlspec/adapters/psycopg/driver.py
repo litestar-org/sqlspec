@@ -43,8 +43,12 @@ from sqlspec.core import (
     is_copy_to_operation,
     register_driver_profile,
 )
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.driver._common import StackExecutionObserver, describe_stack_statement
+from sqlspec.driver import (
+    AsyncDriverAdapterBase,
+    StackExecutionObserver,
+    SyncDriverAdapterBase,
+    describe_stack_statement,
+)
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_readable
@@ -52,7 +56,7 @@ from sqlspec.utils.type_guards import is_readable
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
-    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 

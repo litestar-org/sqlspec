@@ -5,7 +5,7 @@ import hashlib
 import sys
 from types import ModuleType
 
-from sqlspec.observability._common import compute_sql_hash, get_trace_context, resolve_db_system
+from sqlspec.observability import compute_sql_hash, get_trace_context, resolve_db_system
 
 
 def test_resolve_db_system_asyncpg() -> None:

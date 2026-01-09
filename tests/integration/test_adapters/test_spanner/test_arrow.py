@@ -5,8 +5,8 @@ All operations use SQLSpec interface, not raw SDK calls.
 
 import pytest
 
-from sqlspec._typing import PYARROW_INSTALLED
 from sqlspec.adapters.spanner import SpannerSyncConfig
+from sqlspec.typing import PYARROW_INSTALLED
 
 pytestmark = [pytest.mark.spanner, pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")]
 

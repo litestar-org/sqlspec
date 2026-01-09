@@ -7,7 +7,9 @@ from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder import (
+    AggregateExpression,
     Case,
+    Column,
     Delete,
     Insert,
     JoinBuilder,
@@ -17,8 +19,6 @@ from sqlspec.builder import (
     Update,
     WindowFunctionBuilder,
 )
-from sqlspec.builder._column import Column
-from sqlspec.builder._expression_wrappers import AggregateExpression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 

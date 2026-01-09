@@ -251,7 +251,7 @@ Type Definitions
 SessionRecord
 -------------
 
-.. autoclass:: sqlspec.extensions.adk._types.SessionRecord
+.. autoclass:: sqlspec.extensions.adk.SessionRecord
 
    TypedDict representing a session database record.
 
@@ -296,7 +296,7 @@ SessionRecord
 MemoryRecord
 ------------
 
-.. autoclass:: sqlspec.extensions.adk.memory._types.MemoryRecord
+.. autoclass:: sqlspec.extensions.adk.MemoryRecord
 
    TypedDict representing a memory database record.
 
@@ -312,7 +312,7 @@ MemoryRecord
 EventRecord
 -----------
 
-.. autoclass:: sqlspec.extensions.adk._types.EventRecord
+.. autoclass:: sqlspec.extensions.adk.EventRecord
 
    TypedDict representing an event database record.
 

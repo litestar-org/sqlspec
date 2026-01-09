@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.observability._common import resolve_db_system
+from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:

@@ -33,7 +33,19 @@ from sqlspec.builder._dml import (
     UpdateSetClauseMixin,
     UpdateTableClauseMixin,
 )
-from sqlspec.builder._explain import Explain, ExplainMixin
+from sqlspec.builder._explain import (
+    Explain,
+    ExplainMixin,
+    build_bigquery_explain,
+    build_duckdb_explain,
+    build_explain_sql,
+    build_generic_explain,
+    build_mysql_explain,
+    build_oracle_explain,
+    build_postgres_explain,
+    build_sqlite_explain,
+    normalize_dialect_name,
+)
 from sqlspec.builder._expression_wrappers import (
     AggregateExpression,
     ConversionExpression,
@@ -77,6 +89,7 @@ from sqlspec.builder._select import (
     WindowFunctionBuilder,
 )
 from sqlspec.builder._update import Update
+from sqlspec.builder._vector_expressions import VectorDistance
 from sqlspec.exceptions import SQLBuilderError
 
 __all__ = (
@@ -135,12 +148,22 @@ __all__ = (
     "UpdateFromClauseMixin",
     "UpdateSetClauseMixin",
     "UpdateTableClauseMixin",
+    "VectorDistance",
     "WhereClauseMixin",
     "WindowFunctionBuilder",
+    "build_bigquery_explain",
     "build_copy_from_statement",
     "build_copy_statement",
     "build_copy_to_statement",
+    "build_duckdb_explain",
+    "build_explain_sql",
+    "build_generic_explain",
+    "build_mysql_explain",
+    "build_oracle_explain",
+    "build_postgres_explain",
+    "build_sqlite_explain",
     "extract_expression",
+    "normalize_dialect_name",
     "parse_column_expression",
     "parse_condition_expression",
     "parse_order_expression",

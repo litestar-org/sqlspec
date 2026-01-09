@@ -40,8 +40,14 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.driver._common import StackExecutionObserver, VersionInfo, describe_stack_statement, hash_stack_operations
+from sqlspec.driver import (
+    AsyncDriverAdapterBase,
+    StackExecutionObserver,
+    SyncDriverAdapterBase,
+    VersionInfo,
+    describe_stack_statement,
+    hash_stack_operations,
+)
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow

@@ -1,5 +1,6 @@
 """Centralized data dictionary helpers."""
 
+from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.data_dictionary._loader import DataDictionaryLoader, get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import (
     get_dialect_config,
@@ -7,10 +8,12 @@ from sqlspec.data_dictionary._registry import (
     normalize_dialect_name,
     register_dialect,
 )
-from sqlspec.data_dictionary._types import FeatureFlags, FeatureVersions
+from sqlspec.data_dictionary._types import DialectConfig, FeatureFlags, FeatureVersions
 
 __all__ = (
     "DataDictionaryLoader",
+    "DialectConfig",
+    "DialectSQLMixin",
     "FeatureFlags",
     "FeatureVersions",
     "get_data_dictionary_loader",

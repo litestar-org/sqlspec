@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlspec.extensions.events._models import EventMessage
+from sqlspec.extensions.events import EventMessage
 
 
 def test_event_message_all_fields() -> None:

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 
 
 __all__ = ("PsqlpyADKMemoryStore", "PsqlpyADKStore")

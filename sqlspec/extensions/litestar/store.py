@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
-from sqlspec.observability._common import resolve_db_system
+from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_extension_config
 

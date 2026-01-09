@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk.store import AdbcADKMemoryStore
-from sqlspec.extensions.adk.memory._types import MemoryRecord
+from sqlspec.extensions.adk import MemoryRecord
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 

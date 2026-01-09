@@ -1,7 +1,7 @@
 """Psycopg event queue stores for sync and async drivers."""
 
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("PsycopgAsyncEventQueueStore", "PsycopgSyncEventQueueStore")
 

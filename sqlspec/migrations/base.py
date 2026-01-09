@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from rich.console import Console
 
-from sqlspec.builder import Delete, Insert, Select, Update, sql
-from sqlspec.builder._ddl import CreateTable
+from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader

@@ -23,7 +23,7 @@ from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.config import DuckDBConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 
 
 __all__ = ("DuckdbADKMemoryStore", "DuckdbADKStore")

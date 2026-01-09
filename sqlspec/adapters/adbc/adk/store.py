@@ -10,7 +10,7 @@ from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk import MemoryRecord
 
 logger = get_logger("sqlspec.adapters.adbc.adk.store")
 

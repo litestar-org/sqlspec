@@ -21,20 +21,25 @@ Test Coverage:
 import pytest
 from sqlglot import exp
 
-from sqlspec.builder import Delete, Insert, Merge, Select, Update
-from sqlspec.builder._explain import (
+from sqlspec.builder import (
+    Delete,
     Explain,
-    _build_bigquery_explain,
-    _build_duckdb_explain,
-    _build_generic_explain,
-    _build_mysql_explain,
-    _build_oracle_explain,
-    _build_postgres_explain,
-    _build_sqlite_explain,
-    _normalize_dialect_name,
+    Insert,
+    Merge,
+    Select,
+    SQLFactory,
+    Update,
+    build_bigquery_explain,
+    build_duckdb_explain,
     build_explain_sql,
+    build_generic_explain,
+    build_mysql_explain,
+    build_oracle_explain,
+    build_postgres_explain,
+    build_sqlite_explain,
+    normalize_dialect_name,
+    sql,
 )
-from sqlspec.builder._factory import SQLFactory, sql
 from sqlspec.core import SQL
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.statement import StatementConfig
@@ -702,131 +707,131 @@ def test_explain_repr():
 # -----------------------------------------------------------------------------
 
 
-def test_build_postgres_explain_basic():
+def testbuild_postgres_explain_basic():
     """Test PostgreSQL basic EXPLAIN generation."""
     options = ExplainOptions()
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN SELECT * FROM users"
 
 
-def test_build_postgres_explain_analyze():
+def testbuild_postgres_explain_analyze():
     """Test PostgreSQL EXPLAIN ANALYZE generation."""
     options = ExplainOptions(analyze=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN (ANALYZE)" in result
     assert "SELECT * FROM users" in result
 
 
-def test_build_postgres_explain_verbose():
+def testbuild_postgres_explain_verbose():
     """Test PostgreSQL EXPLAIN VERBOSE generation."""
     options = ExplainOptions(verbose=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN (VERBOSE)" in result
 
 
-def test_build_postgres_explain_format_json():
+def testbuild_postgres_explain_format_json():
     """Test PostgreSQL EXPLAIN FORMAT JSON generation."""
     options = ExplainOptions(format=ExplainFormat.JSON)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN (FORMAT JSON)" in result
 
 
-def test_build_postgres_explain_format_xml():
+def testbuild_postgres_explain_format_xml():
     """Test PostgreSQL EXPLAIN FORMAT XML generation."""
     options = ExplainOptions(format=ExplainFormat.XML)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "FORMAT XML" in result
 
 
-def test_build_postgres_explain_format_yaml():
+def testbuild_postgres_explain_format_yaml():
     """Test PostgreSQL EXPLAIN FORMAT YAML generation."""
     options = ExplainOptions(format=ExplainFormat.YAML)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "FORMAT YAML" in result
 
 
-def test_build_postgres_explain_costs_true():
+def testbuild_postgres_explain_costs_true():
     """Test PostgreSQL EXPLAIN COSTS TRUE generation."""
     options = ExplainOptions(costs=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "COSTS TRUE" in result
 
 
-def test_build_postgres_explain_costs_false():
+def testbuild_postgres_explain_costs_false():
     """Test PostgreSQL EXPLAIN COSTS FALSE generation."""
     options = ExplainOptions(costs=False)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "COSTS FALSE" in result
 
 
-def test_build_postgres_explain_buffers():
+def testbuild_postgres_explain_buffers():
     """Test PostgreSQL EXPLAIN BUFFERS generation."""
     options = ExplainOptions(buffers=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "BUFFERS TRUE" in result
 
 
-def test_build_postgres_explain_timing():
+def testbuild_postgres_explain_timing():
     """Test PostgreSQL EXPLAIN TIMING generation."""
     options = ExplainOptions(timing=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "TIMING TRUE" in result
 
 
-def test_build_postgres_explain_summary():
+def testbuild_postgres_explain_summary():
     """Test PostgreSQL EXPLAIN SUMMARY generation."""
     options = ExplainOptions(summary=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "SUMMARY TRUE" in result
 
 
-def test_build_postgres_explain_memory():
+def testbuild_postgres_explain_memory():
     """Test PostgreSQL EXPLAIN MEMORY generation."""
     options = ExplainOptions(memory=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "MEMORY TRUE" in result
 
 
-def test_build_postgres_explain_settings():
+def testbuild_postgres_explain_settings():
     """Test PostgreSQL EXPLAIN SETTINGS generation."""
     options = ExplainOptions(settings=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "SETTINGS TRUE" in result
 
 
-def test_build_postgres_explain_wal():
+def testbuild_postgres_explain_wal():
     """Test PostgreSQL EXPLAIN WAL generation."""
     options = ExplainOptions(wal=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "WAL TRUE" in result
 
 
-def test_build_postgres_explain_generic_plan():
+def testbuild_postgres_explain_generic_plan():
     """Test PostgreSQL EXPLAIN GENERIC_PLAN generation."""
     options = ExplainOptions(generic_plan=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "GENERIC_PLAN TRUE" in result
 
 
-def test_build_postgres_explain_full_options():
+def testbuild_postgres_explain_full_options():
     """Test PostgreSQL EXPLAIN with multiple options."""
     options = ExplainOptions(analyze=True, verbose=True, format=ExplainFormat.JSON, costs=True, buffers=True)
-    result = _build_postgres_explain("SELECT * FROM users", options)
+    result = build_postgres_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN (" in result
     assert "ANALYZE" in result
@@ -841,58 +846,58 @@ def test_build_postgres_explain_full_options():
 # -----------------------------------------------------------------------------
 
 
-def test_build_mysql_explain_basic():
+def testbuild_mysql_explain_basic():
     """Test MySQL basic EXPLAIN generation."""
     options = ExplainOptions()
-    result = _build_mysql_explain("SELECT * FROM users", options)
+    result = build_mysql_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN SELECT * FROM users"
 
 
-def test_build_mysql_explain_analyze():
+def testbuild_mysql_explain_analyze():
     """Test MySQL EXPLAIN ANALYZE generation."""
     options = ExplainOptions(analyze=True)
-    result = _build_mysql_explain("SELECT * FROM users", options)
+    result = build_mysql_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN ANALYZE SELECT * FROM users"
 
 
-def test_build_mysql_explain_format_json():
+def testbuild_mysql_explain_format_json():
     """Test MySQL EXPLAIN FORMAT JSON generation."""
     options = ExplainOptions(format=ExplainFormat.JSON)
-    result = _build_mysql_explain("SELECT * FROM users", options)
+    result = build_mysql_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN FORMAT = JSON" in result
 
 
-def test_build_mysql_explain_format_tree():
+def testbuild_mysql_explain_format_tree():
     """Test MySQL EXPLAIN FORMAT TREE generation."""
     options = ExplainOptions(format=ExplainFormat.TREE)
-    result = _build_mysql_explain("SELECT * FROM users", options)
+    result = build_mysql_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN FORMAT = TREE" in result
 
 
-def test_build_mysql_explain_format_traditional():
+def testbuild_mysql_explain_format_traditional():
     """Test MySQL EXPLAIN FORMAT TRADITIONAL generation."""
     options = ExplainOptions(format=ExplainFormat.TRADITIONAL)
-    result = _build_mysql_explain("SELECT * FROM users", options)
+    result = build_mysql_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN FORMAT = TRADITIONAL" in result
 
 
-def test_build_mysql_explain_format_text_maps_to_traditional():
+def testbuild_mysql_explain_format_text_maps_to_traditional():
     """Test MySQL maps TEXT format to TRADITIONAL."""
     options = ExplainOptions(format=ExplainFormat.TEXT)
-    result = _build_mysql_explain("SELECT * FROM users", options)
+    result = build_mysql_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN FORMAT = TRADITIONAL" in result
 
 
-def test_build_mysql_explain_analyze_ignores_format():
+def testbuild_mysql_explain_analyze_ignores_format():
     """Test MySQL EXPLAIN ANALYZE ignores format (always uses TREE)."""
     options = ExplainOptions(analyze=True, format=ExplainFormat.JSON)
-    result = _build_mysql_explain("SELECT * FROM users", options)
+    result = build_mysql_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN ANALYZE SELECT * FROM users"
 
@@ -902,26 +907,26 @@ def test_build_mysql_explain_analyze_ignores_format():
 # -----------------------------------------------------------------------------
 
 
-def test_build_sqlite_explain_basic():
+def testbuild_sqlite_explain_basic():
     """Test SQLite basic EXPLAIN QUERY PLAN generation."""
     options = ExplainOptions()
-    result = _build_sqlite_explain("SELECT * FROM users", options)
+    result = build_sqlite_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN QUERY PLAN SELECT * FROM users"
 
 
-def test_build_sqlite_explain_ignores_analyze():
+def testbuild_sqlite_explain_ignores_analyze():
     """Test SQLite EXPLAIN ignores analyze option."""
     options = ExplainOptions(analyze=True)
-    result = _build_sqlite_explain("SELECT * FROM users", options)
+    result = build_sqlite_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN QUERY PLAN SELECT * FROM users"
 
 
-def test_build_sqlite_explain_ignores_format():
+def testbuild_sqlite_explain_ignores_format():
     """Test SQLite EXPLAIN ignores format option."""
     options = ExplainOptions(format=ExplainFormat.JSON)
-    result = _build_sqlite_explain("SELECT * FROM users", options)
+    result = build_sqlite_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN QUERY PLAN SELECT * FROM users"
 
@@ -931,34 +936,34 @@ def test_build_sqlite_explain_ignores_format():
 # -----------------------------------------------------------------------------
 
 
-def test_build_duckdb_explain_basic():
+def testbuild_duckdb_explain_basic():
     """Test DuckDB basic EXPLAIN generation."""
     options = ExplainOptions()
-    result = _build_duckdb_explain("SELECT * FROM users", options)
+    result = build_duckdb_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN SELECT * FROM users"
 
 
-def test_build_duckdb_explain_analyze():
+def testbuild_duckdb_explain_analyze():
     """Test DuckDB EXPLAIN ANALYZE generation."""
     options = ExplainOptions(analyze=True)
-    result = _build_duckdb_explain("SELECT * FROM users", options)
+    result = build_duckdb_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN ANALYZE SELECT * FROM users"
 
 
-def test_build_duckdb_explain_format_json():
+def testbuild_duckdb_explain_format_json():
     """Test DuckDB EXPLAIN FORMAT JSON generation."""
     options = ExplainOptions(format=ExplainFormat.JSON)
-    result = _build_duckdb_explain("SELECT * FROM users", options)
+    result = build_duckdb_explain("SELECT * FROM users", options)
 
     assert "EXPLAIN (FORMAT JSON)" in result
 
 
-def test_build_duckdb_explain_format_text_no_parentheses():
+def testbuild_duckdb_explain_format_text_no_parentheses():
     """Test DuckDB EXPLAIN with TEXT format uses plain EXPLAIN."""
     options = ExplainOptions(format=ExplainFormat.TEXT)
-    result = _build_duckdb_explain("SELECT * FROM users", options)
+    result = build_duckdb_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN SELECT * FROM users"
 
@@ -968,26 +973,26 @@ def test_build_duckdb_explain_format_text_no_parentheses():
 # -----------------------------------------------------------------------------
 
 
-def test_build_oracle_explain_basic():
+def testbuild_oracle_explain_basic():
     """Test Oracle EXPLAIN PLAN FOR generation."""
     options = ExplainOptions()
-    result = _build_oracle_explain("SELECT * FROM users", options)
+    result = build_oracle_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN PLAN FOR SELECT * FROM users"
 
 
-def test_build_oracle_explain_ignores_analyze():
+def testbuild_oracle_explain_ignores_analyze():
     """Test Oracle EXPLAIN PLAN ignores analyze option."""
     options = ExplainOptions(analyze=True)
-    result = _build_oracle_explain("SELECT * FROM users", options)
+    result = build_oracle_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN PLAN FOR SELECT * FROM users"
 
 
-def test_build_oracle_explain_ignores_format():
+def testbuild_oracle_explain_ignores_format():
     """Test Oracle EXPLAIN PLAN ignores format option."""
     options = ExplainOptions(format=ExplainFormat.JSON)
-    result = _build_oracle_explain("SELECT * FROM users", options)
+    result = build_oracle_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN PLAN FOR SELECT * FROM users"
 
@@ -997,18 +1002,18 @@ def test_build_oracle_explain_ignores_format():
 # -----------------------------------------------------------------------------
 
 
-def test_build_bigquery_explain_basic():
+def testbuild_bigquery_explain_basic():
     """Test BigQuery basic EXPLAIN generation."""
     options = ExplainOptions()
-    result = _build_bigquery_explain("SELECT * FROM users", options)
+    result = build_bigquery_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN SELECT * FROM users"
 
 
-def test_build_bigquery_explain_analyze():
+def testbuild_bigquery_explain_analyze():
     """Test BigQuery EXPLAIN ANALYZE generation."""
     options = ExplainOptions(analyze=True)
-    result = _build_bigquery_explain("SELECT * FROM users", options)
+    result = build_bigquery_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN ANALYZE SELECT * FROM users"
 
@@ -1018,18 +1023,18 @@ def test_build_bigquery_explain_analyze():
 # -----------------------------------------------------------------------------
 
 
-def test_build_generic_explain_basic():
+def testbuild_generic_explain_basic():
     """Test generic EXPLAIN generation."""
     options = ExplainOptions()
-    result = _build_generic_explain("SELECT * FROM users", options)
+    result = build_generic_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN SELECT * FROM users"
 
 
-def test_build_generic_explain_analyze():
+def testbuild_generic_explain_analyze():
     """Test generic EXPLAIN ANALYZE generation."""
     options = ExplainOptions(analyze=True)
-    result = _build_generic_explain("SELECT * FROM users", options)
+    result = build_generic_explain("SELECT * FROM users", options)
 
     assert result == "EXPLAIN ANALYZE SELECT * FROM users"
 
@@ -1120,28 +1125,28 @@ def test_build_explain_sql_none_dialect():
 
 
 # -----------------------------------------------------------------------------
-# _normalize_dialect_name Tests
+# normalize_dialect_name Tests
 # -----------------------------------------------------------------------------
 
 
-def test_normalize_dialect_name_none():
-    """Test _normalize_dialect_name with None."""
-    assert _normalize_dialect_name(None) is None
+def testnormalize_dialect_name_none():
+    """Test normalize_dialect_name with None."""
+    assert normalize_dialect_name(None) is None
 
 
-def test_normalize_dialect_name_lowercase_string():
-    """Test _normalize_dialect_name with lowercase string."""
-    assert _normalize_dialect_name("postgres") == "postgres"
+def testnormalize_dialect_name_lowercase_string():
+    """Test normalize_dialect_name with lowercase string."""
+    assert normalize_dialect_name("postgres") == "postgres"
 
 
-def test_normalize_dialect_name_uppercase_string():
-    """Test _normalize_dialect_name converts to lowercase."""
-    assert _normalize_dialect_name("POSTGRES") == "postgres"
+def testnormalize_dialect_name_uppercase_string():
+    """Test normalize_dialect_name converts to lowercase."""
+    assert normalize_dialect_name("POSTGRES") == "postgres"
 
 
-def test_normalize_dialect_name_mixed_case_string():
-    """Test _normalize_dialect_name converts mixed case to lowercase."""
-    assert _normalize_dialect_name("PostgreSQL") == "postgresql"
+def testnormalize_dialect_name_mixed_case_string():
+    """Test normalize_dialect_name converts mixed case to lowercase."""
+    assert normalize_dialect_name("PostgreSQL") == "postgresql"
 
 
 # -----------------------------------------------------------------------------
@@ -1473,7 +1478,7 @@ def test_explain_builder_from_select_with_subquery():
 def test_explain_postgres_all_false_booleans():
     """Test PostgreSQL EXPLAIN with all boolean options set to False."""
     options = ExplainOptions(costs=False, buffers=False, timing=False)
-    result = _build_postgres_explain("SELECT 1", options)
+    result = build_postgres_explain("SELECT 1", options)
 
     assert "COSTS FALSE" in result
     assert "BUFFERS FALSE" in result
@@ -1487,12 +1492,12 @@ def test_explain_builder_has_slots():
     assert hasattr(type(explain), "__slots__")
 
 
-def test_normalize_dialect_name_with_dialect_object():
-    """Test _normalize_dialect_name with dialect instance (non-string)."""
+def testnormalize_dialect_name_with_dialect_object():
+    """Test normalize_dialect_name with dialect instance (non-string)."""
     from sqlglot.dialects import postgres
 
     dialect_instance = postgres.Postgres()
-    result = _normalize_dialect_name(dialect_instance)
+    result = normalize_dialect_name(dialect_instance)
 
     assert result == "postgres"
 

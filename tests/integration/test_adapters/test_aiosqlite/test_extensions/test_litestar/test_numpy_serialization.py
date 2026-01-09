@@ -7,8 +7,8 @@ import tempfile
 
 import pytest
 
-from sqlspec._typing import LITESTAR_INSTALLED, NUMPY_INSTALLED
 from sqlspec.base import SQLSpec
+from sqlspec.typing import LITESTAR_INSTALLED, NUMPY_INSTALLED
 
 if not LITESTAR_INSTALLED or not NUMPY_INSTALLED:
     pytest.skip("Litestar or NumPy not installed", allow_module_level=True)

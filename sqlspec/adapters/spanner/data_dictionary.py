@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.data_dictionary._helpers import DialectSQLMixin
+from sqlspec.data_dictionary import DialectSQLMixin
 from sqlspec.driver import (
     ColumnMetadata,
     ForeignKeyMetadata,

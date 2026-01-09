@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec._typing import PYARROW_INSTALLED
+from sqlspec.typing import PYARROW_INSTALLED
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy import PsqlpyDriver
