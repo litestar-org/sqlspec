@@ -50,7 +50,6 @@ __all__ = (
     "is_postgres_dialect",
     "normalize_driver_path",
     "normalize_postgres_empty_parameters",
-    "normalize_rowcount",
     "normalize_script_rowcount",
     "prepare_parameters_with_casts",
     "prepare_postgres_parameters",
@@ -62,6 +61,7 @@ __all__ = (
     "resolve_driver_name_from_config",
     "resolve_parameter_casts",
     "resolve_parameter_styles",
+    "resolve_rowcount",
 )
 
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
@@ -613,8 +613,8 @@ def collect_rows(
     return cast("list[dict[str, Any]]", fetched_data), column_names
 
 
-def normalize_rowcount(cursor: Any) -> int:
-    """Normalize rowcount from an ADBC cursor.
+def resolve_rowcount(cursor: Any) -> int:
+    """Resolve rowcount from an ADBC cursor.
 
     Args:
         cursor: ADBC cursor with optional rowcount metadata.
@@ -640,7 +640,7 @@ def normalize_script_rowcount(previous: int, cursor: Any) -> int:
     Returns:
         Updated rowcount value.
     """
-    rowcount = normalize_rowcount(cursor)
+    rowcount = resolve_rowcount(cursor)
     return rowcount if rowcount != -1 else previous
 
 

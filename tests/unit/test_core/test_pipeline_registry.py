@@ -9,10 +9,12 @@ from sqlspec.core import ParameterProfile
 from sqlspec.core.compiler import CompiledSQL
 from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.statement import get_default_config
+from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("core")
 
 
+@requires_interpreted
 def test_compile_with_pipeline_passes_expression() -> None:
     """Ensure pipeline forwards expressions to the SQL processor."""
     config = get_default_config()

@@ -190,7 +190,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
 
-    def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -233,7 +233,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             is_script_result=True,
         )
 
-    def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """BigQuery execute_many with Parquet bulk load optimization.
 
         Uses Parquet bulk load for INSERT operations (fast path) and falls back
@@ -282,7 +282,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
 
         Args:

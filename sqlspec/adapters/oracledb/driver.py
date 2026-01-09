@@ -27,8 +27,8 @@ from sqlspec.adapters.oracledb.core import (
     normalize_column_names,
     normalize_execute_many_parameters_async,
     normalize_execute_many_parameters_sync,
-    normalize_rowcount,
     raise_exception,
+    resolve_rowcount,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.core import (
@@ -364,7 +364,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleSyncExceptionHandler()
 
-    def _execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -408,7 +408,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         return self._execute_stack_native(stack, continue_on_error=continue_on_error)
 
-    def _execute_many(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
 
         Args:
@@ -463,7 +463,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         return tuple(results)
 
-    def _execute_statement(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
         Args:
@@ -495,7 +495,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             )
 
         # Non-SELECT result processing
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def select_to_storage(
@@ -786,7 +786,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleAsyncExceptionHandler()
 
-    async def _execute_script(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -801,12 +801,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        script_params = cast("dict[str, Any]", prepared_parameters or {})
 
         successful_count = 0
         last_cursor = cursor
 
         for stmt in statements:
-            await cursor.execute(stmt, prepared_parameters or {})
+            await cursor.execute(stmt, script_params)
             successful_count += 1
 
         return self.create_execution_result(
@@ -831,7 +832,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
 
-    async def _execute_many(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
 
         Args:
@@ -927,7 +928,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
 
-    async def _execute_statement(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
         Args:
@@ -961,7 +962,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             )
 
         # Non-SELECT result processing
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(

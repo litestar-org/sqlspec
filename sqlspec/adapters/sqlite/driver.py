@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.adapters.sqlite._typing import SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
     build_insert_statement,
+    collect_rows,
     default_statement_config,
     driver_profile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
-    normalize_rowcount,
-    process_result,
     raise_exception,
+    resolve_rowcount,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
@@ -150,7 +150,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         return SqliteExceptionHandler()
 
-    def _execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Args:
@@ -174,7 +174,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    def _execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
         Args:
@@ -188,11 +188,11 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def _execute_statement(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
         Args:
@@ -207,13 +207,13 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            data, column_names, row_count = process_result(fetched_data, cursor.description)
+            data, column_names, row_count = collect_rows(fetched_data, cursor.description)
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
             )
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def select_to_storage(

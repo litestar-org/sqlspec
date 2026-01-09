@@ -2,7 +2,7 @@
 
 from abc import abstractmethod
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast, final, overload
 
 from mypy_extensions import mypyc_attr
 
@@ -78,6 +78,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
 
+    @final
     def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
 
@@ -109,17 +110,17 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc_handler = self.handle_database_exceptions()
         try:
             with exc_handler, self.with_cursor(connection) as cursor:
-                special_result = self._try_special_handling(cursor, statement)
+                special_result = self.dispatch_special_handling(cursor, statement)
                 if special_result is not None:
                     result = special_result
                 elif statement.is_script:
-                    execution_result = self._execute_script(cursor, statement)
+                    execution_result = self.dispatch_execute_script(cursor, statement)
                     result = self.build_statement_result(statement, execution_result)
                 elif statement.is_many:
-                    execution_result = self._execute_many(cursor, statement)
+                    execution_result = self.dispatch_execute_many(cursor, statement)
                     result = self.build_statement_result(statement, execution_result)
                 else:
-                    execution_result = self._execute_statement(cursor, statement)
+                    execution_result = self.dispatch_execute(cursor, statement)
                     result = self.build_statement_result(statement, execution_result)
         except Exception as exc:  # pragma: no cover - instrumentation path
             if exc_handler.pending_exception is not None:
@@ -201,7 +202,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     def commit(self) -> None:
         """Commit the current transaction on the current connection."""
 
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+    def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
 
         This method is called first in dispatch_statement_execution() to allow drivers to handle
@@ -219,7 +220,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
-    def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a SQL script containing multiple statements.
 
         Default implementation splits the script and executes statements individually.
@@ -241,7 +242,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         for stmt in statements:
             single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
-            self._execute_statement(cursor, single_stmt)
+            self.dispatch_execute(cursor, single_stmt)
         successful_count += 1
 
         return self.create_execution_result(
@@ -327,7 +328,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             logger.debug("Commit after stack operation failed: %s", commit_error)
 
     @abstractmethod
-    def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL with multiple parameter sets (executemany).
 
         Must be implemented by each driver for database-specific executemany logic.
@@ -342,7 +343,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
 
     @abstractmethod
-    def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a single SQL statement.
 
         Must be implemented by each driver for database-specific execution logic.

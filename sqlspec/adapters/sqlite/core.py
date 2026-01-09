@@ -30,14 +30,14 @@ __all__ = (
     "build_insert_statement",
     "build_profile",
     "build_statement_config",
+    "collect_rows",
     "default_statement_config",
     "driver_profile",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
-    "normalize_rowcount",
-    "process_result",
     "raise_exception",
+    "resolve_rowcount",
 )
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
@@ -81,10 +81,10 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def process_result(
+def collect_rows(
     fetched_data: "list[Any]", description: "Sequence[Any] | None"
 ) -> "tuple[list[dict[str, Any]], list[str], int]":
-    """Process SQLite result rows into dictionaries.
+    """Collect SQLite result rows into dictionaries.
 
     Optimized helper to convert raw rows and cursor description into list of dicts.
 
@@ -104,8 +104,8 @@ def process_result(
     return data, column_names, len(data)
 
 
-def normalize_rowcount(cursor: Any) -> int:
-    """Normalize rowcount from a SQLite cursor.
+def resolve_rowcount(cursor: Any) -> int:
+    """Resolve rowcount from a SQLite cursor.
 
     Args:
         cursor: SQLite cursor with optional rowcount metadata.

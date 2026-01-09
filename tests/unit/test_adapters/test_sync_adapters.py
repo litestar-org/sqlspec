@@ -71,12 +71,12 @@ def test_sync_driver_database_exception_handling(mock_sync_driver: MockSyncDrive
         raise exc_handler.pending_exception
 
 
-def test_sync_driver_execute_statement_select(mock_sync_driver: MockSyncDriver) -> None:
-    """Test _execute_statement method with SELECT query."""
+def test_sync_driverdispatch_execute_select(mock_sync_driver: MockSyncDriver) -> None:
+    """Test dispatch_execute method with SELECT query."""
     statement = SQL("SELECT id, name FROM users", statement_config=mock_sync_driver.statement_config)
 
     with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
-        result = mock_sync_driver._execute_statement(cursor, statement)
+        result = mock_sync_driver.dispatch_execute(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_select_result is True
@@ -87,12 +87,12 @@ def test_sync_driver_execute_statement_select(mock_sync_driver: MockSyncDriver) 
     assert result.data_row_count == 2
 
 
-def test_sync_driver_execute_statement_insert(mock_sync_driver: MockSyncDriver) -> None:
-    """Test _execute_statement method with INSERT query."""
+def test_sync_driverdispatch_execute_insert(mock_sync_driver: MockSyncDriver) -> None:
+    """Test dispatch_execute method with INSERT query."""
     statement = SQL("INSERT INTO users (name) VALUES (?)", "test", statement_config=mock_sync_driver.statement_config)
 
     with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
-        result = mock_sync_driver._execute_statement(cursor, statement)
+        result = mock_sync_driver.dispatch_execute(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_select_result is False
@@ -111,7 +111,7 @@ def test_sync_driver_execute_many(mock_sync_driver: MockSyncDriver) -> None:
         is_many=True,
     )
     with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
-        result = mock_sync_driver._execute_many(cursor, statement)
+        result = mock_sync_driver.dispatch_execute_many(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_many_result is True
@@ -128,7 +128,7 @@ def test_sync_driver_execute_many_no_parameters(mock_sync_driver: MockSyncDriver
     )
     with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
         with pytest.raises(ValueError, match="execute_many requires parameters"):
-            mock_sync_driver._execute_many(cursor, statement)
+            mock_sync_driver.dispatch_execute_many(cursor, statement)
 
 
 def test_sync_driver_execute_script(mock_sync_driver: MockSyncDriver) -> None:
@@ -141,7 +141,7 @@ def test_sync_driver_execute_script(mock_sync_driver: MockSyncDriver) -> None:
     statement = SQL(script, statement_config=mock_sync_driver.statement_config, is_script=True)
 
     with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
-        result = mock_sync_driver._execute_script(cursor, statement)
+        result = mock_sync_driver.dispatch_execute_script(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_script_result is True
@@ -469,10 +469,10 @@ def test_sync_driver_build_statement_result(mock_sync_driver: MockSyncDriver) ->
 
 
 def test_sync_driver_special_handling_integration(mock_sync_driver: MockSyncDriver) -> None:
-    """Test that _try_special_handling is called during dispatch."""
+    """Test that dispatch_special_handling is called during dispatch."""
     statement = SQL("SELECT * FROM users", statement_config=mock_sync_driver.statement_config)
 
-    with patch.object(mock_sync_driver, "_try_special_handling", return_value=None) as mock_special:
+    with patch.object(mock_sync_driver, "dispatch_special_handling", return_value=None) as mock_special:
         result = mock_sync_driver.dispatch_statement_execution(statement, mock_sync_driver.connection)
 
         assert isinstance(result, SQLResult)
@@ -483,6 +483,6 @@ def test_sync_driver_error_handling_in_dispatch(mock_sync_driver: MockSyncDriver
     """Test error handling during statement dispatch."""
     statement = SQL("SELECT * FROM users", statement_config=mock_sync_driver.statement_config)
 
-    with patch.object(mock_sync_driver, "_execute_statement", side_effect=ValueError("Test error")):
+    with patch.object(mock_sync_driver, "dispatch_execute", side_effect=ValueError("Test error")):
         with pytest.raises(SQLSpecError, match="Mock database error"):
             mock_sync_driver.dispatch_statement_execution(statement, mock_sync_driver.connection)

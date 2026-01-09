@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.exceptions import SQLFileNotFoundError
@@ -12,6 +14,7 @@ if TYPE_CHECKING:
 __all__ = ("DialectSQLMixin",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class DialectSQLMixin:
     """Mixin for loading dialect-specific data dictionary SQL."""
 

@@ -51,9 +51,9 @@ __all__ = (
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
-    "normalize_rowcount",
     "raise_exception",
     "requires_session_callback",
+    "resolve_rowcount",
 )
 
 
@@ -312,8 +312,8 @@ def build_pipeline_stack_result(
     return StackResult.from_sql_result(sql_result)
 
 
-def normalize_rowcount(cursor: Any) -> int:
-    """Normalize rowcount from an Oracle cursor.
+def resolve_rowcount(cursor: Any) -> int:
+    """Resolve rowcount from an Oracle cursor.
 
     Args:
         cursor: Oracle cursor with optional rowcount metadata.

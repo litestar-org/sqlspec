@@ -26,9 +26,9 @@ from sqlspec.adapters.psycopg.core import (
     execute_with_optional_parameters_async,
     executemany_or_skip,
     executemany_or_skip_async,
-    normalize_rowcount,
     pipeline_supported,
     raise_exception,
+    resolve_rowcount,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
 from sqlspec.core import (
@@ -217,7 +217,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgSyncExceptionHandler()
 
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+    def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for PostgreSQL-specific special operations.
 
         Args:
@@ -278,7 +278,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FILE"}
         )
 
-    def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with multiple statements.
 
         Args:
@@ -379,7 +379,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         return tuple(results)
 
-    def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
         Args:
@@ -394,11 +394,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         if not executemany_or_skip(cursor, sql, prepared_parameters):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
         Args:
@@ -424,7 +424,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def select_to_storage(
@@ -627,7 +627,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgAsyncExceptionHandler()
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+    async def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for PostgreSQL-specific special operations.
 
         Args:
@@ -689,7 +689,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FILE"}
         )
 
-    async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with multiple statements (async).
 
         Args:
@@ -792,7 +792,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         return tuple(results)
 
-    async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets (async).
 
         Args:
@@ -807,11 +807,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         if not await executemany_or_skip_async(cursor, sql, prepared_parameters):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement (async).
 
         Args:
@@ -837,7 +837,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(

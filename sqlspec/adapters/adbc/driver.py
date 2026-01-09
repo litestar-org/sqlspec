@@ -16,12 +16,12 @@ from sqlspec.adapters.adbc.core import (
     handle_postgres_rollback,
     is_postgres_dialect,
     normalize_postgres_empty_parameters,
-    normalize_rowcount,
     normalize_script_rowcount,
     prepare_postgres_parameters,
     raise_exception,
     resolve_dialect_name,
     resolve_parameter_casts,
+    resolve_rowcount,
 )
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
@@ -187,7 +187,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
 
-    def _execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
         Args:
@@ -225,10 +225,10 @@ class AdbcDriver(SyncDriverAdapterBase):
                     processed_params.append(formatted_params)
 
                 cursor.executemany(sql, processed_params)
-                row_count = normalize_rowcount(cursor)
+                row_count = resolve_rowcount(cursor)
             else:
                 cursor.executemany(sql, prepared_parameters)
-                row_count = normalize_rowcount(cursor)
+                row_count = resolve_rowcount(cursor)
 
         except Exception:
             handle_postgres_rollback(self._dialect_name, cursor, logger)
@@ -236,7 +236,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
 
         Args:
@@ -283,10 +283,10 @@ class AdbcDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        row_count = normalize_rowcount(cursor)
+        row_count = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
-    def _execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script containing multiple statements.
 
         Args:

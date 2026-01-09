@@ -330,7 +330,7 @@ def test_replace_null_parameters_with_literals_numeric_dialect() -> None:
     )
 
     assert modified_expression.sql(dialect="postgres") == "INSERT INTO test VALUES ($1, NULL)"
-    assert cleaned_params == [42]
+    assert cleaned_params == (42,)
 
 
 def test_replace_placeholders_with_literals_basic_sequence() -> None:

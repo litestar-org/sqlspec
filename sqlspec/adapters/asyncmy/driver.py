@@ -21,7 +21,7 @@ from sqlspec.adapters.asyncmy.core import (
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     normalize_lastrowid,
-    normalize_rowcount,
+    resolve_rowcount,
 )
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
@@ -149,7 +149,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         return AsyncmyExceptionHandler()
 
-    async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Splits multi-statement scripts and executes each statement sequentially.
@@ -176,7 +176,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL statement with multiple parameter sets.
 
         Uses AsyncMy's executemany for batch operations with MySQL type conversion
@@ -201,7 +201,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
         Handles parameter processing, result fetching, and data transformation
@@ -229,7 +229,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                 cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
             )
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 

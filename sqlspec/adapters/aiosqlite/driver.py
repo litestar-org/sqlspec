@@ -10,14 +10,14 @@ import aiosqlite
 
 from sqlspec.adapters.aiosqlite.core import (
     build_insert_statement,
+    collect_rows,
     default_statement_config,
     driver_profile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
-    normalize_rowcount,
-    process_result,
     raise_exception,
+    resolve_rowcount,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
@@ -125,7 +125,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Handle AIOSQLite-specific exceptions."""
         return AiosqliteExceptionHandler()
 
-    async def _execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -141,17 +141,17 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    async def _execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def _execute_statement(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
@@ -161,13 +161,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
             # aiosqlite returns Iterable[Row], core helper expects Iterable[Any]
             # Use cast to satisfy mypy and pyright
-            data, column_names, row_count = process_result(cast("list[Any]", fetched_data), cursor.description)
+            data, column_names, row_count = collect_rows(cast("list[Any]", fetched_data), cursor.description)
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
             )
 
-        affected_rows = normalize_rowcount(cursor)
+        affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(

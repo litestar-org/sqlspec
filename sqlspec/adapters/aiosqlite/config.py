@@ -6,12 +6,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
-from sqlspec.adapters.aiosqlite.core import (
-    apply_driver_features,
-    build_connection_config,
-    build_pool_config,
-    default_statement_config,
-)
+from sqlspec.adapters.aiosqlite.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.aiosqlite.driver import (
     AiosqliteCursor,
     AiosqliteDriver,
@@ -251,7 +246,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             AiosqliteConnectionPool: The connection pool instance.
 
         """
-        config = build_pool_config(self.connection_config)
+        config = {k: v for k, v in self.connection_config.items() if v is not None}
         pool_size = config.pop("pool_size", 5)
         connect_timeout = config.pop("connect_timeout", 30.0)
         idle_timeout = config.pop("idle_timeout", 24 * 60 * 60)

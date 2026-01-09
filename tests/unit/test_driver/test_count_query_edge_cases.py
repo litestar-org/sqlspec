@@ -26,10 +26,10 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def connection(self):
         return None
 
-    def _execute_statement(self, *args, **kwargs):
+    def dispatch_execute(self, *args, **kwargs):
         raise NotImplementedError("Mock driver - not implemented")
 
-    def _execute_many(self, *args, **kwargs):
+    def dispatch_execute_many(self, *args, **kwargs):
         raise NotImplementedError("Mock driver - not implemented")
 
     def with_cursor(self, *args, **kwargs):
@@ -53,7 +53,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def rollback(self, *args, **kwargs):
         raise NotImplementedError("Mock driver - not implemented")
 
-    def _try_special_handling(self, *args, **kwargs):
+    def dispatch_special_handling(self, *args, **kwargs):
         raise NotImplementedError("Mock driver - not implemented")
 
     @property

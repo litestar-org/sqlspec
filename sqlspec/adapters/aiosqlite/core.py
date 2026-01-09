@@ -28,17 +28,16 @@ __all__ = (
     "apply_driver_features",
     "build_connection_config",
     "build_insert_statement",
-    "build_pool_config",
     "build_profile",
     "build_statement_config",
+    "collect_rows",
     "default_statement_config",
     "driver_profile",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
-    "normalize_rowcount",
-    "process_result",
     "raise_exception",
+    "resolve_rowcount",
 )
 
 
@@ -80,10 +79,10 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def process_result(
+def collect_rows(
     fetched_data: "Iterable[Any]", description: "Sequence[Any] | None"
 ) -> "tuple[list[dict[str, Any]], list[str], int]":
-    """Process SQLite result rows into dictionaries.
+    """Collect aiosqlite result rows into dictionaries.
 
     Optimized helper to convert raw rows and cursor description into list of dicts.
 
@@ -103,8 +102,8 @@ def process_result(
     return data, column_names, len(data)
 
 
-def normalize_rowcount(cursor: Any) -> int:
-    """Normalize rowcount from an aiosqlite cursor.
+def resolve_rowcount(cursor: Any) -> int:
+    """Resolve rowcount from an aiosqlite cursor.
 
     Args:
         cursor: Aiosqlite cursor with optional rowcount metadata.
@@ -148,18 +147,6 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
         msg = "execute_many requires parameters"
         raise ValueError(msg)
     return parameters
-
-
-def build_pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build pool configuration with non-null values only.
-
-    Args:
-        connection_config: Raw connection configuration mapping.
-
-    Returns:
-        Dictionary with pool parameters.
-    """
-    return {key: value for key, value in connection_config.items() if value is not None}
 
 
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":

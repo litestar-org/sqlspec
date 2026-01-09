@@ -72,11 +72,11 @@ async def test_async_driver_database_exception_handling(mock_async_driver: MockA
         raise exc_handler.pending_exception
 
 
-async def test_async_driver_execute_statement_select(mock_async_driver: MockAsyncDriver) -> None:
-    """Test async _execute_statement method with SELECT query."""
+async def test_async_driverdispatch_execute_select(mock_async_driver: MockAsyncDriver) -> None:
+    """Test async dispatch_execute method with SELECT query."""
     statement = SQL("SELECT id, name FROM users", statement_config=mock_async_driver.statement_config)
     async with mock_async_driver.with_cursor(mock_async_driver.connection) as cursor:
-        result = await mock_async_driver._execute_statement(cursor, statement)
+        result = await mock_async_driver.dispatch_execute(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_select_result is True
@@ -87,12 +87,12 @@ async def test_async_driver_execute_statement_select(mock_async_driver: MockAsyn
     assert result.data_row_count == 2
 
 
-async def test_async_driver_execute_statement_insert(mock_async_driver: MockAsyncDriver) -> None:
-    """Test async _execute_statement method with INSERT query."""
+async def test_async_driverdispatch_execute_insert(mock_async_driver: MockAsyncDriver) -> None:
+    """Test async dispatch_execute method with INSERT query."""
     statement = SQL("INSERT INTO users (name) VALUES (?)", "test", statement_config=mock_async_driver.statement_config)
 
     async with mock_async_driver.with_cursor(mock_async_driver.connection) as cursor:
-        result = await mock_async_driver._execute_statement(cursor, statement)
+        result = await mock_async_driver.dispatch_execute(cursor, statement)
     assert isinstance(result, ExecutionResult)
     assert result.is_select_result is False
     assert result.is_script_result is False
@@ -102,7 +102,7 @@ async def test_async_driver_execute_statement_insert(mock_async_driver: MockAsyn
 
 
 async def test_async_driver_execute_many(mock_async_driver: MockAsyncDriver) -> None:
-    """Test async _execute_many method."""
+    """Test async dispatch_execute_many method."""
     statement = SQL(
         "INSERT INTO users (name) VALUES (?)",
         [["alice"], ["bob"], ["charlie"]],
@@ -110,7 +110,7 @@ async def test_async_driver_execute_many(mock_async_driver: MockAsyncDriver) -> 
         is_many=True,
     )
     async with mock_async_driver.with_cursor(mock_async_driver.connection) as cursor:
-        result = await mock_async_driver._execute_statement(cursor, statement)
+        result = await mock_async_driver.dispatch_execute_many(cursor, statement)
     assert isinstance(result, ExecutionResult)
     assert result.is_many_result is True
     assert result.is_select_result is False
@@ -126,11 +126,11 @@ async def test_async_driver_execute_many_no_parameters(mock_async_driver: MockAs
     )
     async with mock_async_driver.with_cursor(mock_async_driver.connection) as cursor:
         with pytest.raises(ValueError, match="execute_many requires parameters"):
-            await mock_async_driver._execute_many(cursor, statement)
+            await mock_async_driver.dispatch_execute_many(cursor, statement)
 
 
 async def test_async_driver_execute_script(mock_async_driver: MockAsyncDriver) -> None:
-    """Test async _execute_script method."""
+    """Test async dispatch_execute_script method."""
     script = """
     INSERT INTO users (name) VALUES ('alice');
     INSERT INTO users (name) VALUES ('bob');
@@ -138,7 +138,7 @@ async def test_async_driver_execute_script(mock_async_driver: MockAsyncDriver) -
     """
     statement = SQL(script, statement_config=mock_async_driver.statement_config, is_script=True)
     async with mock_async_driver.with_cursor(mock_async_driver.connection) as cursor:
-        result = await mock_async_driver._execute_statement(cursor, statement)
+        result = await mock_async_driver.dispatch_execute_script(cursor, statement)
     assert isinstance(result, ExecutionResult)
     assert result.is_script_result is True
     assert result.is_select_result is False
@@ -465,11 +465,11 @@ async def test_async_driver_build_statement_result(mock_async_driver: MockAsyncD
 
 
 async def test_async_driver_special_handling_integration(mock_async_driver: MockAsyncDriver) -> None:
-    """Test that async _try_special_handling is called during dispatch."""
+    """Test that async dispatch_special_handling is called during dispatch."""
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
 
     with patch.object(
-        mock_async_driver, "_try_special_handling", new_callable=AsyncMock, return_value=None
+        mock_async_driver, "dispatch_special_handling", new_callable=AsyncMock, return_value=None
     ) as mock_special:
         result = await mock_async_driver.dispatch_statement_execution(statement, mock_async_driver.connection)
 
@@ -482,7 +482,7 @@ async def test_async_driver_error_handling_in_dispatch(mock_async_driver: MockAs
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
 
     with patch.object(
-        mock_async_driver, "_execute_statement", new_callable=AsyncMock, side_effect=ValueError("Test async error")
+        mock_async_driver, "dispatch_execute", new_callable=AsyncMock, side_effect=ValueError("Test async error")
     ):
         with pytest.raises(SQLSpecError, match="Mock async database error"):
             await mock_async_driver.dispatch_statement_execution(statement, mock_async_driver.connection)

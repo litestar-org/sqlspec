@@ -7,7 +7,7 @@ from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
-from sqlspec.adapters.psqlpy.core import apply_driver_features, build_pool_config, default_statement_config
+from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, PsqlpyExceptionHandler, PsqlpySessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.extensions.events import EventRuntimeHints
@@ -207,7 +207,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        return ConnectionPool(**build_pool_config(self.connection_config))
+        return ConnectionPool(**build_connection_config(self.connection_config))
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

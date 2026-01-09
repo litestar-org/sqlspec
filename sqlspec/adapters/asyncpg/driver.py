@@ -128,7 +128,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Handle database exceptions with PostgreSQL error codes."""
         return AsyncpgExceptionHandler()
 
-    async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult | None":
+    async def dispatch_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult | None":
         """Handle PostgreSQL COPY operations and other special cases.
 
         Args:
@@ -178,7 +178,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         await cursor.execute(sql_text)
 
-    async def _execute_script(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Args:
@@ -203,7 +203,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    async def _execute_many(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using AsyncPG's executemany.
 
         Args:
@@ -303,7 +303,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
             results.append(stack_result)
 
-    async def _execute_statement(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
         Handles both SELECT queries and non-SELECT operations.
@@ -316,19 +316,17 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if prepared_parameters:
-            prepared_parameters = cast("tuple[Any, ...]", prepared_parameters)
+        params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
 
         if statement.returns_rows():
-            records = await cursor.fetch(sql, *prepared_parameters) if prepared_parameters else await cursor.fetch(sql)
+            records = await cursor.fetch(sql, *params) if params else await cursor.fetch(sql)
             data, column_names = collect_rows(records)
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        result = await cursor.execute(sql, *prepared_parameters) if prepared_parameters else await cursor.execute(sql)
+        result = await cursor.execute(sql, *params) if params else await cursor.execute(sql)
 
         affected_rows = parse_status(result)
 

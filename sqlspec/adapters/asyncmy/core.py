@@ -35,7 +35,7 @@ __all__ = (
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
-    "normalize_rowcount",
+    "resolve_rowcount",
 )
 
 MYSQL_ER_DUP_ENTRY = 1062
@@ -311,8 +311,8 @@ def collect_rows(
     return rows, column_names
 
 
-def normalize_rowcount(cursor: Any) -> int:
-    """Normalize rowcount from an AsyncMy cursor.
+def resolve_rowcount(cursor: Any) -> int:
+    """Resolve rowcount from an AsyncMy cursor.
 
     Args:
         cursor: AsyncMy cursor with optional rowcount metadata.
@@ -339,10 +339,10 @@ def normalize_lastrowid(cursor: Any) -> int | None:
     """
     if not has_rowcount(cursor):
         return None
-    if not has_lastrowid(cursor):
-        return None
     rowcount = cursor.rowcount
     if not isinstance(rowcount, int) or rowcount <= 0:
+        return None
+    if not has_lastrowid(cursor):
         return None
     last_id = cursor.lastrowid
     return last_id if isinstance(last_id, int) else None

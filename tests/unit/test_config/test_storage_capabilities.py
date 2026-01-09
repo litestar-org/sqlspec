@@ -39,16 +39,16 @@ class _DummyDriver(SyncDriverAdapterBase):
     def commit(self) -> None:  # type: ignore[override]
         raise NotImplementedError
 
-    def _try_special_handling(self, cursor: Any, statement: Any):  # type: ignore[override]
+    def dispatch_special_handling(self, cursor: Any, statement: Any):  # type: ignore[override]
         return None
 
-    def _execute_script(self, cursor: Any, statement: Any):  # type: ignore[override]
+    def dispatch_execute_script(self, cursor: Any, statement: Any):  # type: ignore[override]
         raise NotImplementedError
 
-    def _execute_many(self, cursor: Any, statement: Any):  # type: ignore[override]
+    def dispatch_execute_many(self, cursor: Any, statement: Any):  # type: ignore[override]
         raise NotImplementedError
 
-    def _execute_statement(self, cursor: Any, statement: Any):  # type: ignore[override]
+    def dispatch_execute(self, cursor: Any, statement: Any):  # type: ignore[override]
         raise NotImplementedError
 
 

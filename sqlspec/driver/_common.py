@@ -1478,10 +1478,11 @@ class CommonDriverAttributesMixin:
         expr = original_sql.expression
         cte: exp.Expression | None = None
         if isinstance(expr, exp.Expression):  # pyright: ignore
-            cte = expr.args.get("with")
+            # sqlglot uses 'with_' as the key for WITH clauses (not 'with')
+            cte = expr.args.get("with_")
             if cte is not None:
                 expr = expr.copy()
-                expr.set("with", None)
+                expr.set("with_", None)
 
         if isinstance(expr, exp.Select):
             from_clause = expr.args.get("from")
@@ -1504,7 +1505,12 @@ class CommonDriverAttributesMixin:
             has_joins = expr.args.get("joins")
             needs_subquery = has_group or has_joins or cte is not None
             if needs_subquery:
-                subquery = expr.subquery(alias="grouped_data")
+                # Strip ORDER BY, LIMIT, OFFSET from the subquery before wrapping
+                subquery_expr = expr.copy()
+                subquery_expr.set("order", None)
+                subquery_expr.set("limit", None)
+                subquery_expr.set("offset", None)
+                subquery = subquery_expr.subquery(alias="grouped_data")
                 count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
             else:
                 source_from = cast("exp.Expression", from_clause)
@@ -1519,11 +1525,11 @@ class CommonDriverAttributesMixin:
             count_expr.set("offset", None)
 
             if cte is not None:
-                count_expr.set("with", cte.copy())
+                count_expr.set("with_", cte.copy())
             return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)
 
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
         if cte is not None:
-            count_expr.set("with", cte.copy())
+            count_expr.set("with_", cte.copy())
         return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)

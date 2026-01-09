@@ -32,8 +32,8 @@ if TYPE_CHECKING:
 
 __all__ = (
     "apply_driver_features",
+    "build_connection_config",
     "build_insert_statement",
-    "build_pool_config",
     "build_profile",
     "build_statement_config",
     "coerce_numeric_for_write",
@@ -223,14 +223,14 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
 default_statement_config = build_statement_config()
 
 
-def build_pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build pool configuration with non-null values only.
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build connection configuration with non-null values only.
 
     Args:
         connection_config: Raw connection configuration mapping.
 
     Returns:
-        Dictionary with pool parameters.
+        Dictionary with connection parameters.
     """
     return {key: value for key, value in connection_config.items() if value is not None}
 

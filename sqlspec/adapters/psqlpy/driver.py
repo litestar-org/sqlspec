@@ -193,7 +193,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """
         return PsqlpyExceptionHandler()
 
-    async def _execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting.
 
         Args:
@@ -224,7 +224,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    async def _execute_many(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
         Args:
@@ -261,7 +261,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=rows_affected, is_many_result=True)
 
-    async def _execute_statement(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
 
         Args:

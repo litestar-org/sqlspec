@@ -190,10 +190,10 @@ class _DummyDriver(SyncDriverAdapterBase):
     def commit(self) -> None:  # pragma: no cover - unused in tests
         return None
 
-    def _try_special_handling(self, cursor: Any, statement: SQL):
+    def dispatch_special_handling(self, cursor: Any, statement: SQL):
         _ = cursor, statement
 
-    def _execute_statement(self, cursor: Any, statement: SQL):
+    def dispatch_execute(self, cursor: Any, statement: SQL):
         _ = cursor, statement
         return self.create_execution_result(
             cursor_result=None,
@@ -209,7 +209,7 @@ class _DummyDriver(SyncDriverAdapterBase):
             is_many_result=False,
         )
 
-    def _execute_many(self, cursor: Any, statement: SQL):
+    def dispatch_execute_many(self, cursor: Any, statement: SQL):
         _ = cursor, statement
         return self.create_execution_result(
             cursor_result=None,

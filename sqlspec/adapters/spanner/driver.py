@@ -155,10 +155,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
         return infer_param_types(params)
 
-    def _execute_statement(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
         params = cast("dict[str, Any] | None", params)
-        coerced_params = self._coerce_params(cast("dict[str, Any] | None", params))
+        coerced_params = self._coerce_params(params)
         param_types_map = self._infer_param_types(coerced_params)
 
         if statement.returns_rows():
@@ -187,16 +187,17 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         msg = "Cannot execute DML in a read-only Snapshot context."
         raise SQLConversionError(msg)
 
-    def _execute_script(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_script(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         is_transaction = supports_write(cursor)
         reader = cast("_SpannerReadProtocol", cursor)
 
         count = 0
+        script_params = cast("dict[str, Any] | None", params)
         for stmt in statements:
             is_select = stmt.upper().strip().startswith("SELECT")
-            coerced_params = self._coerce_params(params)
+            coerced_params = self._coerce_params(script_params)
             if not is_select and not is_transaction:
                 msg = "Cannot execute DML in a read-only Snapshot context."
                 raise SQLConversionError(msg)
@@ -213,7 +214,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             cursor, statement_count=count, successful_statements=count, is_script_result=True
         )
 
-    def _execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         if not supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)

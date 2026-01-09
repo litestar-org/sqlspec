@@ -385,19 +385,12 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Handle database exceptions."""
         return MockSyncExceptionHandler()
 
-    def _try_special_handling(self, cursor: MockSyncCursor, statement: SQL) -> Any | None:
+    def dispatch_special_handling(self, cursor: MockSyncCursor, statement: SQL) -> Any | None:
         """Mock special handling - always return None."""
         return None
 
-    def _execute_statement(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
+    def dispatch_execute(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
         """Mock execute statement."""
-
-        if statement.is_many:
-            return self._execute_many(cursor, statement)
-
-        if statement.is_script:
-            return self._execute_script(cursor, statement)
-
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters)
 
@@ -412,7 +405,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
 
-    def _execute_many(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
         """Mock execute many."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -424,7 +417,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
         cursor.executemany(sql, parameter_sets)
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount, is_many_result=True)
 
-    def _execute_script(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
+    def dispatch_execute_script(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
         """Mock execute script."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
@@ -493,19 +486,12 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         """Handle database exceptions."""
         return MockAsyncExceptionHandler()
 
-    async def _try_special_handling(self, cursor: MockAsyncCursor, statement: SQL) -> Any | None:
+    async def dispatch_special_handling(self, cursor: MockAsyncCursor, statement: SQL) -> Any | None:
         """Mock async special handling - always return None."""
         return None
 
-    async def _execute_statement(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
+    async def dispatch_execute(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
         """Mock async execute statement."""
-
-        if statement.is_many:
-            return await self._execute_many(cursor, statement)
-
-        if statement.is_script:
-            return await self._execute_script(cursor, statement)
-
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters)
 
@@ -520,7 +506,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
 
-    async def _execute_many(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
+    async def dispatch_execute_many(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
         """Mock async execute many."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -532,7 +518,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         await cursor.executemany(sql, parameter_sets)
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount, is_many_result=True)
 
-    async def _execute_script(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
+    async def dispatch_execute_script(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
         """Mock async execute script."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)

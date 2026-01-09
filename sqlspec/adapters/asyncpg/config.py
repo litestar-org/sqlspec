@@ -12,7 +12,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
-    build_pool_config,
+    build_connection_config,
     default_statement_config,
     register_json_codecs,
     register_pgvector_support,
@@ -422,7 +422,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
-        config = build_pool_config(self.connection_config)
+        config = build_connection_config(self.connection_config)
 
         if self.driver_features.get("enable_cloud_sql", False):
             self._setup_cloud_sql_connector(config)

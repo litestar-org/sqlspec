@@ -138,7 +138,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return DuckDBExceptionHandler()
 
-    def _execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parses multi-statement scripts and executes each statement sequentially
@@ -165,7 +165,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    def _execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using batch processing.
 
         Uses DuckDB's executemany method for batch operations and calculates
@@ -190,7 +190,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement with data handling.
 
         Executes a SQL statement with parameter binding and processes the results.

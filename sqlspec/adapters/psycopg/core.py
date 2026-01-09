@@ -53,9 +53,9 @@ __all__ = (
     "execute_with_optional_parameters_async",
     "executemany_or_skip",
     "executemany_or_skip_async",
-    "normalize_rowcount",
     "pipeline_supported",
     "raise_exception",
+    "resolve_rowcount",
 )
 
 TRANSACTION_STATUS_IDLE = 0
@@ -280,8 +280,8 @@ async def executemany_or_skip_async(cursor: Any, sql: str, parameters: Any) -> b
     return True
 
 
-def normalize_rowcount(cursor: Any) -> int:
-    """Normalize rowcount from a psycopg cursor.
+def resolve_rowcount(cursor: Any) -> int:
+    """Resolve rowcount from a psycopg cursor.
 
     Args:
         cursor: Psycopg cursor with optional rowcount metadata.
@@ -327,7 +327,7 @@ def build_pipeline_execution_result(statement: "SQL", cursor: Any) -> "Execution
             last_inserted_id=None,
         )
 
-    affected_rows = normalize_rowcount(cursor)
+    affected_rows = resolve_rowcount(cursor)
     return ExecutionResult(
         cursor_result=cursor,
         rowcount_override=affected_rows,
@@ -373,7 +373,7 @@ async def build_async_pipeline_execution_result(statement: "SQL", cursor: Any) -
             last_inserted_id=None,
         )
 
-    affected_rows = normalize_rowcount(cursor)
+    affected_rows = resolve_rowcount(cursor)
     return ExecutionResult(
         cursor_result=cursor,
         rowcount_override=affected_rows,
