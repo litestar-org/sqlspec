@@ -31,21 +31,23 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL, ParameterStyleConfig, StatementConfig
 
 __all__ = (
-    "apply_psqlpy_driver_features",
-    "build_psqlpy_insert_statement",
-    "build_psqlpy_profile",
-    "build_psqlpy_statement_config",
+    "apply_driver_features",
+    "build_insert_statement",
+    "build_pool_config",
+    "build_profile",
+    "build_statement_config",
     "coerce_numeric_for_write",
     "coerce_records_for_execute_many",
-    "collect_psqlpy_rows",
+    "collect_rows",
+    "default_statement_config",
+    "driver_profile",
     "encode_records_for_binary_copy",
-    "extract_psqlpy_rows_affected",
+    "extract_rows_affected",
     "format_table_identifier",
-    "get_psqlpy_parameter_casts",
+    "get_parameter_casts",
     "normalize_scalar_parameter",
-    "prepare_psqlpy_parameters_with_casts",
-    "psqlpy_statement_config",
-    "raise_psqlpy_exception",
+    "prepare_parameters_with_casts",
+    "raise_exception",
     "split_schema_and_table",
 )
 
@@ -163,7 +165,7 @@ def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
     return tuple(_DECIMAL_NORMALIZER(item) for item in value)
 
 
-def build_psqlpy_profile() -> "DriverParameterProfile":
+def build_profile() -> "DriverParameterProfile":
     """Create the psqlpy driver parameter profile."""
 
     return DriverParameterProfile(
@@ -181,6 +183,9 @@ def build_psqlpy_profile() -> "DriverParameterProfile":
         custom_type_coercions={decimal.Decimal: float},
         default_dialect="postgres",
     )
+
+
+driver_profile = build_profile()
 
 
 def _build_psqlpy_parameter_config(
@@ -206,34 +211,46 @@ def _build_psqlpy_parameter_config(
     return base_config.replace(type_coercion_map=updated_type_map)
 
 
-def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
+def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
     """Construct the psqlpy statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
-    profile = build_psqlpy_profile()
+    profile = driver_profile
     parameter_config = _build_psqlpy_parameter_config(profile, serializer)
     base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
     return base_config.replace(parameter_config=parameter_config)
 
 
-psqlpy_statement_config = build_psqlpy_statement_config()
+default_statement_config = build_statement_config()
 
 
-def apply_psqlpy_driver_features(
+def build_pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build pool configuration with non-null values only.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Dictionary with pool parameters.
+    """
+    return {key: value for key, value in connection_config.items() if value is not None}
+
+
+def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply psqlpy driver feature defaults to statement config."""
-    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    serializer = processed_driver_features.get("json_serializer", to_json)
-    processed_driver_features.setdefault("json_serializer", serializer)
-    processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+    features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    serializer = features.get("json_serializer", to_json)
+    features.setdefault("json_serializer", serializer)
+    features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
-    parameter_config = _build_psqlpy_parameter_config(build_psqlpy_profile(), serializer)
+    parameter_config = _build_psqlpy_parameter_config(driver_profile, serializer)
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
-    return statement_config, processed_driver_features
+    return statement_config, features
 
 
-def collect_psqlpy_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[str]]":
+def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect psqlpy rows and column names.
 
     Args:
@@ -335,7 +352,7 @@ def _parse_psqlpy_command_tag(tag: str) -> int:
     return -1
 
 
-def extract_psqlpy_rows_affected(result: Any) -> int:
+def extract_rows_affected(result: Any) -> int:
     """Extract rows affected from psqlpy results."""
     try:
         if has_query_result_metadata(result):
@@ -350,7 +367,7 @@ def extract_psqlpy_rows_affected(result: Any) -> int:
     return -1
 
 
-def get_psqlpy_parameter_casts(statement: "SQL") -> "dict[int, str]":
+def get_parameter_casts(statement: "SQL") -> "dict[int, str]":
     """Get parameter cast metadata from compiled statements."""
     processed_state = statement.get_processed_state()
     if processed_state is not Empty:
@@ -358,7 +375,7 @@ def get_psqlpy_parameter_casts(statement: "SQL") -> "dict[int, str]":
     return {}
 
 
-def prepare_psqlpy_parameters_with_casts(
+def prepare_parameters_with_casts(
     parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
 ) -> Any:
     """Prepare parameters with cast-aware type coercion."""
@@ -386,7 +403,7 @@ def _raise_postgres_error(error: Any, error_class: type[SQLSpecError], descripti
     raise error_class(msg) from error
 
 
-def raise_psqlpy_exception(error: Any) -> None:
+def raise_exception(error: Any) -> None:
     """Raise SQLSpec exceptions for psqlpy errors."""
     error_msg = str(error).lower()
 
@@ -422,7 +439,7 @@ def format_table_identifier(identifier: str) -> str:
     return _quote_identifier(table_name)
 
 
-def build_psqlpy_insert_statement(table: str, columns: "list[str]") -> str:
+def build_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(_quote_identifier(column) for column in columns)
     placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
     return f"INSERT INTO {format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"

@@ -6,7 +6,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.adapters.psycopg.driver import psycopg_statement_config
+from sqlspec.adapters.psycopg.core import default_statement_config
 from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("postgres")
@@ -24,7 +24,7 @@ def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[Psyco
             "dbname": postgres_service.database,
             "autocommit": True,
         },
-        statement_config=psycopg_statement_config,
+        statement_config=default_statement_config,
     )
 
     try:

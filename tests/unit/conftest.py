@@ -9,7 +9,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from contextlib import asynccontextmanager, contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -775,7 +775,8 @@ class MockSyncDriver(SyncDriverAdapterBase):
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
-        cursor.executemany(sql, prepared_parameters)
+        parameter_sets = cast("list[Any]", prepared_parameters)
+        cursor.executemany(sql, parameter_sets)
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount, is_many_result=True)
 
     def _execute_script(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
@@ -883,7 +884,8 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
-        await cursor.executemany(sql, prepared_parameters)
+        parameter_sets = cast("list[Any]", prepared_parameters)
+        await cursor.executemany(sql, parameter_sets)
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount, is_many_result=True)
 
     async def _execute_script(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:

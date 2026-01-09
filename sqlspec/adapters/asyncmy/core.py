@@ -22,17 +22,20 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
 __all__ = (
-    "apply_asyncmy_driver_features",
-    "asyncmy_statement_config",
-    "build_asyncmy_insert_statement",
-    "build_asyncmy_profile",
-    "build_asyncmy_statement_config",
-    "collect_asyncmy_rows",
-    "detect_asyncmy_json_columns",
-    "format_mysql_identifier",
-    "map_asyncmy_exception",
-    "normalize_asyncmy_lastrowid",
-    "normalize_asyncmy_rowcount",
+    "apply_driver_features",
+    "build_insert_statement",
+    "build_profile",
+    "build_statement_config",
+    "collect_rows",
+    "default_statement_config",
+    "detect_json_columns",
+    "driver_profile",
+    "format_identifier",
+    "map_exception",
+    "normalize_execute_many_parameters",
+    "normalize_execute_parameters",
+    "normalize_lastrowid",
+    "normalize_rowcount",
 )
 
 MYSQL_ER_DUP_ENTRY = 1062
@@ -49,7 +52,7 @@ def _quote_mysql_identifier(identifier: str) -> str:
     return f"`{normalized}`"
 
 
-def format_mysql_identifier(identifier: str) -> str:
+def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
         msg = "Table name must not be empty"
@@ -59,13 +62,43 @@ def format_mysql_identifier(identifier: str) -> str:
     return formatted or _quote_mysql_identifier(cleaned)
 
 
-def build_asyncmy_insert_statement(table: str, columns: "list[str]") -> str:
+def build_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(_quote_mysql_identifier(column) for column in columns)
     placeholders = ", ".join("%s" for _ in columns)
-    return f"INSERT INTO {format_mysql_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+    return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def build_asyncmy_profile() -> "DriverParameterProfile":
+def normalize_execute_parameters(parameters: Any) -> Any:
+    """Normalize parameters for AsyncMy execute calls.
+
+    Args:
+        parameters: Prepared parameters payload.
+
+    Returns:
+        Normalized parameters payload.
+    """
+    return parameters or None
+
+
+def normalize_execute_many_parameters(parameters: Any) -> Any:
+    """Normalize parameters for AsyncMy executemany calls.
+
+    Args:
+        parameters: Prepared parameters payload.
+
+    Returns:
+        Normalized parameters payload.
+
+    Raises:
+        ValueError: When parameters are missing for executemany.
+    """
+    if not parameters:
+        msg = "execute_many requires parameters"
+        raise ValueError(msg)
+    return parameters
+
+
+def build_profile() -> "DriverParameterProfile":
     """Create the AsyncMy driver parameter profile."""
 
     return DriverParameterProfile(
@@ -85,28 +118,31 @@ def build_asyncmy_profile() -> "DriverParameterProfile":
     )
 
 
-def build_asyncmy_statement_config(
+driver_profile = build_profile()
+
+
+def build_statement_config(
     *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> "StatementConfig":
     """Construct the AsyncMy statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
     deserializer = json_deserializer or from_json
-    profile = build_asyncmy_profile()
+    profile = driver_profile
     return build_statement_config_from_profile(
         profile, statement_overrides={"dialect": "mysql"}, json_serializer=serializer, json_deserializer=deserializer
     )
 
 
-asyncmy_statement_config = build_asyncmy_statement_config()
+default_statement_config = build_statement_config()
 
 
-def apply_asyncmy_driver_features(
+def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply AsyncMy driver feature defaults to statement config."""
-    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
-    json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
+    features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    json_serializer = features.setdefault("json_serializer", to_json)
+    json_deserializer = features.setdefault("json_deserializer", from_json)
 
     if json_serializer is not None:
         parameter_config = statement_config.parameter_config.with_json_serializers(
@@ -114,7 +150,7 @@ def apply_asyncmy_driver_features(
         )
         statement_config = statement_config.replace(parameter_config=parameter_config)
 
-    return statement_config, processed_driver_features
+    return statement_config, features
 
 
 def _raise_mysql_error(
@@ -125,7 +161,7 @@ def _raise_mysql_error(
     raise error_class(msg) from error
 
 
-def map_asyncmy_exception(error: Any, *, logger: Any | None = None) -> "bool | None":
+def map_exception(error: Any, *, logger: Any | None = None) -> "bool | None":
     """Map AsyncMy exceptions to SQLSpec errors.
 
     Returns True to suppress expected migration errors.
@@ -167,7 +203,7 @@ def map_asyncmy_exception(error: Any, *, logger: Any | None = None) -> "bool | N
     return None
 
 
-def detect_asyncmy_json_columns(cursor: Any, json_type_codes: "set[int]") -> "list[int]":
+def detect_json_columns(cursor: Any, json_type_codes: "set[int]") -> "list[int]":
     """Identify JSON column indexes from cursor metadata.
 
     Args:
@@ -242,7 +278,7 @@ def _deserialize_asyncmy_json_rows(
     return rows
 
 
-def collect_asyncmy_rows(
+def collect_rows(
     fetched_data: "Sequence[Any] | None",
     description: "Sequence[Any] | None",
     json_indexes: "list[int]",
@@ -275,7 +311,7 @@ def collect_asyncmy_rows(
     return rows, column_names
 
 
-def normalize_asyncmy_rowcount(cursor: Any) -> int:
+def normalize_rowcount(cursor: Any) -> int:
     """Normalize rowcount from an AsyncMy cursor.
 
     Args:
@@ -292,7 +328,7 @@ def normalize_asyncmy_rowcount(cursor: Any) -> int:
     return 0
 
 
-def normalize_asyncmy_lastrowid(cursor: Any) -> int | None:
+def normalize_lastrowid(cursor: Any) -> int | None:
     """Normalize lastrowid for AsyncMy when rowcount indicates success.
 
     Args:
@@ -301,7 +337,9 @@ def normalize_asyncmy_lastrowid(cursor: Any) -> int | None:
     Returns:
         Last inserted id or None when unavailable.
     """
-    if not has_rowcount(cursor) or not has_lastrowid(cursor):
+    if not has_rowcount(cursor):
+        return None
+    if not has_lastrowid(cursor):
         return None
     rowcount = cursor.rowcount
     if not isinstance(rowcount, int) or rowcount <= 0:

@@ -14,7 +14,7 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncConnectionPool,
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
-from sqlspec.adapters.oracledb.core import apply_oracledb_driver_features, requires_oracledb_session_callback
+from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config, requires_session_callback
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncCursor,
     OracleAsyncDriver,
@@ -24,7 +24,6 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncDriver,
     OracleSyncExceptionHandler,
     OracleSyncSessionContext,
-    oracledb_statement_config,
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
@@ -208,18 +207,17 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """
         reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
-        statement_config = statement_config or oracledb_statement_config
+        connection_config = normalize_connection_config(connection_config)
+        statement_config = statement_config or default_statement_config
 
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        processed_driver_features = apply_oracledb_driver_features(normalized_driver_features)
+        driver_features = apply_driver_features(driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=processed_driver_features,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -229,7 +227,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Create the actual connection pool."""
         config = dict(self.connection_config)
 
-        if requires_oracledb_session_callback(self.driver_features):
+        if requires_session_callback(self.driver_features):
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool(**config)
@@ -291,7 +289,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         return OracleSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or oracledb_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -423,17 +421,16 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """
         reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
+        connection_config = normalize_connection_config(connection_config)
 
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        processed_driver_features = apply_oracledb_driver_features(normalized_driver_features)
+        driver_features = apply_driver_features(driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or oracledb_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config or default_statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -443,7 +440,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
 
-        if requires_oracledb_session_callback(self.driver_features):
+        if requires_session_callback(self.driver_features):
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool_async(**config)
@@ -509,7 +506,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         return OracleAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or oracledb_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

@@ -8,7 +8,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker, create_migration_commands
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime

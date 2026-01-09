@@ -8,15 +8,15 @@ from google.cloud.spanner_v1.transaction import Transaction
 
 from sqlspec.adapters.spanner._typing import SpannerSessionContext
 from sqlspec.adapters.spanner.core import (
-    build_spanner_profile,
-    coerce_spanner_params,
-    collect_spanner_rows,
-    create_spanner_arrow_data,
-    infer_spanner_param_types_for_params,
-    raise_spanner_exception,
-    spanner_statement_config,
-    supports_spanner_batch_update,
-    supports_spanner_write,
+    coerce_params,
+    collect_rows,
+    create_arrow_data,
+    default_statement_config,
+    driver_profile,
+    infer_param_types,
+    raise_exception,
+    supports_batch_update,
+    supports_write,
 )
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
@@ -32,9 +32,9 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.spanner._typing import SpannerConnection
     from sqlspec.core import ArrowResult
-    from sqlspec.typing import ArrowReturnFormat
     from sqlspec.core.statement import SQL
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.typing import ArrowReturnFormat
 
 __all__ = (
     "SpannerDataDictionary",
@@ -42,7 +42,6 @@ __all__ = (
     "SpannerSessionContext",
     "SpannerSyncCursor",
     "SpannerSyncDriver",
-    "spanner_statement_config",
 )
 
 
@@ -97,7 +96,7 @@ class SpannerExceptionHandler:
 
         if isinstance(exc_val, api_exceptions.GoogleAPICallError):
             try:
-                raise_spanner_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -133,7 +132,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     ) -> None:
         features = dict(driver_features) if driver_features else {}
         if statement_config is None:
-            statement_config = spanner_statement_config
+            statement_config = default_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
 
@@ -151,14 +150,15 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return SpannerExceptionHandler()
 
     def _coerce_params(self, params: "dict[str, Any] | None") -> "dict[str, Any] | None":
-        return coerce_spanner_params(params, json_serializer=self.driver_features.get("json_serializer"))
+        return coerce_params(params, json_serializer=self.driver_features.get("json_serializer"))
 
     def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
-        return infer_spanner_param_types_for_params(params)
+        return infer_param_types(params)
 
     def _execute_statement(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
-        coerced_params = self._coerce_params(params)
+        params = cast("dict[str, Any] | None", params)
+        coerced_params = self._coerce_params(cast("dict[str, Any] | None", params))
         param_types_map = self._infer_param_types(coerced_params)
 
         if statement.returns_rows():
@@ -174,12 +174,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             if not fields:
                 msg = "Result set metadata not available."
                 raise SQLConversionError(msg)
-            data, column_names = collect_spanner_rows(rows, fields, self._type_converter)
+            data, column_names = collect_rows(rows, fields, self._type_converter)
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        if supports_spanner_write(cursor):
+        if supports_write(cursor):
             writer = cast("_SpannerWriteProtocol", cursor)
             row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map)
             return self.create_execution_result(cursor, rowcount_override=row_count)
@@ -190,7 +190,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _execute_script(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        is_transaction = supports_spanner_write(cursor)
+        is_transaction = supports_write(cursor)
         reader = cast("_SpannerReadProtocol", cursor)
 
         count = 0
@@ -214,7 +214,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
-        if not supports_spanner_batch_update(cursor):
+        if not supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
 
@@ -226,7 +226,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
         for params in prepared_parameters:
-            coerced_params = self._coerce_params(params)
+            coerced_params = self._coerce_params(cast("dict[str, Any] | None", params))
             if coerced_params is None:
                 coerced_params = {}
             batch_args.append((sql, coerced_params, self._infer_param_types(coerced_params)))
@@ -268,7 +268,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         result = self.execute(statement, *parameters, **kwargs)
 
         return_format = cast("ArrowReturnFormat", kwargs.get("return_format", "table"))
-        arrow_data = create_spanner_arrow_data(result.data or [], return_format)
+        arrow_data = create_arrow_data(result.data or [], return_format)
         return create_arrow_result(result.statement, arrow_data, rows_affected=result.rows_affected)
 
     def select_to_storage(
@@ -350,5 +350,4 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
 
-_SPANNER_PROFILE = build_spanner_profile()
-register_driver_profile("spanner", _SPANNER_PROFILE)
+register_driver_profile("spanner", driver_profile)

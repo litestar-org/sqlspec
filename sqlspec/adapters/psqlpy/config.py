@@ -7,10 +7,10 @@ from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
-from sqlspec.adapters.psqlpy.core import apply_psqlpy_driver_features, psqlpy_statement_config
+from sqlspec.adapters.psqlpy.core import apply_driver_features, build_pool_config, default_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, PsqlpyExceptionHandler, PsqlpySessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
@@ -189,37 +189,25 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         """
         reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
+        connection_config = normalize_connection_config(connection_config)
 
-        base_statement_config = statement_config or psqlpy_statement_config
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        base_statement_config, processed_driver_features = apply_psqlpy_driver_features(
-            base_statement_config, normalized_driver_features
-        )
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
         )
 
-    def _get_pool_config_dict(self) -> "dict[str, Any]":
-        """Get pool configuration as plain dict for external library.
-
-        Returns:
-            Dictionary with pool parameters, filtering out None values.
-        """
-        return {k: v for k, v in self.connection_config.items() if v is not None}
-
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        config = self._get_pool_config_dict()
-        return ConnectionPool(**config)
+        return ConnectionPool(**build_pool_config(self.connection_config))
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
@@ -274,7 +262,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         return PsqlpySessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or psqlpy_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

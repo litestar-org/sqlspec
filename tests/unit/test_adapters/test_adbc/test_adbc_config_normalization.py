@@ -1,18 +1,19 @@
 """Unit tests for ADBC config normalization helpers."""
 
-from typing import Any, cast
+from typing import Any
 
 from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc.core import build_connection_config, resolve_driver_name_from_config
 
 
 def _resolve_driver_name(config: AdbcConfig) -> str:
-    """Call the internal driver-name resolver without triggering pyright private usage."""
-    return cast("str", cast("Any", config)._resolve_driver_name())
+    """Resolve driver name from configuration."""
+    return resolve_driver_name_from_config(config.connection_config)
 
 
 def _get_connection_config_dict(config: AdbcConfig) -> dict[str, Any]:
-    """Call the internal connection-config builder without triggering pyright private usage."""
-    return cast("dict[str, Any]", cast("Any", config)._get_connection_config_dict())
+    """Build the normalized connection configuration."""
+    return build_connection_config(config.connection_config)
 
 
 def test_resolve_driver_name_alias_to_connect_path() -> None:

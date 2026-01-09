@@ -607,6 +607,7 @@ def test_adbc_ast_transformer_validation_fixed(adbc_postgresql_session: AdbcDriv
 
     # Verify the transformation works correctly with proper parameter count
     assert len(correct_params) == 2  # We started with 2 params
+    assert isinstance(cleaned_params, tuple)
     assert len(cleaned_params) == 1  # AST transformer reduced to 1 param (None converted to NULL)
 
     # The transformed SQL shows the None became NULL

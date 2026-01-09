@@ -15,16 +15,20 @@ from sqlspec.adapters.oracledb._typing import (
 )
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
-    build_oracledb_pipeline_stack_result,
-    build_oracledb_profile,
-    collect_oracledb_async_rows,
-    collect_oracledb_sync_rows,
-    normalize_oracledb_rowcount,
+    build_insert_statement,
+    build_pipeline_stack_result,
+    build_truncate_statement,
+    coerce_large_string_parameters_async,
+    coerce_large_string_parameters_sync,
+    collect_async_rows,
+    collect_sync_rows,
+    default_statement_config,
+    driver_profile,
     normalize_column_names,
-    oracle_insert_statement,
-    oracle_truncate_statement,
-    oracledb_statement_config,
-    raise_oracledb_exception,
+    normalize_execute_many_parameters_async,
+    normalize_execute_many_parameters_sync,
+    normalize_rowcount,
+    raise_exception,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.core import (
@@ -67,7 +71,6 @@ __all__ = (
     "OracleSyncDriver",
     "OracleSyncExceptionHandler",
     "OracleSyncSessionContext",
-    "oracledb_statement_config",
 )
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
@@ -194,7 +197,7 @@ class OraclePipelineMixin:
                 raise stack_error
 
             stack_results.append(
-                build_oracledb_pipeline_stack_result(
+                build_pipeline_stack_result(
                     compiled.statement,
                     compiled.method,
                     compiled.returns_rows,
@@ -279,7 +282,7 @@ class OracleSyncExceptionHandler:
             return False
         if issubclass(exc_type, oracledb.DatabaseError):
             try:
-                raise_oracledb_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -311,7 +314,7 @@ class OracleAsyncExceptionHandler:
             return False
         if issubclass(exc_type, oracledb.DatabaseError):
             try:
-                raise_oracledb_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -335,12 +338,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            statement_config = oracledb_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="oracle",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
@@ -379,6 +378,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -424,20 +424,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Parameter validation for executemany
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
-
-        # Oracle-specific fix: Ensure parameters are in list format for executemany
-        # Oracle expects a list of sequences, not a tuple of sequences
-        if isinstance(prepared_parameters, tuple):
-            prepared_parameters = list(prepared_parameters)
-
+        prepared_parameters = normalize_execute_many_parameters_sync(prepared_parameters)
         cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows based on parameter count
-        affected_rows = len(prepared_parameters) if prepared_parameters else 0
+        affected_rows = len(prepared_parameters)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -486,20 +476,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Oracle-specific: Use setinputsizes for large string parameters to avoid ORA-01704
-        if prepared_parameters and isinstance(prepared_parameters, dict):
-            for param_name, param_value in prepared_parameters.items():
-                if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
-                    clob = self.connection.createlob(oracledb.DB_TYPE_CLOB)
-                    clob.write(param_value)
-                    prepared_parameters[param_name] = clob
+        prepared_parameters = coerce_large_string_parameters_sync(
+            self.connection, prepared_parameters, lob_type=oracledb.DB_TYPE_CLOB, threshold=LARGE_STRING_THRESHOLD
+        )
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
         cursor.execute(sql, prepared_parameters or {})
 
         # SELECT result processing for Oracle
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            data, column_names = collect_oracledb_sync_rows(
+            data, column_names = collect_sync_rows(
                 cast("list[Any] | None", fetched_data), cursor.description, self.driver_features
             )
 
@@ -508,7 +495,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             )
 
         # Non-SELECT result processing
-        affected_rows = normalize_oracledb_rowcount(cursor)
+        affected_rows = normalize_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def select_to_storage(
@@ -585,12 +572,12 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            statement = oracle_truncate_statement(table)
+            statement = build_truncate_statement(table)
             with self.handle_database_exceptions():
                 self.connection.execute(statement)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            statement = oracle_insert_statement(table, columns)
+            statement = build_insert_statement(table, columns)
             with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
                 cursor.executemany(statement, records)
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
@@ -773,12 +760,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            statement_config = oracledb_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="oracle",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
@@ -864,15 +847,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Parameter validation for executemany
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
-
+        prepared_parameters = normalize_execute_many_parameters_async(prepared_parameters)
         await cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows based on parameter count
-        affected_rows = len(prepared_parameters) if prepared_parameters else 0
+        affected_rows = len(prepared_parameters)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -962,13 +940,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Oracle-specific: Use setinputsizes for large string parameters to avoid ORA-01704
-        if prepared_parameters and isinstance(prepared_parameters, dict):
-            for param_name, param_value in prepared_parameters.items():
-                if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
-                    clob = await self.connection.createlob(oracledb.DB_TYPE_CLOB)
-                    await clob.write(param_value)
-                    prepared_parameters[param_name] = clob
+        prepared_parameters = await coerce_large_string_parameters_async(
+            self.connection, prepared_parameters, lob_type=oracledb.DB_TYPE_CLOB, threshold=LARGE_STRING_THRESHOLD
+        )
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
         await cursor.execute(sql, prepared_parameters or {})
 
@@ -977,7 +952,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         if is_select_like:
             fetched_data = await cursor.fetchall()
-            data, column_names = await collect_oracledb_async_rows(
+            data, column_names = await collect_async_rows(
                 cast("list[Any] | None", fetched_data), cursor.description, self.driver_features
             )
 
@@ -986,7 +961,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             )
 
         # Non-SELECT result processing
-        affected_rows = normalize_oracledb_rowcount(cursor)
+        affected_rows = normalize_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(
@@ -1024,12 +999,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            statement = oracle_truncate_statement(table)
+            statement = build_truncate_statement(table)
             async with self.handle_database_exceptions():
                 await self.connection.execute(statement)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            statement = oracle_insert_statement(table, columns)
+            statement = build_insert_statement(table, columns)
             async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
                 await cursor.executemany(statement, records)
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
@@ -1197,6 +1172,4 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_ORACLE_PROFILE = build_oracledb_profile()
-
-register_driver_profile("oracledb", _ORACLE_PROFILE)
+register_driver_profile("oracledb", driver_profile)

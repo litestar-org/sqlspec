@@ -5,26 +5,25 @@ and transaction management.
 """
 
 import inspect
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import psqlpy.exceptions
 
 from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
-    build_psqlpy_insert_statement,
-    build_psqlpy_profile,
-    build_psqlpy_statement_config,
+    build_insert_statement,
     coerce_numeric_for_write,
     coerce_records_for_execute_many,
-    collect_psqlpy_rows,
+    collect_rows,
+    default_statement_config,
+    driver_profile,
     encode_records_for_binary_copy,
-    extract_psqlpy_rows_affected,
+    extract_rows_affected,
     format_table_identifier,
-    get_psqlpy_parameter_casts,
+    get_parameter_casts,
     normalize_scalar_parameter,
-    prepare_psqlpy_parameters_with_casts,
-    psqlpy_statement_config,
-    raise_psqlpy_exception,
+    prepare_parameters_with_casts,
+    raise_exception,
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
@@ -35,19 +34,14 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
     from sqlspec.core import ArrowResult
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-__all__ = (
-    "PsqlpyCursor",
-    "PsqlpyDriver",
-    "PsqlpyExceptionHandler",
-    "PsqlpySessionContext",
-    "build_psqlpy_statement_config",
-    "psqlpy_statement_config",
-)
+__all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
 
 logger = get_logger("adapters.psqlpy")
 
@@ -115,7 +109,7 @@ class PsqlpyExceptionHandler:
             return False
         if issubclass(exc_type, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error)):
             try:
-                raise_psqlpy_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -139,8 +133,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            statement_config = psqlpy_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
+            )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsqlpyDataDictionary | None = None
@@ -166,8 +161,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
 
         if enable_cast_detection and prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
-            parameter_casts = get_psqlpy_parameter_casts(prepared_statement)
-            prepared = prepare_psqlpy_parameters_with_casts(parameters, parameter_casts, statement_config)
+            parameter_casts = get_parameter_casts(prepared_statement)
+            prepared = prepare_parameters_with_casts(parameters, parameter_casts, statement_config)
         else:
             prepared = super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
 
@@ -214,6 +209,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             that rely on extended protocol (e.g., information_schema queries with name type).
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
@@ -281,10 +277,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         operation_type = statement.operation_type
         should_coerce = operation_type != "SELECT"
         effective_parameters = coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
+        params = cast("Sequence[Any] | Mapping[str, Any] | None", effective_parameters) or []
 
         if statement.returns_rows():
-            query_result = await cursor.fetch(sql, effective_parameters or [])
-            dict_rows, column_names = collect_psqlpy_rows(query_result)
+            query_result = await cursor.fetch(sql, params)
+            dict_rows, column_names = collect_rows(query_result)
 
             return self.create_execution_result(
                 cursor,
@@ -294,8 +291,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        result = await cursor.execute(sql, effective_parameters or [])
-        rows_affected = extract_psqlpy_rows_affected(result)
+        result = await cursor.execute(sql, params)
+        rows_affected = extract_rows_affected(result)
 
         return self.create_execution_result(cursor, rowcount_override=rows_affected)
 
@@ -354,7 +351,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                         await copy_operation
                 except (TypeError, psqlpy.exceptions.DatabaseError) as exc:
                     logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
-                    insert_sql = build_psqlpy_insert_statement(table, columns)
+                    insert_sql = build_insert_statement(table, columns)
                     formatted_records = coerce_records_for_execute_many(records)
                     insert_operation = cursor.execute_many(insert_sql, formatted_records)
                     if inspect.isawaitable(insert_operation):
@@ -421,6 +418,4 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_PSQLPY_PROFILE = build_psqlpy_profile()
-
-register_driver_profile("psqlpy", _PSQLPY_PROFILE)
+register_driver_profile("psqlpy", driver_profile)

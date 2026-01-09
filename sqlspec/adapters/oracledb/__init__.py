@@ -5,6 +5,7 @@ from sqlspec.adapters.oracledb.config import (
     OraclePoolParams,
     OracleSyncConfig,
 )
+from sqlspec.adapters.oracledb.core import default_statement_config
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncCursor,
     OracleAsyncDriver,
@@ -12,7 +13,6 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncCursor,
     OracleSyncDriver,
     OracleSyncExceptionHandler,
-    oracledb_statement_config,
 )
 
 __all__ = (
@@ -28,5 +28,5 @@ __all__ = (
     "OracleSyncCursor",
     "OracleSyncDriver",
     "OracleSyncExceptionHandler",
-    "oracledb_statement_config",
+    "default_statement_config",
 )

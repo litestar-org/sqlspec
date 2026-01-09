@@ -2,23 +2,23 @@
 
 from collections import OrderedDict
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
 
 from sqlspec.adapters.asyncpg.core import (
-    asyncpg_statement_config,
-    build_asyncpg_profile,
-    build_asyncpg_statement_config,
-    collect_asyncpg_rows,
-    configure_asyncpg_parameter_serializers,
-    parse_asyncpg_status,
-    raise_asyncpg_exception,
+    PREPARED_STATEMENT_CACHE_SIZE,
+    NormalizedStackOperation,
+    collect_rows,
+    default_statement_config,
+    driver_profile,
+    invoke_prepared_statement,
+    parse_status,
+    raise_exception,
 )
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.core import (
     SQL,
-    StackOperation,
     StackResult,
     StatementStack,
     create_sql_result,
@@ -34,6 +34,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPreparedStatement
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -41,26 +43,9 @@ if TYPE_CHECKING:
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
 
-__all__ = (
-    "AsyncpgCursor",
-    "AsyncpgDriver",
-    "AsyncpgExceptionHandler",
-    "AsyncpgSessionContext",
-    "asyncpg_statement_config",
-    "build_asyncpg_statement_config",
-    "configure_asyncpg_parameter_serializers",
-)
+__all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "AsyncpgSessionContext")
 
 logger = get_logger("adapters.asyncpg")
-
-
-class _NormalizedStackOperation(NamedTuple):
-    """Normalized execution metadata used for prepared stack operations."""
-
-    operation: "StackOperation"
-    statement: "SQL"
-    sql: str
-    parameters: "tuple[Any, ...] | dict[str, Any] | None"
 
 
 class AsyncpgCursor:
@@ -101,15 +86,12 @@ class AsyncpgExceptionHandler:
             return False
         if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
             try:
-                raise_asyncpg_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
             return False
         return False
-
-
-PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
 
 
 class AsyncpgDriver(AsyncDriverAdapterBase):
@@ -130,12 +112,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            statement_config = asyncpg_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="postgres",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
@@ -238,9 +216,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         if prepared_parameters:
-            await cursor.executemany(sql, prepared_parameters)
+            parameter_sets = cast("list[Sequence[object]]", prepared_parameters)
+            await cursor.executemany(sql, parameter_sets)
 
-            affected_rows = len(prepared_parameters)
+            affected_rows = len(parameter_sets)
         else:
             affected_rows = 0
 
@@ -287,7 +266,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
         for index, operation in enumerate(stack.operations):
             try:
-                normalized: _NormalizedStackOperation | None = None
+                normalized: NormalizedStackOperation | None = None
                 if operation.method == "execute":
                     kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
                     statement_config = kwargs.pop("statement_config", None)
@@ -298,7 +277,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                     )
                     if not sql_statement.is_script and not sql_statement.is_many:
                         sql_text, prepared_parameters = self._get_compiled_sql(sql_statement, config)
-                        normalized = _NormalizedStackOperation(
+                        prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
+                        normalized = NormalizedStackOperation(
                             operation=operation, statement=sql_statement, sql=sql_text, parameters=prepared_parameters
                         )
 
@@ -337,9 +317,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
+        if prepared_parameters:
+            prepared_parameters = cast("tuple[Any, ...]", prepared_parameters)
+
         if statement.returns_rows():
             records = await cursor.fetch(sql, *prepared_parameters) if prepared_parameters else await cursor.fetch(sql)
-            data, column_names = collect_asyncpg_rows(records)
+            data, column_names = collect_rows(records)
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
@@ -347,48 +330,24 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         result = await cursor.execute(sql, *prepared_parameters) if prepared_parameters else await cursor.execute(sql)
 
-        affected_rows = parse_asyncpg_status(result)
+        affected_rows = parse_status(result)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    async def _execute_stack_operation_prepared(self, normalized: "_NormalizedStackOperation") -> StackResult:
+    async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
         prepared = await self._get_prepared_statement(normalized.sql)
         metadata = {"prepared_statement": True}
 
         if normalized.statement.returns_rows():
-            rows = await self._invoke_prepared(prepared, normalized.parameters, fetch=True)
-            data, _ = collect_asyncpg_rows(rows)
+            rows = await invoke_prepared_statement(prepared, normalized.parameters, fetch=True)
+            data, _ = collect_rows(rows)
             sql_result = create_sql_result(normalized.statement, data=data, rows_affected=len(data), metadata=metadata)
             return StackResult.from_sql_result(sql_result)
 
-        status = await self._invoke_prepared(prepared, normalized.parameters, fetch=False)
-        rowcount = parse_asyncpg_status(status)
+        status = await invoke_prepared_statement(prepared, normalized.parameters, fetch=False)
+        rowcount = parse_status(status)
         sql_result = create_sql_result(normalized.statement, rows_affected=rowcount, metadata=metadata)
         return StackResult.from_sql_result(sql_result)
-
-    async def _invoke_prepared(
-        self,
-        prepared: "AsyncpgPreparedStatement",
-        parameters: "tuple[Any, ...] | dict[str, Any] | list[Any] | None",
-        *,
-        fetch: bool,
-    ) -> Any:
-        if parameters is None:
-            if fetch:
-                return await prepared.fetch()
-            await prepared.fetch()
-            return prepared.get_statusmsg()
-
-        if isinstance(parameters, dict):
-            if fetch:
-                return await prepared.fetch(**parameters)
-            await prepared.fetch(**parameters)
-            return prepared.get_statusmsg()
-
-        if fetch:
-            return await prepared.fetch(*parameters)
-        await prepared.fetch(*parameters)
-        return prepared.get_statusmsg()
 
     async def select_to_storage(
         self,
@@ -508,6 +467,4 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_ASYNC_PG_PROFILE = build_asyncpg_profile()
-
-register_driver_profile("asyncpg", _ASYNC_PG_PROFILE)
+register_driver_profile("asyncpg", driver_profile)

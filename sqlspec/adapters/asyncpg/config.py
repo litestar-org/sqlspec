@@ -11,15 +11,16 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
 from sqlspec.adapters.asyncpg.core import (
-    apply_asyncpg_driver_features,
-    asyncpg_statement_config,
-    register_asyncpg_json_codecs,
-    register_asyncpg_pgvector_support,
+    apply_driver_features,
+    build_pool_config,
+    default_statement_config,
+    register_json_codecs,
+    register_pgvector_support,
 )
 from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver, AsyncpgExceptionHandler, AsyncpgSessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
 from sqlspec.utils.logging import get_logger
@@ -45,9 +46,6 @@ __all__ = (
 
 
 logger = get_logger(__name__)
-
-register_json_codecs = register_asyncpg_json_codecs
-register_pgvector_support = register_asyncpg_pgvector_support
 
 
 class AsyncpgConnectionConfig(TypedDict):
@@ -308,18 +306,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         reject_pool_aliases(kwargs)
 
-        base_statement_config = statement_config or asyncpg_statement_config
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        base_statement_config, features_dict = apply_asyncpg_driver_features(
-            base_statement_config, normalized_driver_features
-        )
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
             connection_config=normalize_connection_config(connection_config),
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=features_dict,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -387,14 +382,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     msg = f"Invalid AlloyDB instance URI format: {instance_uri}. Expected format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
                     raise ImproperConfigurationError(msg)
 
-    def _get_pool_config_dict(self) -> "dict[str, Any]":
-        """Get pool configuration as plain dict for external library.
-
-        Returns:
-            Dictionary with pool parameters, filtering out None values.
-        """
-        return {k: v for k, v in self.connection_config.items() if v is not None}
-
     def _setup_cloud_sql_connector(self, config: "dict[str, Any]") -> None:
         """Setup Cloud SQL connector and configure pool for connection factory pattern.
 
@@ -435,7 +422,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
-        config = self._get_pool_config_dict()
+        config = build_pool_config(self.connection_config)
 
         if self.driver_features.get("enable_cloud_sql", False):
             self._setup_cloud_sql_connector(config)
@@ -453,7 +440,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             connection: AsyncPG connection to initialize.
         """
         if self.driver_features.get("enable_json_codecs", True):
-            await register_asyncpg_json_codecs(
+            await register_json_codecs(
                 connection,
                 encoder=self.driver_features.get("json_serializer", to_json),
                 decoder=self.driver_features.get("json_deserializer", from_json),
@@ -469,7 +456,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     self._pgvector_available = False
 
             if self._pgvector_available:
-                await register_asyncpg_pgvector_support(connection)
+                await register_pgvector_support(connection)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool and cleanup connectors."""
@@ -529,7 +516,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         return AsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or asyncpg_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

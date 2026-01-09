@@ -6,6 +6,7 @@ from sqlspec.extensions.events._channel import (
     SyncEventChannel,
     SyncEventListener,
 )
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._protocols import (
     AsyncEventBackendProtocol,
@@ -20,6 +21,7 @@ __all__ = (
     "AsyncEventHandler",
     "AsyncEventListener",
     "EventMessage",
+    "EventRuntimeHints",
     "SyncEventBackendProtocol",
     "SyncEventChannel",
     "SyncEventHandler",

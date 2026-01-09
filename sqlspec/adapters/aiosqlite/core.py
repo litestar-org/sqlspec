@@ -25,14 +25,20 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
 
 __all__ = (
-    "aiosqlite_statement_config",
-    "apply_aiosqlite_driver_features",
-    "build_aiosqlite_profile",
-    "build_sqlite_insert_statement",
-    "format_sqlite_identifier",
-    "normalize_aiosqlite_rowcount",
-    "process_sqlite_result",
-    "raise_aiosqlite_exception",
+    "apply_driver_features",
+    "build_connection_config",
+    "build_insert_statement",
+    "build_pool_config",
+    "build_profile",
+    "build_statement_config",
+    "default_statement_config",
+    "driver_profile",
+    "format_identifier",
+    "normalize_execute_many_parameters",
+    "normalize_execute_parameters",
+    "normalize_rowcount",
+    "process_result",
+    "raise_exception",
 )
 
 
@@ -58,7 +64,7 @@ def _quote_sqlite_identifier(identifier: str) -> str:
     return f'"{normalized}"'
 
 
-def format_sqlite_identifier(identifier: str) -> str:
+def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
         msg = "Table name must not be empty"
@@ -68,13 +74,13 @@ def format_sqlite_identifier(identifier: str) -> str:
     return formatted or _quote_sqlite_identifier(cleaned)
 
 
-def build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:
+def build_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(_quote_sqlite_identifier(column) for column in columns)
     placeholders = ", ".join("?" for _ in columns)
-    return f"INSERT INTO {format_sqlite_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+    return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def process_sqlite_result(
+def process_result(
     fetched_data: "Iterable[Any]", description: "Sequence[Any] | None"
 ) -> "tuple[list[dict[str, Any]], list[str], int]":
     """Process SQLite result rows into dictionaries.
@@ -97,7 +103,7 @@ def process_sqlite_result(
     return data, column_names, len(data)
 
 
-def normalize_aiosqlite_rowcount(cursor: Any) -> int:
+def normalize_rowcount(cursor: Any) -> int:
     """Normalize rowcount from an aiosqlite cursor.
 
     Args:
@@ -114,13 +120,78 @@ def normalize_aiosqlite_rowcount(cursor: Any) -> int:
     return 0
 
 
+def normalize_execute_parameters(parameters: Any) -> Any:
+    """Normalize parameters for SQLite execute calls.
+
+    Args:
+        parameters: Prepared parameters payload.
+
+    Returns:
+        Normalized parameters payload.
+    """
+    return parameters or ()
+
+
+def normalize_execute_many_parameters(parameters: Any) -> Any:
+    """Normalize parameters for SQLite executemany calls.
+
+    Args:
+        parameters: Prepared parameters payload.
+
+    Returns:
+        Normalized parameters payload.
+
+    Raises:
+        ValueError: When parameters are missing for executemany.
+    """
+    if not parameters:
+        msg = "execute_many requires parameters"
+        raise ValueError(msg)
+    return parameters
+
+
+def build_pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build pool configuration with non-null values only.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Dictionary with pool parameters.
+    """
+    return {key: value for key, value in connection_config.items() if value is not None}
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build connection configuration for pool creation.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Dictionary with connection parameters.
+    """
+    excluded_keys = {
+        "pool_size",
+        "connect_timeout",
+        "idle_timeout",
+        "operation_timeout",
+        "extra",
+        "pool_min_size",
+        "pool_max_size",
+        "pool_timeout",
+        "pool_recycle_seconds",
+    }
+    return {key: value for key, value in connection_config.items() if key not in excluded_keys}
+
+
 def _raise_aiosqlite_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:
     code_str = f"[code {code}]" if code else ""
     msg = f"AIOSQLite {description} {code_str}: {error}" if code_str else f"AIOSQLite {description}: {error}"
     raise error_class(msg) from cast("BaseException", error)
 
 
-def raise_aiosqlite_exception(error: BaseException) -> None:
+def raise_exception(error: BaseException) -> None:
     """Raise SQLSpec exceptions for aiosqlite errors."""
     if has_sqlite_error(error):
         error_code = error.sqlite_errorcode
@@ -173,7 +244,7 @@ def raise_aiosqlite_exception(error: BaseException) -> None:
         _raise_aiosqlite_error(error, error_code, SQLSpecError, "database error")
 
 
-def build_aiosqlite_profile() -> "DriverParameterProfile":
+def build_profile() -> "DriverParameterProfile":
     """Create the AIOSQLite driver parameter profile."""
 
     return DriverParameterProfile(
@@ -198,29 +269,32 @@ def build_aiosqlite_profile() -> "DriverParameterProfile":
     )
 
 
-def _build_aiosqlite_statement_config(
+driver_profile = build_profile()
+
+
+def build_statement_config(
     *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> "StatementConfig":
     """Construct the AIOSQLite statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
     deserializer = json_deserializer or from_json
-    profile = build_aiosqlite_profile()
+    profile = driver_profile
     return build_statement_config_from_profile(
         profile, statement_overrides={"dialect": "sqlite"}, json_serializer=serializer, json_deserializer=deserializer
     )
 
 
-aiosqlite_statement_config = _build_aiosqlite_statement_config()
+default_statement_config = build_statement_config()
 
 
-def apply_aiosqlite_driver_features(
+def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply AIOSQLite driver feature defaults to statement config."""
-    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    processed_driver_features.setdefault("enable_custom_adapters", True)
-    json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
-    json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
+    features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    features.setdefault("enable_custom_adapters", True)
+    json_serializer = features.setdefault("json_serializer", to_json)
+    json_deserializer = features.setdefault("json_deserializer", from_json)
 
     if json_serializer is not None:
         parameter_config = statement_config.parameter_config.with_json_serializers(
@@ -228,4 +302,4 @@ def apply_aiosqlite_driver_features(
         )
         statement_config = statement_config.replace(parameter_config=parameter_config)
 
-    return statement_config, processed_driver_features
+    return statement_config, features

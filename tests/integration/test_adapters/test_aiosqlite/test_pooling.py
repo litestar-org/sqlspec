@@ -9,6 +9,7 @@ import tempfile
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.core import build_connection_config
 from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -61,7 +62,7 @@ async def test_regular_memory_auto_converted_pooling() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
     try:
-        assert config._get_connection_config_dict()["database"] == "file::memory:?cache=shared"
+        assert build_connection_config(config.connection_config)["database"] == "file::memory:?cache=shared"
 
         async with config.provide_session() as session1:
             await session1.execute("DROP TABLE IF EXISTS converted_test")

@@ -5,12 +5,8 @@ from sqlspec.adapters.asyncmy.config import (
     AsyncmyDriverFeatures,
     AsyncmyPoolParams,
 )
-from sqlspec.adapters.asyncmy.driver import (
-    AsyncmyCursor,
-    AsyncmyDriver,
-    AsyncmyExceptionHandler,
-    asyncmy_statement_config,
-)
+from sqlspec.adapters.asyncmy.core import default_statement_config
+from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, AsyncmyExceptionHandler
 
 __all__ = (
     "AsyncmyConfig",
@@ -21,5 +17,5 @@ __all__ = (
     "AsyncmyDriverFeatures",
     "AsyncmyExceptionHandler",
     "AsyncmyPoolParams",
-    "asyncmy_statement_config",
+    "default_statement_config",
 )

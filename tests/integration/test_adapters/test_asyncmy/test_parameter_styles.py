@@ -17,7 +17,7 @@ from collections.abc import AsyncGenerator
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_statement_config
 from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("mysql")
@@ -35,7 +35,7 @@ async def asyncmy_parameter_session(mysql_service: MySQLService) -> AsyncGenerat
             "database": mysql_service.db,
             "autocommit": True,
         },
-        statement_config=asyncmy_statement_config,
+        statement_config=default_statement_config,
     )
 
     async with config.provide_session() as session:

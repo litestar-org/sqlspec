@@ -1,7 +1,7 @@
 """PostgreSQL psycopg driver implementation."""
 
 from contextlib import AsyncExitStack, ExitStack
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 
@@ -12,23 +12,28 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncSessionContext,
 )
 from sqlspec.adapters.psycopg.core import (
+    TRANSACTION_STATUS_IDLE,
+    PipelineCursorEntry,
+    PreparedStackOperation,
+    build_async_pipeline_execution_result,
     build_copy_from_command,
-    build_psycopg_async_pipeline_execution_result,
-    build_psycopg_pipeline_execution_result,
-    build_psycopg_profile,
-    build_psycopg_statement_config,
+    build_pipeline_execution_result,
     build_truncate_command,
-    collect_psycopg_rows,
-    normalize_psycopg_rowcount,
-    psycopg_pipeline_supported,
-    psycopg_statement_config,
-    raise_psycopg_exception,
+    collect_rows,
+    default_statement_config,
+    driver_profile,
+    execute_with_optional_parameters,
+    execute_with_optional_parameters_async,
+    executemany_or_skip,
+    executemany_or_skip_async,
+    normalize_rowcount,
+    pipeline_supported,
+    raise_exception,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
 from sqlspec.core import (
     SQL,
     SQLResult,
-    StackOperation,
     StackResult,
     StatementConfig,
     StatementStack,
@@ -60,28 +65,9 @@ __all__ = (
     "PsycopgSyncDriver",
     "PsycopgSyncExceptionHandler",
     "PsycopgSyncSessionContext",
-    "build_psycopg_statement_config",
-    "psycopg_statement_config",
 )
 
 logger = get_logger("adapters.psycopg")
-
-
-class _PreparedStackOperation(NamedTuple):
-    """Precompiled stack operation metadata for psycopg pipeline execution."""
-
-    operation_index: int
-    operation: "StackOperation"
-    statement: "SQL"
-    sql: str
-    parameters: "tuple[Any, ...] | dict[str, Any] | None"
-
-
-class _PipelineCursorEntry(NamedTuple):
-    """Cursor pending result data for psycopg pipeline execution."""
-
-    prepared: "_PreparedStackOperation"
-    cursor: Any
 
 
 class PsycopgPipelineMixin:
@@ -89,8 +75,8 @@ class PsycopgPipelineMixin:
 
     __slots__ = ()
 
-    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[_PreparedStackOperation] | None":
-        prepared: list[_PreparedStackOperation] = []
+    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[PreparedStackOperation] | None":
+        prepared: list[PreparedStackOperation] = []
         for index, operation in enumerate(stack.operations):
             if operation.method != "execute":
                 return None
@@ -111,7 +97,7 @@ class PsycopgPipelineMixin:
                 sql_statement, config
             )
             prepared.append(
-                _PreparedStackOperation(
+                PreparedStackOperation(
                     operation_index=index,
                     operation=operation,
                     statement=sql_statement,
@@ -120,13 +106,6 @@ class PsycopgPipelineMixin:
                 )
             )
         return prepared
-
-
-TRANSACTION_STATUS_IDLE = 0
-TRANSACTION_STATUS_ACTIVE = 1
-TRANSACTION_STATUS_INTRANS = 2
-TRANSACTION_STATUS_INERROR = 3
-TRANSACTION_STATUS_UNKNOWN = 4
 
 
 class PsycopgSyncCursor:
@@ -171,7 +150,7 @@ class PsycopgSyncExceptionHandler:
             return False
         if issubclass(exc_type, psycopg.Error):
             try:
-                raise_psycopg_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -198,14 +177,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            default_config = psycopg_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="postgres",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
-            statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsycopgSyncDataDictionary | None = None
@@ -321,10 +295,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         last_cursor = cursor
 
         for stmt in statements:
-            if prepared_parameters:
-                cursor.execute(stmt, prepared_parameters)
-            else:
-                cursor.execute(stmt)
+            execute_with_optional_parameters(cursor, stmt, prepared_parameters)
             successful_count += 1
 
         return self.create_execution_result(
@@ -338,7 +309,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             not isinstance(stack, StatementStack)
             or not stack
             or self.stack_native_disabled
-            or not psycopg_pipeline_supported()
+            or not pipeline_supported()
             or continue_on_error
         ):
             return super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -350,7 +321,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         return self._execute_stack_pipeline(stack, prepared_ops)
 
     def _execute_stack_pipeline(
-        self, stack: "StatementStack", prepared_ops: "list[_PreparedStackOperation]"
+        self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
     ) -> "tuple[StackResult, ...]":
         results: list[StackResult] = []
         started_transaction = False
@@ -363,7 +334,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
                 with ExitStack() as resource_stack:
                     pipeline = resource_stack.enter_context(self.connection.pipeline())
-                    pending: list[_PipelineCursorEntry] = []
+                    pending: list[PipelineCursorEntry] = []
 
                     for prepared in prepared_ops:
                         exception_ctx = self.handle_database_exceptions()
@@ -385,14 +356,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                             )
                             raise stack_error from exc
 
-                        pending.append(_PipelineCursorEntry(prepared=prepared, cursor=cursor))
+                        pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
 
                     pipeline.sync()
                     for entry in pending:
                         statement = entry.prepared.statement
                         cursor = entry.cursor
 
-                        execution_result = build_psycopg_pipeline_execution_result(statement, cursor)
+                        execution_result = build_pipeline_execution_result(statement, cursor)
                         sql_result = self.build_statement_result(statement, execution_result)
                         results.append(StackResult.from_sql_result(sql_result))
 
@@ -420,12 +391,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        if not prepared_parameters:
+        if not executemany_or_skip(cursor, sql, prepared_parameters):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = normalize_psycopg_rowcount(cursor)
+        affected_rows = normalize_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -441,16 +410,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        if prepared_parameters:
-            cursor.execute(sql, prepared_parameters)
-        else:
-            cursor.execute(sql)
+        execute_with_optional_parameters(cursor, sql, prepared_parameters)
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            fetched_data, column_names = collect_psycopg_rows(
-                cast("list[Any] | None", fetched_data), cursor.description
-            )
+            fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
 
             return self.create_execution_result(
                 cursor,
@@ -460,7 +424,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        affected_rows = normalize_psycopg_rowcount(cursor)
+        affected_rows = normalize_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def select_to_storage(
@@ -590,7 +554,7 @@ class PsycopgAsyncExceptionHandler:
             return False
         if issubclass(exc_type, psycopg.Error):
             try:
-                raise_psycopg_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -618,14 +582,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            default_config = psycopg_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="postgres",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
-            statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsycopgAsyncDataDictionary | None = None
@@ -747,10 +706,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         last_cursor = cursor
 
         for stmt in statements:
-            if prepared_parameters:
-                await cursor.execute(stmt, prepared_parameters)
-            else:
-                await cursor.execute(stmt)
+            await execute_with_optional_parameters_async(cursor, stmt, prepared_parameters)
             successful_count += 1
 
         return self.create_execution_result(
@@ -766,7 +722,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             not isinstance(stack, StatementStack)
             or not stack
             or self.stack_native_disabled
-            or not psycopg_pipeline_supported()
+            or not pipeline_supported()
             or continue_on_error
         ):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -778,7 +734,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         return await self._execute_stack_pipeline(stack, prepared_ops)
 
     async def _execute_stack_pipeline(
-        self, stack: "StatementStack", prepared_ops: "list[_PreparedStackOperation]"
+        self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
     ) -> "tuple[StackResult, ...]":
         results: list[StackResult] = []
         started_transaction = False
@@ -791,7 +747,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
                 async with AsyncExitStack() as resource_stack:
                     pipeline = await resource_stack.enter_async_context(self.connection.pipeline())
-                    pending: list[_PipelineCursorEntry] = []
+                    pending: list[PipelineCursorEntry] = []
 
                     for prepared in prepared_ops:
                         exception_ctx = self.handle_database_exceptions()
@@ -813,14 +769,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                             )
                             raise stack_error from exc
 
-                        pending.append(_PipelineCursorEntry(prepared=prepared, cursor=cursor))
+                        pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
 
                     await pipeline.sync()
                     for entry in pending:
                         statement = entry.prepared.statement
                         cursor = entry.cursor
 
-                        execution_result = await build_psycopg_async_pipeline_execution_result(statement, cursor)
+                        execution_result = await build_async_pipeline_execution_result(statement, cursor)
                         sql_result = self.build_statement_result(statement, execution_result)
                         results.append(StackResult.from_sql_result(sql_result))
 
@@ -848,12 +804,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        if not prepared_parameters:
+        if not await executemany_or_skip_async(cursor, sql, prepared_parameters):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        await cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = normalize_psycopg_rowcount(cursor)
+        affected_rows = normalize_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -869,16 +823,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        if prepared_parameters:
-            await cursor.execute(sql, prepared_parameters)
-        else:
-            await cursor.execute(sql)
+        await execute_with_optional_parameters_async(cursor, sql, prepared_parameters)
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
-            fetched_data, column_names = collect_psycopg_rows(
-                cast("list[Any] | None", fetched_data), cursor.description
-            )
+            fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
 
             return self.create_execution_result(
                 cursor,
@@ -888,7 +837,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        affected_rows = normalize_psycopg_rowcount(cursor)
+        affected_rows = normalize_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(
@@ -977,6 +926,4 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_PSYCOPG_PROFILE = build_psycopg_profile()
-
-register_driver_profile("psycopg", _PSYCOPG_PROFILE)
+register_driver_profile("psycopg", driver_profile)

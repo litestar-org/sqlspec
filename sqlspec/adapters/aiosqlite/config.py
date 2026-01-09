@@ -6,7 +6,12 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
-from sqlspec.adapters.aiosqlite.core import aiosqlite_statement_config, apply_aiosqlite_driver_features
+from sqlspec.adapters.aiosqlite.core import (
+    apply_driver_features,
+    build_connection_config,
+    build_pool_config,
+    default_statement_config,
+)
 from sqlspec.adapters.aiosqlite.driver import (
     AiosqliteCursor,
     AiosqliteDriver,
@@ -188,52 +193,20 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         config_dict = normalize_connection_config(config_dict)
 
-        base_statement_config = statement_config or aiosqlite_statement_config
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        base_statement_config, processed_driver_features = apply_aiosqlite_driver_features(
-            base_statement_config, normalized_driver_features
-        )
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
             connection_config=config_dict,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
             **kwargs,
         )
-
-    def _get_pool_config_dict(self) -> "dict[str, Any]":
-        """Get pool configuration as plain dict for external library.
-
-        Returns:
-            Dictionary with pool parameters, filtering out None values.
-
-        """
-        return {k: v for k, v in self.connection_config.items() if v is not None}
-
-    def _get_connection_config_dict(self) -> "dict[str, Any]":
-        """Get connection configuration as plain dict for pool creation.
-
-        Returns:
-            Dictionary with connection parameters for creating connections.
-
-        """
-        excluded_keys = {
-            "pool_size",
-            "connect_timeout",
-            "idle_timeout",
-            "operation_timeout",
-            "extra",
-            "pool_min_size",
-            "pool_max_size",
-            "pool_timeout",
-            "pool_recycle_seconds",
-        }
-        return {k: v for k, v in self.connection_config.items() if k not in excluded_keys}
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AiosqliteConnectionContext":
         """Provide an async connection context manager.
@@ -266,7 +239,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         return AiosqliteSessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or aiosqlite_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -278,14 +251,14 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             AiosqliteConnectionPool: The connection pool instance.
 
         """
-        config = self._get_pool_config_dict()
+        config = build_pool_config(self.connection_config)
         pool_size = config.pop("pool_size", 5)
         connect_timeout = config.pop("connect_timeout", 30.0)
         idle_timeout = config.pop("idle_timeout", 24 * 60 * 60)
         operation_timeout = config.pop("operation_timeout", 10.0)
 
         pool = AiosqliteConnectionPool(
-            connection_parameters=self._get_connection_config_dict(),
+            connection_parameters=build_connection_config(self.connection_config),
             pool_size=pool_size,
             connect_timeout=connect_timeout,
             idle_timeout=idle_timeout,

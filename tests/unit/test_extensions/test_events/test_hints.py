@@ -2,7 +2,8 @@
 
 import pytest
 
-from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints
+from sqlspec.extensions.events import EventRuntimeHints
+from sqlspec.extensions.events._hints import get_runtime_hints
 
 
 def test_event_runtime_hints_defaults() -> None:

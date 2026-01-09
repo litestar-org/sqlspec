@@ -2,12 +2,8 @@
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgConnectionConfig, AsyncpgPoolConfig
-from sqlspec.adapters.asyncpg.driver import (
-    AsyncpgCursor,
-    AsyncpgDriver,
-    AsyncpgExceptionHandler,
-    asyncpg_statement_config,
-)
+from sqlspec.adapters.asyncpg.core import default_statement_config
+from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver, AsyncpgExceptionHandler
 
 __all__ = (
     "AsyncpgConfig",
@@ -19,5 +15,5 @@ __all__ = (
     "AsyncpgPool",
     "AsyncpgPoolConfig",
     "AsyncpgPreparedStatement",
-    "asyncpg_statement_config",
+    "default_statement_config",
 )

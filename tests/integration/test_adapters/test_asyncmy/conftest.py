@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_statement_config
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ async def asyncmy_config(mysql_service: MySQLService) -> AsyncmyConfig:
             "minsize": 1,
             "maxsize": 5,
         },
-        statement_config=asyncmy_statement_config,
+        statement_config=default_statement_config,
     )
 
 

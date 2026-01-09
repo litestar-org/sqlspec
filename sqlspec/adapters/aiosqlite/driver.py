@@ -9,13 +9,15 @@ from typing import TYPE_CHECKING, Any, cast
 import aiosqlite
 
 from sqlspec.adapters.aiosqlite.core import (
-    aiosqlite_statement_config,
-    build_aiosqlite_profile,
-    build_sqlite_insert_statement,
-    format_sqlite_identifier,
-    normalize_aiosqlite_rowcount,
-    process_sqlite_result,
-    raise_aiosqlite_exception,
+    build_insert_statement,
+    default_statement_config,
+    driver_profile,
+    format_identifier,
+    normalize_execute_many_parameters,
+    normalize_execute_parameters,
+    normalize_rowcount,
+    process_result,
+    raise_exception,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
@@ -30,13 +32,7 @@ if TYPE_CHECKING:
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteSessionContext
 
-__all__ = (
-    "AiosqliteCursor",
-    "AiosqliteDriver",
-    "AiosqliteExceptionHandler",
-    "AiosqliteSessionContext",
-    "aiosqlite_statement_config",
-)
+__all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "AiosqliteSessionContext")
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
@@ -93,7 +89,7 @@ class AiosqliteExceptionHandler:
             return False
         if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):
             try:
-                raise_aiosqlite_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -114,8 +110,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            statement_config = aiosqlite_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
+            )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AiosqliteDataDictionary | None = None
@@ -137,7 +134,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         last_cursor = cursor
 
         for stmt in statements:
-            await cursor.execute(stmt, prepared_parameters or ())
+            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
             successful_count += 1
 
         return self.create_execution_result(
@@ -148,33 +145,29 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Execute SQL with multiple parameter sets."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
+        await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
 
-        await cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = normalize_aiosqlite_rowcount(cursor)
+        affected_rows = normalize_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        await cursor.execute(sql, prepared_parameters or ())
+        await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
 
             # aiosqlite returns Iterable[Row], core helper expects Iterable[Any]
             # Use cast to satisfy mypy and pyright
-            data, column_names, row_count = process_sqlite_result(cast("list[Any]", fetched_data), cursor.description)
+            data, column_names, row_count = process_result(cast("list[Any]", fetched_data), cursor.description)
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
             )
 
-        affected_rows = normalize_aiosqlite_rowcount(cursor)
+        affected_rows = normalize_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def select_to_storage(
@@ -214,13 +207,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            statement = f"DELETE FROM {format_sqlite_identifier(table)}"
+            statement = f"DELETE FROM {format_identifier(table)}"
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 await cursor.execute(statement)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = build_sqlite_insert_statement(table, columns)
+            insert_sql = build_insert_statement(table, columns)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 await cursor.executemany(insert_sql, records)
 
@@ -301,6 +294,4 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_AIOSQLITE_PROFILE = build_aiosqlite_profile()
-
-register_driver_profile("aiosqlite", _AIOSQLITE_PROFILE)
+register_driver_profile("aiosqlite", driver_profile)

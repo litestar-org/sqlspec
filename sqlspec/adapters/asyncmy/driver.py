@@ -11,16 +11,17 @@ from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: igno
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
 from sqlspec.adapters.asyncmy.core import (
-    asyncmy_statement_config,
-    build_asyncmy_insert_statement,
-    build_asyncmy_profile,
-    build_asyncmy_statement_config,
-    collect_asyncmy_rows,
-    detect_asyncmy_json_columns,
-    format_mysql_identifier,
-    map_asyncmy_exception,
-    normalize_asyncmy_lastrowid,
-    normalize_asyncmy_rowcount,
+    build_insert_statement,
+    collect_rows,
+    default_statement_config,
+    detect_json_columns,
+    driver_profile,
+    format_identifier,
+    map_exception,
+    normalize_execute_many_parameters,
+    normalize_execute_parameters,
+    normalize_lastrowid,
+    normalize_rowcount,
 )
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
@@ -40,14 +41,7 @@ if TYPE_CHECKING:
 
 from sqlspec.adapters.asyncmy._typing import AsyncmySessionContext
 
-__all__ = (
-    "AsyncmyCursor",
-    "AsyncmyDriver",
-    "AsyncmyExceptionHandler",
-    "AsyncmySessionContext",
-    "asyncmy_statement_config",
-    "build_asyncmy_statement_config",
-)
+__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "AsyncmySessionContext")
 
 logger = get_logger(__name__)
 
@@ -102,7 +96,7 @@ class AsyncmyExceptionHandler:
             return False
         if issubclass(exc_type, asyncmy.errors.Error):
             try:
-                result = map_asyncmy_exception(exc_val, logger=logger)
+                result = map_exception(exc_val, logger=logger)
                 if result is True:
                     return True
             except Exception as mapped:
@@ -128,19 +122,12 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
-        final_statement_config = statement_config
-        if final_statement_config is None:
-            cache_config = get_cache_config()
-            final_statement_config = asyncmy_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="mysql",
+        if statement_config is None:
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
 
-        super().__init__(
-            connection=connection, statement_config=final_statement_config, driver_features=driver_features
-        )
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AsyncmyDataDictionary | None = None
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
@@ -182,7 +169,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         last_cursor = cursor
 
         for stmt in statements:
-            await cursor.execute(stmt, prepared_parameters or None)
+            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
             successful_count += 1
 
         return self.create_execution_result(
@@ -207,13 +194,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
-
+        prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         await cursor.executemany(sql, prepared_parameters)
 
-        affected_rows = len(prepared_parameters) if prepared_parameters else 0
+        affected_rows = len(prepared_parameters)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -231,24 +215,22 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             ExecutionResult: Statement execution results with data or row counts
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        await cursor.execute(sql, prepared_parameters or None)
+        await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
             fetched_rows = list(fetched_data) if fetched_data else None
             description = list(cursor.description) if cursor.description else None
-            json_indexes = detect_asyncmy_json_columns(cursor, ASYNCMY_JSON_TYPE_CODES)
+            json_indexes = detect_json_columns(cursor, ASYNCMY_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names = collect_asyncmy_rows(
-                fetched_rows, description, json_indexes, deserializer, logger=logger
-            )
+            rows, column_names = collect_rows(fetched_rows, description, json_indexes, deserializer, logger=logger)
 
             return self.create_execution_result(
                 cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
             )
 
-        affected_rows = normalize_asyncmy_rowcount(cursor)
-        last_id = normalize_asyncmy_lastrowid(cursor)
+        affected_rows = normalize_rowcount(cursor)
+        last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     async def select_to_storage(
@@ -288,13 +270,13 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            statement = f"TRUNCATE TABLE {format_mysql_identifier(table)}"
+            statement = f"TRUNCATE TABLE {format_identifier(table)}"
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 await cursor.execute(statement)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = build_asyncmy_insert_statement(table, columns)
+            insert_sql = build_insert_statement(table, columns)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 await cursor.executemany(insert_sql, records)
 
@@ -380,6 +362,4 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-_ASYNCMY_PROFILE = build_asyncmy_profile()
-
-register_driver_profile("asyncmy", _ASYNCMY_PROFILE)
+register_driver_profile("asyncmy", driver_profile)

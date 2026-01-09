@@ -8,7 +8,7 @@ from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
-from sqlspec.adapters.psycopg.core import apply_psycopg_driver_features, psycopg_statement_config
+from sqlspec.adapters.psycopg.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
     PsycopgAsyncDriver,
@@ -22,7 +22,7 @@ from sqlspec.adapters.psycopg.driver import (
 from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
@@ -197,20 +197,17 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
+        connection_config = normalize_connection_config(connection_config)
 
-        base_statement_config = statement_config or psycopg_statement_config
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        base_statement_config, processed_driver_features = apply_psycopg_driver_features(
-            base_statement_config, normalized_driver_features
-        )
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -303,7 +300,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return PsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or psycopg_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -431,20 +428,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
+        connection_config = normalize_connection_config(connection_config)
 
-        base_statement_config = statement_config or psycopg_statement_config
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        base_statement_config, processed_driver_features = apply_psycopg_driver_features(
-            base_statement_config, normalized_driver_features
-        )
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -561,7 +555,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         return PsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or psycopg_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

@@ -12,6 +12,7 @@ import pytest
 
 from sqlspec import ObservabilityConfig, SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
+from sqlspec.adapters.duckdb.core import build_connection_config
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQLResult
 
@@ -289,7 +290,7 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
     config = DuckDBConfig(connection_config=connection_config)
 
     try:
-        connection_config = config._get_connection_config_dict()
+        connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == str(db_path)
         assert connection_config["memory_limit"] == "256MB"
         assert connection_config["threads"] == 4
@@ -372,7 +373,7 @@ def test_config_consistency_with_other_adapters(tmp_path: Path) -> None:
     config = DuckDBConfig(connection_config=connection_config)
 
     try:
-        connection_config = config._get_connection_config_dict()
+        connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == str(db_path)
         assert connection_config["memory_limit"] == "512MB"
         assert connection_config["threads"] == 2

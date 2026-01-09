@@ -9,10 +9,10 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
-from sqlspec.adapters.asyncmy.core import apply_asyncmy_driver_features, asyncmy_statement_config
+from sqlspec.adapters.asyncmy.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, AsyncmyExceptionHandler, AsyncmySessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
@@ -175,23 +175,20 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """
         reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
+        connection_config = normalize_connection_config(connection_config)
 
-        processed_connection_config.setdefault("host", "localhost")
-        processed_connection_config.setdefault("port", 3306)
+        connection_config.setdefault("host", "localhost")
+        connection_config.setdefault("port", 3306)
 
-        base_statement_config = statement_config or asyncmy_statement_config
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        base_statement_config, processed_driver_features = apply_asyncmy_driver_features(
-            base_statement_config, normalized_driver_features
-        )
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -260,7 +257,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         return AsyncmySessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or asyncmy_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

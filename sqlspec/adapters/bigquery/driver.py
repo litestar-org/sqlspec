@@ -8,28 +8,25 @@ type coercion, error handling, and query job management.
 import io
 from typing import TYPE_CHECKING, Any, cast
 
-from google.cloud.bigquery import QueryJob, QueryJobConfig
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
-    bigquery_statement_config,
-    bigquery_storage_api_available,
-    build_bigquery_dml_rowcount,
-    build_bigquery_inlined_script,
-    build_bigquery_load_job_config,
-    build_bigquery_load_job_telemetry,
-    build_bigquery_profile,
-    build_bigquery_retry,
-    build_bigquery_statement_config,
-    collect_bigquery_rows,
-    copy_bigquery_job_config,
-    create_bq_parameters,
-    detect_bigquery_emulator,
-    is_simple_bigquery_insert,
-    normalize_bigquery_script_rowcount,
-    raise_bigquery_exception,
-    try_bigquery_bulk_insert,
+    build_dml_rowcount,
+    build_inlined_script,
+    build_load_job_config,
+    build_load_job_telemetry,
+    build_retry,
+    collect_rows,
+    default_statement_config,
+    detect_emulator,
+    driver_profile,
+    is_simple_insert,
+    normalize_script_rowcount,
+    raise_exception,
+    run_query_job,
+    storage_api_available,
+    try_bulk_insert,
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
@@ -49,6 +46,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from google.cloud.bigquery import QueryJob, QueryJobConfig
     from typing_extensions import Self
 
     from sqlspec.builder import QueryBuilder
@@ -64,14 +62,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-__all__ = (
-    "BigQueryCursor",
-    "BigQueryDriver",
-    "BigQueryExceptionHandler",
-    "BigQuerySessionContext",
-    "bigquery_statement_config",
-    "build_bigquery_statement_config",
-)
+__all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
 
 
 class BigQueryCursor:
@@ -124,7 +115,7 @@ class BigQueryExceptionHandler:
             return False
         if issubclass(exc_type, GoogleCloudError):
             try:
-                raise_bigquery_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
@@ -162,8 +153,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._type_converter = BigQueryOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
 
         if statement_config is None:
-            cache_config = get_cache_config()
-            statement_config = bigquery_statement_config.replace(cache_config=cache_config)
+            statement_config = default_statement_config.replace(cache_config=get_cache_config())
 
         parameter_json_serializer = statement_config.parameter_config.json_serializer
         if parameter_json_serializer is None:
@@ -175,9 +165,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
         self._data_dictionary: BigQueryDataDictionary | None = None
-        self._using_emulator = detect_bigquery_emulator(connection)
+        self._using_emulator = detect_emulator(connection)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
-        self._job_retry = build_bigquery_retry(self._job_retry_deadline, self._using_emulator)
+        self._job_retry = build_retry(self._job_retry_deadline, self._using_emulator)
 
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create context manager for cursor management.
@@ -200,39 +190,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
 
-    def _run_query_job(
-        self,
-        sql_str: str,
-        parameters: Any,
-        connection: BigQueryConnection | None = None,
-        job_config: QueryJobConfig | None = None,
-    ) -> QueryJob:
-        """Execute a BigQuery job with configuration support.
-
-        Args:
-            sql_str: SQL string to execute
-            parameters: Query parameters
-            connection: Optional BigQuery connection override
-            job_config: Optional job configuration
-
-        Returns:
-            QueryJob object representing the executed job
-        """
-        conn = connection or self.connection
-
-        final_job_config = QueryJobConfig()
-
-        if self._default_query_job_config:
-            copy_bigquery_job_config(self._default_query_job_config, final_job_config)
-
-        if job_config:
-            copy_bigquery_job_config(job_config, final_job_config)
-
-        bq_parameters = create_bq_parameters(parameters, self._json_serializer)
-        final_job_config.query_parameters = bq_parameters
-
-        return conn.query(sql_str, job_config=final_job_config)
-
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
 
@@ -253,10 +210,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
         last_rowcount = 0
 
         for stmt in statements:
-            job = self._run_query_job(stmt, prepared_parameters or {}, connection=cursor)
+            job = run_query_job(
+                cursor,
+                stmt,
+                prepared_parameters or {},
+                default_job_config=self._default_query_job_config,
+                job_config=None,
+                json_serializer=self._json_serializer,
+            )
             job.result(job_retry=self._job_retry)
             last_job = job
-            last_rowcount = normalize_bigquery_script_rowcount(last_rowcount, job)
+            last_rowcount = normalize_script_rowcount(last_rowcount, job)
             successful_count += 1
 
         cursor.job = last_job
@@ -296,19 +260,26 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         allow_parse = statement.statement_config.enable_parsing
-        if is_simple_bigquery_insert(sql, parsed_expression, allow_parse=allow_parse):
-            rowcount = try_bigquery_bulk_insert(
+        if is_simple_insert(sql, parsed_expression, allow_parse=allow_parse):
+            rowcount = try_bulk_insert(
                 self.connection, sql, prepared_parameters, parsed_expression, allow_parse=allow_parse
             )
             if rowcount is not None:
                 return self.create_execution_result(cursor, rowcount_override=rowcount, is_many_result=True)
 
-        script_sql = build_bigquery_inlined_script(
+        script_sql = build_inlined_script(
             sql, prepared_parameters, parsed_expression, allow_parse=allow_parse, literal_inliner=self._literal_inliner
         )
-        cursor.job = self._run_query_job(script_sql, None, connection=cursor)
+        cursor.job = run_query_job(
+            cursor,
+            script_sql,
+            None,
+            default_job_config=self._default_query_job_config,
+            job_config=None,
+            json_serializer=self._json_serializer,
+        )
         cursor.job.result(job_retry=self._job_retry)
-        affected_rows = build_bigquery_dml_rowcount(cursor.job, len(prepared_parameters))
+        affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -322,7 +293,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ExecutionResult with query results and metadata
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.job = self._run_query_job(sql, parameters, connection=cursor)
+        cursor.job = run_query_job(
+            cursor,
+            sql,
+            parameters,
+            default_job_config=self._default_query_job_config,
+            job_config=None,
+            json_serializer=self._json_serializer,
+        )
         job_result = cursor.job.result(job_retry=self._job_retry)
         statement_type = str(cursor.job.statement_type or "").upper()
         is_select_like = (
@@ -330,7 +308,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
         if is_select_like:
-            rows_list, column_names = collect_bigquery_rows(job_result, cursor.job.schema)
+            rows_list, column_names = collect_rows(job_result, cursor.job.schema)
 
             return self.create_execution_result(
                 cursor,
@@ -340,7 +318,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        affected_rows = build_bigquery_dml_rowcount(cursor.job, 0)
+        affected_rows = build_dml_rowcount(cursor.job, 0)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def _connection_in_transaction(self) -> bool:
@@ -414,7 +392,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        if not bigquery_storage_api_available():
+        if not storage_api_available():
             if native_only:
                 msg = (
                     "BigQuery native Arrow requires Storage API.\n"
@@ -447,9 +425,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
         # Get compiled SQL and parameters
         sql, driver_params = self._get_compiled_sql(prepared_statement, config)
 
-        # Execute query using existing _run_query_job method
         with self.handle_database_exceptions():
-            query_job = self._run_query_job(sql, driver_params)
+            query_job = run_query_job(
+                self.connection,
+                sql,
+                driver_params,
+                default_job_config=self._default_query_job_config,
+                job_config=None,
+                json_serializer=self._json_serializer,
+            )
             query_job.result()  # Wait for completion
 
             # Native Arrow via Storage API
@@ -508,10 +492,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
         buffer = io.BytesIO()
         pq.write_table(arrow_table, buffer)
         buffer.seek(0)
-        job_config = build_bigquery_load_job_config("parquet", overwrite)
+        job_config = build_load_job_config("parquet", overwrite)
         job = self.connection.load_table_from_file(buffer, table, job_config=job_config)
         job.result()
-        telemetry_payload = build_bigquery_load_job_telemetry(job, table, format_label="parquet")
+        telemetry_payload = build_load_job_telemetry(job, table, format_label="parquet")
         if telemetry:
             telemetry_payload.setdefault("extra", {})
             telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
@@ -532,14 +516,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if file_format != "parquet":
             msg = "BigQuery storage bridge currently supports Parquet ingest only"
             raise StorageCapabilityError(msg, capability="parquet_import_enabled")
-        job_config = build_bigquery_load_job_config(file_format, overwrite)
+        job_config = build_load_job_config(file_format, overwrite)
         job = self.connection.load_table_from_uri(source, table, job_config=job_config)
         job.result()
-        telemetry_payload = build_bigquery_load_job_telemetry(job, table, format_label=file_format)
+        telemetry_payload = build_load_job_telemetry(job, table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload)
 
 
-_BIGQUERY_PROFILE = build_bigquery_profile()
-
-register_driver_profile("bigquery", _BIGQUERY_PROFILE)
+register_driver_profile("bigquery", driver_profile)

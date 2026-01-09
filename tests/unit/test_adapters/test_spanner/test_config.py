@@ -1,7 +1,7 @@
 import pytest
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
-from sqlspec.adapters.spanner.driver import spanner_statement_config
+from sqlspec.adapters.spanner.core import default_statement_config
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.conftest import requires_interpreted
@@ -13,7 +13,7 @@ class _DummyDriver(SyncDriverAdapterBase):
     dialect = "spanner"
 
     def __init__(self, connection: object, **_: object) -> None:
-        super().__init__(connection=connection, statement_config=spanner_statement_config, driver_features={})
+        super().__init__(connection=connection, statement_config=default_statement_config, driver_features={})
 
     def handle_database_exceptions(self):
         raise NotImplementedError

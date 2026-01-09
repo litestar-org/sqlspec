@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
-from sqlspec.adapters.sqlite.core import apply_sqlite_driver_features, sqlite_statement_config
+from sqlspec.adapters.sqlite.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, SqliteSessionContext
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
@@ -159,41 +159,24 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
                 )
                 config_dict["uri"] = True
 
-        base_statement_config = statement_config or sqlite_statement_config
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        base_statement_config, processed_driver_features = apply_sqlite_driver_features(
-            base_statement_config, normalized_driver_features
-        )
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
             bind_key=bind_key,
             connection_instance=connection_instance,
             connection_config=config_dict,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             extension_config=extension_config,
             observability_config=observability_config,
             **kwargs,
         )
 
-    def _get_connection_config_dict(self) -> "dict[str, Any]":
-        """Get connection configuration as plain dict for pool creation."""
-
-        excluded_keys = {
-            "enable_optimizations",
-            "health_check_interval",
-            "pool_min_size",
-            "pool_max_size",
-            "pool_timeout",
-            "pool_recycle_seconds",
-            "extra",
-        }
-        return {k: v for k, v in self.connection_config.items() if v is not None and k not in excluded_keys}
-
     def _create_pool(self) -> SqliteConnectionPool:
         """Create connection pool from configuration."""
-        config_dict = self._get_connection_config_dict()
+        config_dict = build_connection_config(self.connection_config)
 
         pool_kwargs: dict[str, Any] = {}
         recycle_seconds = self.connection_config.get("pool_recycle_seconds")
@@ -271,7 +254,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         return SqliteSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or sqlite_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

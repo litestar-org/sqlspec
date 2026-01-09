@@ -36,19 +36,24 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 __all__ = (
-    "apply_oracledb_driver_features",
-    "build_oracledb_pipeline_stack_result",
-    "build_oracledb_profile",
-    "coerce_sync_row_values",
-    "collect_oracledb_async_rows",
-    "collect_oracledb_sync_rows",
-    "normalize_oracledb_rowcount",
+    "apply_driver_features",
+    "build_insert_statement",
+    "build_pipeline_stack_result",
+    "build_profile",
+    "build_statement_config",
+    "build_truncate_statement",
+    "coerce_large_string_parameters_async",
+    "coerce_large_string_parameters_sync",
+    "collect_async_rows",
+    "collect_sync_rows",
+    "default_statement_config",
+    "driver_profile",
     "normalize_column_names",
-    "oracle_insert_statement",
-    "oracle_truncate_statement",
-    "oracledb_statement_config",
-    "raise_oracledb_exception",
-    "requires_oracledb_session_callback",
+    "normalize_execute_many_parameters_async",
+    "normalize_execute_many_parameters_sync",
+    "normalize_rowcount",
+    "raise_exception",
+    "requires_session_callback",
 )
 
 
@@ -120,17 +125,101 @@ def normalize_column_names(column_names: "list[str]", driver_features: "dict[str
     return normalized
 
 
-def oracle_insert_statement(table: str, columns: "list[str]") -> str:
+def normalize_execute_many_parameters_sync(parameters: Any) -> Any:
+    """Normalize parameters for Oracle executemany calls.
+
+    Args:
+        parameters: Prepared parameters payload.
+
+    Returns:
+        Normalized parameters payload.
+
+    Raises:
+        ValueError: When parameters are missing for executemany.
+    """
+    if not parameters:
+        msg = "execute_many requires parameters"
+        raise ValueError(msg)
+    if isinstance(parameters, tuple):
+        return list(parameters)
+    return parameters
+
+
+def normalize_execute_many_parameters_async(parameters: Any) -> Any:
+    """Normalize parameters for Oracle async executemany calls.
+
+    Args:
+        parameters: Prepared parameters payload.
+
+    Returns:
+        Normalized parameters payload.
+
+    Raises:
+        ValueError: When parameters are missing for executemany.
+    """
+    if not parameters:
+        msg = "execute_many requires parameters"
+        raise ValueError(msg)
+    return parameters
+
+
+def coerce_large_string_parameters_sync(connection: Any, parameters: Any, *, lob_type: Any, threshold: int) -> Any:
+    """Coerce large string parameters into CLOBs.
+
+    Args:
+        connection: Oracle database connection.
+        parameters: Prepared parameters payload.
+        lob_type: Oracle CLOB type.
+        threshold: String length threshold for CLOB conversion.
+
+    Returns:
+        Parameters payload with large strings converted to CLOBs.
+    """
+    if not parameters or not isinstance(parameters, dict):
+        return parameters
+    for param_name, param_value in parameters.items():
+        if isinstance(param_value, str) and len(param_value) > threshold:
+            clob = connection.createlob(lob_type)
+            clob.write(param_value)
+            parameters[param_name] = clob
+    return parameters
+
+
+async def coerce_large_string_parameters_async(
+    connection: Any, parameters: Any, *, lob_type: Any, threshold: int
+) -> Any:
+    """Coerce large string parameters into CLOBs for async Oracle drivers.
+
+    Args:
+        connection: Oracle database connection.
+        parameters: Prepared parameters payload.
+        lob_type: Oracle CLOB type.
+        threshold: String length threshold for CLOB conversion.
+
+    Returns:
+        Parameters payload with large strings converted to CLOBs.
+    """
+    if not parameters or not isinstance(parameters, dict):
+        return parameters
+    for param_name, param_value in parameters.items():
+        if isinstance(param_value, str) and len(param_value) > threshold:
+            clob = await connection.createlob(lob_type)
+            await clob.write(param_value)
+            parameters[param_name] = clob
+    return parameters
+
+
+def build_insert_statement(table: str, columns: "list[str]") -> str:
     column_list = ", ".join(columns)
     placeholders = ", ".join(f":{idx + 1}" for idx in range(len(columns)))
     return f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})"
 
 
-def oracle_truncate_statement(table: str) -> str:
+def build_truncate_statement(table: str) -> str:
     return f"TRUNCATE TABLE {table}"
 
 
-def build_oracledb_pipeline_stack_result(
+def build_pipeline_stack_result(
     statement: "SQL",
     method: str,
     returns_rows: bool,
@@ -223,7 +312,7 @@ def build_oracledb_pipeline_stack_result(
     return StackResult.from_sql_result(sql_result)
 
 
-def normalize_oracledb_rowcount(cursor: Any) -> int:
+def normalize_rowcount(cursor: Any) -> int:
     """Normalize rowcount from an Oracle cursor.
 
     Args:
@@ -240,23 +329,23 @@ def normalize_oracledb_rowcount(cursor: Any) -> int:
     return 0
 
 
-def apply_oracledb_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
+def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
     """Apply OracleDB driver feature defaults."""
-    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
-    processed_driver_features.setdefault("enable_lowercase_column_names", True)
-    processed_driver_features.setdefault("enable_uuid_binary", True)
-    return processed_driver_features
+    features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
+    features.setdefault("enable_lowercase_column_names", True)
+    features.setdefault("enable_uuid_binary", True)
+    return features
 
 
-def requires_oracledb_session_callback(driver_features: "dict[str, Any]") -> bool:
+def requires_session_callback(driver_features: "dict[str, Any]") -> bool:
     """Return True when the session callback should be installed."""
     enable_numpy_vectors = bool(driver_features.get("enable_numpy_vectors", False))
     enable_uuid_binary = bool(driver_features.get("enable_uuid_binary", False))
     return enable_numpy_vectors or enable_uuid_binary
 
 
-def coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     """Coerce LOB handles to concrete values for synchronous execution.
 
     Processes each value in the row, reading LOB objects and applying
@@ -314,7 +403,7 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
     return coerced_values
 
 
-def collect_oracledb_sync_rows(
+def collect_sync_rows(
     fetched_data: "list[Any] | None", description: "list[Any] | None", driver_features: "dict[str, Any]"
 ) -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect OracleDB sync rows into dictionaries with normalized column names.
@@ -333,11 +422,11 @@ def collect_oracledb_sync_rows(
     column_names = normalize_column_names(column_names, driver_features)
     if not fetched_data:
         return [], column_names
-    data = [dict(zip(column_names, coerce_sync_row_values(row), strict=False)) for row in fetched_data]
+    data = [dict(zip(column_names, _coerce_sync_row_values(row), strict=False)) for row in fetched_data]
     return data, column_names
 
 
-async def collect_oracledb_async_rows(
+async def collect_async_rows(
     fetched_data: "list[Any] | None", description: "list[Any] | None", driver_features: "dict[str, Any]"
 ) -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect OracleDB async rows into dictionaries with normalized column names.
@@ -368,7 +457,7 @@ def _raise_oracle_error(error: Any, code: "int | None", error_class: type[SQLSpe
     raise error_class(msg) from error
 
 
-def raise_oracledb_exception(error: Any) -> None:
+def raise_exception(error: Any) -> None:
     """Raise SQLSpec exceptions for Oracle errors."""
     error_obj = error.args[0] if getattr(error, "args", None) else None
     if not error_obj:
@@ -397,7 +486,7 @@ def raise_oracledb_exception(error: Any) -> None:
     _raise_oracle_error(error, error_code, SQLSpecError, "database error")
 
 
-def build_oracledb_profile() -> "DriverParameterProfile":
+def build_profile() -> "DriverParameterProfile":
     """Create the OracleDB driver parameter profile."""
     return DriverParameterProfile(
         name="OracleDB",
@@ -415,13 +504,16 @@ def build_oracledb_profile() -> "DriverParameterProfile":
     )
 
 
-def _build_oracledb_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
+driver_profile = build_profile()
+
+
+def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the OracleDB statement configuration with optional JSON serializer."""
     serializer = json_serializer or to_json
-    profile = build_oracledb_profile()
+    profile = driver_profile
     return build_statement_config_from_profile(
         profile, statement_overrides={"dialect": "oracle"}, json_serializer=serializer
     )
 
 
-oracledb_statement_config = _build_oracledb_statement_config()
+default_statement_config = build_statement_config()

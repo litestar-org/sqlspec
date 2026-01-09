@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.adapters.sqlite.core import build_connection_config
 from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -45,9 +46,10 @@ def test_regular_memory_auto_conversion(sqlite_config_regular_memory: SqliteConf
     assert config.connection_config["pool_min_size"] == 5
     assert config.connection_config["pool_max_size"] == 10
 
-    db_uri = config._get_connection_config_dict()["database"]
+    connection_config = build_connection_config(config.connection_config)
+    db_uri = connection_config["database"]
     assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
-    assert config._get_connection_config_dict()["uri"] is True
+    assert connection_config["uri"] is True
 
     with config.provide_session() as session1:
         session1.execute_script("""
@@ -222,7 +224,7 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
     config = SqliteConfig(connection_config=connection_config)
 
     try:
-        connection_config = config._get_connection_config_dict()
+        connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == str(db_path)
         assert connection_config["timeout"] == 10.0
         assert connection_config["check_same_thread"] is False

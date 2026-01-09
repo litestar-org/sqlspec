@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlspec.adapters.aiosqlite.core import format_sqlite_identifier
+from sqlspec.adapters.aiosqlite.core import format_identifier
 from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
@@ -98,7 +98,7 @@ class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["Aiosqlit
     async def get_tables(self, driver: "AiosqliteDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by topological dependency order using SQLite catalog."""
         schema_name = self.resolve_schema(schema)
-        schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         query_text = self.get_query_text("tables_by_schema").format(schema_prefix=schema_prefix)
         return await driver.select(query_text, schema_type=TableMetadata)
 
@@ -107,7 +107,7 @@ class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["Aiosqlit
     ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
-        schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         if table is None:
             query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
             return await driver.select(query_text, schema_type=ColumnMetadata)
@@ -115,9 +115,7 @@ class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["Aiosqlit
         assert table is not None
         table_name = table
         table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
-        query_text = self.get_query_text("columns_by_table").format(
-            table_name=format_sqlite_identifier(table_identifier)
-        )
+        query_text = self.get_query_text("columns_by_table").format(table_name=format_identifier(table_identifier))
         return await driver.select(query_text, schema_type=ColumnMetadata)
 
     async def get_indexes(
@@ -137,9 +135,7 @@ class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["Aiosqlit
         assert table is not None
         table_name = table
         table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
-        index_list_sql = self.get_query_text("indexes_by_table").format(
-            table_name=format_sqlite_identifier(table_identifier)
-        )
+        index_list_sql = self.get_query_text("indexes_by_table").format(table_name=format_identifier(table_identifier))
         index_rows = await driver.select(index_list_sql)
         for row in index_rows:
             index_name = row.get("name")
@@ -147,7 +143,7 @@ class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["Aiosqlit
                 continue
             index_identifier = f"{schema_name}.{index_name}" if schema_name else index_name
             columns_sql = self.get_query_text("index_columns_by_index").format(
-                index_name=format_sqlite_identifier(index_identifier)
+                index_name=format_identifier(index_identifier)
             )
             columns_rows = await driver.select(columns_sql)
             columns: list[str] = []
@@ -176,7 +172,7 @@ class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["Aiosqlit
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)
-        schema_prefix = f"{format_sqlite_identifier(schema_name)}." if schema_name else ""
+        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         if table is None:
             query_text = self.get_query_text("foreign_keys_by_schema").format(schema_prefix=schema_prefix)
             return await driver.select(query_text, schema_type=ForeignKeyMetadata)
@@ -184,6 +180,6 @@ class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["Aiosqlit
         table_label = table.replace("'", "''")
         table_identifier = f"{schema_name}.{table}" if schema_name else table
         query_text = self.get_query_text("foreign_keys_by_table").format(
-            table_name=format_sqlite_identifier(table_identifier), table_label=table_label
+            table_name=format_identifier(table_identifier), table_label=table_label
         )
         return await driver.select(query_text, schema_type=ForeignKeyMetadata)

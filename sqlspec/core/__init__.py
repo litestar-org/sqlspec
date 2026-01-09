@@ -265,6 +265,7 @@ __all__ = (
     "StatementStack",
     "TypedParameter",
     "apply_filter",
+    "build_arrow_result_from_table",
     "build_literal_inlining_transform",
     "build_null_pruning_transform",
     "build_statement_config_from_profile",

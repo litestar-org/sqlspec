@@ -1,38 +1,32 @@
 """ADBC database configuration."""
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._typing import AdbcConnection
 from sqlspec.adapters.adbc.core import (
-    BIGQUERY_DB_KWARGS_FIELDS,
-    DRIVER_ALIASES,
-    DRIVER_PATH_KEYWORDS_TO_DIALECT,
-    PARAMETER_STYLES_BY_KEYWORD,
-    apply_adbc_driver_features,
-    driver_from_uri,
-    driver_kind_from_driver_name,
-    driver_kind_from_uri,
-    get_adbc_statement_config,
-    normalize_driver_path,
+    apply_driver_features,
+    build_connection_config,
+    get_statement_config,
+    resolve_dialect_from_driver_path,
+    resolve_driver_connect_func,
+    resolve_driver_name_from_config,
 )
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, AdbcSessionContext
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_normalization import normalize_connection_config
-from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
+    from collections.abc import Callable
 
     from sqlspec.observability import ObservabilityConfig
 
-logger = get_logger("adapters.adbc")
+
+__all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
 
 
 class AdbcConnectionParams(TypedDict):
@@ -109,9 +103,6 @@ class AdbcDriverFeatures(TypedDict):
     arrow_extension_types: NotRequired[bool]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
-
-
-__all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
 
 
 class AdbcConnectionContext:
@@ -202,98 +193,23 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.connection_config = normalize_connection_config(connection_config)
 
         if statement_config is None:
-            detected_dialect = str(self._get_dialect() or "sqlite")
-            statement_config = get_adbc_statement_config(detected_dialect)
+            statement_config = get_statement_config(
+                resolve_dialect_from_driver_path(resolve_driver_name_from_config(self.connection_config))
+            )
 
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        statement_config, processed_driver_features = apply_adbc_driver_features(
-            statement_config, normalized_driver_features
-        )
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
             connection_config=self.connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=processed_driver_features,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
             **kwargs,
         )
-
-    def _resolve_driver_name(self) -> str:
-        """Resolve and normalize the driver name.
-
-        Returns:
-            The normalized driver connect function path.
-        """
-        driver_name = self.connection_config.get("driver_name")
-        uri = self.connection_config.get("uri")
-
-        if isinstance(driver_name, str):
-            lowered_driver = driver_name.lower()
-            alias = DRIVER_ALIASES.get(lowered_driver)
-            if alias is not None:
-                return alias
-            return normalize_driver_path(driver_name)
-
-        if isinstance(uri, str):
-            resolved = driver_from_uri(uri)
-            if resolved is not None:
-                return resolved
-
-        return "adbc_driver_sqlite.dbapi.connect"
-
-    def _get_connect_func(self) -> Callable[..., AdbcConnection]:
-        """Get the driver connect function.
-
-        Returns:
-            The driver connect function.
-
-        Raises:
-            ImproperConfigurationError: If driver cannot be loaded.
-        """
-        driver_path = self._resolve_driver_name()
-        try:
-            connect_func = import_string(driver_path)
-        except ImportError as e:
-            msg = f"Failed to import connect function from '{driver_path}'. Is the driver installed? Error: {e}"
-            raise ImproperConfigurationError(msg) from e
-
-        if not callable(connect_func):
-            msg = f"The path '{driver_path}' did not resolve to a callable function."
-            raise ImproperConfigurationError(msg)
-
-        return cast("Callable[..., AdbcConnection]", connect_func)
-
-    def _get_dialect(self) -> "DialectType":
-        """Get the SQL dialect type based on the driver.
-
-        Returns:
-            The SQL dialect type for the driver.
-        """
-        driver_path = self._resolve_driver_name()
-        for keyword, dialect in DRIVER_PATH_KEYWORDS_TO_DIALECT:
-            if keyword in driver_path:
-                return dialect
-        return None
-
-    def _get_parameter_styles(self) -> "tuple[tuple[str, ...], str]":
-        """Get parameter styles based on the underlying driver.
-
-        Returns:
-            Tuple of (supported_parameter_styles, default_parameter_style)
-        """
-        try:
-            driver_path = self._resolve_driver_name()
-            for keyword, styles in PARAMETER_STYLES_BY_KEYWORD:
-                if keyword in driver_path:
-                    return styles
-
-        except Exception:  # pylint: disable=broad-exception-caught
-            logger.debug("Error resolving parameter styles, using defaults", exc_info=True)
-        return (("qmark",), "qmark")
 
     def create_connection(self) -> AdbcConnection:
         """Create and return a new connection using the specified driver.
@@ -306,14 +222,14 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """
 
         try:
-            connect_func = self._get_connect_func()
-            connection_config_dict = self._get_connection_config_dict()
-            connection = connect_func(**connection_config_dict)
+            connection = resolve_driver_connect_func(
+                self.connection_config.get("driver_name"), self.connection_config.get("uri")
+            )(**build_connection_config(self.connection_config))
+            return cast("AdbcConnection", connection)
         except Exception as e:
             driver_name = self.connection_config.get("driver_name", "Unknown")
             msg = f"Could not configure connection using driver '{driver_name}'. Error: {e}"
             raise ImproperConfigurationError(msg) from e
-        return connection
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AdbcConnectionContext":
         """Provide a connection context manager.
@@ -340,57 +256,22 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Returns:
             A context manager that yields an AdbcDriver instance.
         """
-        final_statement_config = (
-            statement_config or self.statement_config or get_adbc_statement_config(str(self._get_dialect() or "sqlite"))
+        statement_config = (
+            statement_config
+            or self.statement_config
+            or get_statement_config(
+                resolve_dialect_from_driver_path(resolve_driver_name_from_config(self.connection_config))
+            )
         )
         handler = _AdbcSessionConnectionHandler(self)
 
         return AdbcSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=final_statement_config,
+            statement_config=statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
-
-    def _get_connection_config_dict(self) -> "dict[str, Any]":
-        """Get the connection configuration dictionary.
-
-        Returns:
-            The connection configuration dictionary.
-        """
-        config = dict(self.connection_config)
-
-        driver_name = config.get("driver_name")
-        uri = config.get("uri")
-        driver_kind: str | None = None
-        if isinstance(driver_name, str):
-            driver_kind = driver_kind_from_driver_name(driver_name)
-        if driver_kind is None and isinstance(uri, str):
-            driver_kind = driver_kind_from_uri(uri)
-
-        if isinstance(uri, str) and driver_kind == "sqlite" and uri.startswith("sqlite://"):
-            config["uri"] = uri[9:]
-        if isinstance(uri, str) and driver_kind == "duckdb" and uri.startswith("duckdb://"):
-            config["path"] = uri[9:]
-            config.pop("uri", None)
-
-        if isinstance(driver_name, str) and driver_kind == "bigquery":
-            db_kwargs = config.get("db_kwargs")
-            db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
-            for param in BIGQUERY_DB_KWARGS_FIELDS:
-                if param in config:
-                    db_kwargs_dict[param] = config.pop(param)
-            if db_kwargs_dict:
-                config["db_kwargs"] = db_kwargs_dict
-        elif isinstance(driver_name, str) and "db_kwargs" in config and driver_kind != "bigquery":
-            db_kwargs = config.pop("db_kwargs")
-            if isinstance(db_kwargs, dict):
-                config.update(db_kwargs)
-
-        config.pop("driver_name", None)
-
-        return config
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AdbcConfig types.

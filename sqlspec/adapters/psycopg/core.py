@@ -1,11 +1,17 @@
 """psycopg adapter compiled helpers."""
 
 import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from psycopg import sql as psycopg_sql
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle, SQL, StatementConfig, build_statement_config_from_profile
+from sqlspec.core import (
+    SQL,
+    DriverParameterProfile,
+    ParameterStyle,
+    StatementConfig,
+    build_statement_config_from_profile,
+)
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -28,25 +34,55 @@ from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import ParameterStyleConfig
+    from sqlspec.core import ParameterStyleConfig, StackOperation
 
 __all__ = (
-    "apply_psycopg_driver_features",
-    "build_psycopg_async_pipeline_execution_result",
-    "build_psycopg_pipeline_execution_result",
+    "PipelineCursorEntry",
+    "PreparedStackOperation",
+    "apply_driver_features",
+    "build_async_pipeline_execution_result",
     "build_copy_from_command",
-    "build_psycopg_profile",
-    "build_psycopg_statement_config",
+    "build_pipeline_execution_result",
+    "build_profile",
+    "build_statement_config",
     "build_truncate_command",
-    "collect_psycopg_rows",
-    "normalize_psycopg_rowcount",
-    "psycopg_pipeline_supported",
-    "psycopg_statement_config",
-    "raise_psycopg_exception",
+    "collect_rows",
+    "default_statement_config",
+    "driver_profile",
+    "execute_with_optional_parameters",
+    "execute_with_optional_parameters_async",
+    "executemany_or_skip",
+    "executemany_or_skip_async",
+    "normalize_rowcount",
+    "pipeline_supported",
+    "raise_exception",
 )
 
+TRANSACTION_STATUS_IDLE = 0
+TRANSACTION_STATUS_ACTIVE = 1
+TRANSACTION_STATUS_INTRANS = 2
+TRANSACTION_STATUS_INERROR = 3
+TRANSACTION_STATUS_UNKNOWN = 4
 
-def psycopg_pipeline_supported() -> bool:
+
+class PreparedStackOperation(NamedTuple):
+    """Precompiled stack operation metadata for psycopg pipeline execution."""
+
+    operation_index: int
+    operation: "StackOperation"
+    statement: "SQL"
+    sql: str
+    parameters: "tuple[Any, ...] | dict[str, Any] | None"
+
+
+class PipelineCursorEntry(NamedTuple):
+    """Cursor pending result data for psycopg pipeline execution."""
+
+    prepared: "PreparedStackOperation"
+    cursor: Any
+
+
+def pipeline_supported() -> bool:
     """Return True when libpq pipeline support is available."""
     try:
         import psycopg
@@ -111,7 +147,7 @@ def _build_psycopg_parameter_config(
     return base_config.replace(type_coercion_map=updated_type_map)
 
 
-def build_psycopg_profile() -> "DriverParameterProfile":
+def build_profile() -> "DriverParameterProfile":
     """Create the psycopg driver parameter profile."""
 
     return DriverParameterProfile(
@@ -136,36 +172,37 @@ def build_psycopg_profile() -> "DriverParameterProfile":
     )
 
 
-def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
+driver_profile = build_profile()
+
+
+def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
     """Construct the psycopg statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
-    profile = build_psycopg_profile()
+    profile = driver_profile
     parameter_config = _build_psycopg_parameter_config(profile, serializer)
     base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
     return base_config.replace(parameter_config=parameter_config)
 
 
-psycopg_statement_config = build_psycopg_statement_config()
+default_statement_config = build_statement_config()
 
 
-def apply_psycopg_driver_features(
+def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply psycopg driver feature defaults to statement config."""
-    processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    serializer = processed_driver_features.get("json_serializer", to_json)
-    processed_driver_features.setdefault("json_serializer", serializer)
-    processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+    features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    serializer = features.get("json_serializer", to_json)
+    features.setdefault("json_serializer", serializer)
+    features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
-    parameter_config = _build_psycopg_parameter_config(build_psycopg_profile(), serializer)
+    parameter_config = _build_psycopg_parameter_config(driver_profile, serializer)
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
-    return statement_config, processed_driver_features
+    return statement_config, features
 
 
-def collect_psycopg_rows(
-    fetched_data: "list[Any] | None", description: "list[Any] | None"
-) -> "tuple[list[Any], list[str]]":
+def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":
     """Collect psycopg rows and column names.
 
     Args:
@@ -181,7 +218,69 @@ def collect_psycopg_rows(
     return fetched_data or [], column_names
 
 
-def normalize_psycopg_rowcount(cursor: Any) -> int:
+def execute_with_optional_parameters(cursor: Any, sql: str, parameters: Any) -> None:
+    """Execute statement with optional parameters.
+
+    Args:
+        cursor: Psycopg cursor object.
+        sql: SQL string to execute.
+        parameters: Prepared parameters payload.
+    """
+    if parameters:
+        cursor.execute(sql, parameters)
+    else:
+        cursor.execute(sql)
+
+
+async def execute_with_optional_parameters_async(cursor: Any, sql: str, parameters: Any) -> None:
+    """Execute statement with optional parameters in async mode.
+
+    Args:
+        cursor: Psycopg async cursor object.
+        sql: SQL string to execute.
+        parameters: Prepared parameters payload.
+    """
+    if parameters:
+        await cursor.execute(sql, parameters)
+    else:
+        await cursor.execute(sql)
+
+
+def executemany_or_skip(cursor: Any, sql: str, parameters: Any) -> bool:
+    """Execute executemany when parameters are provided.
+
+    Args:
+        cursor: Psycopg cursor object.
+        sql: SQL string to execute.
+        parameters: Prepared parameters payload.
+
+    Returns:
+        True when executemany was executed.
+    """
+    if not parameters:
+        return False
+    cursor.executemany(sql, parameters)
+    return True
+
+
+async def executemany_or_skip_async(cursor: Any, sql: str, parameters: Any) -> bool:
+    """Execute executemany when parameters are provided in async mode.
+
+    Args:
+        cursor: Psycopg async cursor object.
+        sql: SQL string to execute.
+        parameters: Prepared parameters payload.
+
+    Returns:
+        True when executemany was executed.
+    """
+    if not parameters:
+        return False
+    await cursor.executemany(sql, parameters)
+    return True
+
+
+def normalize_rowcount(cursor: Any) -> int:
     """Normalize rowcount from a psycopg cursor.
 
     Args:
@@ -199,7 +298,7 @@ def normalize_psycopg_rowcount(cursor: Any) -> int:
     return 0
 
 
-def build_psycopg_pipeline_execution_result(statement: "SQL", cursor: Any) -> "ExecutionResult":
+def build_pipeline_execution_result(statement: "SQL", cursor: Any) -> "ExecutionResult":
     """Build an ExecutionResult for psycopg pipeline execution.
 
     Args:
@@ -212,7 +311,7 @@ def build_psycopg_pipeline_execution_result(statement: "SQL", cursor: Any) -> "E
 
     if statement.returns_rows():
         fetched_data = cursor.fetchall()
-        fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
+        fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
         return ExecutionResult(
             cursor_result=cursor,
             rowcount_override=None,
@@ -228,7 +327,7 @@ def build_psycopg_pipeline_execution_result(statement: "SQL", cursor: Any) -> "E
             last_inserted_id=None,
         )
 
-    affected_rows = normalize_psycopg_rowcount(cursor)
+    affected_rows = normalize_rowcount(cursor)
     return ExecutionResult(
         cursor_result=cursor,
         rowcount_override=affected_rows,
@@ -245,7 +344,7 @@ def build_psycopg_pipeline_execution_result(statement: "SQL", cursor: Any) -> "E
     )
 
 
-async def build_psycopg_async_pipeline_execution_result(statement: "SQL", cursor: Any) -> "ExecutionResult":
+async def build_async_pipeline_execution_result(statement: "SQL", cursor: Any) -> "ExecutionResult":
     """Build an ExecutionResult for psycopg async pipeline execution.
 
     Args:
@@ -258,7 +357,7 @@ async def build_psycopg_async_pipeline_execution_result(statement: "SQL", cursor
 
     if statement.returns_rows():
         fetched_data = await cursor.fetchall()
-        fetched_data, column_names = collect_psycopg_rows(cast("list[Any] | None", fetched_data), cursor.description)
+        fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
         return ExecutionResult(
             cursor_result=cursor,
             rowcount_override=None,
@@ -274,7 +373,7 @@ async def build_psycopg_async_pipeline_execution_result(statement: "SQL", cursor
             last_inserted_id=None,
         )
 
-    affected_rows = normalize_psycopg_rowcount(cursor)
+    affected_rows = normalize_rowcount(cursor)
     return ExecutionResult(
         cursor_result=cursor,
         rowcount_override=affected_rows,
@@ -296,7 +395,7 @@ def _raise_postgres_error(error: Any, code: "str | None", error_class: type[SQLS
     raise error_class(msg) from error
 
 
-def raise_psycopg_exception(error: Any) -> None:
+def raise_exception(error: Any) -> None:
     """Raise SQLSpec exceptions for psycopg errors."""
     error_code = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
     if not error_code:

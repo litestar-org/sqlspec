@@ -1357,9 +1357,10 @@ class CommonDriverAttributesMixin:
             prepared_statement=prepared_statement,
         )
 
+        cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
         cached_statement = CachedStatement(
             compiled_sql=compiled_sql,
-            parameters=tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters,
+            parameters=cast("tuple[Any, ...] | dict[str, Any] | None", cached_parameters),
             expression=prepared_statement.expression,
         )
 

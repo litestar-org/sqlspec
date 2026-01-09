@@ -17,6 +17,7 @@ from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     SQLParsingError,
@@ -25,6 +26,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.typing import Empty
+from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 
@@ -34,26 +36,32 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 __all__ = (
-    "BIGQUERY_DB_KWARGS_FIELDS",
-    "DRIVER_ALIASES",
-    "DRIVER_PATH_KEYWORDS_TO_DIALECT",
-    "PARAMETER_STYLES_BY_KEYWORD",
-    "apply_adbc_driver_features",
-    "build_adbc_profile",
-    "collect_adbc_rows",
-    "detect_adbc_dialect",
+    "apply_driver_features",
+    "build_connection_config",
+    "build_profile",
+    "collect_rows",
+    "detect_dialect",
     "driver_from_uri",
     "driver_kind_from_driver_name",
     "driver_kind_from_uri",
-    "get_adbc_statement_config",
+    "driver_profile",
+    "get_statement_config",
     "handle_postgres_rollback",
+    "is_postgres_dialect",
     "normalize_driver_path",
-    "normalize_adbc_rowcount",
-    "normalize_adbc_script_rowcount",
     "normalize_postgres_empty_parameters",
-    "prepare_adbc_parameters_with_casts",
-    "raise_adbc_exception",
-    "resolve_adbc_parameter_casts",
+    "normalize_rowcount",
+    "normalize_script_rowcount",
+    "prepare_parameters_with_casts",
+    "prepare_postgres_parameters",
+    "raise_exception",
+    "resolve_dialect_from_driver_path",
+    "resolve_dialect_name",
+    "resolve_driver_connect_func",
+    "resolve_driver_name",
+    "resolve_driver_name_from_config",
+    "resolve_parameter_casts",
+    "resolve_parameter_styles",
 )
 
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
@@ -121,13 +129,8 @@ _PARAMETER_STYLES_BY_KEYWORD: "tuple[tuple[str, tuple[tuple[str, ...], str]], ..
 
 _BIGQUERY_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("project_id", "dataset_id", "token")
 
-DRIVER_ALIASES = _DRIVER_ALIASES
-DRIVER_PATH_KEYWORDS_TO_DIALECT = _DRIVER_PATH_KEYWORDS_TO_DIALECT
-PARAMETER_STYLES_BY_KEYWORD = _PARAMETER_STYLES_BY_KEYWORD
-BIGQUERY_DB_KWARGS_FIELDS = _BIGQUERY_DB_KWARGS_FIELDS
 
-
-def detect_adbc_dialect(connection: Any, logger: Any | None = None) -> str:
+def detect_dialect(connection: Any, logger: Any | None = None) -> str:
     """Detect database dialect from ADBC driver information.
 
     Args:
@@ -195,6 +198,131 @@ def driver_kind_from_uri(uri: str) -> "str | None":
     return None
 
 
+def resolve_driver_name(driver_name: str | None, uri: str | None) -> str:
+    """Resolve and normalize the driver name."""
+    if isinstance(driver_name, str):
+        lowered_driver = driver_name.lower()
+        alias = _DRIVER_ALIASES.get(lowered_driver)
+        if alias is not None:
+            return alias
+        return normalize_driver_path(driver_name)
+
+    if isinstance(uri, str):
+        resolved = driver_from_uri(uri)
+        if resolved is not None:
+            return resolved
+
+    return "adbc_driver_sqlite.dbapi.connect"
+
+
+def resolve_driver_name_from_config(connection_config: "Mapping[str, Any]") -> str:
+    """Resolve and normalize the driver name from a connection config mapping."""
+    return resolve_driver_name(connection_config.get("driver_name"), connection_config.get("uri"))
+
+
+def resolve_driver_connect_func(driver_name: str | None, uri: str | None) -> "Callable[..., Any]":
+    """Resolve the driver connect function.
+
+    Raises:
+        ImproperConfigurationError: If driver cannot be loaded.
+    """
+    driver_path = resolve_driver_name(driver_name, uri)
+    try:
+        connect_func = import_string(driver_path)
+    except ImportError as exc:
+        msg = f"Failed to import connect function from '{driver_path}'. Is the driver installed? Error: {exc}"
+        raise ImproperConfigurationError(msg) from exc
+
+    if not callable(connect_func):
+        msg = f"The path '{driver_path}' did not resolve to a callable function."
+        raise ImproperConfigurationError(msg)
+
+    return cast("Callable[..., Any]", connect_func)
+
+
+def resolve_dialect_from_driver_path(driver_path: str) -> str:
+    """Get the SQL dialect type based on the driver path."""
+    for keyword, dialect in _DRIVER_PATH_KEYWORDS_TO_DIALECT:
+        if keyword in driver_path:
+            return dialect
+    return "sqlite"
+
+
+def resolve_parameter_styles(driver_path: str | None, logger: Any | None = None) -> "tuple[tuple[str, ...], str]":
+    """Resolve supported and default parameter styles from a driver path.
+
+    Args:
+        driver_path: Import path for the ADBC driver connect function.
+        logger: Optional logger for diagnostics.
+
+    Returns:
+        Tuple of (supported_parameter_styles, default_parameter_style)
+    """
+    if isinstance(driver_path, str):
+        lowered = driver_path.lower()
+        for keyword, styles in _PARAMETER_STYLES_BY_KEYWORD:
+            if keyword in lowered:
+                return styles
+    if logger is not None:
+        logger.debug("Error resolving parameter styles, using defaults")
+    return (("qmark",), "qmark")
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build a normalized connection configuration dictionary.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Normalized connection configuration dictionary.
+    """
+    config = dict(connection_config)
+
+    driver_name = config.get("driver_name")
+    uri = config.get("uri")
+    driver_kind: str | None = None
+    if isinstance(driver_name, str):
+        driver_kind = driver_kind_from_driver_name(driver_name)
+    if driver_kind is None and isinstance(uri, str):
+        driver_kind = driver_kind_from_uri(uri)
+
+    if isinstance(uri, str) and driver_kind == "sqlite" and uri.startswith("sqlite://"):
+        config["uri"] = uri[9:]
+    if isinstance(uri, str) and driver_kind == "duckdb" and uri.startswith("duckdb://"):
+        config["path"] = uri[9:]
+        config.pop("uri", None)
+
+    if isinstance(driver_name, str) and driver_kind == "bigquery":
+        db_kwargs = config.get("db_kwargs")
+        db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+        for param in _BIGQUERY_DB_KWARGS_FIELDS:
+            if param in config:
+                db_kwargs_dict[param] = config.pop(param)
+        if db_kwargs_dict:
+            config["db_kwargs"] = db_kwargs_dict
+    elif isinstance(driver_name, str) and "db_kwargs" in config and driver_kind != "bigquery":
+        db_kwargs = config.pop("db_kwargs")
+        if isinstance(db_kwargs, dict):
+            config.update(db_kwargs)
+
+    config.pop("driver_name", None)
+
+    return config
+
+
+def resolve_dialect_name(dialect: Any) -> str:
+    """Return the normalized dialect name string."""
+    if dialect is None:
+        return ""
+    return str(dialect)
+
+
+def is_postgres_dialect(dialect_name: str) -> bool:
+    """Return True when the dialect indicates PostgreSQL."""
+    return dialect_name in {"postgres", "postgresql"}
+
+
 def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = None) -> None:
     """Execute rollback for PostgreSQL after transaction failure.
 
@@ -228,12 +356,27 @@ def normalize_postgres_empty_parameters(dialect: str, parameters: Any) -> Any:
     return parameters
 
 
+def prepare_postgres_parameters(
+    parameters: Any,
+    parameter_casts: "dict[int, str]",
+    statement_config: "StatementConfig",
+    *,
+    dialect: str,
+    json_serializer: "Callable[[Any], str]",
+) -> Any:
+    """Prepare Postgres parameters with cast-aware coercion."""
+    postgres_compatible = normalize_postgres_empty_parameters(dialect, parameters)
+    return prepare_parameters_with_casts(
+        postgres_compatible, parameter_casts, statement_config, dialect=dialect, json_serializer=json_serializer
+    )
+
+
 def _raise_adbc_error(error: Any, error_class: type[SQLSpecError], description: str) -> None:
     msg = f"ADBC {description}: {error}"
     raise error_class(msg) from error
 
 
-def raise_adbc_exception(error: Any) -> None:
+def raise_exception(error: Any) -> None:
     """Raise SQLSpec exceptions for ADBC errors."""
     sqlstate = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
 
@@ -310,7 +453,7 @@ def _get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     }
 
 
-def build_adbc_profile() -> "DriverParameterProfile":
+def build_profile() -> "DriverParameterProfile":
     """Create the ADBC driver parameter profile."""
 
     return DriverParameterProfile(
@@ -344,7 +487,10 @@ def build_adbc_profile() -> "DriverParameterProfile":
     )
 
 
-def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
+driver_profile = build_profile()
+
+
+def get_statement_config(detected_dialect: str) -> StatementConfig:
     """Create statement configuration for the specified dialect."""
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
         detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
@@ -353,7 +499,7 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
     type_map = _get_type_coercion_map(detected_dialect)
 
     sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
-    profile = build_adbc_profile()
+    profile = driver_profile
 
     parameter_overrides: dict[str, Any] = {
         "default_parameter_style": default_style,
@@ -416,7 +562,7 @@ def _apply_adbc_json_serializer(
     return statement_config.replace(parameter_config=updated_parameter_config.replace(type_coercion_map=updated_map))
 
 
-def apply_adbc_driver_features(
+def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply ADBC driver feature defaults to the statement config.
@@ -444,7 +590,7 @@ def apply_adbc_driver_features(
     return statement_config, processed_features
 
 
-def collect_adbc_rows(
+def collect_rows(
     fetched_data: "list[Any] | None", description: "list[Any] | None"
 ) -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect ADBC rows into dictionaries with column names.
@@ -467,7 +613,7 @@ def collect_adbc_rows(
     return cast("list[dict[str, Any]]", fetched_data), column_names
 
 
-def normalize_adbc_rowcount(cursor: Any) -> int:
+def normalize_rowcount(cursor: Any) -> int:
     """Normalize rowcount from an ADBC cursor.
 
     Args:
@@ -484,7 +630,7 @@ def normalize_adbc_rowcount(cursor: Any) -> int:
     return -1
 
 
-def normalize_adbc_script_rowcount(previous: int, cursor: Any) -> int:
+def normalize_script_rowcount(previous: int, cursor: Any) -> int:
     """Normalize script rowcount using the latest cursor value when present.
 
     Args:
@@ -494,11 +640,11 @@ def normalize_adbc_script_rowcount(previous: int, cursor: Any) -> int:
     Returns:
         Updated rowcount value.
     """
-    rowcount = normalize_adbc_rowcount(cursor)
+    rowcount = normalize_rowcount(cursor)
     return rowcount if rowcount != -1 else previous
 
 
-def resolve_adbc_parameter_casts(statement: "SQL") -> "dict[int, str]":
+def resolve_parameter_casts(statement: "SQL") -> "dict[int, str]":
     """Return parameter cast mapping from a compiled SQL statement."""
     processed_state = statement.get_processed_state()
     if processed_state is not Empty:
@@ -506,7 +652,7 @@ def resolve_adbc_parameter_casts(statement: "SQL") -> "dict[int, str]":
     return {}
 
 
-def prepare_adbc_parameters_with_casts(
+def prepare_parameters_with_casts(
     parameters: Any,
     parameter_casts: "dict[int, str]",
     statement_config: "StatementConfig",

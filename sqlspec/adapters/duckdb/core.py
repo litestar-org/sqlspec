@@ -20,18 +20,23 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
+from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
 
 __all__ = (
-    "apply_duckdb_driver_features",
-    "build_duckdb_profile",
-    "build_duckdb_statement_config",
-    "collect_duckdb_rows",
-    "duckdb_statement_config",
-    "raise_duckdb_exception",
+    "apply_driver_features",
+    "build_connection_config",
+    "build_profile",
+    "build_statement_config",
+    "collect_rows",
+    "default_statement_config",
+    "driver_profile",
+    "normalize_execute_parameters",
+    "raise_exception",
+    "resolve_rowcount",
 )
 
 
@@ -58,7 +63,7 @@ def _coerce_duckdb_rows(fetched_data: "list[Any]", column_names: "list[str]") ->
     return fetched_data
 
 
-def collect_duckdb_rows(
+def collect_rows(
     fetched_data: "list[Any] | None", description: "list[Any] | None"
 ) -> "tuple[list[dict[str, Any]] | list[Any], list[str]]":
     """Collect DuckDB rows and column names.
@@ -78,7 +83,59 @@ def collect_duckdb_rows(
     return _coerce_duckdb_rows(fetched_data, column_names), column_names
 
 
-def build_duckdb_profile() -> "DriverParameterProfile":
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build connection configuration for pool creation.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Dictionary with connection parameters.
+    """
+    excluded_keys = {
+        "pool_min_size",
+        "pool_max_size",
+        "pool_timeout",
+        "pool_recycle_seconds",
+        "health_check_interval",
+        "extra",
+    }
+    return {key: value for key, value in connection_config.items() if value is not None and key not in excluded_keys}
+
+
+def normalize_execute_parameters(parameters: Any) -> Any:
+    """Normalize parameters for DuckDB execute calls.
+
+    Args:
+        parameters: Prepared parameters payload.
+
+    Returns:
+        Normalized parameters payload.
+    """
+    return parameters or ()
+
+
+def resolve_rowcount(cursor: Any) -> int:
+    """Resolve rowcount from DuckDB cursor results.
+
+    Args:
+        cursor: DuckDB cursor object.
+
+    Returns:
+        Rowcount value derived from cursor output.
+    """
+    try:
+        result = cursor.fetchone()
+        if result and isinstance(result, tuple) and len(result) == 1:
+            return int(result[0])
+    except Exception:
+        if has_rowcount(cursor):
+            return max(cursor.rowcount, 0)
+        return 0
+    return 0
+
+
+def build_profile() -> "DriverParameterProfile":
     """Create the DuckDB driver parameter profile."""
 
     return DriverParameterProfile(
@@ -103,7 +160,10 @@ def build_duckdb_profile() -> "DriverParameterProfile":
     )
 
 
-def apply_duckdb_driver_features(
+driver_profile = build_profile()
+
+
+def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "StatementConfig":
     """Apply DuckDB-specific driver features to statement configuration."""
@@ -134,7 +194,7 @@ def _raise_duckdb_error(error: Any, error_class: type[SQLSpecError], description
     raise error_class(msg) from error
 
 
-def raise_duckdb_exception(exc_type: Any, error: Any) -> None:
+def raise_exception(exc_type: Any, error: Any) -> None:
     """Raise SQLSpec exceptions for DuckDB errors."""
     error_msg = str(error).lower()
     exc_name = exc_type.__name__.lower()
@@ -164,13 +224,13 @@ def raise_duckdb_exception(exc_type: Any, error: Any) -> None:
         _raise_duckdb_error(error, SQLSpecError, "database error")
 
 
-def build_duckdb_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
+def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the DuckDB statement configuration with optional JSON serializer."""
     serializer = json_serializer or to_json
-    profile = build_duckdb_profile()
+    profile = driver_profile
     return build_statement_config_from_profile(
         profile, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
     )
 
 
-duckdb_statement_config = build_duckdb_statement_config()
+default_statement_config = build_statement_config()

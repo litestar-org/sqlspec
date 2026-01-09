@@ -507,6 +507,7 @@ def test_mixed_parameters_order_sensitivity() -> None:
     assert converted_sql == "SELECT $1::text as first, $2::text as mid, $3::int as last"
 
     assert converted_params == ("A", "B", "C")
+    assert isinstance(converted_params, tuple)
     assert len(converted_params) == 3
 
 
@@ -522,6 +523,7 @@ def test_mixed_parameters_with_repeated_numeric() -> None:
 
     assert converted_sql == "SELECT $1::text as name, $2::int as age, $2::int as age2"
     assert converted_params == ("User", 25)
+    assert isinstance(converted_params, tuple)
     assert len(converted_params) == 2
 
 
@@ -1115,6 +1117,7 @@ def test_missing_named_parameters_can_fallback_when_disabled(converter: Paramete
         sql, parameters, ParameterStyle.QMARK, strict_named_parameters=False
     )
 
+    assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
     assert next(iter(converted_params)) == "token"
 

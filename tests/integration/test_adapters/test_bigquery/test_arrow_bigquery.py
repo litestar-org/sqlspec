@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from sqlspec._typing import PYARROW_INSTALLED
-from sqlspec.adapters.bigquery.core import bigquery_storage_api_available
+from sqlspec.adapters.bigquery.core import storage_api_available
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery import BigQueryConfig
@@ -175,7 +175,7 @@ def test_storage_api_detection(bigquery_config: "BigQueryConfig") -> None:
 
     try:
         with bigquery_config.provide_session() as session:
-            has_storage_api = bigquery_storage_api_available()
+            has_storage_api = storage_api_available()
 
             if has_storage_api:
                 result = session.select_to_arrow("SELECT 1 AS id, 'test' AS value")

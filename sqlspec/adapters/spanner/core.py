@@ -6,7 +6,6 @@ from google.api_core import exceptions as api_exceptions
 
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
-from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     NotFoundError,
@@ -15,6 +14,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
+from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -23,20 +23,22 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, ArrowTable
 
 __all__ = (
-    "apply_spanner_driver_features",
-    "build_spanner_profile",
-    "coerce_spanner_params",
-    "collect_spanner_rows",
-    "create_spanner_arrow_data",
-    "infer_spanner_param_types_for_params",
-    "raise_spanner_exception",
-    "spanner_statement_config",
-    "supports_spanner_batch_update",
-    "supports_spanner_write",
+    "apply_driver_features",
+    "build_profile",
+    "build_statement_config",
+    "coerce_params",
+    "collect_rows",
+    "create_arrow_data",
+    "default_statement_config",
+    "driver_profile",
+    "infer_param_types",
+    "raise_exception",
+    "supports_batch_update",
+    "supports_write",
 )
 
 
-def build_spanner_profile() -> "DriverParameterProfile":
+def build_profile() -> "DriverParameterProfile":
     """Create the Spanner driver parameter profile."""
 
     return DriverParameterProfile(
@@ -57,16 +59,19 @@ def build_spanner_profile() -> "DriverParameterProfile":
     )
 
 
-def _build_spanner_statement_config() -> StatementConfig:
+driver_profile = build_profile()
+
+
+def build_statement_config() -> StatementConfig:
     """Construct the Spanner statement configuration."""
-    profile = build_spanner_profile()
+    profile = driver_profile
     return build_statement_config_from_profile(profile, statement_overrides={"dialect": "spanner"})
 
 
-spanner_statement_config = _build_spanner_statement_config()
+default_statement_config = build_statement_config()
 
 
-def apply_spanner_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
+def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
     """Apply Spanner driver feature defaults."""
     processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
     processed_features.setdefault("enable_uuid_conversion", True)
@@ -75,7 +80,7 @@ def apply_spanner_driver_features(driver_features: "Mapping[str, Any] | None") -
     return processed_features
 
 
-def supports_spanner_write(cursor: Any) -> bool:
+def supports_write(cursor: Any) -> bool:
     """Return True when the cursor supports DML execution."""
     try:
         _ = cursor.execute_update
@@ -84,7 +89,7 @@ def supports_spanner_write(cursor: Any) -> bool:
     return True
 
 
-def supports_spanner_batch_update(cursor: Any) -> bool:
+def supports_batch_update(cursor: Any) -> bool:
     """Return True when the cursor supports batch updates."""
     try:
         _ = cursor.batch_update
@@ -93,14 +98,14 @@ def supports_spanner_batch_update(cursor: Any) -> bool:
     return True
 
 
-def infer_spanner_param_types_for_params(params: "dict[str, Any] | None") -> "dict[str, Any]":
+def infer_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
     """Infer Spanner param_types from Python values."""
     if isinstance(params, (list, tuple)):
         return {}
     return infer_spanner_param_types(params)
 
 
-def coerce_spanner_params(
+def coerce_params(
     params: "dict[str, Any] | None", *, json_serializer: "Callable[[Any], str] | None" = None
 ) -> "dict[str, Any] | None":
     """Coerce Python types to Spanner-compatible formats."""
@@ -109,9 +114,7 @@ def coerce_spanner_params(
     return coerce_params_for_spanner(params, json_serializer=json_serializer)
 
 
-def collect_spanner_rows(
-    rows: "list[Any]", fields: "list[Any]", converter: Any
-) -> "tuple[list[dict[str, Any]], list[str]]":
+def collect_rows(rows: "list[Any]", fields: "list[Any]", converter: Any) -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect Spanner rows into dictionaries.
 
     Args:
@@ -132,7 +135,7 @@ def collect_spanner_rows(
     return data, column_names
 
 
-def create_spanner_arrow_data(
+def create_arrow_data(
     data: "list[dict[str, Any]]", return_format: "ArrowReturnFormat"
 ) -> "ArrowTable | ArrowRecordBatch | ArrowRecordBatchReader | list[ArrowRecordBatch]":
     """Create Arrow data from Spanner row dictionaries.
@@ -147,7 +150,7 @@ def create_spanner_arrow_data(
     return convert_dict_to_arrow(data, return_format=return_format)
 
 
-def raise_spanner_exception(error: Any) -> None:
+def raise_exception(error: Any) -> None:
     """Raise SQLSpec exceptions for Spanner errors."""
     if isinstance(error, api_exceptions.AlreadyExists):
         msg = f"Spanner resource already exists: {error}"

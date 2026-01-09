@@ -11,6 +11,7 @@ import pytest
 
 from sqlspec import ObservabilityConfig, SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite.core import build_connection_config
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQLResult
 
@@ -142,7 +143,7 @@ async def test_config_with_connection_config(tmp_path: Path) -> None:
     config = AiosqliteConfig(connection_config=connection_config)
 
     try:
-        connection_config = config._get_connection_config_dict()
+        connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == str(db_path)
         assert connection_config["timeout"] == 10.0
         assert connection_config["isolation_level"] is None
@@ -170,7 +171,7 @@ async def test_config_with_kwargs_override(tmp_path: Path) -> None:
     config = AiosqliteConfig(connection_config=test_connection_config)
 
     try:
-        connection_config = config._get_connection_config_dict()
+        connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == str(db_path)
         assert connection_config["timeout"] == 15.0
 
@@ -227,7 +228,7 @@ async def test_config_memory_database_conversion() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
     try:
-        connection_config = config._get_connection_config_dict()
+        connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == "file::memory:?cache=shared"
         assert connection_config.get("uri") is True
 
@@ -246,7 +247,7 @@ async def test_config_default_database() -> None:
     config = AiosqliteConfig()
 
     try:
-        connection_config = config._get_connection_config_dict()
+        connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == "file::memory:?cache=shared"
         assert connection_config.get("uri") is True
 
@@ -268,7 +269,7 @@ async def test_config_parameter_preservation(tmp_path: Path) -> None:
     config = AiosqliteConfig(connection_config=connection_config)
 
     try:
-        connection_config = config._get_connection_config_dict()
+        connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == str(db_path)
         assert connection_config["isolation_level"] is None
         assert connection_config["cached_statements"] == 100

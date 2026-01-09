@@ -7,11 +7,11 @@ from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import SpannerConnection
-from sqlspec.adapters.spanner.core import apply_spanner_driver_features
-from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver, spanner_statement_config
+from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
 from sqlspec.utils.type_guards import supports_close
 
@@ -188,17 +188,16 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self.connection_config.setdefault("max_sessions", 10)
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
-        normalized_driver_features = dict(driver_features) if driver_features else None
-        features = apply_spanner_driver_features(normalized_driver_features)
+        driver_features = apply_driver_features(driver_features)
 
-        base_statement_config = statement_config or spanner_statement_config
+        statement_config = statement_config or default_statement_config
 
         super().__init__(
             connection_config=self.connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -308,7 +307,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return SpannerSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or spanner_statement_config,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

@@ -6,8 +6,7 @@ import pytest
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import AsyncEventChannel, EventRuntimeHints, SyncEventChannel
 from sqlspec.extensions.events._queue import SyncTableEventQueue
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 

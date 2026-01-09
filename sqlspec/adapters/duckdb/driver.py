@@ -7,27 +7,21 @@ from uuid import uuid4
 import duckdb
 
 from sqlspec.adapters.duckdb.core import (
-    apply_duckdb_driver_features,
-    build_duckdb_profile,
-    build_duckdb_statement_config,
-    collect_duckdb_rows,
-    duckdb_statement_config,
-    raise_duckdb_exception,
+    apply_driver_features,
+    collect_rows,
+    default_statement_config,
+    driver_profile,
+    normalize_execute_parameters,
+    raise_exception,
+    resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
-from sqlspec.core import (
-    SQL,
-    StatementConfig,
-    build_arrow_result_from_table,
-    get_cache_config,
-    register_driver_profile,
-)
+from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
@@ -39,14 +33,7 @@ if TYPE_CHECKING:
 
 from sqlspec.adapters.duckdb._typing import DuckDBSessionContext
 
-__all__ = (
-    "DuckDBCursor",
-    "DuckDBDriver",
-    "DuckDBExceptionHandler",
-    "DuckDBSessionContext",
-    "build_duckdb_statement_config",
-    "duckdb_statement_config",
-)
+__all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
 logger = get_logger("adapters.duckdb")
 
@@ -95,7 +82,7 @@ class DuckDBExceptionHandler:
         if exc_type is None:
             return False
         try:
-            raise_duckdb_exception(exc_type, exc_val)
+            raise_exception(exc_type, exc_val)
         except Exception as mapped:
             self.pending_exception = mapped
             return True
@@ -123,16 +110,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            updated_config = duckdb_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="duckdb",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
-            statement_config = updated_config
 
-        statement_config = apply_duckdb_driver_features(statement_config, driver_features)
+        statement_config = apply_driver_features(statement_config, driver_features)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: DuckDBDataDictionary | None = None
@@ -176,7 +158,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         last_result = None
 
         for stmt in statements:
-            last_result = cursor.execute(stmt, prepared_parameters or ())
+            last_result = cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
             successful_count += 1
 
         return self.create_execution_result(
@@ -199,16 +181,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         if prepared_parameters:
-            cursor.executemany(sql, prepared_parameters)
+            parameter_sets = cast("list[Any]", prepared_parameters)
+            cursor.executemany(sql, parameter_sets)
 
-            if statement.is_modifying_operation():
-                row_count = len(prepared_parameters)
-            else:
-                try:
-                    result = cursor.fetchone()
-                    row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
-                except Exception:
-                    row_count = max(cursor.rowcount, 0) if has_rowcount(cursor) else 0
+            row_count = len(parameter_sets) if statement.is_modifying_operation() else resolve_rowcount(cursor)
         else:
             row_count = 0
 
@@ -228,13 +204,13 @@ class DuckDBDriver(SyncDriverAdapterBase):
             ExecutionResult with execution metadata
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.execute(sql, prepared_parameters or ())
+        cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
             fetched_data = cursor.fetchall()
-            dict_data, column_names = collect_duckdb_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            dict_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
 
             return self.create_execution_result(
                 cursor,
@@ -244,11 +220,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        try:
-            result = cursor.fetchone()
-            row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
-        except Exception:
-            row_count = max(cursor.rowcount, 0) if has_rowcount(cursor) else 0
+        row_count = resolve_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
@@ -432,9 +404,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
 
-_DUCKDB_PROFILE = build_duckdb_profile()
-
-register_driver_profile("duckdb", _DUCKDB_PROFILE)
+register_driver_profile("duckdb", driver_profile)
 
 
 MODIFYING_OPERATIONS: "tuple[str, ...]" = ("INSERT", "UPDATE", "DELETE")

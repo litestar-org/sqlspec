@@ -9,12 +9,18 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.aiosqlite import AiosqliteDriver, aiosqlite_statement_config
-from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver, asyncmy_statement_config
-from sqlspec.adapters.asyncpg import AsyncpgConnection, AsyncpgDriver, asyncpg_statement_config
-from sqlspec.adapters.duckdb import DuckDBDriver, duckdb_statement_config
-from sqlspec.adapters.psqlpy import PsqlpyConnection, PsqlpyDriver, psqlpy_statement_config
-from sqlspec.adapters.sqlite import SqliteDriver, sqlite_statement_config
+from sqlspec.adapters.aiosqlite import AiosqliteDriver
+from sqlspec.adapters.aiosqlite import default_statement_config as aiosqlite_statement_config
+from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
+from sqlspec.adapters.asyncmy import default_statement_config as asyncmy_statement_config
+from sqlspec.adapters.asyncpg import AsyncpgConnection, AsyncpgDriver
+from sqlspec.adapters.asyncpg import default_statement_config as asyncpg_statement_config
+from sqlspec.adapters.duckdb import DuckDBDriver
+from sqlspec.adapters.duckdb import default_statement_config as duckdb_statement_config
+from sqlspec.adapters.psqlpy import PsqlpyConnection, PsqlpyDriver
+from sqlspec.adapters.psqlpy import default_statement_config as psqlpy_statement_config
+from sqlspec.adapters.sqlite import SqliteDriver
+from sqlspec.adapters.sqlite import default_statement_config as sqlite_statement_config
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
 from sqlspec.storage.pipeline import StorageDestination
 from sqlspec.storage.registry import storage_registry
@@ -95,7 +101,7 @@ async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> Non
 
     driver = AsyncpgDriver(
         connection=cast(AsyncpgConnection, DummyAsyncpgConnection()),
-        statement_config=asyncpg_statement_config,
+        statement_config=aiosqlite_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
     monkeypatch.setattr(AsyncpgDriver, "_read_arrow_from_storage_async", _fake_read)
@@ -119,7 +125,7 @@ def test_duckdb_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
 
     driver = DuckDBDriver(
         connection=connection,
-        statement_config=duckdb_statement_config,
+        statement_config=asyncmy_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
 
@@ -139,7 +145,7 @@ async def test_psqlpy_load_from_arrow_overwrite() -> None:
     dummy_connection = DummyPsqlpyConnection()
     driver = PsqlpyDriver(
         connection=cast(PsqlpyConnection, dummy_connection),
-        statement_config=psqlpy_statement_config,
+        statement_config=asyncpg_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
 
@@ -163,7 +169,7 @@ async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.Mon
     dummy_connection = DummyPsqlpyConnection()
     driver = PsqlpyDriver(
         connection=cast(PsqlpyConnection, dummy_connection),
-        statement_config=psqlpy_statement_config,
+        statement_config=duckdb_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
 
@@ -190,7 +196,7 @@ async def test_aiosqlite_load_from_arrow_overwrite() -> None:
 
         driver = AiosqliteDriver(
             connection=connection,
-            statement_config=aiosqlite_statement_config,
+            statement_config=psqlpy_statement_config,
             driver_features={"storage_capabilities": CAPABILITIES},
         )
         arrow_table = pa.table({"id": [1, 2], "name": ["alpha", "beta"]})
@@ -215,7 +221,7 @@ async def test_aiosqlite_load_from_storage_includes_source(monkeypatch: pytest.M
 
         driver = AiosqliteDriver(
             connection=connection,
-            statement_config=aiosqlite_statement_config,
+            statement_config=sqlite_statement_config,
             driver_features={"storage_capabilities": CAPABILITIES},
         )
         arrow_table = pa.table({"id": [5], "label": ["gamma"]})
@@ -290,7 +296,7 @@ async def test_asyncmy_load_from_arrow_overwrite() -> None:
     connection = DummyAsyncmyConnection()
     driver = AsyncmyDriver(
         connection=cast(AsyncmyConnection, connection),
-        statement_config=asyncmy_statement_config,
+        statement_config=psqlpy_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
     arrow_table = pa.table({"id": [3], "score": [9.5]})
@@ -307,7 +313,7 @@ async def test_asyncmy_load_from_storage_merges_source(monkeypatch: pytest.Monke
     connection = DummyAsyncmyConnection()
     driver = AsyncmyDriver(
         connection=cast(AsyncmyConnection, connection),
-        statement_config=asyncmy_statement_config,
+        statement_config=sqlite_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
     arrow_table = pa.table({"id": [11], "score": [8.2]})

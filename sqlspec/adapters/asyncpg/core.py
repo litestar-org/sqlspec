@@ -3,7 +3,7 @@
 import datetime
 import importlib
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 import asyncpg
 
@@ -29,25 +29,41 @@ from sqlspec.utils.type_guards import has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import ParameterStyleConfig
+    from sqlspec.core import SQL, ParameterStyleConfig, StackOperation
 
 __all__ = (
-    "apply_asyncpg_driver_features",
-    "asyncpg_statement_config",
-    "build_asyncpg_profile",
-    "build_asyncpg_statement_config",
-    "collect_asyncpg_rows",
-    "configure_asyncpg_parameter_serializers",
-    "parse_asyncpg_status",
-    "raise_asyncpg_exception",
-    "register_asyncpg_json_codecs",
-    "register_asyncpg_pgvector_support",
+    "NormalizedStackOperation",
+    "apply_driver_features",
+    "build_pool_config",
+    "build_profile",
+    "build_statement_config",
+    "collect_rows",
+    "configure_parameter_serializers",
+    "default_statement_config",
+    "driver_profile",
+    "invoke_prepared_statement",
+    "parse_status",
+    "raise_exception",
+    "register_json_codecs",
+    "register_pgvector_support",
 )
 
 ASYNC_PG_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 EXPECTED_REGEX_GROUPS = 3
 
 logger = get_logger("adapters.asyncpg.core")
+
+
+class NormalizedStackOperation(NamedTuple):
+    """Normalized execution metadata used for prepared stack operations."""
+
+    operation: "StackOperation"
+    statement: "SQL"
+    sql: str
+    parameters: "tuple[Any, ...] | dict[str, Any] | None"
+
+
+PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
 
 
 def _convert_datetime_param(value: Any) -> Any:
@@ -84,7 +100,19 @@ def _build_asyncpg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]"
     }
 
 
-def build_asyncpg_profile() -> "DriverParameterProfile":
+def build_pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build pool configuration with non-null values only.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Dictionary with pool parameters.
+    """
+    return {key: value for key, value in connection_config.items() if value is not None}
+
+
+def build_profile() -> "DriverParameterProfile":
     """Create the AsyncPG driver parameter profile."""
 
     return DriverParameterProfile(
@@ -104,7 +132,10 @@ def build_asyncpg_profile() -> "DriverParameterProfile":
     )
 
 
-def configure_asyncpg_parameter_serializers(
+driver_profile = build_profile()
+
+
+def configure_parameter_serializers(
     parameter_config: "ParameterStyleConfig",
     serializer: "Callable[[Any], str]",
     *,
@@ -116,7 +147,38 @@ def configure_asyncpg_parameter_serializers(
     return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
 
 
-def build_asyncpg_statement_config(
+async def invoke_prepared_statement(
+    prepared: Any, parameters: "tuple[Any, ...] | dict[str, Any] | list[Any] | None", *, fetch: bool
+) -> Any:
+    """Invoke an AsyncPG prepared statement with optional parameters.
+
+    Args:
+        prepared: AsyncPG prepared statement object.
+        parameters: Prepared parameters payload.
+        fetch: Whether to fetch rows.
+
+    Returns:
+        Query result or status message.
+    """
+    if parameters is None:
+        if fetch:
+            return await prepared.fetch()
+        await prepared.fetch()
+        return prepared.get_statusmsg()
+
+    if isinstance(parameters, dict):
+        if fetch:
+            return await prepared.fetch(**parameters)
+        await prepared.fetch(**parameters)
+        return prepared.get_statusmsg()
+
+    if fetch:
+        return await prepared.fetch(*parameters)
+    await prepared.fetch(*parameters)
+    return prepared.get_statusmsg()
+
+
+def build_statement_config(
     *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> "StatementConfig":
     """Construct the AsyncPG statement configuration with optional JSON codecs."""
@@ -124,7 +186,7 @@ def build_asyncpg_statement_config(
     effective_serializer = json_serializer or to_json
     effective_deserializer = json_deserializer or from_json
 
-    profile = build_asyncpg_profile()
+    profile = driver_profile
     base_config = build_statement_config_from_profile(
         profile,
         statement_overrides={"dialect": "postgres"},
@@ -132,17 +194,17 @@ def build_asyncpg_statement_config(
         json_deserializer=effective_deserializer,
     )
 
-    parameter_config = configure_asyncpg_parameter_serializers(
+    parameter_config = configure_parameter_serializers(
         base_config.parameter_config, effective_serializer, deserializer=effective_deserializer
     )
 
     return base_config.replace(parameter_config=parameter_config)
 
 
-asyncpg_statement_config = build_asyncpg_statement_config()
+default_statement_config = build_statement_config()
 
 
-async def register_asyncpg_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
+async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
     """Register JSON type codecs on asyncpg connection."""
     try:
         await connection.set_type_codec("json", encoder=encoder, decoder=decoder, schema="pg_catalog")
@@ -152,7 +214,7 @@ async def register_asyncpg_json_codecs(connection: Any, encoder: Any, decoder: A
         logger.exception("Failed to register JSON type codecs")
 
 
-async def register_asyncpg_pgvector_support(connection: Any) -> None:
+async def register_pgvector_support(connection: Any) -> None:
     """Register pgvector extension support on asyncpg connection."""
     if not PGVECTOR_INSTALLED:
         logger.debug("pgvector not installed - skipping vector type support")
@@ -166,7 +228,7 @@ async def register_asyncpg_pgvector_support(connection: Any) -> None:
         logger.exception("Failed to register pgvector support")
 
 
-def apply_asyncpg_driver_features(
+def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply AsyncPG driver feature defaults to statement config."""
@@ -179,7 +241,7 @@ def apply_asyncpg_driver_features(
     processed_features.setdefault("enable_cloud_sql", False)
     processed_features.setdefault("enable_alloydb", False)
 
-    parameter_config = configure_asyncpg_parameter_serializers(
+    parameter_config = configure_parameter_serializers(
         statement_config.parameter_config, serializer, deserializer=deserializer
     )
     statement_config = statement_config.replace(parameter_config=parameter_config)
@@ -187,7 +249,7 @@ def apply_asyncpg_driver_features(
     return statement_config, processed_features
 
 
-def parse_asyncpg_status(status: Any) -> int:
+def parse_status(status: Any) -> int:
     """Parse AsyncPG status string to extract row count.
 
     AsyncPG returns status strings like "INSERT 0 1", "UPDATE 3", "DELETE 2"
@@ -219,7 +281,7 @@ def _raise_postgres_error(error: Any, code: "str | None", error_class: type[SQLS
     raise error_class(msg) from error
 
 
-def raise_asyncpg_exception(error: Any) -> None:
+def raise_exception(error: Any) -> None:
     """Raise SQLSpec exceptions for asyncpg errors."""
     if isinstance(error, asyncpg.exceptions.UniqueViolationError):
         _raise_postgres_error(error, "23505", UniqueViolationError, "unique constraint violation")
@@ -266,7 +328,7 @@ def raise_asyncpg_exception(error: Any) -> None:
         _raise_postgres_error(error, error_code, SQLSpecError, "database error")
 
 
-def collect_asyncpg_rows(records: "list[Any] | None") -> "tuple[list[dict[str, Any]], list[str]]":
+def collect_rows(records: "list[Any] | None") -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect AsyncPG records into dictionaries and column names.
 
     Args:

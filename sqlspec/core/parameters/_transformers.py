@@ -2,7 +2,7 @@
 
 import bisect
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from sqlglot import exp as _exp
 
@@ -114,10 +114,10 @@ class _PlaceholderLiteralTransformer:
         candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
         for candidate in candidate_names:
             if candidate in payload:
-                return get_value_attribute(payload[candidate])
+                return cast("object", get_value_attribute(payload[candidate]))
         normalized = param_name.lstrip("@:$")
         if normalized in payload:
-            return get_value_attribute(payload[normalized])
+            return cast("object", get_value_attribute(payload[normalized]))
         return None
 
     def __call__(self, node: Any) -> Any:
