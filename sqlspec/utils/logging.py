@@ -10,7 +10,6 @@ from logging import LogRecord
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec._serialization import encode_json
-from sqlspec.observability._common import get_trace_context
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.correlation import correlation_id_var as _correlation_id_var
 
@@ -35,6 +34,19 @@ _BASE_RECORD_KEYS = set(
 _BASE_RECORD_KEYS.update({"message", "asctime"})
 
 correlation_id_var: "ContextVar[str | None]" = _correlation_id_var
+
+
+def _get_trace_context() -> "tuple[str | None, str | None]":
+    """Resolve trace context lazily to avoid import cycles.
+
+    Returns:
+        Tuple of (trace_id, span_id) or (None, None) if unavailable.
+    """
+    try:
+        from sqlspec.observability._common import get_trace_context
+    except Exception:
+        return (None, None)
+    return get_trace_context()
 
 
 def set_correlation_id(correlation_id: "str | None") -> None:
@@ -84,7 +96,7 @@ class StructuredFormatter(logging.Formatter):
         trace_id = cast("str | None", record_dict.get("trace_id"))
         span_id = cast("str | None", record_dict.get("span_id"))
         if trace_id is None or span_id is None:
-            trace_id, span_id = get_trace_context()
+            trace_id, span_id = _get_trace_context()
         if trace_id:
             log_entry["trace_id"] = trace_id
         if span_id:
