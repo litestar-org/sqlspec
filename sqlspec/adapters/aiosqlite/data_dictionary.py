@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.aiosqlite.core import format_identifier
 from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.driver import (
@@ -22,6 +24,7 @@ logger = get_logger("adapters.aiosqlite.data_dictionary")
 __all__ = ("AiosqliteDataDictionary",)
 
 
+@mypyc_attr(native_class=False)
 class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["AiosqliteDriver"]):
     """SQLite-specific async data dictionary."""
 

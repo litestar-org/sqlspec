@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sqlite.core import format_identifier
 from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.driver import (
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.driver import SqliteDriver
 
 
+@mypyc_attr(native_class=False)
 class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver"]):
     """SQLite-specific sync data dictionary."""
 

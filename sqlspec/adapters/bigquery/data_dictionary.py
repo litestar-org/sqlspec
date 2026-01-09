@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.driver import (
     ColumnMetadata,
@@ -18,6 +20,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
 
+@mypyc_attr(native_class=False)
 class BigQueryDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["BigQueryDriver"]):
     """BigQuery-specific sync data dictionary."""
 

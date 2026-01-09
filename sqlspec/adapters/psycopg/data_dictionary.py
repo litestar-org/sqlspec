@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
@@ -22,6 +24,7 @@ logger = get_logger("adapters.psycopg.data_dictionary")
 __all__ = ("PsycopgAsyncDataDictionary", "PsycopgSyncDataDictionary")
 
 
+@mypyc_attr(native_class=False)
 class PsycopgSyncDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["PsycopgSyncDriver"]):
     """PostgreSQL-specific sync data dictionary."""
 
@@ -148,6 +151,7 @@ class PsycopgSyncDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["Psycopg
         )
 
 
+@mypyc_attr(native_class=False)
 class PsycopgAsyncDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["PsycopgAsyncDriver"]):
     """PostgreSQL-specific async data dictionary."""
 

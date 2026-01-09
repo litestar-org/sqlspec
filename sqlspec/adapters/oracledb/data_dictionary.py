@@ -3,6 +3,8 @@
 import re
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
@@ -89,6 +91,7 @@ class OracleVersionInfo(VersionInfo):
         return version_str
 
 
+@mypyc_attr(native_class=False)
 class OracleDataDictionaryMixin(DialectSQLMixin):
     """Shared helpers for Oracle data dictionary implementations."""
 
@@ -173,6 +176,7 @@ class OracleDataDictionaryMixin(DialectSQLMixin):
         return sorted(features)
 
 
+@mypyc_attr(native_class=False)
 class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase["OracleSyncDriver"]):
     """Oracle-specific sync data dictionary."""
 
@@ -289,6 +293,7 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
         )
 
 
+@mypyc_attr(native_class=False)
 class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBase["OracleAsyncDriver"]):
     """Oracle-specific async data dictionary."""
 

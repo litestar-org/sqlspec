@@ -160,6 +160,7 @@ exclude = [
   "sqlspec/protocols.py",           # Protocol definitions
   "sqlspec/builder/**/*.py",        # Builder (not performance critical)
   "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
+  "sqlspec/data_dictionary/_loader.py", # Loader relies on __file__ which fails in compiled modules
 ]
 include = [
   "sqlspec/core/**/*.py",                   # Core module

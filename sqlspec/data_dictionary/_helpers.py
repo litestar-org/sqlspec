@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 __all__ = ("DialectSQLMixin",)
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(native_class=False)
 class DialectSQLMixin:
     """Mixin for loading dialect-specific data dictionary SQL."""
 

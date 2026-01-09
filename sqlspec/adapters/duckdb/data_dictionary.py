@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.driver import (
     ColumnMetadata,
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
 
 
+@mypyc_attr(native_class=False)
 class DuckDBDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["DuckDBDriver"]):
     """DuckDB-specific sync data dictionary."""
 

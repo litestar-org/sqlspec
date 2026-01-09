@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary._helpers import DialectSQLMixin
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
@@ -21,6 +23,7 @@ logger = get_logger("adapters.psqlpy.data_dictionary")
 __all__ = ("PsqlpyDataDictionary",)
 
 
+@mypyc_attr(native_class=False)
 class PsqlpyDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["PsqlpyDriver"]):
     """PostgreSQL-specific async data dictionary via psqlpy."""
 
