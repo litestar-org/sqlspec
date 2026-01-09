@@ -56,7 +56,7 @@ def test_get_local_backend(tmp_path: Path) -> None:
     assert backend.backend_type == "local"
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_get_local_backend_prefers_obstore(tmp_path: Path) -> None:
     """Test that local paths prefer obstore when available."""
     registry = StorageRegistry()
@@ -102,7 +102,7 @@ def test_get_with_backend_override(tmp_path: Path) -> None:
     assert backend.backend_type == "local"
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_get_fsspec_backend(tmp_path: Path) -> None:
     """Test getting fsspec backend."""
     registry = StorageRegistry()
@@ -111,7 +111,7 @@ def test_get_fsspec_backend(tmp_path: Path) -> None:
     assert backend.backend_type == "fsspec"
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_get_obstore_backend(tmp_path: Path) -> None:
     """Test getting obstore backend."""
     registry = StorageRegistry()

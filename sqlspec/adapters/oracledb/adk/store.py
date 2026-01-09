@@ -157,7 +157,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             }
         )
         store = OracleAsyncADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - JSON storage type detected based on Oracle version (21c+, 12c+, legacy)
@@ -549,8 +549,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
             await driver.execute_script(self._get_create_events_table_sql_for_type(storage_type))
 
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
-
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
@@ -923,7 +921,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             }
         )
         store = OracleSyncADKStore(config)
-        store.create_tables()
+        store.ensure_tables()
 
     Notes:
         - JSON storage type detected based on Oracle version (21c+, 12c+, legacy)
@@ -1312,8 +1310,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
             events_sql = SQL(self._get_create_events_table_sql_for_type(storage_type))
             driver.execute_script(events_sql)
-
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None

@@ -9,10 +9,7 @@ from sqlspec._typing import PYARROW_INSTALLED
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc import AdbcDriver
 
-pytestmark = [
-    pytest.mark.xdist_group("duckdb"),
-    pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed"),
-]
+pytestmark = [pytest.mark.xdist_group("duckdb"), pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow missing")]
 
 
 def _drop_duckdb_table(driver: "AdbcDriver", table_name: str) -> None:

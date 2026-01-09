@@ -28,11 +28,13 @@ def test_default_statement_observer_info_excludes_parameters(caplog) -> None:
     default_statement_observer(event)
 
     record = caplog.records[-1]
-    assert record.sql == "SELECT 1"
+    assert record.getMessage() == "db.query"
+    assert record.__dict__["db.statement"] == "SELECT 1"
     assert record.sql_truncated is False
+    assert record.sql_length == len("SELECT 1")
     assert record.parameters_type == "dict"
     assert record.parameters_size == 1
-    assert not hasattr(record, "parameters")
+    assert "parameters" not in record.__dict__
 
 
 def test_default_statement_observer_debug_includes_parameters_and_truncates(caplog) -> None:
@@ -61,7 +63,8 @@ def test_default_statement_observer_debug_includes_parameters_and_truncates(capl
 
     record = caplog.records[-1]
     assert record.sql_truncated is True
-    assert len(record.sql) == 2000
+    assert len(record.__dict__["db.statement"]) == 2000
+    assert record.sql_length == len(long_sql)
     assert record.parameters_truncated is True
     assert isinstance(record.parameters, list)
     assert len(record.parameters) == 100

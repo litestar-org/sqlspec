@@ -13,10 +13,7 @@ from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.builder import Explain, sql
 from sqlspec.core import SQL
 
-pytestmark = [
-    pytest.mark.xdist_group("postgres"),
-    pytest.mark.skip(reason="ADBC uses COPY protocol which is incompatible with EXPLAIN statements"),
-]
+pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.skip(reason="ADBC COPY incompatible with EXPLAIN")]
 
 
 @pytest.fixture

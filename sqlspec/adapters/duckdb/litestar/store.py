@@ -4,13 +4,11 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.config import DuckDBConfig
 
-logger = get_logger("adapters.duckdb.litestar.store")
 
 __all__ = ("DuckdbStore",)
 
@@ -133,7 +131,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         sql = self._get_create_table_sql()
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -242,7 +240,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         with self._config.provide_connection() as conn:
             conn.execute(sql)
             conn.commit()
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+        self._log_delete_all()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
@@ -320,7 +318,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             count = cursor.fetchone()
             row_count = count[0] if count else 0
             if row_count > 0:
-                logger.debug("Cleaned up %d expired sessions", row_count)
+                self._log_delete_expired(row_count)
             return row_count
 
     async def delete_expired(self) -> int:

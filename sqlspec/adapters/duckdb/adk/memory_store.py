@@ -47,7 +47,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             }
         )
         store = DuckdbADKMemoryStore(config)
-        store.create_tables()
+        store.ensure_tables()
 
     Notes:
         - Uses DuckDB native JSON type (not JSONB)
@@ -170,14 +170,12 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         Skips table creation if memory store is disabled.
         """
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
 
         with self._config.provide_connection() as conn:
             conn.execute(self._get_create_memory_table_sql())
             if self._use_fts:
                 self._create_fts_index(conn)
-        logger.debug("Created ADK memory table: %s", self._memory_table)
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.

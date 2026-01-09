@@ -7,14 +7,12 @@ from psycopg import sql as pg_sql
 from psycopg.types.json import Jsonb
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
-logger = get_logger("adapters.psycopg.adk.store")
 
 __all__ = ("PsycopgAsyncADKStore", "PsycopgSyncADKStore")
 
@@ -52,7 +50,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             }
         )
         store = PsycopgAsyncADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - PostgreSQL JSONB type used for state (more efficient than JSON)
@@ -182,7 +180,6 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -507,7 +504,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             }
         )
         store = PsycopgSyncADKStore(config)
-        store.create_tables()
+        store.ensure_tables()
 
     Notes:
         - PostgreSQL JSONB type used for state (more efficient than JSON)
@@ -637,7 +634,6 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(self._get_create_sessions_table_sql())
             driver.execute_script(self._get_create_events_table_sql())
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None

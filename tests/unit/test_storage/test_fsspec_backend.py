@@ -12,7 +12,7 @@ if FSSPEC_INSTALLED:
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_init_with_filesystem_string() -> None:
     """Test initialization with filesystem string."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -21,7 +21,7 @@ def test_init_with_filesystem_string() -> None:
     assert store.protocol == "file"
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_init_with_uri() -> None:
     """Test initialization with URI."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -30,7 +30,7 @@ def test_init_with_uri() -> None:
     assert store.protocol == "file"
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_from_config() -> None:
     """Test from_config class method."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -41,7 +41,7 @@ def test_from_config() -> None:
     assert store.base_path == "/tmp/test"
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_write_and_read_bytes(tmp_path: Path) -> None:
     """Test write and read bytes operations."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -55,7 +55,7 @@ def test_write_and_read_bytes(tmp_path: Path) -> None:
     assert result == test_data
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_write_and_read_text(tmp_path: Path) -> None:
     """Test write and read text operations."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -69,7 +69,7 @@ def test_write_and_read_text(tmp_path: Path) -> None:
     assert result == test_text
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_exists(tmp_path: Path) -> None:
     """Test exists operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -82,7 +82,7 @@ def test_exists(tmp_path: Path) -> None:
     assert store.exists("existing.txt")
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_delete(tmp_path: Path) -> None:
     """Test delete operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -96,7 +96,7 @@ def test_delete(tmp_path: Path) -> None:
     assert not store.exists("to_delete.txt")
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_copy(tmp_path: Path) -> None:
     """Test copy operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -111,7 +111,7 @@ def test_copy(tmp_path: Path) -> None:
     assert store.read_text("copied.txt") == original_content
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_move(tmp_path: Path) -> None:
     """Test move operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -127,7 +127,7 @@ def test_move(tmp_path: Path) -> None:
     assert store.read_text("moved.txt") == original_content
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_list_objects(tmp_path: Path) -> None:
     """Test list_objects operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -146,7 +146,7 @@ def test_list_objects(tmp_path: Path) -> None:
     assert any("file3.txt" in obj for obj in all_objects)
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_glob(tmp_path: Path) -> None:
     """Test glob pattern matching."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -165,7 +165,7 @@ def test_glob(tmp_path: Path) -> None:
     assert not any("config.json" in obj for obj in sql_files)
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_get_metadata(tmp_path: Path) -> None:
     """Test get_metadata operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -181,7 +181,7 @@ def test_get_metadata(tmp_path: Path) -> None:
     assert metadata["exists"] is True
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_is_object_and_is_path(tmp_path: Path) -> None:
     """Test is_object and is_path operations."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -197,7 +197,7 @@ def test_is_object_and_is_path(tmp_path: Path) -> None:
     assert store.is_path("subdir")
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or PyArrow not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or PyArrow missing")
 def test_write_and_read_arrow(tmp_path: Path) -> None:
     """Test write and read Arrow table operations."""
     import pyarrow as pa
@@ -216,7 +216,7 @@ def test_write_and_read_arrow(tmp_path: Path) -> None:
     assert result.equals(table)
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or PyArrow not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or PyArrow missing")
 def test_stream_arrow(tmp_path: Path) -> None:
     """Test stream Arrow record batches."""
     import pyarrow as pa
@@ -240,7 +240,7 @@ def test_stream_arrow(tmp_path: Path) -> None:
     assert reconstructed.equals(table)
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_sign_returns_uri(tmp_path: Path) -> None:
     """Test sign_sync raises NotImplementedError for fsspec backends."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -270,7 +270,7 @@ def test_fsspec_not_installed() -> None:
 # Async tests
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_write_and_read_bytes(tmp_path: Path) -> None:
     """Test async write and read bytes operations."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -284,7 +284,7 @@ async def test_async_write_and_read_bytes(tmp_path: Path) -> None:
     assert result == test_data
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_write_and_read_text(tmp_path: Path) -> None:
     """Test async write and read text operations."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -298,7 +298,7 @@ async def test_async_write_and_read_text(tmp_path: Path) -> None:
     assert result == test_text
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_exists(tmp_path: Path) -> None:
     """Test async exists operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -311,7 +311,7 @@ async def test_async_exists(tmp_path: Path) -> None:
     assert await store.exists_async("async_existing.txt")
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_delete(tmp_path: Path) -> None:
     """Test async delete operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -325,7 +325,7 @@ async def test_async_delete(tmp_path: Path) -> None:
     assert not await store.exists_async("async_to_delete.txt")
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_copy(tmp_path: Path) -> None:
     """Test async copy operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -340,7 +340,7 @@ async def test_async_copy(tmp_path: Path) -> None:
     assert await store.read_text_async("async_copied.txt") == original_content
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_move(tmp_path: Path) -> None:
     """Test async move operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -356,7 +356,7 @@ async def test_async_move(tmp_path: Path) -> None:
     assert await store.read_text_async("async_moved.txt") == original_content
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_list_objects(tmp_path: Path) -> None:
     """Test async list_objects operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -375,7 +375,7 @@ async def test_async_list_objects(tmp_path: Path) -> None:
     assert any("file3.txt" in obj for obj in all_objects)
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_get_metadata(tmp_path: Path) -> None:
     """Test async get_metadata operation."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -391,7 +391,7 @@ async def test_async_get_metadata(tmp_path: Path) -> None:
     assert metadata["exists"] is True
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or PyArrow not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or PyArrow missing")
 async def test_async_write_and_read_arrow(tmp_path: Path) -> None:
     """Test async write and read Arrow table operations."""
     import pyarrow as pa
@@ -414,7 +414,7 @@ async def test_async_write_and_read_arrow(tmp_path: Path) -> None:
     assert result.equals(table)
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or PyArrow not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or PyArrow missing")
 async def test_async_stream_arrow(tmp_path: Path) -> None:
     """Test async stream Arrow record batches."""
     import pyarrow as pa
@@ -439,7 +439,7 @@ async def test_async_stream_arrow(tmp_path: Path) -> None:
     assert reconstructed.equals(table)
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_async_sign_raises_not_implemented(tmp_path: Path) -> None:
     """Test async sign_async raises NotImplementedError for fsspec backends."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -461,7 +461,7 @@ def test_fsspec_operations_without_fsspec() -> None:
         FSSpecBackend("file")  # type: ignore
 
 
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_arrow_operations_without_pyarrow(tmp_path: Path) -> None:
     """Test Arrow operations raise proper error without PyArrow."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend

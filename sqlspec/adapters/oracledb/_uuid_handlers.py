@@ -118,7 +118,6 @@ def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
 
     connection.inputtypehandler = _UuidInputHandler(existing_input)
     connection.outputtypehandler = _UuidOutputHandler(existing_output)
-    logger.debug("Registered UUID type handlers on Oracle connection with chaining support")
 
 
 class _UuidInputHandler:

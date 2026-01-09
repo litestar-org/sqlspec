@@ -13,12 +13,9 @@ from sqlspec.driver import (
     TableMetadata,
     VersionInfo,
 )
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
-
-logger = get_logger("adapters.psqlpy.data_dictionary")
 
 __all__ = ("PsqlpyDataDictionary",)
 
@@ -39,17 +36,17 @@ class PsqlpyDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["PsqlpyDrive
 
         version_value = await driver.select_value(self.get_query("version"))
         if not version_value:
-            logger.warning("No PostgreSQL version information found")
+            self._log_version_unavailable(self.dialect, "missing")
             self.cache_version_for_driver(driver, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
-            logger.warning("Could not parse PostgreSQL version: %s", version_value)
+            self._log_version_unavailable(self.dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
-        logger.debug("Detected PostgreSQL version: %s", version_info)
+        self._log_version_detected(self.dialect, version_info)
         self.cache_version_for_driver(driver, version_info)
         return version_info
 

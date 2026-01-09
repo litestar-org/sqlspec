@@ -111,12 +111,10 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
 
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_memory_table_sql())
-        logger.debug("Created ADK memory table: %s", self._memory_table)
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -299,12 +297,10 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
     def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
 
         with self._config.provide_session() as driver:
             driver.execute_script(self._get_create_memory_table_sql())
-        logger.debug("Created ADK memory table: %s", self._memory_table)
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""

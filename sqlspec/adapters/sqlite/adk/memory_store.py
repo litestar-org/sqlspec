@@ -83,7 +83,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             }
         )
         store = SqliteADKMemoryStore(config)
-        store.create_tables()
+        store.ensure_tables()
 
     Notes:
         - JSON stored as TEXT with SQLSpec serializers
@@ -210,13 +210,11 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         Skips table creation if memory store is disabled.
         """
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
 
         with self._config.provide_session() as driver:
             self._enable_foreign_keys(driver.connection)
             driver.execute_script(self._get_create_memory_table_sql())
-        logger.debug("Created ADK memory table: %s", self._memory_table)
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.

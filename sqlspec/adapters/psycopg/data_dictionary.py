@@ -14,12 +14,9 @@ from sqlspec.driver import (
     TableMetadata,
     VersionInfo,
 )
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
-
-logger = get_logger("adapters.psycopg.data_dictionary")
 
 __all__ = ("PsycopgAsyncDataDictionary", "PsycopgSyncDataDictionary")
 
@@ -48,17 +45,17 @@ class PsycopgSyncDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["Psycopg
 
         version_value = driver.select_value_or_none(self.get_query("version"))
         if not version_value:
-            logger.warning("No PostgreSQL version information found")
+            self._log_version_unavailable(self.dialect, "missing")
             self.cache_version_for_driver(driver, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
-            logger.warning("Could not parse PostgreSQL version: %s", version_value)
+            self._log_version_unavailable(self.dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
-        logger.debug("Detected PostgreSQL version: %s", version_info)
+        self._log_version_detected(self.dialect, version_info)
         self.cache_version_for_driver(driver, version_info)
         return version_info
 
@@ -175,17 +172,17 @@ class PsycopgAsyncDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase["Psyco
 
         version_value = await driver.select_value_or_none(self.get_query("version"))
         if not version_value:
-            logger.warning("No PostgreSQL version information found")
+            self._log_version_unavailable(self.dialect, "missing")
             self.cache_version_for_driver(driver, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
-            logger.warning("Could not parse PostgreSQL version: %s", version_value)
+            self._log_version_unavailable(self.dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
-        logger.debug("Detected PostgreSQL version: %s", version_info)
+        self._log_version_detected(self.dialect, version_info)
         self.cache_version_for_driver(driver, version_info)
         return version_info
 

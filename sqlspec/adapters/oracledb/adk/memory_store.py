@@ -220,12 +220,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
     async def create_tables(self) -> None:
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
 
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_memory_table_sql())
-        logger.debug("Created ADK memory table: %s", self._memory_table)
 
     async def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""
@@ -561,12 +559,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
     def create_tables(self) -> None:
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
 
         with self._config.provide_session() as driver:
             driver.execute_script(self._get_create_memory_table_sql())
-        logger.debug("Created ADK memory table: %s", self._memory_table)
 
     def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""

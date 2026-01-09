@@ -10,10 +10,7 @@ To run these tests, you need:
 
 import pytest
 
-pytestmark = [
-    pytest.mark.spanner,
-    pytest.mark.skip(reason="Spangres fixtures not yet implemented - requires PostgreSQL-dialect database"),
-]
+pytestmark = [pytest.mark.spanner, pytest.mark.skip(reason="Spangres fixtures missing")]
 
 
 def test_spangres_select_one() -> None:

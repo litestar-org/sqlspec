@@ -52,6 +52,7 @@ ASYNC_PG_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s
 EXPECTED_REGEX_GROUPS = 3
 
 logger = get_logger("adapters.asyncpg.core")
+_PGVECTOR_MISSING_LOGGED = False
 
 
 class NormalizedStackOperation(NamedTuple):
@@ -209,7 +210,6 @@ async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> N
     try:
         await connection.set_type_codec("json", encoder=encoder, decoder=decoder, schema="pg_catalog")
         await connection.set_type_codec("jsonb", encoder=encoder, decoder=decoder, schema="pg_catalog")
-        logger.debug("Registered JSON type codecs on asyncpg connection")
     except Exception:
         logger.exception("Failed to register JSON type codecs")
 
@@ -217,13 +217,15 @@ async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> N
 async def register_pgvector_support(connection: Any) -> None:
     """Register pgvector extension support on asyncpg connection."""
     if not PGVECTOR_INSTALLED:
-        logger.debug("pgvector not installed - skipping vector type support")
+        global _PGVECTOR_MISSING_LOGGED
+        if not _PGVECTOR_MISSING_LOGGED:
+            logger.debug("pgvector not installed - skipping vector type support")
+            _PGVECTOR_MISSING_LOGGED = True
         return
 
     try:
         pgvector_asyncpg = importlib.import_module("pgvector.asyncpg")
         await pgvector_asyncpg.register_vector(connection)
-        logger.debug("Registered pgvector support on asyncpg connection")
     except Exception:
         logger.exception("Failed to register pgvector support")
 

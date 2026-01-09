@@ -57,8 +57,8 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver.commit()
             console.print("[green]Migration tracking table schema updated successfully[/]")
 
-        except Exception as e:
-            logger.warning("Could not check or migrate tracking table schema: %s", e)
+        except Exception:
+            logger.exception("Could not check or migrate tracking table schema")
 
     def _add_column(self, driver: "SyncDriverAdapterBase", column_name: str) -> None:
         """Add a single column to the tracking table.
@@ -247,8 +247,8 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             await driver.commit()
             console.print("[green]Migration tracking table schema updated successfully[/]")
 
-        except Exception as e:
-            logger.warning("Could not check or migrate tracking table schema: %s", e)
+        except Exception:
+            logger.exception("Could not check or migrate tracking table schema")
 
     async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
         """Add a single column to the tracking table.

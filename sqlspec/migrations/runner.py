@@ -336,7 +336,7 @@ class BaseMigrationRunner(ABC):
             metadata=dict(metadata), mtime_ns=stat_result.st_mtime_ns, size=stat_result.st_size
         )
         if cached_metadata:
-            logger.info("Migration metadata cache invalidated: %s", cache_key)
+            logger.debug("Migration metadata cache invalidated: %s", cache_key)
         else:
             logger.debug("Cached migration metadata: %s", cache_key)
         return metadata

@@ -78,12 +78,10 @@ class BigQueryADKMemoryStore(BaseAsyncADKMemoryStore["BigQueryConfig"]):
         """Synchronous implementation of create_tables."""
         with self._config.provide_session() as driver:
             driver.execute_script(run_(self._get_create_memory_table_sql)())
-        logger.debug("Created BigQuery ADK memory table: %s", self._memory_table)
 
     async def create_tables(self) -> None:
         """Create the memory table if it doesn't exist."""
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
         await async_(self._create_tables)()
 

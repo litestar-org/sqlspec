@@ -46,7 +46,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             }
         )
         store = AsyncpgADKMemoryStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - JSONB type for content_json and metadata_json
@@ -141,12 +141,10 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         Skips table creation if memory store is disabled.
         """
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
 
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_memory_table_sql())
-        logger.debug("Created ADK memory table: %s", self._memory_table)
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.

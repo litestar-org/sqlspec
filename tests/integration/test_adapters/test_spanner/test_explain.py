@@ -13,10 +13,7 @@ from sqlspec.adapters.spanner import SpannerSyncConfig, SpannerSyncDriver
 from sqlspec.builder import Explain, sql
 from sqlspec.core import SQL
 
-pytestmark = [
-    pytest.mark.xdist_group("spanner"),
-    pytest.mark.skip(reason="Spanner uses query_mode=PLAN for execution plans, not SQL EXPLAIN syntax"),
-]
+pytestmark = [pytest.mark.xdist_group("spanner"), pytest.mark.skip(reason="Spanner uses query_mode=PLAN")]
 
 
 @pytest.fixture

@@ -18,9 +18,6 @@ from sqlspec.driver import (
     VersionInfo,
 )
 from sqlspec.exceptions import SQLFileNotFoundError
-from sqlspec.utils.logging import get_logger
-
-logger = get_logger("adapters.adbc.data_dictionary")
 
 __all__ = ("AdbcDataDictionary",)
 
@@ -98,28 +95,29 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
         try:
             version_value = driver.select_value_or_none(self._get_query(dialect, "version"))
         except Exception:
-            logger.warning("Failed to get %s version", dialect)
+            self._log_version_unavailable(dialect, "query_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
         if not version_value:
-            logger.warning("No %s version information found", dialect)
+            self._log_version_unavailable(dialect, "missing")
             self.cache_version_for_driver(driver, None)
             return None
 
         try:
             config = get_dialect_config(dialect)
         except ValueError:
-            logger.warning("Unknown ADBC dialect %s", dialect)
+            self._log_version_unavailable(dialect, "unknown_dialect")
             self.cache_version_for_driver(driver, None)
             return None
 
         version_info = self.parse_version_with_pattern(config.version_pattern, str(version_value))
         if version_info is None:
-            logger.warning("Could not parse %s version: %s", dialect, version_value)
+            self._log_version_unavailable(dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
+        self._log_version_detected(dialect, version_info)
         self.cache_version_for_driver(driver, version_info)
         return version_info
 

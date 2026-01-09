@@ -183,17 +183,21 @@ class SQLSpec:
     def _cleanup_sync_pools(self) -> None:
         """Clean up only synchronous connection pools at exit."""
         cleaned_count = 0
+        failed_configs: list[str] = []
 
         for config in self._configs.values():
             if config.supports_connection_pooling and not config.is_async:
-                try:
-                    config.close_pool()
+                failure = self._safe_close_pool(config)
+                if failure is None:
                     cleaned_count += 1
-                except Exception as e:
-                    logger.debug("Failed to clean up sync pool for config %s: %s", config.__class__.__name__, e)
+                else:
+                    failed_configs.append(failure)
 
-        if cleaned_count > 0:
-            logger.debug("Sync pool cleanup completed. Cleaned %d pools.", cleaned_count)
+        if cleaned_count or failed_configs:
+            summary: dict[str, object] = {"cleaned_pools": cleaned_count, "failed_pools": len(failed_configs)}
+            if failed_configs:
+                summary["failures"] = failed_configs
+            logger.debug("Sync pool cleanup completed.", extra=summary)
 
     async def close_all_pools(self) -> None:
         """Explicitly close all connection pools (async and sync).
@@ -215,18 +219,35 @@ class SQLSpec:
                 except Exception as e:
                     logger.debug("Failed to prepare cleanup for config %s: %s", config.__class__.__name__, e)
 
+        async_failures: list[str] = []
         if cleanup_tasks:
             try:
                 await asyncio.gather(*cleanup_tasks, return_exceptions=True)  # pyright: ignore
-                logger.debug("Async pool cleanup completed. Cleaned %d pools.", len(cleanup_tasks))  # pyright: ignore
             except Exception as e:
-                logger.debug("Failed to complete async pool cleanup: %s", e)
+                async_failures.append(str(e))
 
         for config in sync_configs:  # pyright: ignore
-            config.close_pool()  # pyright: ignore
+            failure = self._safe_close_pool(config)
+            if failure is not None:
+                async_failures.append(failure)
 
-        if sync_configs:
-            logger.debug("Sync pool cleanup completed. Cleaned %d pools.", len(sync_configs))  # pyright: ignore
+        if cleanup_tasks or sync_configs or async_failures:
+            summary: dict[str, object] = {
+                "async_pools": len(cleanup_tasks),
+                "sync_pools": len(sync_configs),
+                "failures": async_failures,
+            }
+            logger.debug("Pool cleanup completed.", extra=summary)
+
+    @staticmethod
+    def _safe_close_pool(config: "DatabaseConfigProtocol[Any, Any, Any]") -> "str | None":
+        """Close a pool, returning an error string when it fails."""
+
+        try:
+            config.close_pool()
+        except Exception as exc:  # pragma: no cover - best effort cleanup
+            return f"{config.__class__.__name__}: {exc}"
+        return None
 
     async def __aenter__(self) -> "SQLSpec":
         """Async context manager entry."""
@@ -362,8 +383,6 @@ class SQLSpec:
         if id(config) not in self._configs:
             self.add_config(config)
 
-        config_name = config.__class__.__name__
-        logger.debug("Getting connection for config: %s", config_name, extra={"config_type": config_name})
         return config.create_connection()
 
     @overload
@@ -390,9 +409,6 @@ class SQLSpec:
         """
         if id(config) not in self._configs:
             self.add_config(config)
-
-        config_name = config.__class__.__name__
-        logger.debug("Getting session for config: %s", config_name, extra={"config_type": config_name})
 
         connection_obj = self.get_connection(config)
 
@@ -455,8 +471,6 @@ class SQLSpec:
         if id(config) not in self._configs:
             self.add_config(config)
 
-        config_name = config.__class__.__name__
-        logger.debug("Providing connection context for config: %s", config_name, extra={"config_type": config_name})
         connection_context = config.provide_connection(*args, **kwargs)
         runtime = config.get_observability_runtime()
 
@@ -502,8 +516,6 @@ class SQLSpec:
         if id(config) not in self._configs:
             self.add_config(config)
 
-        config_name = config.__class__.__name__
-        logger.debug("Providing session context for config: %s", config_name, extra={"config_type": config_name})
         session_context = config.provide_session(*args, **kwargs)
         runtime = config.get_observability_runtime()
 
@@ -538,13 +550,8 @@ class SQLSpec:
         if id(config) not in self._configs:
             self.add_config(config)
 
-        config_name = config.__class__.__name__
-
         if config.supports_connection_pooling:
-            logger.debug("Getting pool for config: %s", config_name, extra={"config_type": config_name})
             return cast("type[PoolT] | Awaitable[type[PoolT]]", config.create_pool())
-
-        logger.debug("Config %s does not support connection pooling", config_name)
         return None
 
     @overload
@@ -572,13 +579,8 @@ class SQLSpec:
         if id(config) not in self._configs:
             self.add_config(config)
 
-        config_name = config.__class__.__name__
-
         if config.supports_connection_pooling:
-            logger.debug("Closing pool for config: %s", config_name, extra={"config_type": config_name})
             return config.close_pool()
-
-        logger.debug("Config %s does not support connection pooling - nothing to close", config_name)
         return None
 
     @staticmethod

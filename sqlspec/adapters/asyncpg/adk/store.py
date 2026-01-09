@@ -6,12 +6,10 @@ import asyncpg
 
 from sqlspec.config import AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-logger = get_logger("adapters.asyncpg.adk.store")
 
 __all__ = ("AsyncpgADKStore",)
 
@@ -53,7 +51,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             }
         )
         store = AsyncpgADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - PostgreSQL JSONB type used for state (more efficient than JSON)
@@ -184,7 +182,6 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         async with self.config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None

@@ -16,13 +16,11 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.config import DuckDBConfig
 
-logger = get_logger("adapters.duckdb.adk.store")
 
 __all__ = ("DuckdbADKStore",)
 
@@ -58,7 +56,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             }
         )
         store = DuckdbADKStore(config)
-        store.create_tables()
+        store.ensure_tables()
 
         session = store.create_session(
             session_id="session-123",
@@ -183,7 +181,6 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         with self._config.provide_connection() as conn:
             conn.execute(self._get_create_sessions_table_sql())
             conn.execute(self._get_create_events_table_sql())
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None

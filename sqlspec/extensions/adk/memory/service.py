@@ -46,7 +46,7 @@ class SQLSpecMemoryService(BaseMemoryService):
             }
         )
         store = AsyncpgADKMemoryStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
         service = SQLSpecMemoryService(store)
         await service.add_session_to_memory(completed_session)
@@ -150,7 +150,7 @@ class SQLSpecSyncMemoryService:
             }
         )
         store = SqliteADKMemoryStore(config)
-        store.create_tables()
+        store.ensure_tables()
 
         service = SQLSpecSyncMemoryService(store)
         service.add_session_to_memory(completed_session)

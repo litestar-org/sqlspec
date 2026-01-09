@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
+from sqlspec.observability._common import resolve_db_system
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -211,6 +212,15 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
+    async def ensure_tables(self) -> None:
+        """Create tables when enabled and emit a standardized log entry."""
+
+        if not self._enabled:
+            self._log_memory_table_skipped()
+            return
+        await self.create_tables()
+        self._log_memory_table_created()
+
     @abstractmethod
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
@@ -228,6 +238,22 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
             RuntimeError: If memory store is disabled.
         """
         raise NotImplementedError
+
+    def _log_memory_table_created(self) -> None:
+        logger.debug(
+            "ADK memory table ready",
+            extra={"db.system": resolve_db_system(type(self).__name__), "memory_table": self._memory_table},
+        )
+
+    def _log_memory_table_skipped(self) -> None:
+        logger.debug(
+            "ADK memory table creation skipped",
+            extra={
+                "db.system": resolve_db_system(type(self).__name__),
+                "memory_table": self._memory_table,
+                "reason": "disabled",
+            },
+        )
 
     @abstractmethod
     async def search_entries(
@@ -429,6 +455,15 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
+    def ensure_tables(self) -> None:
+        """Create tables when enabled and emit a standardized log entry."""
+
+        if not self._enabled:
+            self._log_memory_table_skipped()
+            return
+        self.create_tables()
+        self._log_memory_table_created()
+
     @abstractmethod
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
@@ -446,6 +481,22 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
             RuntimeError: If memory store is disabled.
         """
         raise NotImplementedError
+
+    def _log_memory_table_created(self) -> None:
+        logger.debug(
+            "ADK memory table ready",
+            extra={"db.system": resolve_db_system(type(self).__name__), "memory_table": self._memory_table},
+        )
+
+    def _log_memory_table_skipped(self) -> None:
+        logger.debug(
+            "ADK memory table creation skipped",
+            extra={
+                "db.system": resolve_db_system(type(self).__name__),
+                "memory_table": self._memory_table,
+                "reason": "disabled",
+            },
+        )
 
     @abstractmethod
     def search_entries(

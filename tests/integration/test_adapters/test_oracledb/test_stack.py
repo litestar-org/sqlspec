@@ -50,7 +50,7 @@ async def test_async_statement_stack_native_pipeline(
     """Verify StatementStack execution routes through the native pipeline when supported."""
 
     if not await oracle_async_session._pipeline_native_supported():
-        pytest.skip("Native pipeline support unavailable for current Oracle version")
+        pytest.skip("Oracle native pipeline unavailable")
 
     table_name = "stack_async_pipeline"
     await _reset_async_table(oracle_async_session, table_name)
@@ -91,7 +91,7 @@ async def test_async_statement_stack_continue_on_error_pipeline(oracle_async_ses
     """Ensure continue-on-error surfaces failures while executing remaining operations."""
 
     if not await oracle_async_session._pipeline_native_supported():
-        pytest.skip("Native pipeline support unavailable for current Oracle version")
+        pytest.skip("Oracle native pipeline unavailable")
 
     table_name = "stack_async_errors"
     await _reset_async_table(oracle_async_session, table_name)

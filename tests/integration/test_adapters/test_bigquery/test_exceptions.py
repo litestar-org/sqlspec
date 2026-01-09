@@ -10,10 +10,7 @@ from pytest_databases.docker.bigquery import BigQueryService
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
 from sqlspec.exceptions import NotFoundError, SQLParsingError, UniqueViolationError
 
-pytestmark = [
-    pytest.mark.xdist_group("bigquery"),
-    pytest.mark.skip(reason="BigQuery emulator configuration issues - requires proper project ID setup"),
-]
+pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.skip(reason="BigQuery emulator config missing")]
 
 
 @pytest.fixture

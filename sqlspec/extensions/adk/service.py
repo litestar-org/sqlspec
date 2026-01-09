@@ -36,7 +36,7 @@ class SQLSpecSessionService(BaseSessionService):
 
         config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
         store = AsyncpgADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
         service = SQLSpecSessionService(store)
         session = await service.create_session(

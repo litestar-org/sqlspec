@@ -4,14 +4,12 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
-logger = get_logger("adapters.sqlite.adk.store")
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
@@ -113,7 +111,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             }
         )
         store = SqliteADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - JSON stored as TEXT with SQLSpec serializers (msgspec/orjson/stdlib)
@@ -241,7 +239,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             driver.connection.execute("PRAGMA foreign_keys = ON")
             driver.execute_script(run_(self._get_create_sessions_table_sql)())
             driver.execute_script(run_(self._get_create_events_table_sql)())
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""

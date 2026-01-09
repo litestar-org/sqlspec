@@ -14,7 +14,7 @@ from sqlspec.typing import PGVECTOR_INSTALLED
 
 pytestmark = [
     pytest.mark.xdist_group("postgres"),
-    pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector not installed"),
+    pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector missing"),
 ]
 
 
@@ -24,7 +24,7 @@ async def asyncpg_vector_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncGe
     try:
         await asyncpg_async_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
     except Exception as e:
-        pytest.skip(f"pgvector extension not available on server: {e}")
+        pytest.skip(f"pgvector extension missing: {e}")
 
     try:
         await asyncpg_async_driver.execute_script(

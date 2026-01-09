@@ -14,18 +14,15 @@ from sqlspec.driver import (
     TableMetadata,
     VersionInfo,
 )
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
-
-logger = get_logger("adapters.aiosqlite.data_dictionary")
 
 __all__ = ("AiosqliteDataDictionary",)
 
 
 @mypyc_attr(native_class=False)
-class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase):  # type: ignore[type-arg]
+class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase):
     """SQLite-specific async data dictionary."""
 
     __slots__ = ()
@@ -52,17 +49,17 @@ class AiosqliteDataDictionary(DialectSQLMixin, AsyncDataDictionaryBase):  # type
 
         version_value = await driver.select_value_or_none(self.get_query("version"))
         if not version_value:
-            logger.warning("No SQLite version information found")
+            self._log_version_unavailable(self.dialect, "missing")
             self.cache_version_for_driver(driver, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
-            logger.warning("Could not parse SQLite version: %s", version_value)
+            self._log_version_unavailable(self.dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
-        logger.debug("Detected SQLite version: %s", version_info)
+        self._log_version_detected(self.dialect, version_info)
         self.cache_version_for_driver(driver, version_info)
         return version_info
 

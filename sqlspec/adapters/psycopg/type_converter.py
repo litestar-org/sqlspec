@@ -10,7 +10,7 @@ functions to avoid module-level optional dependency issues.
 import importlib
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
+from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -54,19 +54,13 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
     from psycopg import ProgrammingError
 
     if not PGVECTOR_INSTALLED:
-        logger.debug("pgvector not installed - skipping vector type handlers")
         return
-
-    if not NUMPY_INSTALLED:
-        logger.debug("NumPy not installed - registering pgvector without NumPy support")
 
     try:
         pgvector_psycopg = importlib.import_module("pgvector.psycopg")
         pgvector_psycopg.register_vector(connection)
-        logger.debug("Registered pgvector type handlers on psycopg sync connection")
     except (ValueError, TypeError, ProgrammingError) as error:
         if _is_missing_vector_error(error):
-            logger.debug("Skipping pgvector registration - extension not enabled in database")
             return
         logger.warning("Unexpected error during pgvector registration: %s", error)
     except Exception:
@@ -85,20 +79,14 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
     from psycopg import ProgrammingError
 
     if not PGVECTOR_INSTALLED:
-        logger.debug("pgvector not installed - skipping vector type handlers")
         return
-
-    if not NUMPY_INSTALLED:
-        logger.debug("NumPy not installed - registering pgvector without NumPy support")
 
     try:
         pgvector_psycopg = importlib.import_module("pgvector.psycopg")
         register_vector_async = pgvector_psycopg.register_vector_async
         await register_vector_async(connection)
-        logger.debug("Registered pgvector type handlers on psycopg async connection")
     except (ValueError, TypeError, ProgrammingError) as error:
         if _is_missing_vector_error(error):
-            logger.debug("Skipping pgvector registration - extension not enabled in database")
             return
         logger.warning("Unexpected error during pgvector registration: %s", error)
     except Exception:

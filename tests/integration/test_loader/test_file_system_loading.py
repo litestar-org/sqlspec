@@ -214,7 +214,7 @@ SELECT 'from symlink' as source;
     try:
         symlink_file.symlink_to(original_file)
     except OSError:
-        pytest.skip("Symbolic links not supported on this system")
+        pytest.skip("Symbolic links unsupported")
 
     loader = SQLFileLoader()
     loader.load_sql(symlink_file)
@@ -264,7 +264,7 @@ def test_permission_denied_error(tmp_path: Path) -> None:
         SQLFileParseError: When file permissions prevent reading.
     """
     if os.name == "nt":
-        pytest.skip("Permission testing not reliable on Windows")
+        pytest.skip("Windows permissions unreliable")
 
     restricted_file = tmp_path / "restricted.sql"
     restricted_file.write_text("""
@@ -662,7 +662,7 @@ SELECT 'Unicode filename works' as message;
             encoding="utf-8",
         )
     except OSError:
-        pytest.skip("Unicode filenames not supported on this system")
+        pytest.skip("Unicode filenames unsupported")
 
     loader = SQLFileLoader()
     loader.load_sql(unicode_file)
@@ -747,7 +747,7 @@ def test_special_characters_in_paths(tmp_path: Path) -> None:
 SELECT 'Special path works' as result;
 """)
     except OSError:
-        pytest.skip("Special characters in paths not supported on this system")
+        pytest.skip("Special characters unsupported")
 
     loader = SQLFileLoader()
     loader.load_sql(special_file)

@@ -5,14 +5,12 @@ from typing import TYPE_CHECKING, Any, Final
 import psqlpy.exceptions
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
-logger = get_logger("adapters.psqlpy.adk.store")
 
 __all__ = ("PsqlpyADKStore",)
 
@@ -52,7 +50,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             }
         )
         store = PsqlpyADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - PostgreSQL JSONB type used for state (more efficient than JSON)
@@ -186,8 +184,6 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
-
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None

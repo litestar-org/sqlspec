@@ -2,6 +2,7 @@
 
 from sqlspec.observability._config import (
     LifecycleHook,
+    LoggingConfig,
     ObservabilityConfig,
     RedactionConfig,
     StatementObserver,
@@ -12,6 +13,7 @@ from sqlspec.observability._dispatcher import LifecycleContext, LifecycleDispatc
 from sqlspec.observability._observer import (
     StatementEvent,
     create_event,
+    create_statement_observer,
     default_statement_observer,
     format_statement_event,
 )
@@ -23,6 +25,7 @@ __all__ = (
     "LifecycleContext",
     "LifecycleDispatcher",
     "LifecycleHook",
+    "LoggingConfig",
     "ObservabilityConfig",
     "ObservabilityRuntime",
     "RedactionConfig",
@@ -32,6 +35,7 @@ __all__ = (
     "TelemetryConfig",
     "TelemetryDiagnostics",
     "create_event",
+    "create_statement_observer",
     "default_statement_observer",
     "format_statement_event",
 )

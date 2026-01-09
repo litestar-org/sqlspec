@@ -13,10 +13,7 @@ from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
 from sqlspec.builder import Explain, sql
 from sqlspec.core import SQL
 
-pytestmark = [
-    pytest.mark.xdist_group("bigquery"),
-    pytest.mark.skip(reason="BigQuery emulator does not support EXPLAIN statements"),
-]
+pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.skip(reason="BigQuery emulator EXPLAIN unsupported")]
 
 
 @pytest.fixture

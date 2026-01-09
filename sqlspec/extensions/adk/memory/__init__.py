@@ -31,7 +31,7 @@ Example (async):
     )
 
     store = AsyncpgADKMemoryStore(config)
-    await store.create_tables()
+    await store.ensure_tables()
 
     service = SQLSpecMemoryService(store)
 

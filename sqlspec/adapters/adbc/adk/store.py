@@ -55,7 +55,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             }
         )
         store = AdbcADKStore(config)
-        store.create_tables()
+        store.ensure_tables()
 
     Notes:
         - TEXT for JSON storage (compatible across all ADBC backends)
@@ -488,8 +488,6 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 conn.commit()
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
-
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     def _enable_foreign_keys(self, cursor: Any, conn: Any) -> None:
         """Enable foreign key constraints for SQLite.

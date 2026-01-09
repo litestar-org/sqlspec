@@ -17,13 +17,11 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
 
-logger = get_logger("adapters.adbc.litestar.store")
 
 __all__ = ("ADBCStore",)
 
@@ -228,7 +226,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(sql_text)
             driver.commit()
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     def _get_drop_table_sql(self) -> "list[str]":
         """Get dialect-specific DROP TABLE SQL statements for ADBC.
@@ -483,7 +481,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 if count > 0:
                     driver.execute(delete_sql)
                     driver.commit()
-                    logger.debug("Cleaned up %d expired sessions", count)
+                    self._log_delete_expired(count)
 
                 return count
 
@@ -492,7 +490,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             driver.commit()
             count = exec_result.rows_affected
             if count > 0:
-                logger.debug("Cleaned up %d expired sessions", count)
+                self._log_delete_expired(count)
             return count
 
     async def delete_expired(self) -> int:

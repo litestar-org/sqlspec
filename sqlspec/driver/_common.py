@@ -42,6 +42,7 @@ from sqlspec.core.parameters import fingerprint_parameters
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime
+from sqlspec.observability._common import resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
@@ -682,6 +683,23 @@ class DataDictionaryMixin:
         patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2] else 0
         return VersionInfo(major, minor, patch)
 
+    def _resolve_log_adapter(self) -> str:
+        """Resolve adapter identifier for logging."""
+
+        return str(getattr(self, "dialect", type(self).__name__))
+
+    def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
+        """Log detected database version with db.system context."""
+
+        logger.debug(
+            "Detected database version", extra={"db.system": resolve_db_system(adapter), "db.version": str(version)}
+        )
+
+    def _log_version_unavailable(self, adapter: str, reason: str) -> None:
+        """Log that database version could not be determined."""
+
+        logger.debug("Database version unavailable", extra={"db.system": resolve_db_system(adapter), "reason": reason})
+
     def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version.
 
@@ -707,10 +725,10 @@ class DataDictionaryMixin:
 
                     parsed_version = self.parse_version_string(version_str)
                     if parsed_version:
-                        logger.debug("Detected database version: %s", parsed_version)
+                        self._log_version_detected(self._resolve_log_adapter(), parsed_version)
                         return parsed_version
 
-        logger.warning("Could not detect database version")
+        self._log_version_unavailable(self._resolve_log_adapter(), "queries_exhausted")
         return None
 
     def get_default_type_mapping(self) -> "dict[str, str]":

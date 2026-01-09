@@ -99,7 +99,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         sql = self._get_create_table_sql()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -203,7 +203,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             async with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 await cursor.execute(sql)
                 await conn.commit()
-            logger.debug("Deleted all sessions from table: %s", self._table_name)
+            self._log_delete_all()
         except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
@@ -292,5 +292,5 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             await conn.commit()
             count: int = cursor.rowcount
             if count > 0:
-                logger.debug("Cleaned up %d expired sessions", count)
+                self._log_delete_expired(count)
             return count

@@ -935,7 +935,7 @@ def mock_async_connection() -> MockAsyncConnection:
 def mock_sync_driver(mock_sync_connection: MockSyncConnection) -> MockSyncDriver:
     """Fixture for mock sync driver."""
     if is_compiled():
-        pytest.skip("Mock driver fixtures require interpreted driver base classes when compiled.")
+        pytest.skip("Requires interpreted driver base")
     return MockSyncDriver(mock_sync_connection)
 
 
@@ -943,7 +943,7 @@ def mock_sync_driver(mock_sync_connection: MockSyncConnection) -> MockSyncDriver
 def mock_async_driver(mock_async_connection: MockAsyncConnection) -> MockAsyncDriver:
     """Fixture for mock async driver."""
     if is_compiled():
-        pytest.skip("Mock driver fixtures require interpreted driver base classes when compiled.")
+        pytest.skip("Requires interpreted driver base")
     return MockAsyncDriver(mock_async_connection)
 
 

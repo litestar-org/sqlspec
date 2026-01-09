@@ -6,14 +6,12 @@ from typing import TYPE_CHECKING, Any
 from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.config import BigQueryConfig
 
-logger = get_logger("adapters.bigquery.adk.store")
 
 __all__ = ("BigQueryADKStore",)
 
@@ -54,7 +52,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
             }
         )
         store = BigQueryADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - JSON type for state, content, and metadata (native BigQuery JSON)
@@ -196,7 +194,6 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(run_(self._get_create_sessions_table_sql)())
             driver.execute_script(run_(self._get_create_events_table_sql)())
-        logger.debug("Created BigQuery ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""

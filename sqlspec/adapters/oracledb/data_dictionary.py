@@ -15,12 +15,9 @@ from sqlspec.driver import (
     TableMetadata,
     VersionInfo,
 )
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
-
-logger = get_logger("adapters.oracledb.data_dictionary")
 
 ORACLE_MIN_JSON_NATIVE_VERSION = 21
 ORACLE_MIN_JSON_NATIVE_COMPATIBLE = 20
@@ -177,7 +174,7 @@ class OracleDataDictionaryMixin(DialectSQLMixin):
 
 
 @mypyc_attr(native_class=False)
-class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase):  # type: ignore[type-arg]
+class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase):
     """Oracle-specific sync data dictionary."""
 
     __slots__ = ()
@@ -211,13 +208,13 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
 
         version_row = driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
-            logger.warning("No Oracle version information found")
+            self._log_version_unavailable(self.dialect, "missing")
             self.cache_version_for_driver(driver, None)
             return None
 
         version_value = self._extract_version_value(version_row)
         if not version_value:
-            logger.warning("Could not parse Oracle version row")
+            self._log_version_unavailable(self.dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
@@ -225,10 +222,11 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
         is_autonomous = self._is_autonomous(driver)
         version_info = self._build_version_info(version_value, compatible, is_autonomous)
         if version_info is None:
-            logger.warning("Could not parse Oracle version: %s", version_value)
+            self._log_version_unavailable(self.dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
+        self._log_version_detected(self.dialect, version_info)
         self.cache_version_for_driver(driver, version_info)
         return version_info
 
@@ -298,7 +296,7 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
 
 
 @mypyc_attr(native_class=False)
-class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBase):  # type: ignore[type-arg]
+class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBase):
     """Oracle-specific async data dictionary."""
 
     __slots__ = ()
@@ -332,13 +330,13 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
 
         version_row = await driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
-            logger.warning("No Oracle version information found")
+            self._log_version_unavailable(self.dialect, "missing")
             self.cache_version_for_driver(driver, None)
             return None
 
         version_value = self._extract_version_value(version_row)
         if not version_value:
-            logger.warning("Could not parse Oracle version row")
+            self._log_version_unavailable(self.dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
@@ -346,10 +344,11 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
         is_autonomous = await self._is_autonomous(driver)
         version_info = self._build_version_info(version_value, compatible, is_autonomous)
         if version_info is None:
-            logger.warning("Could not parse Oracle version: %s", version_value)
+            self._log_version_unavailable(self.dialect, "parse_failed")
             self.cache_version_for_driver(driver, None)
             return None
 
+        self._log_version_detected(self.dialect, version_info)
         self.cache_version_for_driver(driver, version_info)
         return version_info
 

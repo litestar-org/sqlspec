@@ -17,7 +17,7 @@ from sqlspec.typing import PGVECTOR_INSTALLED
 # PostgreSQL ADBC tests
 pytestmark_postgres = [
     pytest.mark.xdist_group("postgres"),
-    pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector not installed"),
+    pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector missing"),
 ]
 
 
@@ -27,7 +27,7 @@ def adbc_postgres_vector_session(adbc_sync_driver: AdbcDriver) -> Generator[Adbc
     try:
         adbc_sync_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
     except Exception as e:
-        pytest.skip(f"pgvector extension not available on server: {e}")
+        pytest.skip(f"pgvector extension missing: {e}")
 
     try:
         adbc_sync_driver.execute_script(
@@ -58,7 +58,7 @@ def adbc_postgres_vector_session(adbc_sync_driver: AdbcDriver) -> Generator[Adbc
 
 
 @pytest.mark.postgres
-@pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector not installed")
+@pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector missing")
 def test_adbc_postgres_euclidean_distance_execution(adbc_postgres_vector_session: AdbcDriver) -> None:
     """Test ADBC PostgreSQL euclidean distance operator execution."""
     query = (
@@ -80,7 +80,7 @@ def test_adbc_postgres_euclidean_distance_execution(adbc_postgres_vector_session
 
 
 @pytest.mark.postgres
-@pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector not installed")
+@pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector missing")
 def test_adbc_postgres_cosine_distance_execution(adbc_postgres_vector_session: AdbcDriver) -> None:
     """Test ADBC PostgreSQL cosine distance operator execution."""
     query = (
@@ -97,7 +97,7 @@ def test_adbc_postgres_cosine_distance_execution(adbc_postgres_vector_session: A
 
 
 @pytest.mark.postgres
-@pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector not installed")
+@pytest.mark.skipif(not PGVECTOR_INSTALLED, reason="pgvector missing")
 def test_adbc_postgres_cosine_similarity_execution(adbc_postgres_vector_session: AdbcDriver) -> None:
     """Test ADBC PostgreSQL cosine similarity calculation."""
     query = (
@@ -128,7 +128,7 @@ def adbc_duckdb_vector_session(adbc_duckdb_driver: AdbcDriver) -> Generator[Adbc
         adbc_duckdb_driver.execute_script("INSTALL vss")
         adbc_duckdb_driver.execute_script("LOAD vss")
     except Exception as e:
-        pytest.skip(f"DuckDB VSS extension not available: {e}")
+        pytest.skip(f"DuckDB VSS extension missing: {e}")
 
     try:
         adbc_duckdb_driver.execute_script(

@@ -175,7 +175,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
     def create_tables(self) -> None:
         if not self._enabled:
-            logger.debug("Memory store disabled, skipping table creation")
             return
 
         with self._config.provide_connection() as conn:
@@ -198,8 +197,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 conn.commit()
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
-
-        logger.debug("Created ADK memory table: %s", self._memory_table)
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:

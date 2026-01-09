@@ -480,7 +480,7 @@ def update_cache_config(config: CacheConfig) -> None:
         config: New cache configuration to apply globally
     """
     logger = get_logger("sqlspec.cache")
-    logger.info("Cache configuration updated: %s", config)
+    logger.debug("Cache configuration updated: %s", config)
 
     global _default_cache, _global_cache_config, _namespaced_cache
     _global_cache_config = config
@@ -495,7 +495,7 @@ def update_cache_config(config: CacheConfig) -> None:
     _namespaced_cache = None
 
     logger = get_logger("sqlspec.cache")
-    logger.info(
+    logger.debug(
         "Cache configuration updated - all caches cleared",
         extra={
             "compiled_cache_enabled": config.compiled_cache_enabled,
@@ -524,7 +524,7 @@ def log_cache_stats() -> None:
     """Log cache statistics."""
     logger = get_logger("sqlspec.cache")
     stats = get_cache_stats()
-    logger.info("Cache Statistics: %s", stats)
+    logger.debug("Cache Statistics: %s", stats)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

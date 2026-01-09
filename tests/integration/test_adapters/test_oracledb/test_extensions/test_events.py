@@ -36,7 +36,7 @@ def _prepare_queue_table() -> None:
     try:
         import oracledb
     except ImportError as error:  # pragma: no cover - optional dependency guard
-        _maybe_skip(f"oracledb not installed: {error}")
+        _maybe_skip(f"oracledb missing: {error}")
 
     try:
         connection = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=_build_dsn())
@@ -91,7 +91,7 @@ def test_oracle_sync_event_channel_queue_fallback(tmp_path: "Path") -> None:
     try:
         _prepare_queue_table()
     except SQLSpecError as error:  # pragma: no cover - service unavailable guard
-        _maybe_skip(f"oracle service unavailable: {error}")
+        _maybe_skip(f"Oracle unavailable: {error}")
 
     config = OracleSyncConfig(
         connection_config={
@@ -131,7 +131,7 @@ async def test_oracle_async_event_channel_queue_fallback(tmp_path: "Path") -> No
     try:
         _prepare_queue_table()
     except SQLSpecError as error:  # pragma: no cover - service unavailable guard
-        _maybe_skip(f"oracle service unavailable: {error}")
+        _maybe_skip(f"Oracle unavailable: {error}")
 
     config = OracleAsyncConfig(
         connection_config={

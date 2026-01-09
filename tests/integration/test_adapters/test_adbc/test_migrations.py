@@ -74,7 +74,7 @@ def down():
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_migration_workflow() -> None:
     """Test ADBC PostgreSQL migration workflow with test database."""
-    pytest.skip("PostgreSQL ADBC driver tests require running PostgreSQL instance")
+    pytest.skip("Requires running PostgreSQL")
 
 
 @pytest.mark.xdist_group("sqlite")

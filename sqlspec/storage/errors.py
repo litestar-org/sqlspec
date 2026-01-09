@@ -78,7 +78,7 @@ def raise_storage_error(error: Exception, *, backend: str, operation: str, path:
     }
 
     if is_missing:
-        logger.debug("Storage object missing during %s", operation, extra=log_extra)
+        logger.info("Storage object missing during %s", operation, extra=log_extra)
         raise FileNotFoundInStorageError(normalized.message) from error
 
     logger.warning("Storage operation %s failed", operation, extra=log_extra, exc_info=error)

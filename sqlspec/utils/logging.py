@@ -10,6 +10,7 @@ from logging import LogRecord
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec._serialization import encode_json
+from sqlspec.observability._common import get_trace_context
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.correlation import correlation_id_var as _correlation_id_var
 
@@ -80,6 +81,14 @@ class StructuredFormatter(logging.Formatter):
         correlation_id = cast("str | None", record_dict.get("correlation_id")) or get_correlation_id()
         if correlation_id:
             log_entry["correlation_id"] = correlation_id
+        trace_id = cast("str | None", record_dict.get("trace_id"))
+        span_id = cast("str | None", record_dict.get("span_id"))
+        if trace_id is None or span_id is None:
+            trace_id, span_id = get_trace_context()
+        if trace_id:
+            log_entry["trace_id"] = trace_id
+        if span_id:
+            log_entry["span_id"] = span_id
 
         extra_fields = record_dict.get("extra_fields")
         if isinstance(extra_fields, dict):

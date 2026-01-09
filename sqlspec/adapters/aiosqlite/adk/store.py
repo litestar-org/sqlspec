@@ -4,13 +4,11 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 
-logger = get_logger("adapters.aiosqlite.adk.store")
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
@@ -110,7 +108,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             }
         )
         store = AiosqliteADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - JSON stored as TEXT with SQLSpec serializers (msgspec/orjson/stdlib)
@@ -232,7 +230,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await self._enable_foreign_keys(driver.connection)
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None

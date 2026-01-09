@@ -13,10 +13,7 @@ import pytest
 from sqlspec.adapters.spanner.core import driver_profile
 from sqlspec.core import ParameterStyle
 
-pytestmark = [
-    pytest.mark.spanner,
-    pytest.mark.skip(reason="Spangres fixtures not yet implemented - requires PostgreSQL-dialect database"),
-]
+pytestmark = [pytest.mark.spanner, pytest.mark.skip(reason="Spangres fixtures missing")]
 
 
 def test_spangres_positional_parameter_basic() -> None:

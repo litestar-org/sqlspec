@@ -49,7 +49,7 @@ def duckdb_session() -> Generator[AdbcDriver, None, None]:
             or "Failed to import connect function" in str(e)
             or "Could not configure connection" in str(e)
         ):
-            pytest.skip(f"DuckDB ADBC driver not available: {e}")
+            pytest.skip(f"DuckDB ADBC missing: {e}")
         raise
 
 

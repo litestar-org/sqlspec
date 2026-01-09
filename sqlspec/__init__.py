@@ -48,6 +48,7 @@ from sqlspec.extensions.events import (
 )
 from sqlspec.loader import SQLFile, SQLFileLoader
 from sqlspec.observability import (
+    LoggingConfig,
     ObservabilityConfig,
     ObservabilityRuntime,
     RedactionConfig,
@@ -55,6 +56,7 @@ from sqlspec.observability import (
     StatementObserver,
     TelemetryConfig,
     create_event,
+    create_statement_observer,
     default_statement_observer,
     format_statement_event,
 )
@@ -82,6 +84,7 @@ __all__ = (
     "ExecutionResult",
     "FunctionColumn",
     "Insert",
+    "LoggingConfig",
     "Merge",
     "ObservabilityConfig",
     "ObservabilityRuntime",
@@ -122,6 +125,7 @@ __all__ = (
     "builder",
     "core",
     "create_event",
+    "create_statement_observer",
     "default_statement_observer",
     "driver",
     "exceptions",

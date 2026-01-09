@@ -7,7 +7,6 @@ from google.cloud.spanner_v1 import param_types
 
 from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -25,8 +24,6 @@ if TYPE_CHECKING:
 
         def list_tables(self) -> Any: ...
 
-
-logger = get_logger("adapters.spanner.litestar.store")
 
 __all__ = ("SpannerSyncStore",)
 

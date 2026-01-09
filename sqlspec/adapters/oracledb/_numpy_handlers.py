@@ -125,9 +125,7 @@ def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
         connection: Oracle connection (sync or async).
     """
     if not NUMPY_INSTALLED:
-        logger.debug("NumPy not installed - skipping vector type handlers")
         return
 
     connection.inputtypehandler = _input_type_handler
     connection.outputtypehandler = _output_type_handler
-    logger.debug("Registered NumPy vector type handlers on Oracle connection")

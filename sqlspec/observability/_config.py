@@ -94,10 +94,59 @@ class TelemetryConfig:
         )
 
 
+class LoggingConfig:
+    """Controls log output format and verbosity."""
+
+    __slots__ = ("include_sql_hash", "include_trace_context", "parameter_truncation_count", "sql_truncation_length")
+
+    def __init__(
+        self,
+        *,
+        include_sql_hash: bool = True,
+        sql_truncation_length: int = 2000,
+        parameter_truncation_count: int = 100,
+        include_trace_context: bool = True,
+    ) -> None:
+        self.include_sql_hash = include_sql_hash
+        self.sql_truncation_length = sql_truncation_length
+        self.parameter_truncation_count = parameter_truncation_count
+        self.include_trace_context = include_trace_context
+
+    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+        msg = "LoggingConfig objects are mutable and unhashable"
+        raise TypeError(msg)
+
+    def copy(self) -> "LoggingConfig":
+        """Return a shallow copy of the logging configuration."""
+
+        return LoggingConfig(
+            include_sql_hash=self.include_sql_hash,
+            sql_truncation_length=self.sql_truncation_length,
+            parameter_truncation_count=self.parameter_truncation_count,
+            include_trace_context=self.include_trace_context,
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"LoggingConfig(include_sql_hash={self.include_sql_hash!r}, sql_truncation_length={self.sql_truncation_length!r}, "
+            f"parameter_truncation_count={self.parameter_truncation_count!r}, include_trace_context={self.include_trace_context!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, LoggingConfig):
+            return NotImplemented
+        return (
+            self.include_sql_hash == other.include_sql_hash
+            and self.sql_truncation_length == other.sql_truncation_length
+            and self.parameter_truncation_count == other.parameter_truncation_count
+            and self.include_trace_context == other.include_trace_context
+        )
+
+
 class ObservabilityConfig:
     """Aggregates lifecycle hooks, observers, and telemetry toggles."""
 
-    __slots__ = ("lifecycle", "print_sql", "redaction", "statement_observers", "telemetry")
+    __slots__ = ("lifecycle", "logging", "print_sql", "redaction", "statement_observers", "telemetry")
 
     def __init__(
         self,
@@ -107,12 +156,14 @@ class ObservabilityConfig:
         statement_observers: tuple[StatementObserver, ...] | Iterable[StatementObserver] | None = None,
         telemetry: "TelemetryConfig | None" = None,
         redaction: "RedactionConfig | None" = None,
+        logging: "LoggingConfig | None" = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.print_sql = print_sql
         self.statement_observers = tuple(statement_observers) if statement_observers is not None else None
         self.telemetry = telemetry
         self.redaction = redaction
+        self.logging = logging
 
     def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
         msg = "ObservabilityConfig objects are mutable and unhashable"
@@ -125,12 +176,14 @@ class ObservabilityConfig:
         observers = tuple(self.statement_observers) if self.statement_observers else None
         telemetry_copy = self.telemetry.copy() if self.telemetry else None
         redaction_copy = self.redaction.copy() if self.redaction else None
+        logging_copy = self.logging.copy() if self.logging else None
         return ObservabilityConfig(
             lifecycle=lifecycle_copy,
             print_sql=self.print_sql,
             statement_observers=observers,
             telemetry=telemetry_copy,
             redaction=redaction_copy,
+            logging=logging_copy,
         )
 
     @classmethod
@@ -162,6 +215,7 @@ class ObservabilityConfig:
 
         telemetry = override.telemetry.copy() if override.telemetry else base.telemetry
         redaction = _merge_redaction(base.redaction, override.redaction)
+        logging = _merge_logging(base.logging, override.logging)
 
         return ObservabilityConfig(
             lifecycle=lifecycle,
@@ -169,10 +223,14 @@ class ObservabilityConfig:
             statement_observers=observers,
             telemetry=telemetry,
             redaction=redaction,
+            logging=logging,
         )
 
     def __repr__(self) -> str:
-        return f"ObservabilityConfig(lifecycle={self.lifecycle!r}, print_sql={self.print_sql!r}, statement_observers={self.statement_observers!r}, telemetry={self.telemetry!r}, redaction={self.redaction!r})"
+        return (
+            f"ObservabilityConfig(lifecycle={self.lifecycle!r}, print_sql={self.print_sql!r}, statement_observers={self.statement_observers!r}, telemetry={self.telemetry!r}, "
+            f"redaction={self.redaction!r}, logging={self.logging!r})"
+        )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ObservabilityConfig):
@@ -183,6 +241,7 @@ class ObservabilityConfig:
             and self.statement_observers == other.statement_observers
             and self.telemetry == other.telemetry
             and self.redaction == other.redaction
+            and self.logging == other.logging
         )
 
 
@@ -201,6 +260,14 @@ def _merge_redaction(base: "RedactionConfig | None", override: "RedactionConfig 
     if override.parameter_allow_list is not None:
         merged.parameter_allow_list = tuple(override.parameter_allow_list)
     return merged
+
+
+def _merge_logging(base: "LoggingConfig | None", override: "LoggingConfig | None") -> "LoggingConfig | None":
+    if base is None and override is None:
+        return None
+    if override is None:
+        return base.copy() if base else None
+    return override.copy()
 
 
 def _normalize_lifecycle(config: "LifecycleConfig | None") -> "LifecycleConfig | None":
@@ -228,4 +295,11 @@ def _merge_lifecycle(base: "LifecycleConfig | None", override: "LifecycleConfig 
     return cast("LifecycleConfig", merged_dict)
 
 
-__all__ = ("LifecycleHook", "ObservabilityConfig", "RedactionConfig", "StatementObserver", "TelemetryConfig")
+__all__ = (
+    "LifecycleHook",
+    "LoggingConfig",
+    "ObservabilityConfig",
+    "RedactionConfig",
+    "StatementObserver",
+    "TelemetryConfig",
+)
