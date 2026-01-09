@@ -11,11 +11,9 @@ from sqlspec.core.parameters._alignment import looks_like_execute_many
 from sqlspec.core.parameters._converter import ParameterConverter
 from sqlspec.core.parameters._types import (
     ParameterInfo,
-    ParameterMapping,
     ParameterPayload,
     ParameterProcessingResult,
     ParameterProfile,
-    ParameterSequence,
     ParameterStyle,
     ParameterStyleConfig,
     TypedParameter,

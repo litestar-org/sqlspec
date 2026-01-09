@@ -1500,7 +1500,10 @@ class CommonDriverAttributesMixin:
                 )
                 raise ImproperConfigurationError(msg)
 
-            if expr.args.get("group"):
+            has_group = expr.args.get("group")
+            has_joins = expr.args.get("joins")
+            needs_subquery = has_group or has_joins or cte is not None
+            if needs_subquery:
                 subquery = expr.subquery(alias="grouped_data")
                 count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
             else:

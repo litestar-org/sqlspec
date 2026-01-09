@@ -12,7 +12,6 @@ import pytest
 
 pytestmark = [
     pytest.mark.spanner,
-    pytest.mark.spangres,
     pytest.mark.skip(reason="Spangres fixtures not yet implemented - requires PostgreSQL-dialect database"),
 ]
 

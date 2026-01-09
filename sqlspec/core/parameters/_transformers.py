@@ -220,7 +220,8 @@ def replace_null_parameters_with_literals(
 
     cleaned_parameters: object
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
-        cleaned_parameters = [value for index, value in enumerate(parameters) if index not in null_positions]
+        cleaned_list = [value for index, value in enumerate(parameters) if index not in null_positions]
+        cleaned_parameters = tuple(cleaned_list) if isinstance(parameters, tuple) else cleaned_list
     elif isinstance(parameters, Mapping):
         cleaned_dict: dict[str, object] = {}
         next_numeric_index = 1
