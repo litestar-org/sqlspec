@@ -144,6 +144,20 @@ class LocalStore:
         encoded = data.encode(encoding)
         self.write_bytes(path, encoded, **kwargs)
 
+    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes from file."""
+        resolved = self._resolve_path(path)
+        chunk_size = chunk_size or 65536  # Default 64KB
+        try:
+            with resolved.open("rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+        except FileNotFoundError as error:
+            raise FileNotFoundError(str(resolved)) from error
+
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in directory."""
         # If prefix looks like a directory path, treat as directory
@@ -350,6 +364,14 @@ class LocalStore:
     async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to file asynchronously."""
         await async_(self.write_text)(path, data, encoding, **kwargs)
+
+    async def stream_read_async(
+        self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
+    ) -> AsyncIterator[bytes]:
+        """Stream bytes from file asynchronously."""
+        from sqlspec.storage.backends.base import AsyncBytesIterator
+
+        return AsyncBytesIterator(self.stream_read(path, chunk_size, **kwargs))
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects asynchronously."""

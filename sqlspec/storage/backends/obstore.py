@@ -474,6 +474,23 @@ class ObStoreBackend:
             path=resolved_path,
         )
 
+    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes using obstore.
+
+        Note:
+            For remote backends, this currently performs a full read and yields chunks
+            as obstore's sync client doesn't expose a streaming iterator.
+            Use stream_read_async for true streaming.
+        """
+        resolved_path = self._resolve_path(path)
+        data = self.read_bytes(resolved_path)
+        
+        if chunk_size:
+            for i in range(0, len(data), chunk_size):
+                yield data[i : i + chunk_size]
+        else:
+            yield data
+
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
         """Stream Arrow record batches.
 
@@ -608,6 +625,33 @@ class ObStoreBackend:
             mode="async",
             path=resolved_path,
         )
+
+    async def stream_read_async(
+        self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
+    ) -> AsyncIterator[bytes]:
+        """Stream bytes from storage asynchronously."""
+        if self._is_local_store:
+            resolved_path = self._resolve_path_for_local_store(path)
+        else:
+            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
+        result = await self.store.get_async(resolved_path)
+        stream = result.stream()
+
+        async def _generator() -> AsyncIterator[bytes]:
+            async for chunk in stream:
+                yield bytes(chunk)
+
+            _log_storage_event(
+                "storage.read",
+                backend_type=self.backend_type,
+                protocol=self.protocol,
+                operation="stream_read",
+                mode="async",
+                path=resolved_path,
+            )
+
+        return _generator()
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""

@@ -1,6 +1,7 @@
 """Storage pipeline scaffolding for driver-aware storage bridge."""
 
 from collections import deque
+from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
 from time import perf_counter, time
@@ -373,6 +374,17 @@ class SyncStoragePipeline:
         }
         return table, telemetry
 
+    def stream_read(
+        self,
+        source: StorageDestination,
+        *,
+        chunk_size: int | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "Iterator[bytes]":
+        """Stream bytes from an artifact."""
+        backend, path = self._resolve_backend(source, storage_options)
+        return backend.stream_read(path, chunk_size=chunk_size)
+
     def allocate_staging_artifacts(self, requests: "list[StorageLoadRequest]") -> "list[StagedArtifact]":
         """Allocate staging metadata for upcoming loads."""
 
@@ -556,3 +568,14 @@ class AsyncStoragePipeline:
             "backend": backend_name,
         }
         return table, telemetry
+
+    async def stream_read_async(
+        self,
+        source: StorageDestination,
+        *,
+        chunk_size: int | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "AsyncIterator[bytes]":
+        """Stream bytes from an artifact asynchronously."""
+        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
+        return await backend.stream_read_async(path, chunk_size=chunk_size)

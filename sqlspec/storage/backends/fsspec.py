@@ -398,6 +398,18 @@ class FSSpecBackend:
         )
         raise NotImplementedError(msg)
 
+    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes from storage."""
+        resolved_path = self._resolve_path(path)
+        chunk_size = chunk_size or 65536
+        
+        with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage.
 
@@ -425,13 +437,21 @@ class FSSpecBackend:
                 )
                 yield from parquet_file.iter_batches()  # pyright: ignore[reportUnknownMemberType]
 
-    async def read_bytes_async(self, path: str | Path, **kwargs: Any) -> bytes:
+    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from storage asynchronously."""
         return await async_(self.read_bytes)(path, **kwargs)
 
-    async def write_bytes_async(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
         """Write bytes to storage asynchronously."""
         return await async_(self.write_bytes)(path, data, **kwargs)
+
+    async def stream_read_async(
+        self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
+    ) -> AsyncIterator[bytes]:
+        """Stream bytes from storage asynchronously."""
+        from sqlspec.storage.backends.base import AsyncBytesIterator
+
+        return AsyncBytesIterator(self.stream_read(path, chunk_size, **kwargs))
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.
@@ -447,7 +467,7 @@ class FSSpecBackend:
 
         return AsyncArrowBatchIterator(self.stream_arrow(pattern, **kwargs))
 
-    async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
+    async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""
         return await async_(self.read_text)(path, encoding, **kwargs)
 

@@ -8,7 +8,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
-__all__ = ("AsyncArrowBatchIterator", "ObjectStoreBase")
+__all__ = ("AsyncArrowBatchIterator", "AsyncBytesIterator", "ObjectStoreBase")
 
 
 class AsyncArrowBatchIterator:
@@ -50,6 +50,45 @@ class AsyncArrowBatchIterator:
             raise StopAsyncIteration from None
 
 
+class AsyncBytesIterator:
+    """Async iterator wrapper for sync bytes iterators.
+
+    This class implements the async iterator protocol without using async generators,
+    allowing it to be compiled by mypyc (which doesn't support async generators).
+
+    The class wraps a synchronous iterator and exposes it as an async iterator,
+    enabling usage with `async for` syntax.
+    """
+
+    __slots__ = ("_sync_iter",)
+
+    def __init__(self, sync_iterator: "Iterator[bytes]") -> None:
+        """Initialize the async iterator wrapper.
+
+        Args:
+            sync_iterator: The synchronous iterator to wrap.
+        """
+        self._sync_iter = sync_iterator
+
+    def __aiter__(self) -> "AsyncBytesIterator":
+        """Return self as the async iterator."""
+        return self
+
+    async def __anext__(self) -> bytes:
+        """Get the next item from the iterator asynchronously.
+
+        Returns:
+            The next chunk of bytes.
+
+        Raises:
+            StopAsyncIteration: When the iterator is exhausted.
+        """
+        try:
+            return next(self._sync_iter)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class ObjectStoreBase(ABC):
     """Base class for storage backends."""
@@ -64,6 +103,11 @@ class ObjectStoreBase(ABC):
     @abstractmethod
     def write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Write bytes to storage."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def stream_read(self, path: str, chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes from storage."""
         raise NotImplementedError
 
     @abstractmethod
@@ -154,6 +198,13 @@ class ObjectStoreBase(ABC):
     @abstractmethod
     async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to storage asynchronously."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def stream_read_async(
+        self, path: str, chunk_size: "int | None" = None, **kwargs: Any
+    ) -> AsyncIterator[bytes]:
+        """Stream bytes from storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod

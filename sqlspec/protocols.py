@@ -509,6 +509,11 @@ class ObjectStoreProtocol(Protocol):
         msg = "Arrow streaming not implemented"
         raise NotImplementedError(msg)
 
+    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> "Iterator[bytes]":
+        """Stream bytes from an object."""
+        msg = "Stream reading not implemented"
+        raise NotImplementedError(msg)
+
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Async read bytes from an object."""
         msg = "Async operations not implemented"
@@ -527,6 +532,13 @@ class ObjectStoreProtocol(Protocol):
     async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Async write text to an object."""
         msg = "Async operations not implemented"
+        raise NotImplementedError(msg)
+
+    async def stream_read_async(
+        self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
+    ) -> "AsyncIterator[bytes]":
+        """Stream bytes from an object asynchronously."""
+        msg = "Async stream reading not implemented"
         raise NotImplementedError(msg)
 
     async def exists_async(self, path: "str | Path", **kwargs: Any) -> bool:
