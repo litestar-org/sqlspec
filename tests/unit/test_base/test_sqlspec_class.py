@@ -176,11 +176,11 @@ def test_log_cache_stats_logs_to_configured_logger() -> None:
         SQLSpec.log_cache_stats()
 
         mock_get_logger.assert_called_once_with("sqlspec.cache")
-        mock_logger.info.assert_called_once()
+        mock_logger.log.assert_called_once()
 
-        call_args = mock_logger.info.call_args
+        call_args = mock_logger.log.call_args
         assert call_args is not None
-        assert "Cache Statistics" in call_args[0][0]
+        assert "cache.stats" in call_args[0][1]
 
 
 @requires_interpreted
@@ -460,9 +460,9 @@ def test_cache_configuration_logging_integration(mock_get_logger: MagicMock) -> 
         new_config = CacheConfig(sql_cache_size=3333, fragment_cache_enabled=False)
         SQLSpec.update_cache_config(new_config)
 
-        mock_logger.info.assert_called()
-        log_call = mock_logger.info.call_args
-        assert "Cache configuration updated" in log_call[0][0]
+        mock_logger.log.assert_called()
+        log_calls = [call[0][1] for call in mock_logger.log.call_args_list]
+        assert any("cache.config" in msg for msg in log_calls)
 
     finally:
         SQLSpec.update_cache_config(original_config)

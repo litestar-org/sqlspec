@@ -10,14 +10,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
-from sqlspec.extensions.events import (
-    EventMessage,
-    build_queue_backend,
-    get_runtime_hints,
-    normalize_event_channel_name,
-    resolve_adapter_name,
-)
+from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_name
+from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._protocols import AsyncEventBackendProtocol, SyncEventBackendProtocol
+from sqlspec.extensions.events._queue import build_queue_backend
+from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_span_attribute
 from sqlspec.utils.uuids import uuid4

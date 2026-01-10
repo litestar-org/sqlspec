@@ -744,6 +744,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                 cursor = await conn.execute(sql, params)
                 inserted_count += cursor.rowcount
                 await cursor.close()
+            await conn.commit()
         return inserted_count
 
     async def search_entries(
@@ -779,14 +780,15 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         async with self._config.provide_connection() as conn:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
+            columns = [col[0] for col in cursor.description or []]
             await cursor.close()
         records: list[MemoryRecord] = []
         for row in rows:
-            record = cast("MemoryRecord", dict(row))
-            record["timestamp"] = _julian_to_datetime(row["timestamp"])
-            record["inserted_at"] = _julian_to_datetime(row["inserted_at"])
-            record["content_json"] = from_json(row["content_json"])
-            record["metadata_json"] = from_json(row["metadata_json"]) if row["metadata_json"] else None
+            record = cast("MemoryRecord", dict(zip(columns, row, strict=False)))
+            record["timestamp"] = _julian_to_datetime(record["timestamp"])
+            record["inserted_at"] = _julian_to_datetime(record["inserted_at"])
+            record["content_json"] = from_json(record["content_json"])
+            record["metadata_json"] = from_json(record["metadata_json"]) if record["metadata_json"] else None
             records.append(record)
         return records
 

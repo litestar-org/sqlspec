@@ -35,13 +35,14 @@ async def test_asyncpg_statement_logging_format(postgres_service: "PostgresServi
             "min_size": 1,
             "max_size": 2,
         },
-        observability_config=ObservabilityConfig(logging=LoggingConfig(include_trace_context=False)),
+        observability_config=ObservabilityConfig(print_sql=True, logging=LoggingConfig(include_trace_context=False)),
     )
     try:
         async with config.provide_session() as driver:
             await driver.execute("SELECT 1")
     finally:
         logger.removeHandler(handler)
+        logger.propagate = True
 
     output = stream.getvalue().strip()
     assert "db.query" in output
@@ -55,7 +56,7 @@ def test_sqlite_statement_logging_format_with_correlation_id() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
             connection_config={"database": tmp.name},
-            observability_config=ObservabilityConfig(logging=LoggingConfig(include_trace_context=False)),
+            observability_config=ObservabilityConfig(print_sql=True, logging=LoggingConfig(include_trace_context=False)),
         )
         try:
             with CorrelationContext.context("cid-logging"):
@@ -63,6 +64,7 @@ def test_sqlite_statement_logging_format_with_correlation_id() -> None:
                     driver.execute("SELECT 1")
         finally:
             logger.removeHandler(handler)
+            logger.propagate = True
 
     output = stream.getvalue().strip()
     assert "db.query" in output

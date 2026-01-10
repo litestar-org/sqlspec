@@ -599,7 +599,7 @@ def test_log_cache_stats_function() -> None:
         log_cache_stats()
 
         mock_get_logger.assert_called_once_with("sqlspec.cache")
-        mock_logger.info.assert_called_once()
+        mock_logger.log.assert_called_once()
 
 
 def test_namespaced_cache_interface() -> None:

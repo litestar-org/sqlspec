@@ -328,8 +328,7 @@ def test_skipped_file_logging(tmp_path: Path, caplog) -> None:
     with caplog.at_level(logging.DEBUG):
         loader.load_sql(ddl_file)
 
-    assert "Skipping SQL file without named statements" in caplog.text
-    assert str(ddl_file) in caplog.text
+    assert "sql.load" in caplog.text
 
 
 def test_strip_leading_comments() -> None:

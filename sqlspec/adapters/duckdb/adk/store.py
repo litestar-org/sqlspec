@@ -719,18 +719,20 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         inserted_count = 0
         if self._owner_id_column_name:
             sql = f"""
-            INSERT OR IGNORE INTO {self._memory_table} (
+            INSERT INTO {self._memory_table} (
                 id, session_id, app_name, user_id, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO NOTHING RETURNING 1
             """
         else:
             sql = f"""
-            INSERT OR IGNORE INTO {self._memory_table} (
+            INSERT INTO {self._memory_table} (
                 id, session_id, app_name, user_id, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO NOTHING RETURNING 1
             """
 
         with self._config.provide_connection() as conn:
@@ -766,7 +768,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                         entry["inserted_at"],
                     )
                 result = conn.execute(sql, params)
-                inserted_count += result.rowcount
+                inserted_count += len(result.fetchall())
             conn.commit()
         return inserted_count
 
@@ -823,11 +825,12 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
+        sql = f"DELETE FROM {self._memory_table} WHERE session_id = ? RETURNING 1"
         with self._config.provide_connection() as conn:
             result = conn.execute(sql, (session_id,))
+            deleted_count = len(result.fetchall())
             conn.commit()
-            return result.rowcount
+            return deleted_count
 
     def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
@@ -838,8 +841,10 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         sql = f"""
         DELETE FROM {self._memory_table}
         WHERE inserted_at < (CURRENT_TIMESTAMP - INTERVAL '{days} days')
+        RETURNING 1
         """
         with self._config.provide_connection() as conn:
             result = conn.execute(sql)
+            deleted_count = len(result.fetchall())
             conn.commit()
-            return result.rowcount
+            return deleted_count
