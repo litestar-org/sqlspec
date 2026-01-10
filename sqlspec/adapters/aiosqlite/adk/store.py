@@ -784,12 +784,12 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             await cursor.close()
         records: list[MemoryRecord] = []
         for row in rows:
-            record = cast("MemoryRecord", dict(zip(columns, row, strict=False)))
-            record["timestamp"] = _julian_to_datetime(record["timestamp"])
-            record["inserted_at"] = _julian_to_datetime(record["inserted_at"])
-            record["content_json"] = from_json(record["content_json"])
-            record["metadata_json"] = from_json(record["metadata_json"]) if record["metadata_json"] else None
-            records.append(record)
+            raw = dict(zip(columns, row, strict=False))
+            raw["timestamp"] = _julian_to_datetime(raw["timestamp"])
+            raw["inserted_at"] = _julian_to_datetime(raw["inserted_at"])
+            raw["content_json"] = from_json(raw["content_json"])
+            raw["metadata_json"] = from_json(raw["metadata_json"]) if raw["metadata_json"] else None
+            records.append(cast("MemoryRecord", raw))
         return records
 
     async def delete_entries_by_session(self, session_id: str) -> int:
