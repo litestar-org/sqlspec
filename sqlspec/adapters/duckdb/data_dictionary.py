@@ -17,7 +17,10 @@ from sqlspec.driver import (
 __all__ = ("DuckDBDataDictionary",)
 
 if TYPE_CHECKING:
+    import re
+
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
+    from sqlspec.data_dictionary import DialectConfig
 
 
 @mypyc_attr(native_class=False)
@@ -27,6 +30,34 @@ class DuckDBDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["DuckDBDriver
     __slots__ = ()
 
     dialect = "duckdb"
+
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver."""
+        return SyncDataDictionaryBase.get_cached_version(self, driver_id)
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        """Cache version info for a driver."""
+        SyncDataDictionaryBase.cache_version(self, driver_id, version)
+
+    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
+        """Parse version string using a specific regex pattern."""
+        return SyncDataDictionaryBase.parse_version_with_pattern(self, pattern, version_str)
+
+    def get_dialect_config(self) -> "DialectConfig":
+        """Return the dialect configuration for this data dictionary."""
+        return DialectSQLMixin.get_dialect_config(self)
+
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        return DialectSQLMixin.resolve_schema(self, schema)
+
+    def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
+        """Resolve a feature flag using dialect config and version info."""
+        return DialectSQLMixin.resolve_feature_flag(self, feature, version)
+
+    def list_available_features(self) -> "list[str]":
+        """List all features available for the dialect."""
+        return DialectSQLMixin.list_available_features(self)
 
     def get_version(self, driver: "DuckDBDriver") -> "VersionInfo | None":
         """Get DuckDB database version information.

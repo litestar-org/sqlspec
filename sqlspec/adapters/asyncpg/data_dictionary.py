@@ -15,7 +15,10 @@ from sqlspec.driver import (
 )
 
 if TYPE_CHECKING:
+    import re
+
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
+    from sqlspec.data_dictionary import DialectConfig
 
 __all__ = ("AsyncpgDataDictionary",)
 
@@ -27,6 +30,30 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase, DialectSQLMixin):
     __slots__ = ()
 
     dialect = "postgres"
+
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver."""
+        return AsyncDataDictionaryBase.get_cached_version(self, driver_id)
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        """Cache version info for a driver."""
+        AsyncDataDictionaryBase.cache_version(self, driver_id, version)
+
+    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
+        """Parse version string using a specific regex pattern."""
+        return AsyncDataDictionaryBase.parse_version_with_pattern(self, pattern, version_str)
+
+    def get_dialect_config(self) -> "DialectConfig":
+        """Return the dialect configuration for this data dictionary."""
+        return DialectSQLMixin.get_dialect_config(self)
+
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        return DialectSQLMixin.resolve_schema(self, schema)
+
+    def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
+        """Resolve a feature flag using dialect config and version info."""
+        return DialectSQLMixin.resolve_feature_flag(self, feature, version)
 
     def get_cached_version_for_driver(self, driver: "AsyncpgDriver") -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver instance."""

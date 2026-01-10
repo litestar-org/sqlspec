@@ -22,6 +22,8 @@ from sqlspec.exceptions import SQLFileNotFoundError
 __all__ = ("AdbcDataDictionary",)
 
 if TYPE_CHECKING:
+    import re
+
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import SQL
 
@@ -30,6 +32,18 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
     """ADBC multi-dialect data dictionary."""
 
     __slots__ = ()
+
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver."""
+        return SyncDataDictionaryBase.get_cached_version(self, driver_id)
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        """Cache version info for a driver."""
+        SyncDataDictionaryBase.cache_version(self, driver_id, version)
+
+    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
+        """Parse version string using a specific regex pattern."""
+        return SyncDataDictionaryBase.parse_version_with_pattern(self, pattern, version_str)
 
     def _normalize_dialect(self, driver: "AdbcDriver") -> str:
         dialect_value = str(driver.dialect)

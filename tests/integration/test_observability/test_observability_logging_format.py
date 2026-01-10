@@ -56,7 +56,9 @@ def test_sqlite_statement_logging_format_with_correlation_id() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
             connection_config={"database": tmp.name},
-            observability_config=ObservabilityConfig(print_sql=True, logging=LoggingConfig(include_trace_context=False)),
+            observability_config=ObservabilityConfig(
+                print_sql=True, logging=LoggingConfig(include_trace_context=False)
+            ),
         )
         try:
             with CorrelationContext.context("cid-logging"):

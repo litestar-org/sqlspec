@@ -179,6 +179,14 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
 
     __slots__ = ()
 
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver."""
+        return SyncDataDictionaryBase.get_cached_version(self, driver_id)
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        """Cache version info for a driver."""
+        SyncDataDictionaryBase.cache_version(self, driver_id, version)
+
     def get_cached_version_for_driver(self, driver: "OracleSyncDriver") -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver instance."""
         return self.get_cached_version(id(driver))
@@ -307,6 +315,14 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
     """Oracle-specific async data dictionary."""
 
     __slots__ = ()
+
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        """Get cached version info for a driver."""
+        return AsyncDataDictionaryBase.get_cached_version(self, driver_id)
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        """Cache version info for a driver."""
+        AsyncDataDictionaryBase.cache_version(self, driver_id, version)
 
     def get_cached_version_for_driver(self, driver: "OracleAsyncDriver") -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver instance."""
