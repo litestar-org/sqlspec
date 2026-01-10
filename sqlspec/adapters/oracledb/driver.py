@@ -354,120 +354,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
 
-    def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
-        """Create context manager for Oracle cursor.
-
-        Args:
-            connection: Oracle database connection
-
-        Returns:
-            Context manager for cursor operations
-
-        """
-        return OracleSyncCursor(connection)
-
-    def handle_database_exceptions(self) -> "OracleSyncExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately."""
-        return OracleSyncExceptionHandler()
-
-    def dispatch_execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Parameters are embedded as static values for script execution compatibility.
-
-        Args:
-            cursor: Oracle cursor object
-            statement: SQL script statement to execute
-
-        Returns:
-            Execution result containing statement count and success information
-
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_cursor = cursor
-
-        for stmt in statements:
-            cursor.execute(stmt, prepared_parameters or {})
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
-        """Execute a StatementStack using Oracle's pipeline when available."""
-        if not isinstance(stack, StatementStack) or not stack:
-            return super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        blocker = self._stack_native_blocker(stack)
-        if blocker is not None:
-            self._log_pipeline_skip(blocker, stack)
-            return super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        if not self._pipeline_native_supported():
-            self._log_pipeline_skip(self._pipeline_support_reason or "database_version", stack)
-            return super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        return self._execute_stack_native(stack, continue_on_error=continue_on_error)
-
-    def dispatch_execute_many(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using Oracle batch processing.
-
-        Args:
-            cursor: Oracle cursor object
-            statement: SQL statement with multiple parameter sets
-
-        Returns:
-            Execution result with affected row count
-
-        Raises:
-            ValueError: If no parameters are provided
-
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        prepared_parameters = normalize_execute_many_parameters_sync(prepared_parameters)
-        cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = len(prepared_parameters)
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
-
-    def _execute_stack_native(self, stack: "StatementStack", *, continue_on_error: bool) -> "tuple[StackResult, ...]":
-        compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
-        pipeline = oracledb.create_pipeline()
-        for compiled in compiled_operations:
-            self._add_pipeline_operation(pipeline, compiled)
-
-        results: list[StackResult] = []
-        started_transaction = False
-
-        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
-            try:
-                if not continue_on_error and not self._connection_in_transaction():
-                    self.begin()
-                    started_transaction = True
-
-                pipeline_results = self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
-                results = self._build_stack_results_from_pipeline(
-                    compiled_operations, pipeline_results, continue_on_error, observer
-                )
-
-                if started_transaction:
-                    self.commit()
-            except Exception as exc:
-                if started_transaction:
-                    try:
-                        self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
-                        logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
-                raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
-
-        return tuple(results)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def dispatch_execute(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
@@ -504,126 +393,67 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    def select_to_storage(
-        self,
-        statement: "Statement | QueryBuilder | SQL | str",
-        destination: "StorageDestination",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, object] | None" = None,
-        format_hint: "StorageFormat | None" = None,
-        telemetry: "StorageTelemetry | None" = None,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Execute a query and stream Arrow-formatted output to storage (sync)."""
-        self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_result_to_storage_sync(
-            arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
+    def dispatch_execute_many(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets using Oracle batch processing.
+
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            Execution result with affected row count
+
+        Raises:
+            ValueError: If no parameters are provided
+
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        prepared_parameters = normalize_execute_many_parameters_sync(prepared_parameters)
+        cursor.executemany(sql, prepared_parameters)
+
+        affected_rows = len(prepared_parameters)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    def dispatch_execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script with statement splitting and parameter handling.
+
+        Parameters are embedded as static values for script execution compatibility.
+
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL script statement to execute
+
+        Returns:
+            Execution result containing statement count and success information
+
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        last_cursor = cursor
+
+        for stmt in statements:
+            cursor.execute(stmt, prepared_parameters or {})
+            successful_count += 1
+
+        return self.create_execution_result(
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
-        self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
 
-    def _detect_oracle_version(self) -> "VersionInfo | None":
-        if self._oracle_version is not None:
-            return self._oracle_version
-        version = self.data_dictionary.get_version(self)
-        self._oracle_version = version
-        return version
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
 
-    def _detect_oracledb_version(self) -> "tuple[int, int, int]":
-        return ORACLEDB_VERSION
-
-    def _pipeline_native_supported(self) -> bool:
-        if self._pipeline_support is not None:
-            return self._pipeline_support
-
-        if self.stack_native_disabled:
-            self._pipeline_support = False
-            self._pipeline_support_reason = "env_override"
-            return False
-
-        if self._detect_oracledb_version() < PIPELINE_MIN_DRIVER_VERSION:
-            self._pipeline_support = False
-            self._pipeline_support_reason = "driver_version"
-            return False
-
-        if not has_pipeline_capability(self.connection):
-            self._pipeline_support = False
-            self._pipeline_support_reason = "driver_api_missing"
-            return False
-
-        version_info = self._detect_oracle_version()
-        if version_info and version_info.major >= PIPELINE_MIN_DATABASE_MAJOR:
-            self._pipeline_support = True
-            self._pipeline_support_reason = None
-            return True
-
-        self._pipeline_support = False
-        self._pipeline_support_reason = "database_version"
-        return False
-
-    def load_from_arrow(
-        self,
-        table: str,
-        source: "ArrowResult | Any",
-        *,
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        telemetry: "StorageTelemetry | None" = None,
-    ) -> "StorageBridgeJob":
-        """Load Arrow data into Oracle using batched executemany calls."""
-        self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
-        if overwrite:
-            statement = build_truncate_statement(table)
-            with self.handle_database_exceptions():
-                self.connection.execute(statement)
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            statement = build_insert_statement(table, columns)
-            with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
-                cursor.executemany(statement, records)
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
-        telemetry_payload["destination"] = table
-        self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
-
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts into Oracle."""
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
-        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-    # Oracle transaction management
     def begin(self) -> None:
         """Begin a database transaction.
 
         Oracle handles transactions automatically, so this is a no-op.
         """
         # Oracle handles transactions implicitly
-
-    def rollback(self) -> None:
-        """Rollback the current transaction.
-
-        Raises:
-            SQLSpecError: If rollback fails
-
-        """
-        try:
-            self.connection.rollback()
-        except oracledb.Error as e:
-            msg = f"Failed to rollback Oracle transaction: {e}"
-            raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
         """Commit the current transaction.
@@ -638,19 +468,38 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
-        """Execute SQL and return an Oracle DataFrame."""
-        params = parameters if parameters is not None else []
+    def rollback(self) -> None:
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If rollback fails
+
+        """
         try:
-            execute_df = self.connection.execute_df
-        except AttributeError:
-            execute_df = None
-        if execute_df is not None:
-            try:
-                return execute_df(sql, params, arraysize=batch_size or 1000)
-            except TypeError:
-                return execute_df(sql, params)
-        return self.connection.fetch_df_all(statement=sql, parameters=params, arraysize=batch_size or 1000)
+            self.connection.rollback()
+        except oracledb.Error as e:
+            msg = f"Failed to rollback Oracle transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
+        """Create context manager for Oracle cursor.
+
+        Args:
+            connection: Oracle database connection
+
+        Returns:
+            Context manager for cursor operations
+
+        """
+        return OracleSyncCursor(connection)
+
+    def handle_database_exceptions(self) -> "OracleSyncExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return OracleSyncExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # ARROW API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_arrow(
         self,
@@ -732,9 +581,94 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             arrow_schema=arrow_schema,
         )
 
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return False
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STACK EXECUTION METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
+        """Execute a StatementStack using Oracle's pipeline when available."""
+        if not isinstance(stack, StatementStack) or not stack:
+            return super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        blocker = self._stack_native_blocker(stack)
+        if blocker is not None:
+            self._log_pipeline_skip(blocker, stack)
+            return super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        if not self._pipeline_native_supported():
+            self._log_pipeline_skip(self._pipeline_support_reason or "database_version", stack)
+            return super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        return self._execute_stack_native(stack, continue_on_error=continue_on_error)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow-formatted output to storage (sync)."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline = self._storage_pipeline()
+        telemetry_payload = self._write_result_to_storage_sync(
+            arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into Oracle using batched executemany calls."""
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            statement = build_truncate_statement(table)
+            with self.handle_database_exceptions():
+                self.connection.execute(statement)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            statement = build_insert_statement(table, columns)
+            with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+                cursor.executemany(statement, records)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts into Oracle."""
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "OracledbSyncDataDictionary":
@@ -747,6 +681,99 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = OracledbSyncDataDictionary()
         return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return False
+
+    def _detect_oracle_version(self) -> "VersionInfo | None":
+        if self._oracle_version is not None:
+            return self._oracle_version
+        version = self.data_dictionary.get_version(self)
+        self._oracle_version = version
+        return version
+
+    def _detect_oracledb_version(self) -> "tuple[int, int, int]":
+        return ORACLEDB_VERSION
+
+    def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
+        """Execute SQL and return an Oracle DataFrame."""
+        params = parameters if parameters is not None else []
+        try:
+            execute_df = self.connection.execute_df
+        except AttributeError:
+            execute_df = None
+        if execute_df is not None:
+            try:
+                return execute_df(sql, params, arraysize=batch_size or 1000)
+            except TypeError:
+                return execute_df(sql, params)
+        return self.connection.fetch_df_all(statement=sql, parameters=params, arraysize=batch_size or 1000)
+
+    def _execute_stack_native(self, stack: "StatementStack", *, continue_on_error: bool) -> "tuple[StackResult, ...]":
+        compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
+        pipeline = oracledb.create_pipeline()
+        for compiled in compiled_operations:
+            self._add_pipeline_operation(pipeline, compiled)
+
+        results: list[StackResult] = []
+        started_transaction = False
+
+        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
+            try:
+                if not continue_on_error and not self._connection_in_transaction():
+                    self.begin()
+                    started_transaction = True
+
+                pipeline_results = self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
+                results = self._build_stack_results_from_pipeline(
+                    compiled_operations, pipeline_results, continue_on_error, observer
+                )
+
+                if started_transaction:
+                    self.commit()
+            except Exception as exc:
+                if started_transaction:
+                    try:
+                        self.rollback()
+                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                        logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
+                raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
+
+        return tuple(results)
+
+    def _pipeline_native_supported(self) -> bool:
+        if self._pipeline_support is not None:
+            return self._pipeline_support
+
+        if self.stack_native_disabled:
+            self._pipeline_support = False
+            self._pipeline_support_reason = "env_override"
+            return False
+
+        if self._detect_oracledb_version() < PIPELINE_MIN_DRIVER_VERSION:
+            self._pipeline_support = False
+            self._pipeline_support_reason = "driver_version"
+            return False
+
+        if not has_pipeline_capability(self.connection):
+            self._pipeline_support = False
+            self._pipeline_support_reason = "driver_api_missing"
+            return False
+
+        version_info = self._detect_oracle_version()
+        if version_info and version_info.major >= PIPELINE_MIN_DATABASE_MAJOR:
+            self._pipeline_support = True
+            self._pipeline_support_reason = None
+            return True
+
+        self._pipeline_support = False
+        self._pipeline_support_reason = "database_version"
+        return False
 
 
 class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
@@ -776,163 +803,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
 
-    def with_cursor(self, connection: OracleAsyncConnection) -> OracleAsyncCursor:
-        """Create context manager for Oracle cursor.
-
-        Args:
-            connection: Oracle database connection
-
-        Returns:
-            Context manager for cursor operations
-
-        """
-        return OracleAsyncCursor(connection)
-
-    def handle_database_exceptions(self) -> "OracleAsyncExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately."""
-        return OracleAsyncExceptionHandler()
-
-    async def dispatch_execute_script(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Parameters are embedded as static values for script execution compatibility.
-
-        Args:
-            cursor: Oracle cursor object
-            statement: SQL script statement to execute
-
-        Returns:
-            Execution result containing statement count and success information
-
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        script_params = cast("dict[str, Any]", prepared_parameters or {})
-
-        successful_count = 0
-        last_cursor = cursor
-
-        for stmt in statements:
-            await cursor.execute(stmt, script_params)
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    async def execute_stack(
-        self, stack: "StatementStack", *, continue_on_error: bool = False
-    ) -> "tuple[StackResult, ...]":
-        """Execute a StatementStack using Oracle's pipeline when available."""
-        if not isinstance(stack, StatementStack) or not stack:
-            return await super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        blocker = self._stack_native_blocker(stack)
-        if blocker is not None:
-            self._log_pipeline_skip(blocker, stack)
-            return await super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        if not await self._pipeline_native_supported():
-            self._log_pipeline_skip(self._pipeline_support_reason or "database_version", stack)
-            return await super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
-
-    async def dispatch_execute_many(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using Oracle batch processing.
-
-        Args:
-            cursor: Oracle cursor object
-            statement: SQL statement with multiple parameter sets
-
-        Returns:
-            Execution result with affected row count
-
-        Raises:
-            ValueError: If no parameters are provided
-
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        prepared_parameters = normalize_execute_many_parameters_async(prepared_parameters)
-        await cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = len(prepared_parameters)
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
-
-    async def _execute_stack_native(
-        self, stack: "StatementStack", *, continue_on_error: bool
-    ) -> "tuple[StackResult, ...]":
-        compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
-        pipeline = oracledb.create_pipeline()
-        for compiled in compiled_operations:
-            self._add_pipeline_operation(pipeline, compiled)
-
-        results: list[StackResult] = []
-        started_transaction = False
-
-        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
-            try:
-                if not continue_on_error and not self._connection_in_transaction():
-                    await self.begin()
-                    started_transaction = True
-
-                pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
-                results = self._build_stack_results_from_pipeline(
-                    compiled_operations, pipeline_results, continue_on_error, observer
-                )
-
-                if started_transaction:
-                    await self.commit()
-            except Exception as exc:
-                if started_transaction:
-                    try:
-                        await self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
-                        logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
-                raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
-
-        return tuple(results)
-
-    async def _pipeline_native_supported(self) -> bool:
-        if self._pipeline_support is not None:
-            return self._pipeline_support
-
-        if self.stack_native_disabled:
-            self._pipeline_support = False
-            self._pipeline_support_reason = "env_override"
-            return False
-
-        if self._detect_oracledb_version() < PIPELINE_MIN_DRIVER_VERSION:
-            self._pipeline_support = False
-            self._pipeline_support_reason = "driver_version"
-            return False
-
-        if not has_pipeline_capability(self.connection):
-            self._pipeline_support = False
-            self._pipeline_support_reason = "driver_api_missing"
-            return False
-
-        version_info = await self._detect_oracle_version()
-        if version_info and version_info.major >= PIPELINE_MIN_DATABASE_MAJOR:
-            self._pipeline_support = True
-            self._pipeline_support_reason = None
-            return True
-
-        self._pipeline_support = False
-        self._pipeline_support_reason = "database_version"
-        return False
-
-    async def _detect_oracle_version(self) -> "VersionInfo | None":
-        if self._oracle_version is not None:
-            return self._oracle_version
-        version = await self.data_dictionary.get_version(self)
-        self._oracle_version = version
-        return version
-
-    def _detect_oracledb_version(self) -> "tuple[int, int, int]":
-        return ORACLEDB_VERSION
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def dispatch_execute(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
@@ -971,89 +844,67 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    async def select_to_storage(
-        self,
-        statement: "Statement | QueryBuilder | SQL | str",
-        destination: "StorageDestination",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, object] | None" = None,
-        format_hint: "StorageFormat | None" = None,
-        telemetry: "StorageTelemetry | None" = None,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Execute a query and write Arrow-compatible output to storage (async)."""
-        self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        async_pipeline = self._storage_pipeline()
-        telemetry_payload = await self._write_result_to_storage_async(
-            arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
-        )
-        self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+    async def dispatch_execute_many(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets using Oracle batch processing.
 
-    async def load_from_arrow(
-        self,
-        table: str,
-        source: "ArrowResult | Any",
-        *,
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        telemetry: "StorageTelemetry | None" = None,
-    ) -> "StorageBridgeJob":
-        """Asynchronously load Arrow data into Oracle."""
-        self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
-        if overwrite:
-            statement = build_truncate_statement(table)
-            async with self.handle_database_exceptions():
-                await self.connection.execute(statement)
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            statement = build_insert_statement(table, columns)
-            async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
-                await cursor.executemany(statement, records)
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
-        telemetry_payload["destination"] = table
-        self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL statement with multiple parameter sets
 
-    async def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-    ) -> "StorageBridgeJob":
-        """Asynchronously load staged artifacts into Oracle."""
-        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
-        return await self.load_from_arrow(
-            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        Returns:
+            Execution result with affected row count
+
+        Raises:
+            ValueError: If no parameters are provided
+
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        prepared_parameters = normalize_execute_many_parameters_async(prepared_parameters)
+        await cursor.executemany(sql, prepared_parameters)
+
+        affected_rows = len(prepared_parameters)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    async def dispatch_execute_script(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script with statement splitting and parameter handling.
+
+        Parameters are embedded as static values for script execution compatibility.
+
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL script statement to execute
+
+        Returns:
+            Execution result containing statement count and success information
+
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        script_params = cast("dict[str, Any]", prepared_parameters or {})
+
+        successful_count = 0
+        last_cursor = cursor
+
+        for stmt in statements:
+            await cursor.execute(stmt, script_params)
+            successful_count += 1
+
+        return self.create_execution_result(
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    # Oracle transaction management
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
     async def begin(self) -> None:
         """Begin a database transaction.
 
         Oracle handles transactions automatically, so this is a no-op.
         """
         # Oracle handles transactions implicitly
-
-    async def rollback(self) -> None:
-        """Rollback the current transaction.
-
-        Raises:
-            SQLSpecError: If rollback fails
-
-        """
-        try:
-            await self.connection.rollback()
-        except oracledb.Error as e:
-            msg = f"Failed to rollback Oracle transaction: {e}"
-            raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
         """Commit the current transaction.
@@ -1068,19 +919,38 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    async def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
-        """Execute SQL and return an Oracle DataFrame."""
-        params = parameters if parameters is not None else []
+    async def rollback(self) -> None:
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If rollback fails
+
+        """
         try:
-            execute_df = self.connection.execute_df
-        except AttributeError:
-            execute_df = None
-        if execute_df is not None:
-            try:
-                return await execute_df(sql, params, arraysize=batch_size or 1000)
-            except TypeError:
-                return await execute_df(sql, params)
-        return await self.connection.fetch_df_all(statement=sql, parameters=params, arraysize=batch_size or 1000)
+            await self.connection.rollback()
+        except oracledb.Error as e:
+            msg = f"Failed to rollback Oracle transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: OracleAsyncConnection) -> OracleAsyncCursor:
+        """Create context manager for Oracle cursor.
+
+        Args:
+            connection: Oracle database connection
+
+        Returns:
+            Context manager for cursor operations
+
+        """
+        return OracleAsyncCursor(connection)
+
+    def handle_database_exceptions(self) -> "OracleAsyncExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return OracleAsyncExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # ARROW API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_arrow(
         self,
@@ -1162,9 +1032,98 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             arrow_schema=arrow_schema,
         )
 
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return False
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STACK EXECUTION METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def execute_stack(
+        self, stack: "StatementStack", *, continue_on_error: bool = False
+    ) -> "tuple[StackResult, ...]":
+        """Execute a StatementStack using Oracle's pipeline when available."""
+        if not isinstance(stack, StatementStack) or not stack:
+            return await super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        blocker = self._stack_native_blocker(stack)
+        if blocker is not None:
+            self._log_pipeline_skip(blocker, stack)
+            return await super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        if not await self._pipeline_native_supported():
+            self._log_pipeline_skip(self._pipeline_support_reason or "database_version", stack)
+            return await super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and write Arrow-compatible output to storage (async)."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        async_pipeline = self._storage_pipeline()
+        telemetry_payload = await self._write_result_to_storage_async(
+            arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Asynchronously load Arrow data into Oracle."""
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            statement = build_truncate_statement(table)
+            async with self.handle_database_exceptions():
+                await self.connection.execute(statement)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            statement = build_insert_statement(table, columns)
+            async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+                await cursor.executemany(statement, records)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Asynchronously load staged artifacts into Oracle."""
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "OracledbAsyncDataDictionary":
@@ -1177,6 +1136,101 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = OracledbAsyncDataDictionary()
         return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return False
+
+    async def _detect_oracle_version(self) -> "VersionInfo | None":
+        if self._oracle_version is not None:
+            return self._oracle_version
+        version = await self.data_dictionary.get_version(self)
+        self._oracle_version = version
+        return version
+
+    def _detect_oracledb_version(self) -> "tuple[int, int, int]":
+        return ORACLEDB_VERSION
+
+    async def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
+        """Execute SQL and return an Oracle DataFrame."""
+        params = parameters if parameters is not None else []
+        try:
+            execute_df = self.connection.execute_df
+        except AttributeError:
+            execute_df = None
+        if execute_df is not None:
+            try:
+                return await execute_df(sql, params, arraysize=batch_size or 1000)
+            except TypeError:
+                return await execute_df(sql, params)
+        return await self.connection.fetch_df_all(statement=sql, parameters=params, arraysize=batch_size or 1000)
+
+    async def _execute_stack_native(
+        self, stack: "StatementStack", *, continue_on_error: bool
+    ) -> "tuple[StackResult, ...]":
+        compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
+        pipeline = oracledb.create_pipeline()
+        for compiled in compiled_operations:
+            self._add_pipeline_operation(pipeline, compiled)
+
+        results: list[StackResult] = []
+        started_transaction = False
+
+        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
+            try:
+                if not continue_on_error and not self._connection_in_transaction():
+                    await self.begin()
+                    started_transaction = True
+
+                pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
+                results = self._build_stack_results_from_pipeline(
+                    compiled_operations, pipeline_results, continue_on_error, observer
+                )
+
+                if started_transaction:
+                    await self.commit()
+            except Exception as exc:
+                if started_transaction:
+                    try:
+                        await self.rollback()
+                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                        logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
+                raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
+
+        return tuple(results)
+
+    async def _pipeline_native_supported(self) -> bool:
+        if self._pipeline_support is not None:
+            return self._pipeline_support
+
+        if self.stack_native_disabled:
+            self._pipeline_support = False
+            self._pipeline_support_reason = "env_override"
+            return False
+
+        if self._detect_oracledb_version() < PIPELINE_MIN_DRIVER_VERSION:
+            self._pipeline_support = False
+            self._pipeline_support_reason = "driver_version"
+            return False
+
+        if not has_pipeline_capability(self.connection):
+            self._pipeline_support = False
+            self._pipeline_support_reason = "driver_api_missing"
+            return False
+
+        version_info = await self._detect_oracle_version()
+        if version_info and version_info.major >= PIPELINE_MIN_DATABASE_MAJOR:
+            self._pipeline_support = True
+            self._pipeline_support_reason = None
+            return True
+
+        self._pipeline_support = False
+        self._pipeline_support_reason = "database_version"
+        return False
 
 
 register_driver_profile("oracledb", driver_profile)

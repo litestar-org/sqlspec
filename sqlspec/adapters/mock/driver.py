@@ -201,79 +201,9 @@ class MockSyncDriver(SyncDriverAdapterBase):
         self._data_dictionary: MockDataDictionary | None = None
         self._target_dialect = target_dialect
 
-    def _transpile_to_sqlite(self, statement: "SQL") -> str:
-        """Convert statement from target dialect to SQLite.
-
-        Args:
-            statement: SQL statement to transpile.
-
-        Returns:
-            Transpiled SQL string compatible with SQLite.
-        """
-        if self._target_dialect == "sqlite":
-            sql, _ = self._get_compiled_sql(statement, self.statement_config)
-            return sql
-        return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
-
-    def with_cursor(self, connection: "MockConnection") -> "MockCursor":
-        """Create context manager for SQLite cursor.
-
-        Args:
-            connection: SQLite database connection
-
-        Returns:
-            Cursor context manager for safe cursor operations
-        """
-        return MockCursor(connection)
-
-    def handle_database_exceptions(self) -> "MockExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
-
-        Returns:
-            Exception handler with deferred exception pattern for mypyc compatibility.
-        """
-        return MockExceptionHandler()
-
-    def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Args:
-            cursor: SQLite cursor object
-            statement: SQL statement containing multiple statements
-
-        Returns:
-            ExecutionResult with script execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-
-        for stmt in statements:
-            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-            successful_count += 1
-
-        return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets.
-
-        Args:
-            cursor: SQLite cursor object
-            statement: SQL statement with multiple parameter sets
-
-        Returns:
-            ExecutionResult with batch execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
-
-        affected_rows = resolve_rowcount(cursor)
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -298,6 +228,111 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets.
+
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            ExecutionResult with batch execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
+
+        affected_rows = resolve_rowcount(cursor)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script with statement splitting and parameter handling.
+
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement containing multiple statements
+
+        Returns:
+            ExecutionResult with script execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+
+        for stmt in statements:
+            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            successful_count += 1
+
+        return self.create_execution_result(
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def begin(self) -> None:
+        """Begin a database transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be started
+        """
+        try:
+            if not self.connection.in_transaction:
+                self.connection.execute("BEGIN")
+        except sqlite3.Error as e:
+            msg = f"Failed to begin transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def commit(self) -> None:
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be committed
+        """
+        try:
+            self.connection.commit()
+        except sqlite3.Error as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def rollback(self) -> None:
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be rolled back
+        """
+        try:
+            self.connection.rollback()
+        except sqlite3.Error as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: "MockConnection") -> "MockCursor":
+        """Create context manager for SQLite cursor.
+
+        Args:
+            connection: SQLite database connection
+
+        Returns:
+            Cursor context manager for safe cursor operations
+        """
+        return MockCursor(connection)
+
+    def handle_database_exceptions(self) -> "MockExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately.
+
+        Returns:
+            Exception handler with deferred exception pattern for mypyc compatibility.
+        """
+        return MockExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -362,50 +397,9 @@ class MockSyncDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    def begin(self) -> None:
-        """Begin a database transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be started
-        """
-        try:
-            if not self.connection.in_transaction:
-                self.connection.execute("BEGIN")
-        except sqlite3.Error as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def rollback(self) -> None:
-        """Rollback the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be rolled back
-        """
-        try:
-            self.connection.rollback()
-        except sqlite3.Error as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def commit(self) -> None:
-        """Commit the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be committed
-        """
-        try:
-            self.connection.commit()
-        except sqlite3.Error as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        Returns:
-            True if connection is in an active transaction.
-        """
-        return bool(self.connection.in_transaction)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "MockDataDictionary":
@@ -417,6 +411,32 @@ class MockSyncDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = MockDataDictionary()
         return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _transpile_to_sqlite(self, statement: "SQL") -> str:
+        """Convert statement from target dialect to SQLite.
+
+        Args:
+            statement: SQL statement to transpile.
+
+        Returns:
+            Transpiled SQL string compatible with SQLite.
+        """
+        if self._target_dialect == "sqlite":
+            sql, _ = self._get_compiled_sql(statement, self.statement_config)
+            return sql
+        return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        Returns:
+            True if connection is in an active transaction.
+        """
+        return bool(self.connection.in_transaction)
 
 
 class MockAsyncDriver(AsyncDriverAdapterBase):
@@ -454,81 +474,9 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         self._async_data_dictionary: MockAsyncDataDictionary | None = None
         self._target_dialect = target_dialect
 
-    def _transpile_to_sqlite(self, statement: "SQL") -> str:
-        """Convert statement from target dialect to SQLite.
-
-        Args:
-            statement: SQL statement to transpile.
-
-        Returns:
-            Transpiled SQL string compatible with SQLite.
-        """
-        if self._target_dialect == "sqlite":
-            sql, _ = self._get_compiled_sql(statement, self.statement_config)
-            return sql
-        return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
-
-    def with_cursor(self, connection: "MockConnection") -> "MockAsyncCursor":
-        """Create async context manager for SQLite cursor.
-
-        Args:
-            connection: SQLite database connection
-
-        Returns:
-            Async cursor context manager
-        """
-        return MockAsyncCursor(connection)
-
-    def handle_database_exceptions(self) -> "MockAsyncExceptionHandler":
-        """Handle database-specific exceptions.
-
-        Returns:
-            Async exception handler with deferred exception pattern.
-        """
-        return MockAsyncExceptionHandler()
-
-    async def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script asynchronously.
-
-        Args:
-            cursor: SQLite cursor object
-            statement: SQL statement containing multiple statements
-
-        Returns:
-            ExecutionResult with script execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-
-        for stmt in statements:
-            execute_async = async_(cursor.execute)
-            await execute_async(stmt, normalize_execute_parameters(prepared_parameters))
-            successful_count += 1
-
-        return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    async def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets asynchronously.
-
-        Args:
-            cursor: SQLite cursor object
-            statement: SQL statement with multiple parameter sets
-
-        Returns:
-            ExecutionResult with batch execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        executemany_async = async_(cursor.executemany)
-        await executemany_async(sql, normalize_execute_many_parameters(prepared_parameters))
-
-        affected_rows = resolve_rowcount(cursor)
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement asynchronously.
@@ -556,6 +504,116 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    async def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets asynchronously.
+
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            ExecutionResult with batch execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        executemany_async = async_(cursor.executemany)
+        await executemany_async(sql, normalize_execute_many_parameters(prepared_parameters))
+
+        affected_rows = resolve_rowcount(cursor)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    async def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script asynchronously.
+
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement containing multiple statements
+
+        Returns:
+            ExecutionResult with script execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+
+        for stmt in statements:
+            execute_async = async_(cursor.execute)
+            await execute_async(stmt, normalize_execute_parameters(prepared_parameters))
+            successful_count += 1
+
+        return self.create_execution_result(
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def begin(self) -> None:
+        """Begin a database transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be started
+        """
+        try:
+            if not self.connection.in_transaction:
+                execute_async = async_(self.connection.execute)
+                await execute_async("BEGIN")
+        except sqlite3.Error as e:
+            msg = f"Failed to begin transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def commit(self) -> None:
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be committed
+        """
+        try:
+            commit_async = async_(self.connection.commit)
+            await commit_async()
+        except sqlite3.Error as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be rolled back
+        """
+        try:
+            rollback_async = async_(self.connection.rollback)
+            await rollback_async()
+        except sqlite3.Error as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: "MockConnection") -> "MockAsyncCursor":
+        """Create async context manager for SQLite cursor.
+
+        Args:
+            connection: SQLite database connection
+
+        Returns:
+            Async cursor context manager
+        """
+        return MockAsyncCursor(connection)
+
+    def handle_database_exceptions(self) -> "MockAsyncExceptionHandler":
+        """Handle database-specific exceptions.
+
+        Returns:
+            Async exception handler with deferred exception pattern.
+        """
+        return MockAsyncExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -624,53 +682,9 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    async def begin(self) -> None:
-        """Begin a database transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be started
-        """
-        try:
-            if not self.connection.in_transaction:
-                execute_async = async_(self.connection.execute)
-                await execute_async("BEGIN")
-        except sqlite3.Error as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    async def rollback(self) -> None:
-        """Rollback the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be rolled back
-        """
-        try:
-            rollback_async = async_(self.connection.rollback)
-            await rollback_async()
-        except sqlite3.Error as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    async def commit(self) -> None:
-        """Commit the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be committed
-        """
-        try:
-            commit_async = async_(self.connection.commit)
-            await commit_async()
-        except sqlite3.Error as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        Returns:
-            True if connection is in an active transaction.
-        """
-        return bool(self.connection.in_transaction)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "MockAsyncDataDictionary":
@@ -682,6 +696,32 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         if self._async_data_dictionary is None:
             self._async_data_dictionary = MockAsyncDataDictionary()
         return self._async_data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _transpile_to_sqlite(self, statement: "SQL") -> str:
+        """Convert statement from target dialect to SQLite.
+
+        Args:
+            statement: SQL statement to transpile.
+
+        Returns:
+            Transpiled SQL string compatible with SQLite.
+        """
+        if self._target_dialect == "sqlite":
+            sql, _ = self._get_compiled_sql(statement, self.statement_config)
+            return sql
+        return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        Returns:
+            True if connection is in an active transaction.
+        """
+        return bool(self.connection.in_transaction)
 
 
 register_driver_profile("mock", driver_profile)

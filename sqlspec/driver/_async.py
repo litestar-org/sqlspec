@@ -62,6 +62,18 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     This class includes flattened storage and SQL translation methods that were
     previously in StorageDriverMixin and SQLTranslatorMixin. The flattening
     eliminates cross-trait attribute access that caused mypyc segmentation faults.
+
+    Method Organization:
+        1. Core dispatch methods (the execution engine)
+        2. Transaction management (abstract methods)
+        3. Public API - execution methods
+        4. Public API - query methods (select/fetch variants)
+        5. Arrow API methods
+        6. Stack execution
+        7. Storage API methods
+        8. Utility methods
+        9. Private/internal methods
+
     """
 
     __slots__ = ()
@@ -87,6 +99,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             Data dictionary instance for metadata queries
 
         """
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS - The Execution Engine
+    # ─────────────────────────────────────────────────────────────────────────────
 
     @final
     async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
@@ -189,67 +205,35 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         return result
 
-    def _connection_in_transaction(self) -> bool:
-        """Check if the connection is inside a transaction.
-
-        Each adapter MUST override this method with direct attribute access
-        for optimal mypyc performance. Do not use getattr chains.
-
-        Raises:
-            NotImplementedError: Always - subclasses must override.
-
-        """
-        msg = "Adapters must override _connection_in_transaction()"
-        raise NotImplementedError(msg)
-
     @abstractmethod
-    def with_cursor(self, connection: Any) -> Any:
-        """Create and return an async context manager for cursor acquisition and cleanup.
+    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """Execute a single SQL statement.
 
-        Returns an async context manager that yields a cursor for database operations.
-        Concrete implementations handle database-specific cursor creation and cleanup.
-        """
-
-    @abstractmethod
-    def handle_database_exceptions(self) -> "AsyncExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
-
-        Returns:
-            Exception handler with deferred exception pattern for mypyc compatibility.
-            The handler stores mapped exceptions in pending_exception rather than
-            raising from __aexit__ to avoid ABI boundary violations.
-
-        """
-
-    @abstractmethod
-    async def begin(self) -> None:
-        """Begin a database transaction on the current connection."""
-
-    @abstractmethod
-    async def rollback(self) -> None:
-        """Rollback the current transaction on the current connection."""
-
-    @abstractmethod
-    async def commit(self) -> None:
-        """Commit the current transaction on the current connection."""
-
-    async def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
-        """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
-
-        This method is called first in dispatch_statement_execution() to allow drivers to handle
-        special operations that don't follow the standard SQL execution pattern.
+        Must be implemented by each driver for database-specific execution logic.
 
         Args:
             cursor: Database cursor/connection object
-            statement: SQL statement to analyze
+            statement: SQL statement object with all necessary data and configuration
 
         Returns:
-            SQLResult if the special operation was handled and completed,
-            None if standard execution should proceed
+            ExecutionResult with execution data
 
         """
-        _ = (cursor, statement)
-        return None
+
+    @abstractmethod
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """Execute SQL with multiple parameter sets (executemany).
+
+        Must be implemented by each driver for database-specific executemany logic.
+
+        Args:
+            cursor: Database cursor/connection object
+            statement: SQL statement object with all necessary data and configuration
+
+        Returns:
+            ExecutionResult with execution data for the many operation
+
+        """
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a SQL script containing multiple statements.
@@ -280,115 +264,62 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
 
-    async def execute_stack(
-        self, stack: "StatementStack", *, continue_on_error: bool = False
-    ) -> "tuple[StackResult, ...]":
-        """Execute a StatementStack sequentially using the adapter's primitives."""
-        if not isinstance(stack, StatementStack):
-            msg = "execute_stack expects a StatementStack instance"
-            raise TypeError(msg)
-        if not stack:
-            msg = "Cannot execute an empty StatementStack"
-            raise ValueError(msg)
+    async def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+        """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
 
-        results: list[StackResult] = []
-        single_transaction = not continue_on_error
-
-        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
-            started_transaction = False
-
-            try:
-                if single_transaction and not self._connection_in_transaction():
-                    await self.begin()
-                    started_transaction = True
-
-                for index, operation in enumerate(stack.operations):
-                    try:
-                        result = await self._execute_stack_operation(operation)
-                    except Exception as exc:  # pragma: no cover - exercised via tests
-                        stack_error = StackExecutionError(
-                            index,
-                            describe_stack_statement(operation.statement),
-                            exc,
-                            adapter=type(self).__name__,
-                            mode="continue-on-error" if continue_on_error else "fail-fast",
-                        )
-
-                        if started_transaction and not continue_on_error:
-                            try:
-                                await self.rollback()
-                            except Exception as rollback_error:  # pragma: no cover - diagnostics only
-                                logger.debug("Rollback after stack failure failed: %s", rollback_error)
-                            started_transaction = False
-
-                        if continue_on_error:
-                            await self._rollback_after_stack_error_async()
-                            observer.record_operation_error(stack_error)
-                            results.append(StackResult.from_error(stack_error))
-                            continue
-
-                        raise stack_error from exc
-
-                    results.append(StackResult(result=result))
-
-                    if continue_on_error:
-                        await self._commit_after_stack_operation_async()
-
-                if started_transaction:
-                    await self.commit()
-            except Exception:
-                if started_transaction:
-                    try:
-                        await self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
-                        logger.debug("Rollback after stack failure failed: %s", rollback_error)
-                raise
-
-        return tuple(results)
-
-    async def _rollback_after_stack_error_async(self) -> None:
-        """Attempt to rollback after a stack operation error (async)."""
-        try:
-            await self.rollback()
-        except Exception as rollback_error:  # pragma: no cover - driver-specific cleanup
-            logger.debug("Rollback after stack error failed: %s", rollback_error)
-
-    async def _commit_after_stack_operation_async(self) -> None:
-        """Attempt to commit after a successful stack operation when not batching (async)."""
-        try:
-            await self.commit()
-        except Exception as commit_error:  # pragma: no cover - driver-specific cleanup
-            logger.debug("Commit after stack operation failed: %s", commit_error)
-
-    @abstractmethod
-    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute SQL with multiple parameter sets (executemany).
-
-        Must be implemented by each driver for database-specific executemany logic.
+        This method is called first in dispatch_statement_execution() to allow drivers to handle
+        special operations that don't follow the standard SQL execution pattern.
 
         Args:
             cursor: Database cursor/connection object
-            statement: SQL statement object with all necessary data and configuration
+            statement: SQL statement to analyze
 
         Returns:
-            ExecutionResult with execution data for the many operation
+            SQLResult if the special operation was handled and completed,
+            None if standard execution should proceed
 
+        """
+        _ = (cursor, statement)
+        return None
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT - Required Abstract Methods
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def begin(self) -> None:
+        """Begin a database transaction on the current connection."""
+
+    @abstractmethod
+    async def commit(self) -> None:
+        """Commit the current transaction on the current connection."""
+
+    @abstractmethod
+    async def rollback(self) -> None:
+        """Rollback the current transaction on the current connection."""
+
+    @abstractmethod
+    def with_cursor(self, connection: Any) -> Any:
+        """Create and return an async context manager for cursor acquisition and cleanup.
+
+        Returns an async context manager that yields a cursor for database operations.
+        Concrete implementations handle database-specific cursor creation and cleanup.
         """
 
     @abstractmethod
-    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute a single SQL statement.
-
-        Must be implemented by each driver for database-specific execution logic.
-
-        Args:
-            cursor: Database cursor/connection object
-            statement: SQL statement object with all necessary data and configuration
+    def handle_database_exceptions(self) -> "AsyncExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
-            ExecutionResult with execution data
+            Exception handler with deferred exception pattern for mypyc compatibility.
+            The handler stores mapped exceptions in pending_exception rather than
+            raising from __aexit__ to avoid ABI boundary violations.
 
         """
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PUBLIC API - Core Execution Methods
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def execute(
         self,
@@ -446,6 +377,89 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
 
         return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PUBLIC API - Query Methods (select/fetch variants)
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    @overload
+    async def select(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT]": ...
+
+    @overload
+    async def select(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[dict[str, Any]]": ...
+
+    async def select(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT] | list[dict[str, Any]]":
+        """Execute a select statement and return all rows."""
+        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        return result.get_data(schema_type=schema_type)
+
+    @overload
+    async def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT]": ...
+
+    @overload
+    async def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[dict[str, Any]]": ...
+
+    async def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT] | list[dict[str, Any]]":
+        """Execute a select statement and return all rows.
+
+        This is an alias for :meth:`select` provided for users familiar
+        with asyncpg's fetch() naming convention.
+
+        See Also:
+            select(): Primary method with identical behavior
+
+        """
+        return await self.select(
+            statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+        )
 
     @overload
     async def select_one(
@@ -618,187 +632,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         return await self.select_one_or_none(
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
-        )
-
-    @overload
-    async def select(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT]",
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "list[SchemaT]": ...
-
-    @overload
-    async def select(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: None = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "list[dict[str, Any]]": ...
-
-    async def select(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "list[SchemaT] | list[dict[str, Any]]":
-        """Execute a select statement and return all rows."""
-        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        return result.get_data(schema_type=schema_type)
-
-    @overload
-    async def fetch(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT]",
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "list[SchemaT]": ...
-
-    @overload
-    async def fetch(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: None = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "list[dict[str, Any]]": ...
-
-    async def fetch(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "list[SchemaT] | list[dict[str, Any]]":
-        """Execute a select statement and return all rows.
-
-        This is an alias for :meth:`select` provided for users familiar
-        with asyncpg's fetch() naming convention.
-
-        See Also:
-            select(): Primary method with identical behavior
-
-        """
-        return await self.select(
-            statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
-        )
-
-    async def select_to_arrow(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        statement_config: "StatementConfig | None" = None,
-        return_format: "ArrowReturnFormat" = "table",
-        native_only: bool = False,
-        batch_size: int | None = None,
-        arrow_schema: Any = None,
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        """Execute query and return results as Apache Arrow format (async).
-
-        This base implementation uses the conversion path: execute() → dict → Arrow.
-        Adapters with native Arrow support (ADBC, DuckDB, BigQuery) override this
-        method to use zero-copy native paths for 5-10x performance improvement.
-
-        Args:
-            statement: SQL query string, Statement, or QueryBuilder
-            *parameters: Query parameters (same format as execute()/select())
-            statement_config: Optional statement configuration override
-            return_format: "table" for pyarrow.Table (default), "batch" for single RecordBatch,
-                         "batches" for iterator of RecordBatches, "reader" for RecordBatchReader
-            native_only: If True, raise error if native Arrow unavailable (default: False)
-            batch_size: Rows per batch for "batch"/"batches" format (default: None = all rows)
-            arrow_schema: Optional pyarrow.Schema for type casting
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            ArrowResult containing pyarrow.Table, RecordBatchReader, or RecordBatches
-
-        Raises:
-            ImproperConfigurationError: If native_only=True and adapter doesn't support native Arrow
-
-        Examples:
-            >>> result = await driver.select_to_arrow(
-            ...     "SELECT * FROM users WHERE age > ?", 18
-            ... )
-            >>> df = result.to_pandas()
-            >>> print(df.head())
-
-            >>> # Force native Arrow path (raises error if unavailable)
-            >>> result = await driver.select_to_arrow(
-            ...     "SELECT * FROM users", native_only=True
-            ... )
-
-        """
-        if native_only:
-            msg = (
-                f"Adapter '{self.__class__.__name__}' does not support native Arrow results. "
-                f"Use native_only=False to allow conversion path, or switch to an adapter "
-                f"with native Arrow support (ADBC, DuckDB, BigQuery)."
-            )
-            raise ImproperConfigurationError(msg)
-
-        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-
-        arrow_data = convert_dict_to_arrow_with_schema(
-            result.data, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
-        )
-        return create_arrow_result(
-            statement=result.statement,
-            data=arrow_data,
-            rows_affected=result.rows_affected,
-            last_inserted_id=result.last_inserted_id,
-            execution_time=result.execution_time,
-            metadata=result.metadata,
-        )
-
-    async def fetch_to_arrow(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        statement_config: "StatementConfig | None" = None,
-        return_format: "ArrowReturnFormat" = "table",
-        native_only: bool = False,
-        batch_size: int | None = None,
-        arrow_schema: Any = None,
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        """Execute query and return results as Apache Arrow format (async).
-
-        This is an alias for :meth:`select_to_arrow` provided for users familiar
-        with asyncpg's fetch() naming convention.
-
-        See Also:
-            select_to_arrow(): Primary method with identical behavior and full documentation
-
-        """
-        return await self.select_to_arrow(
-            statement,
-            *parameters,
-            statement_config=statement_config,
-            return_format=return_format,
-            native_only=native_only,
-            batch_size=batch_size,
-            arrow_schema=arrow_schema,
-            **kwargs,
         )
 
     async def select_value(
@@ -986,56 +819,185 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
         )
 
-    async def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
-        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+    # ─────────────────────────────────────────────────────────────────────────────
+    # ARROW API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
-        if operation.method == "execute":
-            return await self.execute(operation.statement, *operation.arguments, **kwargs)
+    async def select_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: "ArrowReturnFormat" = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute query and return results as Apache Arrow format (async).
 
-        if operation.method == "execute_many":
-            if not operation.arguments:
-                msg = "execute_many stack operation requires parameter sets"
-                raise ValueError(msg)
-            parameter_sets = operation.arguments[0]
-            filters = operation.arguments[1:]
-            return await self.execute_many(operation.statement, parameter_sets, *filters, **kwargs)
-
-        if operation.method == "execute_script":
-            return await self.execute_script(operation.statement, *operation.arguments, **kwargs)
-
-        if operation.method == "execute_arrow":
-            return await self.select_to_arrow(operation.statement, *operation.arguments, **kwargs)
-
-        msg = f"Unsupported stack operation method: {operation.method}"
-        raise ValueError(msg)
-
-    def convert_to_dialect(
-        self, statement: "Statement", to_dialect: "DialectType | None" = None, pretty: bool = DEFAULT_PRETTY
-    ) -> str:
-        """Convert a statement to a target SQL dialect.
+        This base implementation uses the conversion path: execute() → dict → Arrow.
+        Adapters with native Arrow support (ADBC, DuckDB, BigQuery) override this
+        method to use zero-copy native paths for 5-10x performance improvement.
 
         Args:
-            statement: SQL statement to convert.
-            to_dialect: Target dialect (defaults to current dialect).
-            pretty: Whether to format the output SQL.
+            statement: SQL query string, Statement, or QueryBuilder
+            *parameters: Query parameters (same format as execute()/select())
+            statement_config: Optional statement configuration override
+            return_format: "table" for pyarrow.Table (default), "batch" for single RecordBatch,
+                         "batches" for iterator of RecordBatches, "reader" for RecordBatchReader
+            native_only: If True, raise error if native Arrow unavailable (default: False)
+            batch_size: Rows per batch for "batch"/"batches" format (default: None = all rows)
+            arrow_schema: Optional pyarrow.Schema for type casting
+            **kwargs: Additional keyword arguments
 
         Returns:
-            SQL string in target dialect.
+            ArrowResult containing pyarrow.Table, RecordBatchReader, or RecordBatches
+
+        Raises:
+            ImproperConfigurationError: If native_only=True and adapter doesn't support native Arrow
+
+        Examples:
+            >>> result = await driver.select_to_arrow(
+            ...     "SELECT * FROM users WHERE age > ?", 18
+            ... )
+            >>> df = result.to_pandas()
+            >>> print(df.head())
+
+            >>> # Force native Arrow path (raises error if unavailable)
+            >>> result = await driver.select_to_arrow(
+            ...     "SELECT * FROM users", native_only=True
+            ... )
 
         """
-        return _convert_to_dialect_impl(statement, self.dialect, to_dialect, pretty)
+        if native_only:
+            msg = (
+                f"Adapter '{self.__class__.__name__}' does not support native Arrow results. "
+                f"Use native_only=False to allow conversion path, or switch to an adapter "
+                f"with native Arrow support (ADBC, DuckDB, BigQuery)."
+            )
+            raise ImproperConfigurationError(msg)
 
-    def _storage_pipeline(self) -> "AsyncStoragePipeline":
-        """Get or create an async storage pipeline.
+        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
 
-        Returns:
-            AsyncStoragePipeline instance.
+        arrow_data = convert_dict_to_arrow_with_schema(
+            result.data, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
+        )
+        return create_arrow_result(
+            statement=result.statement,
+            data=arrow_data,
+            rows_affected=result.rows_affected,
+            last_inserted_id=result.last_inserted_id,
+            execution_time=result.execution_time,
+            metadata=result.metadata,
+        )
+
+    async def fetch_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: "ArrowReturnFormat" = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute query and return results as Apache Arrow format (async).
+
+        This is an alias for :meth:`select_to_arrow` provided for users familiar
+        with asyncpg's fetch() naming convention.
+
+        See Also:
+            select_to_arrow(): Primary method with identical behavior and full documentation
 
         """
-        factory = self.storage_pipeline_factory
-        if factory is None:
-            return AsyncStoragePipeline()
-        return cast("AsyncStoragePipeline", factory())
+        return await self.select_to_arrow(
+            statement,
+            *parameters,
+            statement_config=statement_config,
+            return_format=return_format,
+            native_only=native_only,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+            **kwargs,
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STACK EXECUTION
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def execute_stack(
+        self, stack: "StatementStack", *, continue_on_error: bool = False
+    ) -> "tuple[StackResult, ...]":
+        """Execute a StatementStack sequentially using the adapter's primitives."""
+        if not isinstance(stack, StatementStack):
+            msg = "execute_stack expects a StatementStack instance"
+            raise TypeError(msg)
+        if not stack:
+            msg = "Cannot execute an empty StatementStack"
+            raise ValueError(msg)
+
+        results: list[StackResult] = []
+        single_transaction = not continue_on_error
+
+        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
+            started_transaction = False
+
+            try:
+                if single_transaction and not self._connection_in_transaction():
+                    await self.begin()
+                    started_transaction = True
+
+                for index, operation in enumerate(stack.operations):
+                    try:
+                        result = await self._execute_stack_operation(operation)
+                    except Exception as exc:  # pragma: no cover - exercised via tests
+                        stack_error = StackExecutionError(
+                            index,
+                            describe_stack_statement(operation.statement),
+                            exc,
+                            adapter=type(self).__name__,
+                            mode="continue-on-error" if continue_on_error else "fail-fast",
+                        )
+
+                        if started_transaction and not continue_on_error:
+                            try:
+                                await self.rollback()
+                            except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                                logger.debug("Rollback after stack failure failed: %s", rollback_error)
+                            started_transaction = False
+
+                        if continue_on_error:
+                            await self._rollback_after_stack_error_async()
+                            observer.record_operation_error(stack_error)
+                            results.append(StackResult.from_error(stack_error))
+                            continue
+
+                        raise stack_error from exc
+
+                    results.append(StackResult(result=result))
+
+                    if continue_on_error:
+                        await self._commit_after_stack_operation_async()
+
+                if started_transaction:
+                    await self.commit()
+            except Exception:
+                if started_transaction:
+                    try:
+                        await self.rollback()
+                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                        logger.debug("Rollback after stack failure failed: %s", rollback_error)
+                raise
+
+        return tuple(results)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -1152,6 +1114,92 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
         return None
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def convert_to_dialect(
+        self, statement: "Statement", to_dialect: "DialectType | None" = None, pretty: bool = DEFAULT_PRETTY
+    ) -> str:
+        """Convert a statement to a target SQL dialect.
+
+        Args:
+            statement: SQL statement to convert.
+            to_dialect: Target dialect (defaults to current dialect).
+            pretty: Whether to format the output SQL.
+
+        Returns:
+            SQL string in target dialect.
+
+        """
+        return _convert_to_dialect_impl(statement, self.dialect, to_dialect, pretty)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if the connection is inside a transaction.
+
+        Each adapter MUST override this method with direct attribute access
+        for optimal mypyc performance. Do not use getattr chains.
+
+        Raises:
+            NotImplementedError: Always - subclasses must override.
+
+        """
+        msg = "Adapters must override _connection_in_transaction()"
+        raise NotImplementedError(msg)
+
+    async def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
+        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+
+        if operation.method == "execute":
+            return await self.execute(operation.statement, *operation.arguments, **kwargs)
+
+        if operation.method == "execute_many":
+            if not operation.arguments:
+                msg = "execute_many stack operation requires parameter sets"
+                raise ValueError(msg)
+            parameter_sets = operation.arguments[0]
+            filters = operation.arguments[1:]
+            return await self.execute_many(operation.statement, parameter_sets, *filters, **kwargs)
+
+        if operation.method == "execute_script":
+            return await self.execute_script(operation.statement, *operation.arguments, **kwargs)
+
+        if operation.method == "execute_arrow":
+            return await self.select_to_arrow(operation.statement, *operation.arguments, **kwargs)
+
+        msg = f"Unsupported stack operation method: {operation.method}"
+        raise ValueError(msg)
+
+    async def _rollback_after_stack_error_async(self) -> None:
+        """Attempt to rollback after a stack operation error (async)."""
+        try:
+            await self.rollback()
+        except Exception as rollback_error:  # pragma: no cover - driver-specific cleanup
+            logger.debug("Rollback after stack error failed: %s", rollback_error)
+
+    async def _commit_after_stack_operation_async(self) -> None:
+        """Attempt to commit after a successful stack operation when not batching (async)."""
+        try:
+            await self.commit()
+        except Exception as commit_error:  # pragma: no cover - driver-specific cleanup
+            logger.debug("Commit after stack operation failed: %s", commit_error)
+
+    def _storage_pipeline(self) -> "AsyncStoragePipeline":
+        """Get or create an async storage pipeline.
+
+        Returns:
+            AsyncStoragePipeline instance.
+
+        """
+        factory = self.storage_pipeline_factory
+        if factory is None:
+            return AsyncStoragePipeline()
+        return cast("AsyncStoragePipeline", factory())
 
     async def _write_result_to_storage_async(
         self,

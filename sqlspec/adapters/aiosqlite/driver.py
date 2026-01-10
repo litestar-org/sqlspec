@@ -117,39 +117,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AiosqliteDataDictionary | None = None
 
-    def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
-        """Create async context manager for AIOSQLite cursor."""
-        return AiosqliteCursor(connection)
-
-    def handle_database_exceptions(self) -> "AiosqliteExceptionHandler":
-        """Handle AIOSQLite-specific exceptions."""
-        return AiosqliteExceptionHandler()
-
-    async def dispatch_execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_cursor = cursor
-
-        for stmt in statements:
-            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    async def dispatch_execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
-
-        affected_rows = resolve_rowcount(cursor)
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def dispatch_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
@@ -169,6 +139,84 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    async def dispatch_execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets."""
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
+
+        affected_rows = resolve_rowcount(cursor)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    async def dispatch_execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script."""
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        last_cursor = cursor
+
+        for stmt in statements:
+            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            successful_count += 1
+
+        return self.create_execution_result(
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def begin(self) -> None:
+        """Begin a database transaction."""
+        try:
+            if not self.connection.in_transaction:
+                await self.connection.execute("BEGIN IMMEDIATE")
+        except aiosqlite.Error as e:
+            max_retries = 3
+            for attempt in range(max_retries):
+                delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
+                await asyncio.sleep(delay)
+                try:
+                    await self.connection.execute("BEGIN IMMEDIATE")
+                except aiosqlite.Error:
+                    if attempt == max_retries - 1:
+                        break
+                else:
+                    return
+            msg = f"Failed to begin transaction after retries: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        try:
+            await self.connection.commit()
+        except aiosqlite.Error as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction."""
+        try:
+            await self.connection.rollback()
+        except aiosqlite.Error as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
+        """Create async context manager for AIOSQLite cursor."""
+        return AiosqliteCursor(connection)
+
+    def handle_database_exceptions(self) -> "AiosqliteExceptionHandler":
+        """Handle AIOSQLite-specific exceptions."""
+        return AiosqliteExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -238,49 +286,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    async def begin(self) -> None:
-        """Begin a database transaction."""
-        try:
-            if not self.connection.in_transaction:
-                await self.connection.execute("BEGIN IMMEDIATE")
-        except aiosqlite.Error as e:
-            max_retries = 3
-            for attempt in range(max_retries):
-                delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
-                await asyncio.sleep(delay)
-                try:
-                    await self.connection.execute("BEGIN IMMEDIATE")
-                except aiosqlite.Error:
-                    if attempt == max_retries - 1:
-                        break
-                else:
-                    return
-            msg = f"Failed to begin transaction after retries: {e}"
-            raise SQLSpecError(msg) from e
-
-    async def rollback(self) -> None:
-        """Rollback the current transaction."""
-        try:
-            await self.connection.rollback()
-        except aiosqlite.Error as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    async def commit(self) -> None:
-        """Commit the current transaction."""
-        try:
-            await self.connection.commit()
-        except aiosqlite.Error as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        Returns:
-            True if connection is in an active transaction.
-        """
-        return bool(self.connection.in_transaction)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "AiosqliteDataDictionary":
@@ -292,6 +300,18 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AiosqliteDataDictionary()
         return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        Returns:
+            True if connection is in an active transaction.
+        """
+        return bool(self.connection.in_transaction)
 
 
 register_driver_profile("aiosqlite", driver_profile)

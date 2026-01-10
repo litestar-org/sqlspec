@@ -131,24 +131,51 @@ class SqliteDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SqliteDataDictionary | None = None
 
-    def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
-        """Create context manager for SQLite cursor.
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute single SQL statement.
 
         Args:
-            connection: SQLite database connection
+            cursor: SQLite cursor object
+            statement: SQL statement to execute
 
         Returns:
-            Cursor context manager for safe cursor operations
+            ExecutionResult with statement execution details
         """
-        return SqliteCursor(connection)
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
-    def handle_database_exceptions(self) -> "SqliteExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
+        if statement.returns_rows():
+            fetched_data = cursor.fetchall()
+            data, column_names, row_count = collect_rows(fetched_data, cursor.description)
+
+            return self.create_execution_result(
+                cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
+            )
+
+        affected_rows = resolve_rowcount(cursor)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets.
+
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement with multiple parameter sets
 
         Returns:
-            Exception handler with deferred exception pattern for mypyc compatibility.
+            ExecutionResult with batch execution details
         """
-        return SqliteExceptionHandler()
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
+
+        affected_rows = resolve_rowcount(cursor)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -174,47 +201,69 @@ class SqliteDriver(SyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets.
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def begin(self) -> None:
+        """Begin a database transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be started
+        """
+        try:
+            if not self.connection.in_transaction:
+                self.connection.execute("BEGIN")
+        except sqlite3.Error as e:
+            msg = f"Failed to begin transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def commit(self) -> None:
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be committed
+        """
+        try:
+            self.connection.commit()
+        except sqlite3.Error as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def rollback(self) -> None:
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be rolled back
+        """
+        try:
+            self.connection.rollback()
+        except sqlite3.Error as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
+        """Create context manager for SQLite cursor.
 
         Args:
-            cursor: SQLite cursor object
-            statement: SQL statement with multiple parameter sets
+            connection: SQLite database connection
 
         Returns:
-            ExecutionResult with batch execution details
+            Cursor context manager for safe cursor operations
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return SqliteCursor(connection)
 
-        cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
-
-        affected_rows = resolve_rowcount(cursor)
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
-
-    def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement.
-
-        Args:
-            cursor: SQLite cursor object
-            statement: SQL statement to execute
+    def handle_database_exceptions(self) -> "SqliteExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
-            ExecutionResult with statement execution details
+            Exception handler with deferred exception pattern for mypyc compatibility.
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
+        return SqliteExceptionHandler()
 
-        if statement.returns_rows():
-            fetched_data = cursor.fetchall()
-            data, column_names, row_count = collect_rows(fetched_data, cursor.description)
-
-            return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
-            )
-
-        affected_rows = resolve_rowcount(cursor)
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -282,50 +331,9 @@ class SqliteDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    def begin(self) -> None:
-        """Begin a database transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be started
-        """
-        try:
-            if not self.connection.in_transaction:
-                self.connection.execute("BEGIN")
-        except sqlite3.Error as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def rollback(self) -> None:
-        """Rollback the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be rolled back
-        """
-        try:
-            self.connection.rollback()
-        except sqlite3.Error as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def commit(self) -> None:
-        """Commit the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be committed
-        """
-        try:
-            self.connection.commit()
-        except sqlite3.Error as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        Returns:
-            True if connection is in an active transaction.
-        """
-        return bool(self.connection.in_transaction)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "SqliteDataDictionary":
@@ -337,6 +345,18 @@ class SqliteDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = SqliteDataDictionary()
         return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        Returns:
+            True if connection is in an active transaction.
+        """
+        return bool(self.connection.in_transaction)
 
 
 register_driver_profile("sqlite", driver_profile)

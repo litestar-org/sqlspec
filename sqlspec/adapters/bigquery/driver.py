@@ -169,69 +169,48 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry = build_retry(self._job_retry_deadline, self._using_emulator)
 
-    def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
-        """Create context manager for cursor management.
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
-        Returns:
-            BigQueryCursor: Cursor object for query execution
-        """
-        return BigQueryCursor(connection)
-
-    def begin(self) -> None:
-        """Begin transaction - BigQuery doesn't support transactions."""
-
-    def rollback(self) -> None:
-        """Rollback transaction - BigQuery doesn't support transactions."""
-
-    def commit(self) -> None:
-        """Commit transaction - BigQuery doesn't support transactions."""
-
-    def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately."""
-        return BigQueryExceptionHandler()
-
-    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Parameters are embedded as static values for script execution compatibility.
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """Execute single SQL statement with BigQuery data handling.
 
         Args:
             cursor: BigQuery cursor object
             statement: SQL statement to execute
 
         Returns:
-            ExecutionResult with script execution details
+            ExecutionResult with query results and metadata
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_job = None
-        last_rowcount = 0
-
-        for stmt in statements:
-            job = run_query_job(
-                cursor,
-                stmt,
-                prepared_parameters or {},
-                default_job_config=self._default_query_job_config,
-                job_config=None,
-                json_serializer=self._json_serializer,
-            )
-            job.result(job_retry=self._job_retry)
-            last_job = job
-            last_rowcount = normalize_script_rowcount(last_rowcount, job)
-            successful_count += 1
-
-        cursor.job = last_job
-
-        return self.create_execution_result(
+        sql, parameters = self._get_compiled_sql(statement, self.statement_config)
+        cursor.job = run_query_job(
             cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            rowcount_override=last_rowcount,
-            is_script_result=True,
+            sql,
+            parameters,
+            default_job_config=self._default_query_job_config,
+            job_config=None,
+            json_serializer=self._json_serializer,
         )
+        job_result = cursor.job.result(job_retry=self._job_retry)
+        statement_type = str(cursor.job.statement_type or "").upper()
+        is_select_like = (
+            statement.returns_rows() or statement_type == "SELECT" or self._should_force_select(statement, cursor)
+        )
+
+        if is_select_like:
+            rows_list, column_names = collect_rows(job_result, cursor.job.schema)
+
+            return self.create_execution_result(
+                cursor,
+                selected_data=rows_list,
+                column_names=column_names,
+                data_row_count=len(rows_list),
+                is_select_result=True,
+            )
+
+        affected_rows = build_dml_rowcount(cursor.job, 0)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """BigQuery execute_many with Parquet bulk load optimization.
@@ -282,65 +261,77 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute single SQL statement with BigQuery data handling.
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """Execute SQL script with statement splitting and parameter handling.
+
+        Parameters are embedded as static values for script execution compatibility.
 
         Args:
             cursor: BigQuery cursor object
             statement: SQL statement to execute
 
         Returns:
-            ExecutionResult with query results and metadata
+            ExecutionResult with script execution details
         """
-        sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.job = run_query_job(
-            cursor,
-            sql,
-            parameters,
-            default_job_config=self._default_query_job_config,
-            job_config=None,
-            json_serializer=self._json_serializer,
-        )
-        job_result = cursor.job.result(job_retry=self._job_retry)
-        statement_type = str(cursor.job.statement_type or "").upper()
-        is_select_like = (
-            statement.returns_rows() or statement_type == "SELECT" or self._should_force_select(statement, cursor)
-        )
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
-        if is_select_like:
-            rows_list, column_names = collect_rows(job_result, cursor.job.schema)
+        successful_count = 0
+        last_job = None
+        last_rowcount = 0
 
-            return self.create_execution_result(
+        for stmt in statements:
+            job = run_query_job(
                 cursor,
-                selected_data=rows_list,
-                column_names=column_names,
-                data_row_count=len(rows_list),
-                is_select_result=True,
+                stmt,
+                prepared_parameters or {},
+                default_job_config=self._default_query_job_config,
+                job_config=None,
+                json_serializer=self._json_serializer,
             )
+            job.result(job_retry=self._job_retry)
+            last_job = job
+            last_rowcount = normalize_script_rowcount(last_rowcount, job)
+            successful_count += 1
 
-        affected_rows = build_dml_rowcount(cursor.job, 0)
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+        cursor.job = last_job
 
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
+        return self.create_execution_result(
+            cursor,
+            statement_count=len(statements),
+            successful_statements=successful_count,
+            rowcount_override=last_rowcount,
+            is_script_result=True,
+        )
 
-        BigQuery does not support transactions.
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def begin(self) -> None:
+        """Begin transaction - BigQuery doesn't support transactions."""
+
+    def commit(self) -> None:
+        """Commit transaction - BigQuery doesn't support transactions."""
+
+    def rollback(self) -> None:
+        """Rollback transaction - BigQuery doesn't support transactions."""
+
+    def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
+        """Create context manager for cursor management.
 
         Returns:
-            False - BigQuery has no transaction support.
+            BigQueryCursor: Cursor object for query execution
         """
-        return False
+        return BigQueryCursor(connection)
 
-    @property
-    def data_dictionary(self) -> "BigQueryDataDictionary":
-        """Get the data dictionary for this driver.
+    def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return BigQueryExceptionHandler()
 
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = BigQueryDataDictionary()
-        return self._data_dictionary
+    # ─────────────────────────────────────────────────────────────────────────────
+    # ARROW API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_arrow(
         self,
@@ -449,6 +440,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
         msg = "Unreachable"
         raise RuntimeError(msg)  # pragma: no cover
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
     def select_to_storage(
         self,
         statement: "Statement | QueryBuilder | SQL | str",
@@ -522,6 +517,35 @@ class BigQueryDriver(SyncDriverAdapterBase):
         telemetry_payload = build_load_job_telemetry(job, table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    @property
+    def data_dictionary(self) -> "BigQueryDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = BigQueryDataDictionary()
+        return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE / INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        BigQuery does not support transactions.
+
+        Returns:
+            False - BigQuery has no transaction support.
+        """
+        return False
 
 
 register_driver_profile("bigquery", driver_profile)

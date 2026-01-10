@@ -130,76 +130,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AsyncmyDataDictionary | None = None
 
-    def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
-        """Create cursor context manager for the connection.
-
-        Args:
-            connection: AsyncMy database connection
-
-        Returns:
-            AsyncmyCursor: Context manager for cursor operations
-        """
-        return AsyncmyCursor(connection)
-
-    def handle_database_exceptions(self) -> "AsyncmyExceptionHandler":
-        """Provide exception handling context manager.
-
-        Returns:
-            AsyncmyExceptionHandler: Context manager for AsyncMy exception handling
-        """
-        return AsyncmyExceptionHandler()
-
-    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Splits multi-statement scripts and executes each statement sequentially.
-        Parameters are embedded as static values for script execution compatibility.
-
-        Args:
-            cursor: AsyncMy cursor object
-            statement: SQL script to execute
-
-        Returns:
-            ExecutionResult: Script execution results with statement count
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_cursor = cursor
-
-        for stmt in statements:
-            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL statement with multiple parameter sets.
-
-        Uses AsyncMy's executemany for batch operations with MySQL type conversion
-        and parameter processing.
-
-        Args:
-            cursor: AsyncMy cursor object
-            statement: SQL statement with multiple parameter sets
-
-        Returns:
-            ExecutionResult: Batch execution results
-
-        Raises:
-            ValueError: If no parameters provided for executemany operation
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
-        await cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = len(prepared_parameters)
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS - The Execution Engine
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -232,6 +165,124 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
+
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute SQL statement with multiple parameter sets.
+
+        Uses AsyncMy's executemany for batch operations with MySQL type conversion
+        and parameter processing.
+
+        Args:
+            cursor: AsyncMy cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            ExecutionResult: Batch execution results
+
+        Raises:
+            ValueError: If no parameters provided for executemany operation
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
+        await cursor.executemany(sql, prepared_parameters)
+
+        affected_rows = len(prepared_parameters)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script with statement splitting and parameter handling.
+
+        Splits multi-statement scripts and executes each statement sequentially.
+        Parameters are embedded as static values for script execution compatibility.
+
+        Args:
+            cursor: AsyncMy cursor object
+            statement: SQL script to execute
+
+        Returns:
+            ExecutionResult: Script execution results with statement count
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        last_cursor = cursor
+
+        for stmt in statements:
+            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            successful_count += 1
+
+        return self.create_execution_result(
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def begin(self) -> None:
+        """Begin a database transaction.
+
+        Explicitly starts a MySQL transaction to ensure proper transaction boundaries.
+
+        Raises:
+            SQLSpecError: If transaction initialization fails
+        """
+        try:
+            async with AsyncmyCursor(self.connection) as cursor:
+                await cursor.execute("BEGIN")
+        except asyncmy.errors.MySQLError as e:
+            msg = f"Failed to begin MySQL transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def commit(self) -> None:
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction commit fails
+        """
+        try:
+            await self.connection.commit()
+        except asyncmy.errors.MySQLError as e:
+            msg = f"Failed to commit MySQL transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction rollback fails
+        """
+        try:
+            await self.connection.rollback()
+        except asyncmy.errors.MySQLError as e:
+            msg = f"Failed to rollback MySQL transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
+        """Create cursor context manager for the connection.
+
+        Args:
+            connection: AsyncMy database connection
+
+        Returns:
+            AsyncmyCursor: Context manager for cursor operations
+        """
+        return AsyncmyCursor(connection)
+
+    def handle_database_exceptions(self) -> "AsyncmyExceptionHandler":
+        """Provide exception handling context manager.
+
+        Returns:
+            AsyncmyExceptionHandler: Context manager for AsyncMy exception handling
+        """
+        return AsyncmyExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -301,54 +352,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    async def begin(self) -> None:
-        """Begin a database transaction.
-
-        Explicitly starts a MySQL transaction to ensure proper transaction boundaries.
-
-        Raises:
-            SQLSpecError: If transaction initialization fails
-        """
-        try:
-            async with AsyncmyCursor(self.connection) as cursor:
-                await cursor.execute("BEGIN")
-        except asyncmy.errors.MySQLError as e:
-            msg = f"Failed to begin MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    async def rollback(self) -> None:
-        """Rollback the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction rollback fails
-        """
-        try:
-            await self.connection.rollback()
-        except asyncmy.errors.MySQLError as e:
-            msg = f"Failed to rollback MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    async def commit(self) -> None:
-        """Commit the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction commit fails
-        """
-        try:
-            await self.connection.commit()
-        except asyncmy.errors.MySQLError as e:
-            msg = f"Failed to commit MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        AsyncMy uses explicit BEGIN and does not expose reliable transaction state.
-
-        Returns:
-            False - AsyncMy requires explicit transaction management.
-        """
-        return False
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "AsyncmyDataDictionary":
@@ -360,6 +366,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AsyncmyDataDictionary()
         return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        AsyncMy uses explicit BEGIN and does not expose reliable transaction state.
+
+        Returns:
+            False - AsyncMy requires explicit transaction management.
+        """
+        return False
 
 
 register_driver_profile("asyncmy", driver_profile)

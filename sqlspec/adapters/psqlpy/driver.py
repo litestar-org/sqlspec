@@ -140,89 +140,44 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsqlpyDataDictionary | None = None
 
-    def prepare_driver_parameters(
-        self,
-        parameters: Any,
-        statement_config: "StatementConfig",
-        is_many: bool = False,
-        prepared_statement: Any | None = None,
-    ) -> Any:
-        """Prepare parameters with cast-aware type coercion for psqlpy.
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
-        Args:
-            parameters: Parameters in any format
-            statement_config: Statement configuration
-            is_many: Whether this is for execute_many operation
-            prepared_statement: Prepared statement containing the original SQL statement
-
-        Returns:
-            Parameters with cast-aware type coercion applied
-        """
-        enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
-
-        if enable_cast_detection and prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
-            parameter_casts = get_parameter_casts(prepared_statement)
-            prepared = prepare_parameters_with_casts(parameters, parameter_casts, statement_config)
-        else:
-            prepared = super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
-
-        if not is_many and isinstance(prepared, list):
-            prepared = tuple(prepared)
-
-        if not is_many and isinstance(prepared, tuple):
-            return tuple(normalize_scalar_parameter(item) for item in prepared)
-
-        return prepared
-
-    def with_cursor(self, connection: "PsqlpyConnection") -> "PsqlpyCursor":
-        """Create context manager for psqlpy cursor.
-
-        Args:
-            connection: Psqlpy connection object
-
-        Returns:
-            PsqlpyCursor context manager
-        """
-        return PsqlpyCursor(connection)
-
-    def handle_database_exceptions(self) -> "PsqlpyExceptionHandler":
-        """Handle database-specific exceptions.
-
-        Returns:
-            Exception handler context manager
-        """
-        return PsqlpyExceptionHandler()
-
-    async def dispatch_execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute SQL script with statement splitting.
+    async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
+        """Execute single SQL statement.
 
         Args:
             cursor: Psqlpy connection object
-            statement: SQL statement with script content
+            statement: SQL statement to execute
 
         Returns:
-            ExecutionResult with script execution metadata
-
-        Notes:
-            Uses execute() with empty parameters for each statement instead of execute_batch().
-            execute_batch() uses simple query protocol which can break subsequent queries
-            that rely on extended protocol (e.g., information_schema queries with name type).
+            ExecutionResult with execution metadata
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
-        statement_config = statement.statement_config
-        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
-        successful_count = 0
-        last_result = None
+        driver_parameters = prepared_parameters
+        operation_type = statement.operation_type
+        should_coerce = operation_type != "SELECT"
+        effective_parameters = coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
+        params = cast("Sequence[Any] | Mapping[str, Any] | None", effective_parameters) or []
 
-        for stmt in statements:
-            last_result = await cursor.execute(stmt, prepared_parameters or [])
-            successful_count += 1
+        if statement.returns_rows():
+            query_result = await cursor.fetch(sql, params)
+            dict_rows, column_names = collect_rows(query_result)
 
-        return self.create_execution_result(
-            last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+            return self.create_execution_result(
+                cursor,
+                selected_data=dict_rows,
+                column_names=column_names,
+                data_row_count=len(dict_rows),
+                is_select_result=True,
+            )
+
+        result = await cursor.execute(sql, params)
+        rows_affected = extract_rows_affected(result)
+
+        return self.create_execution_result(cursor, rowcount_override=rows_affected)
 
     async def dispatch_execute_many(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
@@ -261,40 +216,87 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=rows_affected, is_many_result=True)
 
-    async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute single SQL statement.
+    async def dispatch_execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
+        """Execute SQL script with statement splitting.
 
         Args:
             cursor: Psqlpy connection object
-            statement: SQL statement to execute
+            statement: SQL statement with script content
 
         Returns:
-            ExecutionResult with execution metadata
+            ExecutionResult with script execution metadata
+
+        Notes:
+            Uses execute() with empty parameters for each statement instead of execute_batch().
+            execute_batch() uses simple query protocol which can break subsequent queries
+            that rely on extended protocol (e.g., information_schema queries with name type).
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
+        statement_config = statement.statement_config
+        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
-        driver_parameters = prepared_parameters
-        operation_type = statement.operation_type
-        should_coerce = operation_type != "SELECT"
-        effective_parameters = coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
-        params = cast("Sequence[Any] | Mapping[str, Any] | None", effective_parameters) or []
+        successful_count = 0
+        last_result = None
 
-        if statement.returns_rows():
-            query_result = await cursor.fetch(sql, params)
-            dict_rows, column_names = collect_rows(query_result)
+        for stmt in statements:
+            last_result = await cursor.execute(stmt, prepared_parameters or [])
+            successful_count += 1
 
-            return self.create_execution_result(
-                cursor,
-                selected_data=dict_rows,
-                column_names=column_names,
-                data_row_count=len(dict_rows),
-                is_select_result=True,
-            )
+        return self.create_execution_result(
+            last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
 
-        result = await cursor.execute(sql, params)
-        rows_affected = extract_rows_affected(result)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
 
-        return self.create_execution_result(cursor, rowcount_override=rows_affected)
+    async def begin(self) -> None:
+        """Begin a database transaction."""
+        try:
+            await self.connection.execute("BEGIN")
+        except psqlpy.exceptions.DatabaseError as e:
+            msg = f"Failed to begin psqlpy transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        try:
+            await self.connection.execute("COMMIT")
+        except psqlpy.exceptions.DatabaseError as e:
+            msg = f"Failed to commit psqlpy transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction."""
+        try:
+            await self.connection.execute("ROLLBACK")
+        except psqlpy.exceptions.DatabaseError as e:
+            msg = f"Failed to rollback psqlpy transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: "PsqlpyConnection") -> "PsqlpyCursor":
+        """Create context manager for psqlpy cursor.
+
+        Args:
+            connection: Psqlpy connection object
+
+        Returns:
+            PsqlpyCursor context manager
+        """
+        return PsqlpyCursor(connection)
+
+    def handle_database_exceptions(self) -> "PsqlpyExceptionHandler":
+        """Handle database-specific exceptions.
+
+        Returns:
+            Exception handler context manager
+        """
+        return PsqlpyExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -378,33 +380,43 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    async def begin(self) -> None:
-        """Begin a database transaction."""
-        try:
-            await self.connection.execute("BEGIN")
-        except psqlpy.exceptions.DatabaseError as e:
-            msg = f"Failed to begin psqlpy transaction: {e}"
-            raise SQLSpecError(msg) from e
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
-    async def rollback(self) -> None:
-        """Rollback the current transaction."""
-        try:
-            await self.connection.execute("ROLLBACK")
-        except psqlpy.exceptions.DatabaseError as e:
-            msg = f"Failed to rollback psqlpy transaction: {e}"
-            raise SQLSpecError(msg) from e
+    def prepare_driver_parameters(
+        self,
+        parameters: Any,
+        statement_config: "StatementConfig",
+        is_many: bool = False,
+        prepared_statement: Any | None = None,
+    ) -> Any:
+        """Prepare parameters with cast-aware type coercion for psqlpy.
 
-    async def commit(self) -> None:
-        """Commit the current transaction."""
-        try:
-            await self.connection.execute("COMMIT")
-        except psqlpy.exceptions.DatabaseError as e:
-            msg = f"Failed to commit psqlpy transaction: {e}"
-            raise SQLSpecError(msg) from e
+        Args:
+            parameters: Parameters in any format
+            statement_config: Statement configuration
+            is_many: Whether this is for execute_many operation
+            prepared_statement: Prepared statement containing the original SQL statement
 
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return bool(self.connection.in_transaction())
+        Returns:
+            Parameters with cast-aware type coercion applied
+        """
+        enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
+
+        if enable_cast_detection and prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
+            parameter_casts = get_parameter_casts(prepared_statement)
+            prepared = prepare_parameters_with_casts(parameters, parameter_casts, statement_config)
+        else:
+            prepared = super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+
+        if not is_many and isinstance(prepared, list):
+            prepared = tuple(prepared)
+
+        if not is_many and isinstance(prepared, tuple):
+            return tuple(normalize_scalar_parameter(item) for item in prepared)
+
+        return prepared
 
     @property
     def data_dictionary(self) -> "PsqlpyDataDictionary":
@@ -416,6 +428,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = PsqlpyDataDictionary()
         return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction."""
+        return bool(self.connection.in_transaction())
 
 
 register_driver_profile("psqlpy", driver_profile)

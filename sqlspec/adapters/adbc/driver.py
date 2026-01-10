@@ -133,108 +133,9 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._json_serializer = cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json))
         self._data_dictionary: AdbcDataDictionary | None = None
 
-    def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
-        """Create context manager for cursor.
-
-        Args:
-            connection: Database connection
-
-        Returns:
-            Cursor context manager
-        """
-        return AdbcCursor(connection)
-
-    def handle_database_exceptions(self) -> "AdbcExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
-
-        Returns:
-            Exception handler context manager
-        """
-        return AdbcExceptionHandler()
-
-    def prepare_driver_parameters(
-        self,
-        parameters: Any,
-        statement_config: "StatementConfig",
-        is_many: bool = False,
-        prepared_statement: Any | None = None,
-    ) -> Any:
-        """Prepare parameters with cast-aware type coercion for ADBC.
-
-        For PostgreSQL, applies cast-aware parameter processing using metadata from the compiled statement.
-        This allows proper handling of JSONB casts and other type conversions.
-        Respects driver_features['enable_cast_detection'] configuration.
-
-        Args:
-            parameters: Parameters in any format
-            statement_config: Statement configuration
-            is_many: Whether this is for execute_many operation
-            prepared_statement: Prepared statement containing the original SQL statement
-
-        Returns:
-            Parameters with cast-aware type coercion applied
-        """
-        enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
-        if enable_cast_detection and prepared_statement and self._is_postgres and not is_many:
-            parameter_casts = resolve_parameter_casts(prepared_statement)
-            return prepare_postgres_parameters(
-                parameters,
-                parameter_casts,
-                statement_config,
-                dialect=self._dialect_name,
-                json_serializer=self._json_serializer,
-            )
-
-        return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
-
-    def dispatch_execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets.
-
-        Args:
-            cursor: Database cursor
-            statement: SQL statement to execute
-
-        Returns:
-            Execution result with row counts
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        parameter_casts = resolve_parameter_casts(statement)
-
-        try:
-            if not prepared_parameters:
-                cursor._rowcount = 0  # pyright: ignore[reportPrivateUsage]
-                row_count = 0
-            elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
-                processed_params = []
-                for param_set in prepared_parameters:
-                    if self._is_postgres:
-                        # For postgres, always use cast-aware parameter preparation
-                        formatted_params = prepare_postgres_parameters(
-                            param_set,
-                            parameter_casts,
-                            self.statement_config,
-                            dialect=self._dialect_name,
-                            json_serializer=self._json_serializer,
-                        )
-                    else:
-                        postgres_compatible = normalize_postgres_empty_parameters(self._dialect_name, param_set)
-                        formatted_params = self.prepare_driver_parameters(
-                            postgres_compatible, self.statement_config, is_many=False
-                        )
-                    processed_params.append(formatted_params)
-
-                cursor.executemany(sql, processed_params)
-                row_count = resolve_rowcount(cursor)
-            else:
-                cursor.executemany(sql, prepared_parameters)
-                row_count = resolve_rowcount(cursor)
-
-        except Exception:
-            handle_postgres_rollback(self._dialect_name, cursor, logger)
-            raise
-
-        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def dispatch_execute(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
@@ -286,6 +187,55 @@ class AdbcDriver(SyncDriverAdapterBase):
         row_count = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
+    def dispatch_execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets.
+
+        Args:
+            cursor: Database cursor
+            statement: SQL statement to execute
+
+        Returns:
+            Execution result with row counts
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        parameter_casts = resolve_parameter_casts(statement)
+
+        try:
+            if not prepared_parameters:
+                cursor._rowcount = 0  # pyright: ignore[reportPrivateUsage]
+                row_count = 0
+            elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
+                processed_params = []
+                for param_set in prepared_parameters:
+                    if self._is_postgres:
+                        # For postgres, always use cast-aware parameter preparation
+                        formatted_params = prepare_postgres_parameters(
+                            param_set,
+                            parameter_casts,
+                            self.statement_config,
+                            dialect=self._dialect_name,
+                            json_serializer=self._json_serializer,
+                        )
+                    else:
+                        postgres_compatible = normalize_postgres_empty_parameters(self._dialect_name, param_set)
+                        formatted_params = self.prepare_driver_parameters(
+                            postgres_compatible, self.statement_config, is_many=False
+                        )
+                    processed_params.append(formatted_params)
+
+                cursor.executemany(sql, processed_params)
+                row_count = resolve_rowcount(cursor)
+            else:
+                cursor.executemany(sql, prepared_parameters)
+                row_count = resolve_rowcount(cursor)
+
+        except Exception:
+            handle_postgres_rollback(self._dialect_name, cursor, logger)
+            raise
+
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+
     def dispatch_execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script containing multiple statements.
 
@@ -329,6 +279,10 @@ class AdbcDriver(SyncDriverAdapterBase):
             is_script_result=True,
         )
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
     def begin(self) -> None:
         """Begin database transaction."""
         try:
@@ -336,15 +290,6 @@ class AdbcDriver(SyncDriverAdapterBase):
                 cursor.execute("BEGIN")
         except Exception as e:
             msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def rollback(self) -> None:
-        """Rollback database transaction."""
-        try:
-            with self.with_cursor(self.connection) as cursor:
-                cursor.execute("ROLLBACK")
-        except Exception as e:
-            msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
@@ -356,26 +301,37 @@ class AdbcDriver(SyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
+    def rollback(self) -> None:
+        """Rollback database transaction."""
+        try:
+            with self.with_cursor(self.connection) as cursor:
+                cursor.execute("ROLLBACK")
+        except Exception as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
 
-        ADBC uses explicit BEGIN and does not expose reliable transaction state.
+    def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
+        """Create context manager for cursor.
+
+        Args:
+            connection: Database connection
 
         Returns:
-            False - ADBC requires explicit transaction management.
+            Cursor context manager
         """
-        return False
+        return AdbcCursor(connection)
 
-    @property
-    def data_dictionary(self) -> "AdbcDataDictionary":
-        """Get the data dictionary for this driver.
+    def handle_database_exceptions(self) -> "AdbcExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
-            Data dictionary instance for metadata queries
+            Exception handler context manager
         """
-        if self._data_dictionary is None:
-            self._data_dictionary = AdbcDataDictionary()
-        return self._data_dictionary
+        return AdbcExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # ARROW API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_arrow(
         self,
@@ -445,6 +401,10 @@ class AdbcDriver(SyncDriverAdapterBase):
         msg = "Unreachable"
         raise RuntimeError(msg)  # pragma: no cover
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
     def select_to_storage(
         self,
         statement: "Statement | QueryBuilder | SQL | str",
@@ -504,6 +464,70 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    @property
+    def data_dictionary(self) -> "AdbcDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = AdbcDataDictionary()
+        return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        ADBC uses explicit BEGIN and does not expose reliable transaction state.
+
+        Returns:
+            False - ADBC requires explicit transaction management.
+        """
+        return False
+
+    def prepare_driver_parameters(
+        self,
+        parameters: Any,
+        statement_config: "StatementConfig",
+        is_many: bool = False,
+        prepared_statement: Any | None = None,
+    ) -> Any:
+        """Prepare parameters with cast-aware type coercion for ADBC.
+
+        For PostgreSQL, applies cast-aware parameter processing using metadata from the compiled statement.
+        This allows proper handling of JSONB casts and other type conversions.
+        Respects driver_features['enable_cast_detection'] configuration.
+
+        Args:
+            parameters: Parameters in any format
+            statement_config: Statement configuration
+            is_many: Whether this is for execute_many operation
+            prepared_statement: Prepared statement containing the original SQL statement
+
+        Returns:
+            Parameters with cast-aware type coercion applied
+        """
+        enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
+        if enable_cast_detection and prepared_statement and self._is_postgres and not is_many:
+            parameter_casts = resolve_parameter_casts(prepared_statement)
+            return prepare_postgres_parameters(
+                parameters,
+                parameter_casts,
+                statement_config,
+                dialect=self._dialect_name,
+                json_serializer=self._json_serializer,
+            )
+
+        return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
 
 
 register_driver_profile("adbc", driver_profile)
