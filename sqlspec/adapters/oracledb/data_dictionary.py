@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.data_dictionary import DialectSQLMixin
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     ColumnMetadata,
@@ -89,7 +88,7 @@ class OracleVersionInfo(VersionInfo):
 
 
 @mypyc_attr(native_class=False)
-class OracleDataDictionaryMixin(DialectSQLMixin):
+class OracleDataDictionaryMixin:
     """Shared helpers for Oracle data dictionary implementations."""
 
     __slots__ = ()
@@ -159,10 +158,24 @@ class OracleDataDictionaryMixin(DialectSQLMixin):
             return version_info.supports_json_blob()
         if feature == "supports_json":
             return version_info.supports_json_blob()
-        return self.resolve_feature_flag(feature, version_info)
+        from sqlspec.data_dictionary import get_dialect_config
+
+        config = get_dialect_config(self.dialect)
+        flag = config.get_feature_flag(feature)
+        if flag is not None:
+            return flag
+        required_version = config.get_feature_version(feature)
+        if required_version is None:
+            return False
+        return bool(version_info >= required_version)
 
     def list_available_features(self) -> "list[str]":
-        features = set(super().list_available_features())
+        from sqlspec.data_dictionary import get_dialect_config
+
+        config = get_dialect_config(self.dialect)
+        features: set[str] = set()
+        features.update(config.feature_flags.keys())
+        features.update(config.feature_versions.keys())
         features.update({
             "is_autonomous",
             "supports_native_json",
@@ -179,17 +192,8 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
 
     __slots__ = ()
 
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver."""
-        return super().get_cached_version(driver_id)
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        """Cache version info for a driver."""
-        super().cache_version(driver_id, version)
-
-    def get_cached_version_for_driver(self, driver: "OracleSyncDriver") -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver instance."""
-        return self.get_cached_version(id(driver))
+    def __init__(self) -> None:
+        super().__init__()
 
     def _get_compatible_value(self, driver: "OracleSyncDriver") -> "str | None":
         query_text = self.get_query_text("compatible")
@@ -210,20 +214,21 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
 
     def get_version(self, driver: "OracleSyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information."""
-        was_cached, cached_version = self.get_cached_version_for_driver(driver)
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
         if was_cached:
             return cast("OracleVersionInfo | None", cached_version)
 
         version_row = driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
             self._log_version_unavailable(self.dialect, "missing")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         version_value = self._extract_version_value(version_row)
         if not version_value:
             self._log_version_unavailable(self.dialect, "parse_failed")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         compatible = self._get_compatible_value(driver)
@@ -231,11 +236,11 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
         version_info = self._build_version_info(version_value, compatible, is_autonomous)
         if version_info is None:
             self._log_version_unavailable(self.dialect, "parse_failed")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         self._log_version_detected(self.dialect, version_info)
-        self.cache_version_for_driver(driver, version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
     def get_feature_flag(self, driver: "OracleSyncDriver", feature: str) -> bool:
@@ -316,17 +321,8 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
 
     __slots__ = ()
 
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver."""
-        return super().get_cached_version(driver_id)
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        """Cache version info for a driver."""
-        super().cache_version(driver_id, version)
-
-    def get_cached_version_for_driver(self, driver: "OracleAsyncDriver") -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver instance."""
-        return self.get_cached_version(id(driver))
+    def __init__(self) -> None:
+        super().__init__()
 
     async def _get_compatible_value(self, driver: "OracleAsyncDriver") -> "str | None":
         query_text = self.get_query_text("compatible")
@@ -347,20 +343,21 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
 
     async def get_version(self, driver: "OracleAsyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information."""
-        was_cached, cached_version = self.get_cached_version_for_driver(driver)
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
         if was_cached:
             return cast("OracleVersionInfo | None", cached_version)
 
         version_row = await driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
             self._log_version_unavailable(self.dialect, "missing")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         version_value = self._extract_version_value(version_row)
         if not version_value:
             self._log_version_unavailable(self.dialect, "parse_failed")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         compatible = await self._get_compatible_value(driver)
@@ -368,11 +365,11 @@ class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionary
         version_info = self._build_version_info(version_value, compatible, is_autonomous)
         if version_info is None:
             self._log_version_unavailable(self.dialect, "parse_failed")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         self._log_version_detected(self.dialect, version_info)
-        self.cache_version_for_driver(driver, version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
     async def get_feature_flag(self, driver: "OracleAsyncDriver", feature: str) -> bool:

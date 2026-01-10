@@ -88,6 +88,7 @@ from sqlspec.builder._select import (
     WhereClauseMixin,
     WindowFunctionBuilder,
 )
+from sqlspec.builder._temporal import FlashbackTable
 from sqlspec.builder._update import Update
 from sqlspec.builder._vector_expressions import VectorDistance
 from sqlspec.exceptions import SQLBuilderError
@@ -119,6 +120,7 @@ __all__ = (
     "Explain",
     "ExplainMixin",
     "ExpressionBuilder",
+    "FlashbackTable",
     "FunctionColumn",
     "FunctionExpression",
     "HavingClauseMixin",

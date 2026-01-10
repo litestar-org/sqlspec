@@ -69,6 +69,8 @@ __all__ = (
     "EXEC_CURSOR_RESULT",
     "EXEC_ROWCOUNT_OVERRIDE",
     "EXEC_SPECIAL_DATA",
+    "VERSION_GROUPS_MIN_FOR_MINOR",
+    "VERSION_GROUPS_MIN_FOR_PATCH",
     "AsyncExceptionHandler",
     "ColumnMetadata",
     "CommonDriverAttributesMixin",
@@ -85,6 +87,7 @@ __all__ = (
     "handle_single_row_error",
     "hash_stack_operations",
     "make_cache_key_hashable",
+    "resolve_db_system",
 )
 
 

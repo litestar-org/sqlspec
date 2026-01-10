@@ -98,18 +98,20 @@ def supports_batch_update(cursor: Any) -> bool:
     return True
 
 
-def infer_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
+def infer_param_types(params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any]":
     """Infer Spanner param_types from Python values."""
-    if isinstance(params, (list, tuple)) or not isinstance(params, dict):
+    if not isinstance(params, dict):
         return {}
     return infer_spanner_param_types(params)
 
 
 def coerce_params(
-    params: "dict[str, Any] | None", *, json_serializer: "Callable[[Any], str] | None" = None
+    params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None",
+    *,
+    json_serializer: "Callable[[Any], str] | None" = None,
 ) -> "dict[str, Any] | None":
     """Coerce Python types to Spanner-compatible formats."""
-    if isinstance(params, (list, tuple)) or not isinstance(params, dict):
+    if not isinstance(params, dict):
         return None
     return coerce_params_for_spanner(params, json_serializer=json_serializer)
 

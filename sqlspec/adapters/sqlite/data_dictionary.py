@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.sqlite.core import format_identifier
-from sqlspec.data_dictionary import DialectSQLMixin
 from sqlspec.driver import (
     ColumnMetadata,
     ForeignKeyMetadata,
@@ -18,47 +17,19 @@ from sqlspec.driver import (
 __all__ = ("SqliteDataDictionary",)
 
 if TYPE_CHECKING:
-    import re
-
     from sqlspec.adapters.sqlite.driver import SqliteDriver
-    from sqlspec.data_dictionary import DialectConfig
 
 
 @mypyc_attr(native_class=False)
-class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver"]):
+class SqliteDataDictionary(SyncDataDictionaryBase["SqliteDriver"]):
     """SQLite-specific sync data dictionary."""
 
     __slots__ = ()
 
     dialect = "sqlite"
 
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver."""
-        return super().get_cached_version(driver_id)
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        """Cache version info for a driver."""
-        super().cache_version(driver_id, version)
-
-    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
-        """Parse version string using a specific regex pattern."""
-        return super().parse_version_with_pattern(pattern, version_str)
-
-    def get_dialect_config(self) -> "DialectConfig":
-        """Return the dialect configuration for this data dictionary."""
-        return super().get_dialect_config()
-
-    def resolve_schema(self, schema: "str | None") -> "str | None":
-        """Return a schema name using dialect defaults when missing."""
-        return super().resolve_schema(schema)
-
-    def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
-        """Resolve a feature flag using dialect config and version info."""
-        return super().resolve_feature_flag(feature, version)
-
-    def get_cached_version_for_driver(self, driver: "SqliteDriver") -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver instance."""
-        return self.get_cached_version(id(driver))
+    def __init__(self) -> None:
+        super().__init__()
 
     def get_version(self, driver: "SqliteDriver") -> "VersionInfo | None":
         """Get SQLite database version information.
@@ -70,24 +41,25 @@ class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver
             SQLite version information or None if detection fails.
 
         """
-        was_cached, cached_version = self.get_cached_version_for_driver(driver)
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
         if was_cached:
             return cached_version
 
         version_value = driver.select_value_or_none(self.get_query("version"))
         if not version_value:
             self._log_version_unavailable(self.dialect, "missing")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
             self._log_version_unavailable(self.dialect, "parse_failed")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         self._log_version_detected(self.dialect, version_info)
-        self.cache_version_for_driver(driver, version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
     def get_feature_flag(self, driver: "SqliteDriver", feature: str) -> bool:
@@ -221,7 +193,3 @@ class SqliteDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SqliteDriver
             table_name=format_identifier(table_identifier), table_label=table_label
         )
         return driver.select(query_text, schema_type=ForeignKeyMetadata)
-
-    def list_available_features(self) -> "list[str]":
-        """List all features available for the dialect."""
-        return super().list_available_features()

@@ -24,8 +24,6 @@ from sqlspec.exceptions import SQLFileNotFoundError
 __all__ = ("AdbcDataDictionary",)
 
 if TYPE_CHECKING:
-    import re
-
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import SQL
 
@@ -36,17 +34,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
 
     __slots__ = ()
 
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver."""
-        return super().get_cached_version(driver_id)
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        """Cache version info for a driver."""
-        super().cache_version(driver_id, version)
-
-    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
-        """Parse version string using a specific regex pattern."""
-        return super().parse_version_with_pattern(pattern, version_str)
+    def __init__(self) -> None:
+        super().__init__()
 
     def _normalize_dialect(self, driver: "AdbcDriver") -> str:
         dialect_value = str(driver.dialect)
@@ -105,7 +94,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
         if dialect == "bigquery":
             return None
 
-        was_cached, cached_version = self.get_cached_version_for_driver(driver)
+        driver_id = id(driver)
+        was_cached, cached_version = self.get_cached_version(driver_id)
         if was_cached:
             return cached_version
 
@@ -113,29 +103,29 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
             version_value = driver.select_value_or_none(self._get_query(dialect, "version"))
         except Exception:
             self._log_version_unavailable(dialect, "query_failed")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         if not version_value:
             self._log_version_unavailable(dialect, "missing")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         try:
             config = get_dialect_config(dialect)
         except ValueError:
             self._log_version_unavailable(dialect, "unknown_dialect")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         version_info = self.parse_version_with_pattern(config.version_pattern, str(version_value))
         if version_info is None:
             self._log_version_unavailable(dialect, "parse_failed")
-            self.cache_version_for_driver(driver, None)
+            self.cache_version(driver_id, None)
             return None
 
         self._log_version_detected(dialect, version_info)
-        self.cache_version_for_driver(driver, version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
     def get_feature_flag(self, driver: "AdbcDriver", feature: str) -> bool:

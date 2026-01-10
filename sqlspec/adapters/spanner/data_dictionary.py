@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.data_dictionary import DialectSQLMixin
 from sqlspec.driver import (
     ColumnMetadata,
     ForeignKeyMetadata,
@@ -17,47 +16,19 @@ from sqlspec.driver import (
 __all__ = ("SpannerDataDictionary",)
 
 if TYPE_CHECKING:
-    import re
-
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
-    from sqlspec.data_dictionary import DialectConfig
 
 
 @mypyc_attr(native_class=False)
-class SpannerDataDictionary(DialectSQLMixin, SyncDataDictionaryBase["SpannerSyncDriver"]):
+class SpannerDataDictionary(SyncDataDictionaryBase["SpannerSyncDriver"]):
     """Fetch table, column, and index metadata from Spanner."""
 
     __slots__ = ()
 
     dialect = "spanner"
 
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver."""
-        return super().get_cached_version(driver_id)
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        """Cache version info for a driver."""
-        super().cache_version(driver_id, version)
-
-    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
-        """Parse version string using a specific regex pattern."""
-        return super().parse_version_with_pattern(pattern, version_str)
-
-    def get_dialect_config(self) -> "DialectConfig":
-        """Return the dialect configuration for this data dictionary."""
-        return super().get_dialect_config()
-
-    def resolve_schema(self, schema: "str | None") -> "str | None":
-        """Return a schema name using dialect defaults when missing."""
-        return super().resolve_schema(schema)
-
-    def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
-        """Resolve a feature flag using dialect config and version info."""
-        return super().resolve_feature_flag(feature, version)
-
-    def list_available_features(self) -> "list[str]":
-        """List all features available for the dialect."""
-        return super().list_available_features()
+    def __init__(self) -> None:
+        super().__init__()
 
     def get_version(self, driver: "SpannerSyncDriver") -> "VersionInfo | None":
         """Get Spanner version information.

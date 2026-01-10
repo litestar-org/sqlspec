@@ -366,10 +366,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """Check if connection is in transaction."""
         return False
 
-    def _coerce_params(self, params: "dict[str, Any] | None") -> "dict[str, Any] | None":
+    def _coerce_params(self, params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any] | None":
         return coerce_params(params, json_serializer=self.driver_features.get("json_serializer"))
 
-    def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
+    def _infer_param_types(self, params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any]":
         return infer_param_types(params)
 
 

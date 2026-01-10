@@ -1,6 +1,10 @@
 """Synchronous driver protocol implementation."""
 
+import graphlib
+import logging
+import re
 from abc import abstractmethod
+from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast, final, overload
 
@@ -8,15 +12,19 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.core import SQL, ProcessedState, StackResult, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
+from sqlspec.data_dictionary._loader import get_data_dictionary_loader
+from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._common import (
+    VERSION_GROUPS_MIN_FOR_MINOR,
+    VERSION_GROUPS_MIN_FOR_PATCH,
     CommonDriverAttributesMixin,
-    DataDictionaryMixin,
     ExecutionResult,
     StackExecutionObserver,
     SyncExceptionHandler,
     VersionInfo,
     describe_stack_statement,
     handle_single_row_error,
+    resolve_db_system,
 )
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
@@ -28,10 +36,10 @@ from sqlspec.driver._storage_helpers import (
     create_storage_job,
     stringify_storage_target,
 )
-from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
+from sqlspec.exceptions import ImproperConfigurationError, SQLFileNotFoundError, StackExecutionError
 from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
 from sqlspec.utils.arrow_impl import convert_dict_to_arrow_with_schema
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -40,8 +48,9 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.driver._common import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
-    from sqlspec.protocols import HasExecuteProtocol
+    from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol
     from sqlspec.typing import ArrowReturnFormat, ArrowTable, SchemaT, StatementParameters
 
 _LOGGER_NAME: Final[str] = "sqlspec"
@@ -1316,27 +1325,251 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         return create_storage_job(produced, provided, status=status)
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
-class SyncDataDictionaryBase(DataDictionaryMixin, Generic[SyncDriverT]):
-    """Base class for synchronous data dictionary implementations."""
+@mypyc_attr(native_class=False)
+class SyncDataDictionaryBase(Generic[SyncDriverT]):
+    """Base class for synchronous data dictionary implementations.
 
-    __slots__ = ()
+    This class uses native_class=False to ensure proper inheritance works
+    in mypyc compiled mode. When both base and concrete classes use
+    native_class=False, the inheritance chain remains intact.
+    """
+
+    __slots__ = ("_version_cache", "_version_fetch_attempted")
+
+    _version_cache: "dict[int, VersionInfo | None]"
+    _version_fetch_attempted: "set[int]"
+
+    dialect: str
+    """Dialect identifier. Must be defined by subclasses."""
+
+    def __init__(self) -> None:
+        self._version_cache = {}
+        self._version_fetch_attempted = set()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # DIALECT SQL METHODS (merged from DialectSQLMixin)
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def get_dialect_config(self) -> "DialectConfig":
+        """Return the dialect configuration for this data dictionary."""
+        return get_dialect_config(self.dialect)
+
+    def get_query(self, name: str) -> "SQL":
+        """Return a named SQL query for this dialect."""
+        loader = get_data_dictionary_loader()
+        return loader.get_query(self.dialect, name)
+
+    def get_query_text(self, name: str) -> str:
+        """Return raw SQL text for a named query for this dialect."""
+        loader = get_data_dictionary_loader()
+        return loader.get_query_text(self.dialect, name)
+
+    def get_query_text_or_none(self, name: str) -> "str | None":
+        """Return raw SQL text for a named query or None if missing."""
+        try:
+            return self.get_query_text(name)
+        except SQLFileNotFoundError:
+            return None
+
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        if schema is not None:
+            return schema
+        config = self.get_dialect_config()
+        return config.default_schema
+
+    def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
+        """Resolve a feature flag using dialect config and version info."""
+        config = self.get_dialect_config()
+        flag = config.get_feature_flag(feature)
+        if flag is not None:
+            return flag
+        required_version = config.get_feature_version(feature)
+        if required_version is None or version is None:
+            return False
+        return bool(version >= required_version)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # VERSION CACHING METHODS (inlined from DataDictionaryMixin)
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        """Get cached version info for a driver."""
-        return super().get_cached_version(driver_id)
+        """Get cached version info for a driver.
+
+        Args:
+            driver_id: The id() of the driver instance.
+
+        Returns:
+            Tuple of (was_cached, version_info). If was_cached is False,
+            the caller should fetch the version and call cache_version().
+        """
+        if driver_id in self._version_fetch_attempted:
+            return True, self._version_cache.get(driver_id)
+        return False, None
 
     def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        """Cache version info for a driver."""
-        super().cache_version(driver_id, version)
+        """Cache version info for a driver.
+
+        Args:
+            driver_id: The id() of the driver instance.
+            version: The version info to cache (can be None if detection failed).
+        """
+        self._version_fetch_attempted.add(driver_id)
+        if version is not None:
+            self._version_cache[driver_id] = version
 
     def parse_version_string(self, version_str: str) -> "VersionInfo | None":
-        """Parse a version string into VersionInfo."""
-        return super().parse_version_string(version_str)
+        """Parse version string into VersionInfo.
+
+        Args:
+            version_str: Raw version string from database
+
+        Returns:
+            VersionInfo instance or None if parsing fails
+        """
+        patterns = [r"(\d+)\.(\d+)\.(\d+)", r"(\d+)\.(\d+)", r"(\d+)"]
+        for pattern in patterns:
+            match = re.search(pattern, version_str)
+            if match:
+                groups = match.groups()
+                major = int(groups[0])
+                minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR else 0
+                patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH else 0
+                return VersionInfo(major, minor, patch)
+        return None
+
+    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
+        """Parse version string using a specific regex pattern.
+
+        Args:
+            pattern: Compiled regex pattern for the version format
+            version_str: Raw version string from database
+
+        Returns:
+            VersionInfo instance or None if parsing fails
+        """
+        match = pattern.search(version_str)
+        if not match:
+            return None
+        groups = match.groups()
+        if not groups:
+            return None
+        major = int(groups[0])
+        minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR and groups[1] else 0
+        patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2] else 0
+        return VersionInfo(major, minor, patch)
+
+    def _resolve_log_adapter(self) -> str:
+        """Resolve adapter identifier for logging."""
+        return str(getattr(self, "dialect", type(self).__name__))
+
+    def _log_version_detected(self, adapter: str, version: "VersionInfo") -> None:
+        """Log detected database version with db.system context."""
+        logger.debug(
+            "Detected database version", extra={"db.system": resolve_db_system(adapter), "db.version": str(version)}
+        )
+
+    def _log_version_unavailable(self, adapter: str, reason: str) -> None:
+        """Log that database version could not be determined."""
+        logger.debug("Database version unavailable", extra={"db.system": resolve_db_system(adapter), "reason": reason})
+
+    def _log_schema_introspect(
+        self, driver: Any, *, schema_name: "str | None", table_name: "str | None", operation: str
+    ) -> None:
+        """Log schema-level introspection activity."""
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "schema.introspect",
+            db_system=resolve_db_system(type(driver).__name__),
+            schema_name=schema_name,
+            table_name=table_name,
+            operation=operation,
+        )
+
+    def _log_table_describe(self, driver: Any, *, schema_name: "str | None", table_name: str, operation: str) -> None:
+        """Log table-level introspection activity."""
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "table.describe",
+            db_system=resolve_db_system(type(driver).__name__),
+            schema_name=schema_name,
+            table_name=table_name,
+            operation=operation,
+        )
 
     def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
-        """Try multiple version queries to detect database version."""
-        return super().detect_version_with_queries(driver, queries)
+        """Try multiple version queries to detect database version.
+
+        Args:
+            driver: Database driver with execute support
+            queries: List of SQL queries to try
+
+        Returns:
+            Version information or None if detection fails
+        """
+        for query in queries:
+            with suppress(Exception):
+                result: HasDataProtocol = driver.execute(query)
+                result_data = result.data
+                if result_data:
+                    first_row = result_data[0]
+                    version_str = str(first_row)
+                    if isinstance(first_row, dict):
+                        version_str = str(next(iter(first_row.values())))
+                    elif isinstance(first_row, (list, tuple)):
+                        version_str = str(first_row[0])
+
+                    parsed_version = self.parse_version_string(version_str)
+                    if parsed_version:
+                        self._log_version_detected(self._resolve_log_adapter(), parsed_version)
+                        return parsed_version
+
+        self._log_version_unavailable(self._resolve_log_adapter(), "queries_exhausted")
+        return None
+
+    def get_default_type_mapping(self) -> "dict[str, str]":
+        """Get default type mappings for common categories.
+
+        Returns:
+            Dictionary mapping type categories to generic SQL types
+        """
+        return {
+            "json": "TEXT",
+            "uuid": "VARCHAR(36)",
+            "boolean": "INTEGER",
+            "timestamp": "TIMESTAMP",
+            "text": "TEXT",
+            "blob": "BLOB",
+        }
+
+    def get_default_features(self) -> "list[str]":
+        """Get default feature flags supported by most databases.
+
+        Returns:
+            List of commonly supported feature names
+        """
+        return ["supports_transactions", "supports_prepared_statements"]
+
+    def sort_tables_topologically(self, tables: "list[str]", foreign_keys: "list[ForeignKeyMetadata]") -> "list[str]":
+        """Sort tables topologically based on foreign key dependencies.
+
+        Args:
+            tables: List of table names.
+            foreign_keys: List of foreign key metadata.
+
+        Returns:
+            List of table names in topological order (dependencies first).
+        """
+        sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
+        for table in tables:
+            sorter.add(table)
+        for fk in foreign_keys:
+            if fk.table_name == fk.referenced_table:
+                continue
+            sorter.add(fk.table_name, fk.referenced_table)
+        return list(sorter.static_order())
 
     def get_cached_version_for_driver(self, driver: "SyncDriverT") -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver instance.
@@ -1466,4 +1699,8 @@ class SyncDataDictionaryBase(DataDictionaryMixin, Generic[SyncDriverT]):
             List of feature names this data dictionary supports
 
         """
-        return self.get_default_features()
+        config = self.get_dialect_config()
+        features = set(self.get_default_features())
+        features.update(config.feature_flags.keys())
+        features.update(config.feature_versions.keys())
+        return sorted(features)

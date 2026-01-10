@@ -25,6 +25,7 @@ from sqlspec.builder._parsing_utils import (
     parse_table_expression,
     to_expression,
 )
+from sqlspec.builder._temporal import FlashbackTable
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
@@ -307,9 +308,17 @@ class SelectClauseMixin:
         builder.set_expression(select_expr)
         return cast("Self", builder)
 
-    def from_(self, table: str | exp.Expression | Any, alias: str | None = None) -> Self:
+    def from_(
+        self,
+        table: str | exp.Expression | Any,
+        alias: str | None = None,
+        as_of: Any | None = None,
+        as_of_type: str | None = None,
+    ) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="FROM clause only valid for SELECT.")
+        from_expr: exp.Expression
+
         if isinstance(table, str):
             from_expr = parse_table_expression(table, alias)
         elif is_expression(table):
@@ -330,6 +339,26 @@ class SelectClauseMixin:
             from_expr = exp.alias_(wrapped_subquery, alias) if alias else wrapped_subquery
         else:
             from_expr = table
+
+        if as_of is not None:
+            # Handle alias stripping/re-applying if from_expr is an Alias or Table with alias
+            inner_expr = from_expr.copy()  # Avoid mutating original expression if shared
+            target_alias = alias
+
+            if isinstance(inner_expr, exp.Alias):
+                target_alias = inner_expr.alias
+                inner_expr = inner_expr.this
+
+            if target_alias is None and isinstance(inner_expr, exp.Table) and inner_expr.args.get("alias"):
+                # Extract alias from Table if present
+                target_alias = inner_expr.args.get("alias").this
+                inner_expr.set("alias", None)
+
+            # Pass kind if provided, otherwise let generator decide default
+            kind_expr = exp.Var(this=as_of_type) if as_of_type else None
+            wrapped = FlashbackTable(this=inner_expr, as_of=exp.convert(as_of), kind=kind_expr)
+            from_expr = exp.alias_(wrapped, target_alias) if target_alias else wrapped
+
         builder.set_expression(select_expr.from_(from_expr, copy=False))
         return cast("Self", builder)
 
