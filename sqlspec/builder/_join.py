@@ -12,7 +12,6 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import parse_table_expression
-from sqlspec.builder._temporal import FlashbackTable
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_and_sql, has_parameter_builder
 
@@ -163,31 +162,32 @@ class JoinClauseMixin:
         join_expr = build_join_clause(builder, table, on, alias, join_type, lateral=lateral)
 
         if as_of is not None:
-            # Wrap the table in the JOIN expression with FlashbackTable
+            # Add temporal version clause to the table in JOIN expression
             inner_table = join_expr.this
 
             # Copy to avoid mutating original expression if it's shared
             inner_table = inner_table.copy()
 
-            # Handle alias if present on the inner table (should be moved to wrapper or preserved)
-            # In sqlglot Join, 'this' is the table expression.
-            target_alias = alias  # Usually alias argument controls it
+            # Handle alias if present on the inner table
+            target_alias = alias
 
             if isinstance(inner_table, exp.Alias):
                 target_alias = inner_table.alias
                 inner_table = inner_table.this
 
-            # If alias was None, check if table had internal alias (e.g. from parse_table_expression)
-            if target_alias is None and isinstance(inner_table, exp.Table) and inner_table.args.get("alias"):
-                target_alias = inner_table.args.get("alias").this
-                inner_table.set("alias", None)
-            # Defer kind selection to generator unless explicitly provided
-            kind_expr = exp.Var(this=as_of_type) if as_of_type else None
+            # If alias was None, check if table had internal alias
+            if target_alias is None and isinstance(inner_table, exp.Table):
+                alias_expr = inner_table.args.get("alias")
+                if alias_expr is not None:
+                    target_alias = alias_expr.this
+                    inner_table.set("alias", None)
 
-            wrapped = FlashbackTable(this=inner_table, as_of=exp.convert(as_of), kind=kind_expr)
+            # Create Version expression and attach to table
+            version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
+            inner_table.set("version", version)
 
             # Update the join expression's 'this'
-            new_this = exp.alias_(wrapped, target_alias) if target_alias else wrapped
+            new_this = exp.alias_(inner_table, target_alias) if target_alias else inner_table
             join_expr.set("this", new_this)
 
         builder._expression = builder._expression.join(join_expr, copy=False)
@@ -255,15 +255,16 @@ class JoinClauseMixin:
             if isinstance(inner_table, exp.Alias):
                 target_alias = inner_table.alias
                 inner_table = inner_table.this
-            elif isinstance(inner_table, exp.Table) and inner_table.args.get("alias"):
-                target_alias = inner_table.args.get("alias").this
-                inner_table.set("alias", None)
+            elif isinstance(inner_table, exp.Table):
+                alias_expr = inner_table.args.get("alias")
+                if alias_expr is not None:
+                    target_alias = alias_expr.this
+                    inner_table.set("alias", None)
 
-            # Defer kind selection to generator unless explicitly provided
-            kind_expr = exp.Var(this=as_of_type) if as_of_type else None
-
-            wrapped = FlashbackTable(this=inner_table, as_of=exp.convert(as_of), kind=kind_expr)
-            table_expr = exp.alias_(wrapped, target_alias) if target_alias else wrapped
+            # Create Version expression and attach to table
+            version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
+            inner_table.set("version", version)
+            table_expr = exp.alias_(inner_table, target_alias) if target_alias else inner_table
 
         join_expr = exp.Join(this=table_expr, kind="CROSS")
         builder._expression = builder._expression.join(join_expr, copy=False)
@@ -442,15 +443,18 @@ class JoinBuilder:
             if isinstance(inner_table, exp.Alias):
                 target_alias = inner_table.alias
                 inner_table = inner_table.this
-            elif isinstance(inner_table, exp.Table) and inner_table.args.get("alias"):
-                target_alias = inner_table.args.get("alias").this
-                inner_table.set("alias", None)
+            elif isinstance(inner_table, exp.Table):
+                alias_expr = inner_table.args.get("alias")
+                if alias_expr is not None:
+                    target_alias = alias_expr.this
+                    inner_table.set("alias", None)
 
-            # Pass kind if provided, otherwise let generator decide default
-            kind_expr = exp.Var(this=self._as_of_type) if self._as_of_type else None
-
-            wrapped = FlashbackTable(this=inner_table, as_of=exp.convert(self._as_of), kind=kind_expr)
-            table_expr = exp.alias_(wrapped, target_alias) if target_alias else wrapped
+            # Create Version expression and attach to table
+            version = exp.Version(
+                this=self._as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(self._as_of)
+            )
+            inner_table.set("version", version)
+            table_expr = exp.alias_(inner_table, target_alias) if target_alias else inner_table
 
         # Create the appropriate join type using same pattern as existing JoinClauseMixin
         if self._join_type in {"INNER JOIN", "INNER", "LATERAL JOIN"}:

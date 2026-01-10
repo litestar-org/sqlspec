@@ -88,10 +88,13 @@ from sqlspec.builder._select import (
     WhereClauseMixin,
     WindowFunctionBuilder,
 )
-from sqlspec.builder._temporal import FlashbackTable
+from sqlspec.builder._temporal import create_temporal_table, register_version_generators
 from sqlspec.builder._update import Update
 from sqlspec.builder._vector_expressions import VectorDistance
 from sqlspec.exceptions import SQLBuilderError
+
+# Register temporal query SQL generators on module import
+register_version_generators()
 
 __all__ = (
     "AggregateExpression",
@@ -120,7 +123,6 @@ __all__ = (
     "Explain",
     "ExplainMixin",
     "ExpressionBuilder",
-    "FlashbackTable",
     "FunctionColumn",
     "FunctionExpression",
     "HavingClauseMixin",
@@ -164,12 +166,14 @@ __all__ = (
     "build_oracle_explain",
     "build_postgres_explain",
     "build_sqlite_explain",
+    "create_temporal_table",
     "extract_expression",
     "normalize_dialect_name",
     "parse_column_expression",
     "parse_condition_expression",
     "parse_order_expression",
     "parse_table_expression",
+    "register_version_generators",
     "sql",
     "to_expression",
 )

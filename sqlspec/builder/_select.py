@@ -25,7 +25,6 @@ from sqlspec.builder._parsing_utils import (
     parse_table_expression,
     to_expression,
 )
-from sqlspec.builder._temporal import FlashbackTable
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
@@ -349,15 +348,18 @@ class SelectClauseMixin:
                 target_alias = inner_expr.alias
                 inner_expr = inner_expr.this
 
-            if target_alias is None and isinstance(inner_expr, exp.Table) and inner_expr.args.get("alias"):
+            if target_alias is None and isinstance(inner_expr, exp.Table):
                 # Extract alias from Table if present
-                target_alias = inner_expr.args.get("alias").this
-                inner_expr.set("alias", None)
+                alias_expr = inner_expr.args.get("alias")
+                if alias_expr is not None:
+                    target_alias = alias_expr.this
+                    inner_expr.set("alias", None)
 
-            # Pass kind if provided, otherwise let generator decide default
-            kind_expr = exp.Var(this=as_of_type) if as_of_type else None
-            wrapped = FlashbackTable(this=inner_expr, as_of=exp.convert(as_of), kind=kind_expr)
-            from_expr = exp.alias_(wrapped, target_alias) if target_alias else wrapped
+            # Use sqlglot's built-in Version expression for temporal queries
+            # Custom version_sql generators are registered in _temporal module
+            version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
+            inner_expr.set("version", version)
+            from_expr = exp.alias_(inner_expr, target_alias) if target_alias else inner_expr
 
         builder.set_expression(select_expr.from_(from_expr, copy=False))
         return cast("Self", builder)
