@@ -19,6 +19,7 @@ Available adapters:
 - **BigQuery**: bigquery
 - **Spanner**: spanner
 - **Cross-Database**: ADBC (Arrow Database Connectivity)
+- **Testing**: Mock (SQLite :memory: with dialect transpilation)
 
 Each adapter implementation includes:
 
@@ -1095,6 +1096,133 @@ ADBC (Arrow Database Connectivity)
    :show-inheritance:
 
 .. autoclass:: AdbcDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Testing
+=======
+
+Mock
+----
+
+.. currentmodule:: sqlspec.adapters.mock
+
+**Homepage**: Built-in (uses SQLite :memory: backend)
+
+**PyPI**: N/A (included with SQLSpec)
+
+**Concurrency**: Sync and async
+
+**Connection Pooling**: None (uses :memory: database per connection)
+
+**Parameter Style**: ``?, ?, ?`` (SQLite positional, transpiled from target dialect)
+
+**Special Features**:
+
+- Dialect transpilation via sqlglot (write SQL in Postgres, MySQL, Oracle - execute on SQLite)
+- Initial SQL execution on connection creation
+- No external database dependencies
+- Perfect for unit testing with production-like SQL syntax
+- Sync and async support
+
+**Known Limitations**:
+
+- SQLite feature limitations apply (no stored procedures, limited concurrent writes)
+- Not all dialect-specific features transpile to SQLite
+- In-memory only (no persistence)
+
+**Installation**:
+
+.. code-block:: bash
+
+   # No installation required - built into SQLSpec
+   uv add sqlspec
+
+**Configuration (Sync with Postgres Dialect)**:
+
+.. code-block:: python
+
+   from sqlspec.adapters.mock import MockSyncConfig
+
+   config = MockSyncConfig(target_dialect="postgres")
+
+   with config.provide_session() as session:
+       # Write Postgres SQL - executes on SQLite
+       session.execute("""
+           CREATE TABLE users (
+               id SERIAL PRIMARY KEY,
+               name VARCHAR(100)
+           )
+       """)
+       session.execute("INSERT INTO users (name) VALUES ($1)", "Alice")
+       result = session.select_one("SELECT * FROM users WHERE name = $1", "Alice")
+
+**Configuration (Async with MySQL Dialect)**:
+
+.. code-block:: python
+
+   from sqlspec.adapters.mock import MockAsyncConfig
+
+   config = MockAsyncConfig(
+       target_dialect="mysql",
+       initial_sql="CREATE TABLE items (id INT, name TEXT)"
+   )
+
+   async with config.provide_session() as session:
+       await session.execute("INSERT INTO items VALUES (%s, %s)", 1, "Widget")
+       result = await session.select("SELECT * FROM items")
+
+**Configuration (With Initial SQL Setup)**:
+
+.. code-block:: python
+
+   from sqlspec.adapters.mock import MockSyncConfig
+
+   config = MockSyncConfig(
+       target_dialect="postgres",
+       initial_sql=[
+           "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
+           "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER)",
+       ]
+   )
+
+   with config.provide_session() as session:
+       # Tables already exist from initial_sql
+       session.execute("INSERT INTO users (id, name) VALUES ($1, $2)", 1, "Alice")
+
+**Use Cases**:
+
+- **Unit Testing**: Test SQL logic without database dependencies
+- **CI/CD Pipelines**: Run tests where real databases aren't available
+- **Rapid Prototyping**: Develop with production-like SQL syntax
+- **Integration Tests**: Validate dialect-specific SQL translates correctly
+
+**Supported Target Dialects**:
+
+- ``postgres`` - PostgreSQL (``$1, $2`` parameters)
+- ``mysql`` - MySQL (``%s`` parameters)
+- ``oracle`` - Oracle (``:1, :2`` parameters)
+- ``sqlite`` - SQLite (no transpilation, ``?`` parameters)
+
+**API Reference**:
+
+.. autoclass:: MockSyncConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: MockAsyncConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: MockSyncDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: MockAsyncDriver
    :members:
    :undoc-members:
    :show-inheritance:

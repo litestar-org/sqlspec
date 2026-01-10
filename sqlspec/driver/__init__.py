@@ -14,6 +14,7 @@ from sqlspec.driver._common import (
     describe_stack_statement,
     hash_stack_operations,
 )
+from sqlspec.driver._sql_helpers import convert_to_dialect
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 
 __all__ = (
@@ -31,6 +32,7 @@ __all__ = (
     "SyncDriverAdapterBase",
     "TableMetadata",
     "VersionInfo",
+    "convert_to_dialect",
     "describe_stack_statement",
     "hash_stack_operations",
 )

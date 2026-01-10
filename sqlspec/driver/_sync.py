@@ -1276,19 +1276,19 @@ class SyncDataDictionaryBase(DataDictionaryMixin, Generic[SyncDriverT]):
 
     def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver."""
-        return DataDictionaryMixin.get_cached_version(self, driver_id)
+        return super().get_cached_version(driver_id)
 
     def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
         """Cache version info for a driver."""
-        DataDictionaryMixin.cache_version(self, driver_id, version)
+        super().cache_version(driver_id, version)
 
     def parse_version_string(self, version_str: str) -> "VersionInfo | None":
         """Parse a version string into VersionInfo."""
-        return DataDictionaryMixin.parse_version_string(self, version_str)
+        return super().parse_version_string(version_str)
 
     def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version."""
-        return DataDictionaryMixin.detect_version_with_queries(self, driver, queries)
+        return super().detect_version_with_queries(driver, queries)
 
     def get_cached_version_for_driver(self, driver: "SyncDriverT") -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver instance.

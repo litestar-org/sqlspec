@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sqlite.core import format_identifier
 from sqlspec.data_dictionary import (
     get_data_dictionary_loader,
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 
+@mypyc_attr(native_class=False)
 class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
     """ADBC multi-dialect data dictionary."""
 
@@ -35,15 +38,15 @@ class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
 
     def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver."""
-        return SyncDataDictionaryBase.get_cached_version(self, driver_id)
+        return super().get_cached_version(driver_id)
 
     def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
         """Cache version info for a driver."""
-        SyncDataDictionaryBase.cache_version(self, driver_id, version)
+        super().cache_version(driver_id, version)
 
     def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
         """Parse version string using a specific regex pattern."""
-        return SyncDataDictionaryBase.parse_version_with_pattern(self, pattern, version_str)
+        return super().parse_version_with_pattern(pattern, version_str)
 
     def _normalize_dialect(self, driver: "AdbcDriver") -> str:
         dialect_value = str(driver.dialect)
