@@ -9,15 +9,8 @@ from typing import TYPE_CHECKING
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.mock.core import format_identifier
-from sqlspec.driver import (
-    AsyncDataDictionaryBase,
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    SyncDataDictionaryBase,
-    TableMetadata,
-    VersionInfo,
-)
+from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 __all__ = ("MockAsyncDataDictionary", "MockDataDictionary")
 
@@ -26,7 +19,7 @@ if TYPE_CHECKING:
 
 
 @mypyc_attr(native_class=False)
-class MockDataDictionary(SyncDataDictionaryBase["MockSyncDriver"]):
+class MockDataDictionary(SyncDataDictionaryBase):
     """Mock-specific sync data dictionary.
 
     Delegates metadata queries to SQLite's catalog (sqlite_master, PRAGMA table_info).
@@ -201,7 +194,7 @@ class MockDataDictionary(SyncDataDictionaryBase["MockSyncDriver"]):
 
 
 @mypyc_attr(native_class=False)
-class MockAsyncDataDictionary(AsyncDataDictionaryBase["MockAsyncDriver"]):
+class MockAsyncDataDictionary(AsyncDataDictionaryBase):
     """Mock-specific async data dictionary.
 
     Delegates metadata queries to SQLite's catalog (sqlite_master, PRAGMA table_info).

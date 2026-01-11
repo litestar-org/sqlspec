@@ -6,7 +6,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-async def test_async_connection(postgres_service: PostgresService) -> None:
+async def test_async_connection(postgres_service: "PostgresService") -> None:
     """Test asyncpg connection components."""
     # Test direct connection
     async_config = AsyncpgConfig(

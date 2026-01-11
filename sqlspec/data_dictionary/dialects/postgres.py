@@ -1,7 +1,7 @@
 import re
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
-from sqlspec.driver import VersionInfo
+from sqlspec.typing import VersionInfo
 
 POSTGRES_VERSION_PATTERN = re.compile(r"PostgreSQL (\d+)\.(\d+)(?:\.(\d+))?")
 

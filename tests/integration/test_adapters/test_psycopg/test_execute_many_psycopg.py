@@ -13,7 +13,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[PsycopgSyncDriver, None, None]":
+def psycopg_batch_session(postgres_service: "PostgresService") -> "Generator[PsycopgSyncDriver, None, None]":
     """Create a Psycopg session for batch operation testing."""
     config = PsycopgSyncConfig(
         connection_config={

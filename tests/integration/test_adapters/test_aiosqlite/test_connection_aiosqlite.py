@@ -1,8 +1,6 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Test AIOSQLite connection functionality."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4

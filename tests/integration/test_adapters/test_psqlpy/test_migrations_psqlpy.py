@@ -11,7 +11,7 @@ from sqlspec.migrations.commands import AsyncMigrationCommands
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-async def test_psqlpy_migration_full_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psqlpy_migration_full_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test full Psqlpy migration workflow: init -> create -> upgrade -> downgrade."""
 
     test_id = "psqlpy_full_workflow"
@@ -86,7 +86,7 @@ def down():
             await config.close_pool()
 
 
-async def test_psqlpy_multiple_migrations_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psqlpy_multiple_migrations_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psqlpy workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
     test_id = "psqlpy_multi_workflow"
@@ -194,7 +194,7 @@ def down():
             await config.close_pool()
 
 
-async def test_psqlpy_migration_current_command(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psqlpy_migration_current_command(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test the current migration command shows correct version for Psqlpy."""
 
     test_id = "psqlpy_current_cmd"
@@ -250,7 +250,7 @@ def down():
             await config.close_pool()
 
 
-async def test_psqlpy_migration_error_handling(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psqlpy_migration_error_handling(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psqlpy migration error handling."""
     migration_dir = tmp_path / "migrations"
 
@@ -293,7 +293,7 @@ def down():
             await config.close_pool()
 
 
-async def test_psqlpy_migration_with_transactions(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psqlpy_migration_with_transactions(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psqlpy migrations work properly with transactions."""
 
     test_id = "psqlpy_transactions"

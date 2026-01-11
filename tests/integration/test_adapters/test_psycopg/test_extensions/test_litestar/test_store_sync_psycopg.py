@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psycopg, pytest.m
 
 
 @pytest.fixture
-async def psycopg_sync_store(postgres_service: PostgresService) -> AsyncGenerator[PsycopgSyncStore, None]:
+async def psycopg_sync_store(postgres_service: "PostgresService") -> AsyncGenerator[PsycopgSyncStore, None]:
     """Create Psycopg sync store with test database."""
     config = PsycopgSyncConfig(
         connection_config={

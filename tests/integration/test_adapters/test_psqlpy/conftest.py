@@ -1,7 +1,5 @@
 """Fixtures and configuration for PSQLPy integration tests."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
@@ -14,7 +12,7 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-async def psqlpy_config(postgres_service: PostgresService) -> AsyncGenerator[PsqlpyConfig, None]:
+async def psqlpy_config(postgres_service: "PostgresService") -> AsyncGenerator[PsqlpyConfig, None]:
     """Fixture for PsqlpyConfig using the postgres service."""
 
     dsn = (

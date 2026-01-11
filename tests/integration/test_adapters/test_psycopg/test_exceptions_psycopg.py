@@ -18,7 +18,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-def psycopg_sync_exception_session(postgres_service: PostgresService) -> Generator[PsycopgSyncDriver, None, None]:
+def psycopg_sync_exception_session(postgres_service: "PostgresService") -> Generator[PsycopgSyncDriver, None, None]:
     """Create a psycopg sync session for exception testing."""
     config = PsycopgSyncConfig(
         connection_config={
@@ -37,7 +37,7 @@ def psycopg_sync_exception_session(postgres_service: PostgresService) -> Generat
 
 @pytest.fixture
 async def psycopg_async_exception_session(
-    postgres_service: PostgresService,
+    postgres_service: "PostgresService",
 ) -> AsyncGenerator[PsycopgAsyncDriver, None]:
     """Create a psycopg async session for exception testing."""
     config = PsycopgAsyncConfig(

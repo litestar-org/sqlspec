@@ -1,7 +1,7 @@
 import re
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
-from sqlspec.driver import VersionInfo
+from sqlspec.typing import VersionInfo
 
 DUCKDB_VERSION_PATTERN = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 

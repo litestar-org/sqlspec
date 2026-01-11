@@ -17,10 +17,19 @@ if TYPE_CHECKING:
 
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
-    from sqlspec.typing import ArrowRecordBatch, ArrowTable
+    from sqlspec.typing import (
+        ArrowRecordBatch,
+        ArrowTable,
+        ColumnMetadata,
+        ForeignKeyMetadata,
+        IndexMetadata,
+        TableMetadata,
+        VersionInfo,
+    )
 
 __all__ = (
     "ArrowTableStatsProtocol",
+    "AsyncDataDictionaryProtocol",
     "AsyncDeleteProtocol",
     "AsyncReadBytesProtocol",
     "AsyncReadableProtocol",
@@ -73,6 +82,7 @@ __all__ = (
     "SupportsCloseProtocol",
     "SupportsDtypeStrProtocol",
     "SupportsJsonTypeProtocol",
+    "SyncDataDictionaryProtocol",
     "WithMethodProtocol",
 )
 
@@ -848,3 +858,59 @@ class HasMigrationConfigProtocol(Protocol):
     """
 
     migration_config: "Mapping[str, Any] | None"
+
+
+class SyncDataDictionaryProtocol(Protocol):
+    """Protocol for sync data dictionary implementations."""
+
+    dialect: str
+
+    def get_version(self, driver: Any) -> "VersionInfo | None": ...
+
+    def get_feature_flag(self, driver: Any, feature: str) -> bool: ...
+
+    def get_optimal_type(self, driver: Any, type_category: str) -> str: ...
+
+    def get_tables(self, driver: Any, schema: "str | None" = None) -> "list[TableMetadata]": ...
+
+    def get_columns(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]": ...
+
+    def get_indexes(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]": ...
+
+    def get_foreign_keys(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]": ...
+
+    def list_available_features(self) -> "list[str]": ...
+
+
+class AsyncDataDictionaryProtocol(Protocol):
+    """Protocol for async data dictionary implementations."""
+
+    dialect: str
+
+    async def get_version(self, driver: Any) -> "VersionInfo | None": ...
+
+    async def get_feature_flag(self, driver: Any, feature: str) -> bool: ...
+
+    async def get_optimal_type(self, driver: Any, type_category: str) -> str: ...
+
+    async def get_tables(self, driver: Any, schema: "str | None" = None) -> "list[TableMetadata]": ...
+
+    async def get_columns(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]": ...
+
+    async def get_indexes(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]": ...
+
+    async def get_foreign_keys(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]": ...
+
+    def list_available_features(self) -> "list[str]": ...

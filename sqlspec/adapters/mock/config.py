@@ -138,7 +138,7 @@ class _MockAsyncSessionFactory:
             self._connection = None
 
 
-class MockSyncConfig(NoPoolSyncConfig[MockConnection, MockSyncDriver]):
+class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
     """Sync mock database configuration.
 
     Uses SQLite :memory: as the execution backend with dialect transpilation.
@@ -315,7 +315,7 @@ class MockSyncConfig(NoPoolSyncConfig[MockConnection, MockSyncDriver]):
         return namespace
 
 
-class MockAsyncConfig(NoPoolAsyncConfig[MockConnection, MockAsyncDriver]):
+class MockAsyncConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):
     """Async mock database configuration.
 
     Uses SQLite :memory: as the execution backend with dialect transpilation.

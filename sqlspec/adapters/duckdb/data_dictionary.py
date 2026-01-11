@@ -4,14 +4,8 @@ from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.driver import (
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    SyncDataDictionaryBase,
-    TableMetadata,
-    VersionInfo,
-)
+from sqlspec.driver import SyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 __all__ = ("DuckDBDataDictionary",)
 
@@ -20,7 +14,7 @@ if TYPE_CHECKING:
 
 
 @mypyc_attr(native_class=False)
-class DuckDBDataDictionary(SyncDataDictionaryBase["DuckDBDriver"]):
+class DuckDBDataDictionary(SyncDataDictionaryBase):
     """DuckDB-specific sync data dictionary."""
 
     __slots__ = ()

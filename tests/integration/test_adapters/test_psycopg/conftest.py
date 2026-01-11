@@ -24,7 +24,7 @@ def _cleanup_portal() -> "Generator[None, None, None]":
 
 
 @pytest.fixture
-def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[PsycopgSyncConfig, None, None]":
+def psycopg_sync_config(postgres_service: "PostgresService") -> "Generator[PsycopgSyncConfig, None, None]":
     """Create a psycopg sync configuration."""
     config = PsycopgSyncConfig(
         connection_config={
@@ -38,7 +38,7 @@ def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[Psycopg
 
 
 @pytest.fixture(scope="function")
-async def psycopg_async_config(postgres_service: PostgresService) -> "AsyncGenerator[PsycopgAsyncConfig, None]":
+async def psycopg_async_config(postgres_service: "PostgresService") -> "AsyncGenerator[PsycopgAsyncConfig, None]":
     """Create a psycopg async configuration."""
     config = PsycopgAsyncConfig(
         connection_config={

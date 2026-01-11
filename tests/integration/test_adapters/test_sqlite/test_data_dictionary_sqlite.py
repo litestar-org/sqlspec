@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec.driver import VersionInfo
+from sqlspec.typing import VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.driver import SqliteDriver

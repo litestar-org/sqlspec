@@ -11,7 +11,7 @@ from sqlspec.migrations.commands import AsyncMigrationCommands
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-async def test_asyncpg_migration_full_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_migration_full_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test full AsyncPG migration workflow: init -> create -> upgrade -> downgrade."""
     migration_dir = tmp_path / "migrations"
 
@@ -83,7 +83,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_multiple_migrations_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_multiple_migrations_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncPG workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
     migration_dir = tmp_path / "migrations"
 
@@ -187,7 +187,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_migration_current_command(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_migration_current_command(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test the current migration command shows correct version for AsyncPG."""
     migration_dir = tmp_path / "migrations"
 
@@ -242,7 +242,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_migration_error_handling(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_migration_error_handling(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncPG migration error handling."""
     migration_dir = tmp_path / "migrations"
 
@@ -289,7 +289,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_migration_with_transactions(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_migration_with_transactions(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncPG migrations work properly with transactions."""
     migration_dir = tmp_path / "migrations"
 
@@ -365,7 +365,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_config_migrate_up_method(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_config_migrate_up_method(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncpgConfig.migrate_up() method works correctly."""
     migration_dir = tmp_path / "migrations"
 
@@ -419,7 +419,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_config_migrate_down_method(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_config_migrate_down_method(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncpgConfig.migrate_down() method works correctly."""
     migration_dir = tmp_path / "migrations"
 
@@ -480,7 +480,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_config_get_current_migration_method(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_config_get_current_migration_method(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncpgConfig.get_current_migration() method returns correct version."""
     migration_dir = tmp_path / "migrations"
 
@@ -525,7 +525,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_config_create_migration_method(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_config_create_migration_method(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncpgConfig.create_migration() method generates migration file."""
     migration_dir = tmp_path / "migrations"
 
@@ -555,7 +555,7 @@ async def test_asyncpg_config_create_migration_method(tmp_path: Path, postgres_s
             await config.close_pool()
 
 
-async def test_asyncpg_config_stamp_migration_method(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_config_stamp_migration_method(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncpgConfig.stamp_migration() method marks database at revision."""
     migration_dir = tmp_path / "migrations"
 
@@ -603,7 +603,7 @@ def down():
             await config.close_pool()
 
 
-async def test_asyncpg_config_fix_migrations_dry_run(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_asyncpg_config_fix_migrations_dry_run(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test AsyncpgConfig.fix_migrations() dry run shows what would change."""
     migration_dir = tmp_path / "migrations"
 

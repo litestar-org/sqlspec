@@ -4,14 +4,8 @@ from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.driver import (
-    AsyncDataDictionaryBase,
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    TableMetadata,
-    VersionInfo,
-)
+from sqlspec.driver import AsyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
@@ -20,7 +14,7 @@ __all__ = ("AsyncpgDataDictionary",)
 
 
 @mypyc_attr(native_class=False)
-class AsyncpgDataDictionary(AsyncDataDictionaryBase["AsyncpgDriver"]):
+class AsyncpgDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
 
     __slots__ = ()
@@ -29,16 +23,6 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase["AsyncpgDriver"]):
 
     def __init__(self) -> None:
         super().__init__()
-
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        if driver_id in self._version_fetch_attempted:
-            return True, self._version_cache.get(driver_id)
-        return False, None
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        self._version_fetch_attempted.add(driver_id)
-        if version is not None:
-            self._version_cache[driver_id] = version
 
     async def get_version(self, driver: "AsyncpgDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.

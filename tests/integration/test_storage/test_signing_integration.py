@@ -23,7 +23,7 @@ TEST_TEXT_CONTENT = "Hello, SQLSpec URL signing test!"
 
 @pytest.fixture
 def obstore_s3_backend(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> "ObjectStoreProtocol":
     """Set up ObStore S3 backend for signing tests."""
     _ = minio_client

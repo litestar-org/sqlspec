@@ -12,7 +12,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 @pytest.mark.postgres
 @pytest.mark.asyncio
-async def test_asyncpg_native_event_channel(postgres_service: PostgresService) -> None:
+async def test_asyncpg_native_event_channel(postgres_service: "PostgresService") -> None:
     """AsyncPG configs surface native LISTEN/NOTIFY events."""
 
     config = AsyncpgConfig(

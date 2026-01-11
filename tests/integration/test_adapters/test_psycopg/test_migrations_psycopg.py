@@ -13,7 +13,7 @@ from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCom
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-def test_psycopg_sync_migration_full_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
+def test_psycopg_sync_migration_full_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test full Psycopg sync migration workflow: init -> create -> upgrade -> downgrade."""
 
     test_id = "psycopg_sync_full"
@@ -86,7 +86,7 @@ def down():
             config.close_pool()
 
 
-async def test_psycopg_async_migration_full_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psycopg_async_migration_full_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test full Psycopg async migration workflow: init -> create -> upgrade -> downgrade."""
 
     test_id = "psycopg_async_full"
@@ -161,7 +161,7 @@ def down():
             await config.close_pool()
 
 
-def test_psycopg_sync_multiple_migrations_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
+def test_psycopg_sync_multiple_migrations_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psycopg sync workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
     test_id = "psycopg_sync_multi"
@@ -261,7 +261,7 @@ def down():
             config.close_pool()
 
 
-async def test_psycopg_async_multiple_migrations_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psycopg_async_multiple_migrations_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psycopg async workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
     test_id = "psycopg_async_multi"
@@ -366,7 +366,7 @@ def down():
             await config.close_pool()
 
 
-def test_psycopg_sync_migration_current_command(tmp_path: Path, postgres_service: PostgresService) -> None:
+def test_psycopg_sync_migration_current_command(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test the current migration command shows correct version for Psycopg sync."""
 
     test_id = "psycopg_sync_current"
@@ -422,7 +422,7 @@ def down():
             config.close_pool()
 
 
-async def test_psycopg_async_migration_current_command(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psycopg_async_migration_current_command(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test the current migration command shows correct version for Psycopg async."""
 
     test_id = "psycopg_async_current"
@@ -483,7 +483,7 @@ def down():
             await config.close_pool()
 
 
-def test_psycopg_sync_migration_error_handling(tmp_path: Path, postgres_service: PostgresService) -> None:
+def test_psycopg_sync_migration_error_handling(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psycopg sync migration error handling."""
     migration_dir = tmp_path / "migrations"
 
@@ -529,7 +529,7 @@ def down():
             config.close_pool()
 
 
-async def test_psycopg_async_migration_error_handling(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psycopg_async_migration_error_handling(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psycopg async migration error handling."""
     migration_dir = tmp_path / "migrations"
 
@@ -580,7 +580,7 @@ def down():
             await config.close_pool()
 
 
-def test_psycopg_sync_migration_with_transactions(tmp_path: Path, postgres_service: PostgresService) -> None:
+def test_psycopg_sync_migration_with_transactions(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psycopg sync migrations work properly with transactions."""
 
     test_id = "psycopg_sync_trans"
@@ -659,7 +659,7 @@ def down():
             config.close_pool()
 
 
-async def test_psycopg_async_migration_with_transactions(tmp_path: Path, postgres_service: PostgresService) -> None:
+async def test_psycopg_async_migration_with_transactions(tmp_path: Path, postgres_service: "PostgresService") -> None:
     """Test Psycopg async migrations work properly with transactions."""
 
     test_id = "psycopg_async_trans"

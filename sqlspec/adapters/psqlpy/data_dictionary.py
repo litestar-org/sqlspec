@@ -4,14 +4,8 @@ from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.driver import (
-    AsyncDataDictionaryBase,
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    TableMetadata,
-    VersionInfo,
-)
+from sqlspec.driver import AsyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
@@ -20,7 +14,7 @@ __all__ = ("PsqlpyDataDictionary",)
 
 
 @mypyc_attr(native_class=False)
-class PsqlpyDataDictionary(AsyncDataDictionaryBase["PsqlpyDriver"]):
+class PsqlpyDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary via psqlpy."""
 
     __slots__ = ()

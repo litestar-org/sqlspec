@@ -1,7 +1,5 @@
 """Integration tests for psycopg async driver COPY operations."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -15,7 +13,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGenerator[PsycopgAsyncDriver, None]:
+async def psycopg_async_session(postgres_service: "PostgresService") -> AsyncGenerator[PsycopgAsyncDriver, None]:
     """Create a psycopg async session with test table."""
     config = PsycopgAsyncConfig(
         connection_config={

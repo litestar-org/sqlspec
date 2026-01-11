@@ -7,8 +7,6 @@ Tests bulk upsert functionality using JSON_TABLE strategy:
 - Performance with different row counts
 """
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 from decimal import Decimal
 

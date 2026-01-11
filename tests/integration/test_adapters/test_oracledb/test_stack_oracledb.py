@@ -2,8 +2,6 @@
 
 """Integration tests for Oracle StatementStack execution paths."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

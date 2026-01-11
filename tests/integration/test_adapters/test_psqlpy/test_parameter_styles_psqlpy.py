@@ -1,7 +1,5 @@
 """Test PSQLPy parameter style handling."""
 
-from __future__ import annotations
-
 import datetime
 import decimal
 import math

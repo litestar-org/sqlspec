@@ -46,7 +46,17 @@ class Insert(
             table: Target table name
             **kwargs: Additional QueryBuilder arguments
         """
-        super().__init__(**kwargs)
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_query_builder_kwargs(kwargs)
+        )
+        super().__init__(
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
 
         self._columns: list[str] = []
         self._values_added_count: int = 0

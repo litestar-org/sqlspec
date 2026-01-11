@@ -12,7 +12,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 
 
 @pytest.fixture
-def postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
+def postgresql_session(postgres_service: "PostgresService") -> Generator[AdbcDriver, None, None]:
     """PostgreSQL ADBC session fixture."""
     config = AdbcConfig(
         connection_config={

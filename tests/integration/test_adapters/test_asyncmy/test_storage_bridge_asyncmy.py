@@ -1,7 +1,5 @@
 """Storage bridge integration tests for AsyncMy adapter."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

@@ -8,7 +8,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 
 
 @pytest.fixture(scope="function")
-def asyncpg_connection_config(postgres_service: PostgresService) -> "dict[str, Any]":
+def asyncpg_connection_config(postgres_service: "PostgresService") -> "dict[str, Any]":
     """Base pool configuration for AsyncPG tests."""
 
     return {

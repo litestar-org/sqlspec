@@ -644,7 +644,7 @@ async def test_for_update_locking(asyncpg_session: AsyncpgDriver) -> None:
 
 
 @pytest.mark.asyncpg
-async def test_for_update_skip_locked(postgres_service: PostgresService) -> None:
+async def test_for_update_skip_locked(postgres_service: "PostgresService") -> None:
     """Test SKIP LOCKED functionality with two sessions."""
     import asyncio
 

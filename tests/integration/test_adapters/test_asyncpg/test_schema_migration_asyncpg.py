@@ -9,7 +9,7 @@ from sqlspec.migrations.tracker import AsyncMigrationTracker
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-def _create_config(postgres_service: PostgresService) -> AsyncpgConfig:
+def _create_config(postgres_service: "PostgresService") -> AsyncpgConfig:
     """Create AsyncpgConfig from PostgresService fixture."""
     return AsyncpgConfig(
         connection_config={
@@ -24,7 +24,7 @@ def _create_config(postgres_service: PostgresService) -> AsyncpgConfig:
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_tracker_creates_full_schema(postgres_service: PostgresService) -> None:
+async def test_asyncpg_tracker_creates_full_schema(postgres_service: "PostgresService") -> None:
     """Test AsyncPG tracker creates complete schema with all columns."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()
@@ -59,7 +59,7 @@ async def test_asyncpg_tracker_creates_full_schema(postgres_service: PostgresSer
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_tracker_migrates_legacy_schema(postgres_service: PostgresService) -> None:
+async def test_asyncpg_tracker_migrates_legacy_schema(postgres_service: "PostgresService") -> None:
     """Test AsyncPG tracker adds missing columns to legacy schema."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()
@@ -97,7 +97,7 @@ async def test_asyncpg_tracker_migrates_legacy_schema(postgres_service: Postgres
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_tracker_migration_preserves_data(postgres_service: PostgresService) -> None:
+async def test_asyncpg_tracker_migration_preserves_data(postgres_service: "PostgresService") -> None:
     """Test AsyncPG schema migration preserves existing records."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()
@@ -133,7 +133,7 @@ async def test_asyncpg_tracker_migration_preserves_data(postgres_service: Postgr
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_tracker_version_type_recording(postgres_service: PostgresService) -> None:
+async def test_asyncpg_tracker_version_type_recording(postgres_service: "PostgresService") -> None:
     """Test AsyncPG tracker correctly records version_type."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()
@@ -164,7 +164,7 @@ async def test_asyncpg_tracker_version_type_recording(postgres_service: Postgres
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_tracker_execution_sequence(postgres_service: PostgresService) -> None:
+async def test_asyncpg_tracker_execution_sequence(postgres_service: "PostgresService") -> None:
     """Test AsyncPG tracker execution_sequence auto-increments."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()
@@ -199,7 +199,7 @@ async def test_asyncpg_tracker_execution_sequence(postgres_service: PostgresServ
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_get_current_version_uses_execution_sequence(postgres_service: PostgresService) -> None:
+async def test_asyncpg_get_current_version_uses_execution_sequence(postgres_service: "PostgresService") -> None:
     """Test AsyncPG get_current_version uses execution order."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()
@@ -222,7 +222,7 @@ async def test_asyncpg_get_current_version_uses_execution_sequence(postgres_serv
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_update_version_record_preserves_metadata(postgres_service: PostgresService) -> None:
+async def test_asyncpg_update_version_record_preserves_metadata(postgres_service: "PostgresService") -> None:
     """Test AsyncPG update preserves execution_sequence and applied_at."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()
@@ -259,7 +259,7 @@ async def test_asyncpg_update_version_record_preserves_metadata(postgres_service
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_update_version_record_idempotent(postgres_service: PostgresService) -> None:
+async def test_asyncpg_update_version_record_idempotent(postgres_service: "PostgresService") -> None:
     """Test AsyncPG update_version_record is idempotent."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()
@@ -284,7 +284,7 @@ async def test_asyncpg_update_version_record_idempotent(postgres_service: Postgr
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_migration_schema_is_idempotent(postgres_service: PostgresService) -> None:
+async def test_asyncpg_migration_schema_is_idempotent(postgres_service: "PostgresService") -> None:
     """Test AsyncPG schema migration can be run multiple times."""
     config = _create_config(postgres_service)
     tracker = AsyncMigrationTracker()

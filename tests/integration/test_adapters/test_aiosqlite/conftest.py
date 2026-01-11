@@ -1,7 +1,5 @@
 """Fixtures and configuration for AIOSQLite integration tests."""
 
-from __future__ import annotations
-
 import os
 import tempfile
 from collections.abc import AsyncGenerator

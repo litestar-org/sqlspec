@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, TypedDict, cast
 if TYPE_CHECKING:
     from re import Pattern
 
-    from sqlspec.driver import VersionInfo
+    from sqlspec.typing import VersionInfo
 
 __all__ = ("DialectConfig", "FeatureFlags", "FeatureVersions")
 

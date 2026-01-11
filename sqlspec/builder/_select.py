@@ -1415,7 +1415,17 @@ class Select(
             Select("id", "name")  # Shorthand for Select().select("id", "name")
             Select()              # Same as Select() - start empty
         """
-        super().__init__(**kwargs)
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_query_builder_kwargs(kwargs)
+        )
+        super().__init__(
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
 
         self._hints: list[dict[str, object]] = []
 

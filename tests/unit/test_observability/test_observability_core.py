@@ -13,14 +13,7 @@ from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
-from sqlspec.driver import (
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    SyncDataDictionaryBase,
-    SyncDriverAdapterBase,
-    TableMetadata,
-)
+from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.observability import LifecycleDispatcher, compute_sql_hash, get_trace_context, resolve_db_system
 from sqlspec.storage import StorageTelemetry
 from sqlspec.storage.pipeline import (
@@ -28,6 +21,7 @@ from sqlspec.storage.pipeline import (
     reset_storage_bridge_events,
     reset_storage_bridge_metrics,
 )
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.utils.correlation import CorrelationContext
 from tests.conftest import requires_interpreted
 
@@ -133,7 +127,7 @@ class _FakeSyncPipeline:
         )
 
 
-class _DummyDictionary(SyncDataDictionaryBase["_DummyDriver"]):
+class _DummyDictionary(SyncDataDictionaryBase):
     def get_version(self, driver: "_DummyDriver") -> None:
         _ = driver
 

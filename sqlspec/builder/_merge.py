@@ -703,7 +703,17 @@ class Merge(
         """
         if "enable_optimization" not in kwargs:
             kwargs["enable_optimization"] = False
-        super().__init__(**kwargs)
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_query_builder_kwargs(kwargs)
+        )
+        super().__init__(
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
         self._merge_target_quoted = False
         self._lock_targets_quoted = False
         self._initialize_expression()

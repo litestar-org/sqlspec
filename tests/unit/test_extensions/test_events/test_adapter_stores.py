@@ -1,9 +1,19 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event queue stores and DDL generation."""
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from sqlspec.core import StatementConfig
+from sqlspec.extensions.events import BaseEventQueueStore
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    BaseEventQueueStoreBase = BaseEventQueueStore[SqliteConfig]
+else:
+    BaseEventQueueStoreBase = BaseEventQueueStore
 
 
 def test_asyncmy_store_column_types() -> None:
@@ -638,9 +648,8 @@ def test_base_store_table_name_property() -> None:
     config = SqliteConfig(
         connection_config={"database": ":memory:"}, extension_config={"events": {"queue_table": "custom_queue"}}
     )
-    from sqlspec.extensions.events import BaseEventQueueStore
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -656,9 +665,8 @@ def test_base_store_settings_property() -> None:
         connection_config={"database": ":memory:"},
         extension_config={"events": {"queue_table": "my_queue", "custom_setting": "value"}},
     )
-    from sqlspec.extensions.events import BaseEventQueueStore
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -672,9 +680,8 @@ def test_base_store_default_table_name() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"events": {}})
-    from sqlspec.extensions.events import BaseEventQueueStore
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -687,9 +694,8 @@ def test_base_store_create_statements_if_not_exists() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"events": {}})
-    from sqlspec.extensions.events import BaseEventQueueStore
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -706,9 +712,8 @@ def test_base_store_drop_statements_if_exists() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"events": {}})
-    from sqlspec.extensions.events import BaseEventQueueStore
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 

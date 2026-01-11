@@ -1,7 +1,5 @@
 """Storage bridge integration tests for PSQLPy driver."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import pytest
@@ -24,7 +22,7 @@ pytestmark = [
 
 @pytest.mark.anyio
 async def test_psqlpy_storage_bridge_with_minio(
-    psqlpy_driver: PsqlpyDriver, minio_service: MinioService, minio_client: Minio, minio_default_bucket_name: str
+    psqlpy_driver: PsqlpyDriver, minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> None:
     alias = "storage_bridge_psqlpy"
     destination = f"alias://{alias}/psqlpy/export.parquet"

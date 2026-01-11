@@ -18,7 +18,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-def adbc_exception_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
+def adbc_exception_session(postgres_service: "PostgresService") -> Generator[AdbcDriver, None, None]:
     """Create an ADBC session for exception testing with PostgreSQL backend."""
     config = AdbcConfig(
         connection_config={

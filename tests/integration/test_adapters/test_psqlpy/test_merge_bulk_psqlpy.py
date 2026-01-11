@@ -7,8 +7,6 @@ Tests bulk upsert functionality with varying dataset sizes to validate:
 - Performance with different row counts
 """
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 
 import pytest

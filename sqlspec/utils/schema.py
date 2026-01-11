@@ -106,7 +106,7 @@ def _is_foreign_key_metadata_type(schema_type: type) -> bool:
 
     # Check module for stronger guarantee without importing
     module = getattr(schema_type, "__module__", "")
-    if "sqlspec" in module and "driver" in module:
+    if "sqlspec" in module and ("driver" in module or "data_dictionary" in module):
         return True
 
     slots = getattr(schema_type, "__slots__", None)

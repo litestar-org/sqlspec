@@ -1,11 +1,17 @@
 from contextlib import AbstractContextManager, contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
 from tests.conftest import requires_interpreted
 
 pytestmark = requires_interpreted
+
+
+if TYPE_CHECKING:
+    _NoPoolSyncConfigBase = NoPoolSyncConfig[Any, "_DummyDriver"]
+else:
+    _NoPoolSyncConfigBase = NoPoolSyncConfig
 
 
 class _DummyDriver(SyncDriverAdapterBase):
@@ -51,7 +57,7 @@ class _DummyDriver(SyncDriverAdapterBase):
         raise NotImplementedError
 
 
-class _CapabilityConfig(NoPoolSyncConfig[Any, "_DummyDriver"]):
+class _CapabilityConfig(_NoPoolSyncConfigBase):
     driver_type = _DummyDriver
     connection_type = object
     supports_native_arrow_export = True

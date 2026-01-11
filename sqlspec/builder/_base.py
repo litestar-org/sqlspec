@@ -156,6 +156,23 @@ class QueryBuilder(ABC):
         self._lock_targets_quoted = False
         self._merge_target_quoted = False
 
+    @classmethod
+    def _parse_query_builder_kwargs(
+        cls, kwargs: "dict[str, Any]"
+    ) -> "tuple[DialectType | None, dict[str, dict[str, str]] | None, bool, bool, bool, bool]":
+        dialect = kwargs.pop("dialect", None)
+        schema = kwargs.pop("schema", None)
+        enable_optimization = kwargs.pop("enable_optimization", True)
+        optimize_joins = kwargs.pop("optimize_joins", True)
+        optimize_predicates = kwargs.pop("optimize_predicates", True)
+        simplify_expressions = kwargs.pop("simplify_expressions", True)
+
+        if kwargs:
+            unknown = ", ".join(sorted(kwargs.keys()))
+            cls._raise_sql_builder_error(f"Unexpected QueryBuilder arguments: {unknown}")
+
+        return (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions)
+
     def _initialize_expression(self) -> None:
         """Initialize the base expression. Called after __init__."""
         self._expression = self._create_base_expression()
@@ -979,7 +996,17 @@ class ExpressionBuilder(QueryBuilder):
     __slots__ = ()
 
     def __init__(self, expression: exp.Expression, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_query_builder_kwargs(kwargs)
+        )
+        super().__init__(
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
         if not is_expression(expression):
             self._raise_invalid_expression_type(expression)
         self._expression = expression

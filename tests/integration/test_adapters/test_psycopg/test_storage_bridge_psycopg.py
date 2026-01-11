@@ -1,7 +1,5 @@
 """Storage bridge integration tests for psycopg drivers."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator, Generator
 from typing import TYPE_CHECKING
 
@@ -38,8 +36,8 @@ async def psycopg_async_session(psycopg_async_config: PsycopgAsyncConfig) -> Asy
 
 def test_psycopg_sync_storage_bridge_with_minio(
     psycopg_sync_config: PsycopgSyncConfig,
-    minio_service: MinioService,
-    minio_client: Minio,
+    minio_service: "MinioService",
+    minio_client: "Minio",
     minio_default_bucket_name: str,
 ) -> None:
     alias = "storage_bridge_psycopg_sync"
@@ -101,8 +99,8 @@ def test_psycopg_sync_storage_bridge_with_minio(
 @pytest.mark.anyio
 async def test_psycopg_async_storage_bridge_with_minio(
     psycopg_async_session: PsycopgAsyncDriver,
-    minio_service: MinioService,
-    minio_client: Minio,
+    minio_service: "MinioService",
+    minio_client: "Minio",
     minio_default_bucket_name: str,
 ) -> None:
     alias = "storage_bridge_psycopg_async"

@@ -44,7 +44,6 @@ from sqlspec.driver import (
     AsyncDriverAdapterBase,
     StackExecutionObserver,
     SyncDriverAdapterBase,
-    VersionInfo,
     describe_stack_statement,
     hash_stack_operations,
 )
@@ -62,7 +61,7 @@ if TYPE_CHECKING:
     from sqlspec.core.stack import StackOperation
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters, VersionInfo
 
 
 logger = get_logger(__name__)

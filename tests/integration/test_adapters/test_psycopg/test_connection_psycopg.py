@@ -25,7 +25,7 @@ async def test_async_connection(psycopg_async_config: PsycopgAsyncConfig) -> Non
     await psycopg_async_config.close_pool()
 
 
-def test_sync_connection(postgres_service: PostgresService) -> None:
+def test_sync_connection(postgres_service: "PostgresService") -> None:
     """Test sync connection components."""
     # Test direct connection
     sync_config = PsycopgSyncConfig(

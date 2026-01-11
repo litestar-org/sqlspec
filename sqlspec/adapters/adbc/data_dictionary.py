@@ -11,15 +11,9 @@ from sqlspec.data_dictionary import (
     list_registered_dialects,
     normalize_dialect_name,
 )
-from sqlspec.driver import (
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    SyncDataDictionaryBase,
-    TableMetadata,
-    VersionInfo,
-)
+from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 __all__ = ("AdbcDataDictionary",)
 
@@ -29,7 +23,7 @@ if TYPE_CHECKING:
 
 
 @mypyc_attr(native_class=False)
-class AdbcDataDictionary(SyncDataDictionaryBase["AdbcDriver"]):
+class AdbcDataDictionary(SyncDataDictionaryBase):
     """ADBC multi-dialect data dictionary."""
 
     __slots__ = ()

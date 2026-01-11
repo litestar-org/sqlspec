@@ -6,7 +6,7 @@ import re
 from abc import abstractmethod
 from contextlib import suppress
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast, final, overload
+from typing import TYPE_CHECKING, Any, Final, cast, final, overload
 
 from mypy_extensions import mypyc_attr
 
@@ -21,7 +21,6 @@ from sqlspec.driver._common import (
     ExecutionResult,
     StackExecutionObserver,
     SyncExceptionHandler,
-    VersionInfo,
     describe_stack_statement,
     handle_single_row_error,
     resolve_db_system,
@@ -38,6 +37,7 @@ from sqlspec.driver._storage_helpers import (
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLFileNotFoundError, StackExecutionError
 from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
+from sqlspec.typing import VersionInfo
 from sqlspec.utils.arrow_impl import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -49,19 +49,25 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.data_dictionary._types import DialectConfig
-    from sqlspec.driver._common import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
     from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol
-    from sqlspec.typing import ArrowReturnFormat, ArrowTable, SchemaT, StatementParameters
+    from sqlspec.typing import (
+        ArrowReturnFormat,
+        ArrowTable,
+        ColumnMetadata,
+        ForeignKeyMetadata,
+        IndexMetadata,
+        SchemaT,
+        StatementParameters,
+        TableMetadata,
+    )
 
 _LOGGER_NAME: Final[str] = "sqlspec"
 logger = get_logger(_LOGGER_NAME)
 
-__all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncDriverT")
+__all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase")
 
 
 EMPTY_FILTERS: Final["list[StatementFilter]"] = []
-
-SyncDriverT = TypeVar("SyncDriverT", bound="SyncDriverAdapterBase")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -91,7 +97,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
     @property
     @abstractmethod
-    def data_dictionary(self) -> "SyncDataDictionaryBase[Any]":
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.
 
         Returns:
@@ -1325,8 +1331,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         return create_storage_job(produced, provided, status=status)
 
 
-@mypyc_attr(native_class=False)
-class SyncDataDictionaryBase(Generic[SyncDriverT]):
+@mypyc_attr(native_class=False, allow_interpreted_subclasses=True)
+class SyncDataDictionaryBase:
     """Base class for synchronous data dictionary implementations.
 
     This class uses native_class=False to ensure proper inheritance works
@@ -1393,6 +1399,15 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
     # VERSION CACHING METHODS (inlined from DataDictionaryMixin)
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def _ensure_version_cache(self) -> None:
+        """Ensure version cache containers exist."""
+        try:
+            _ = self._version_fetch_attempted
+            _ = self._version_cache
+        except AttributeError:
+            self._version_cache = {}
+            self._version_fetch_attempted = set()
+
     def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver.
 
@@ -1403,6 +1418,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
             Tuple of (was_cached, version_info). If was_cached is False,
             the caller should fetch the version and call cache_version().
         """
+        self._ensure_version_cache()
         if driver_id in self._version_fetch_attempted:
             return True, self._version_cache.get(driver_id)
         return False, None
@@ -1414,6 +1430,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
             driver_id: The id() of the driver instance.
             version: The version info to cache (can be None if detection failed).
         """
+        self._ensure_version_cache()
         self._version_fetch_attempted.add(driver_id)
         if version is not None:
             self._version_cache[driver_id] = version
@@ -1571,7 +1588,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
             sorter.add(fk.table_name, fk.referenced_table)
         return list(sorter.static_order())
 
-    def get_cached_version_for_driver(self, driver: "SyncDriverT") -> "tuple[bool, VersionInfo | None]":
+    def get_cached_version_for_driver(self, driver: Any) -> "tuple[bool, VersionInfo | None]":
         """Get cached version info for a driver instance.
 
         Args:
@@ -1583,7 +1600,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
         """
         return self.get_cached_version(id(driver))
 
-    def cache_version_for_driver(self, driver: "SyncDriverT", version: "VersionInfo | None") -> None:
+    def cache_version_for_driver(self, driver: Any, version: "VersionInfo | None") -> None:
         """Cache version info for a driver instance.
 
         Args:
@@ -1594,7 +1611,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
         self.cache_version(id(driver), version)
 
     @abstractmethod
-    def get_version(self, driver: "SyncDriverT") -> "VersionInfo | None":
+    def get_version(self, driver: Any) -> "VersionInfo | None":
         """Get database version information.
 
         Args:
@@ -1606,7 +1623,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
         """
 
     @abstractmethod
-    def get_feature_flag(self, driver: "SyncDriverT", feature: str) -> bool:
+    def get_feature_flag(self, driver: Any, feature: str) -> bool:
         """Check if database supports a specific feature.
 
         Args:
@@ -1619,7 +1636,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
         """
 
     @abstractmethod
-    def get_optimal_type(self, driver: "SyncDriverT", type_category: str) -> str:
+    def get_optimal_type(self, driver: Any, type_category: str) -> str:
         """Get optimal database type for a category.
 
         Args:
@@ -1632,7 +1649,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
         """
 
     @abstractmethod
-    def get_tables(self, driver: "SyncDriverT", schema: "str | None" = None) -> "list[TableMetadata]":
+    def get_tables(self, driver: Any, schema: "str | None" = None) -> "list[TableMetadata]":
         """Get list of tables in schema.
 
         Args:
@@ -1646,7 +1663,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
 
     @abstractmethod
     def get_columns(
-        self, driver: "SyncDriverT", table: "str | None" = None, schema: "str | None" = None
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema.
 
@@ -1662,7 +1679,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
 
     @abstractmethod
     def get_indexes(
-        self, driver: "SyncDriverT", table: "str | None" = None, schema: "str | None" = None
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
     ) -> "list[IndexMetadata]":
         """Get index information for a table or schema.
 
@@ -1678,7 +1695,7 @@ class SyncDataDictionaryBase(Generic[SyncDriverT]):
 
     @abstractmethod
     def get_foreign_keys(
-        self, driver: "SyncDriverT", table: "str | None" = None, schema: "str | None" = None
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata.
 

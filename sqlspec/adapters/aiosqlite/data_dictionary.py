@@ -5,14 +5,8 @@ from typing import TYPE_CHECKING
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.aiosqlite.core import format_identifier
-from sqlspec.driver import (
-    AsyncDataDictionaryBase,
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    TableMetadata,
-    VersionInfo,
-)
+from sqlspec.driver import AsyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
@@ -21,7 +15,7 @@ __all__ = ("AiosqliteDataDictionary",)
 
 
 @mypyc_attr(native_class=False)
-class AiosqliteDataDictionary(AsyncDataDictionaryBase["AiosqliteDriver"]):
+class AiosqliteDataDictionary(AsyncDataDictionaryBase):
     """SQLite-specific async data dictionary."""
 
     __slots__ = ()

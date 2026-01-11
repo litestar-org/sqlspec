@@ -4,15 +4,8 @@ from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.driver import (
-    AsyncDataDictionaryBase,
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    SyncDataDictionaryBase,
-    TableMetadata,
-    VersionInfo,
-)
+from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
@@ -21,7 +14,7 @@ __all__ = ("PsycopgAsyncDataDictionary", "PsycopgSyncDataDictionary")
 
 
 @mypyc_attr(native_class=False)
-class PsycopgSyncDataDictionary(SyncDataDictionaryBase["PsycopgSyncDriver"]):
+class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
     """PostgreSQL-specific sync data dictionary."""
 
     __slots__ = ()
@@ -30,16 +23,6 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase["PsycopgSyncDriver"]):
 
     def __init__(self) -> None:
         super().__init__()
-
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        if driver_id in self._version_fetch_attempted:
-            return True, self._version_cache.get(driver_id)
-        return False, None
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        self._version_fetch_attempted.add(driver_id)
-        if version is not None:
-            self._version_cache[driver_id] = version
 
     def get_version(self, driver: "PsycopgSyncDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
@@ -169,7 +152,7 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase["PsycopgSyncDriver"]):
 
 
 @mypyc_attr(native_class=False)
-class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase["PsycopgAsyncDriver"]):
+class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
 
     __slots__ = ()
@@ -178,16 +161,6 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase["PsycopgAsyncDriver"]):
 
     def __init__(self) -> None:
         super().__init__()
-
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        if driver_id in self._version_fetch_attempted:
-            return True, self._version_cache.get(driver_id)
-        return False, None
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        self._version_fetch_attempted.add(driver_id)
-        if version is not None:
-            self._version_cache[driver_id] = version
 
     async def get_version(self, driver: "PsycopgAsyncDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.

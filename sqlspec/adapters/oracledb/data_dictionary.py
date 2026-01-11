@@ -6,15 +6,8 @@ from typing import TYPE_CHECKING, Any, cast
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import get_dialect_config
-from sqlspec.driver import (
-    AsyncDataDictionaryBase,
-    ColumnMetadata,
-    ForeignKeyMetadata,
-    IndexMetadata,
-    SyncDataDictionaryBase,
-    TableMetadata,
-    VersionInfo,
-)
+from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -91,7 +84,7 @@ class OracleVersionInfo(VersionInfo):
 
 
 @mypyc_attr(native_class=False)
-class OracledbSyncDataDictionary(SyncDataDictionaryBase["OracleSyncDriver"]):
+class OracledbSyncDataDictionary(SyncDataDictionaryBase):
     """Oracle-specific sync data dictionary."""
 
     __slots__ = ()
@@ -100,16 +93,6 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase["OracleSyncDriver"]):
 
     def __init__(self) -> None:
         super().__init__()
-
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        if driver_id in self._version_fetch_attempted:
-            return True, self._version_cache.get(driver_id)
-        return False, None
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        self._version_fetch_attempted.add(driver_id)
-        if version is not None:
-            self._version_cache[driver_id] = version
 
     def _extract_version_value(self, row: Any) -> "str | None":
         if isinstance(row, dict):
@@ -319,7 +302,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase["OracleSyncDriver"]):
 
 
 @mypyc_attr(native_class=False)
-class OracledbAsyncDataDictionary(AsyncDataDictionaryBase["OracleAsyncDriver"]):
+class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
     """Oracle-specific async data dictionary."""
 
     __slots__ = ()
@@ -328,16 +311,6 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase["OracleAsyncDriver"]):
 
     def __init__(self) -> None:
         super().__init__()
-
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
-        if driver_id in self._version_fetch_attempted:
-            return True, self._version_cache.get(driver_id)
-        return False, None
-
-    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
-        self._version_fetch_attempted.add(driver_id)
-        if version is not None:
-            self._version_cache[driver_id] = version
 
     def _extract_version_value(self, row: Any) -> "str | None":
         if isinstance(row, dict):

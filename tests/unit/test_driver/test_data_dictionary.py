@@ -4,7 +4,8 @@ from unittest.mock import Mock
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
-from sqlspec.driver import SyncDriverAdapterBase, VersionInfo
+from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.typing import VersionInfo
 from tests.conftest import requires_interpreted
 
 pytestmark = requires_interpreted

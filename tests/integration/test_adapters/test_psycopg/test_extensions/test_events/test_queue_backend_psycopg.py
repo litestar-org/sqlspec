@@ -16,12 +16,12 @@ from tests.integration.test_adapters._events_helpers import (
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-def _build_conninfo(service: PostgresService) -> str:
+def _build_conninfo(service: "PostgresService") -> str:
     return f"postgresql://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
 
 
 @pytest.mark.postgres
-def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: PostgresService) -> None:
+def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: "PostgresService") -> None:
     """Psycopg sync configs use the queue fallback successfully."""
 
     migrations_dir = prepare_events_migrations(tmp_path)
@@ -55,7 +55,7 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
 
 @pytest.mark.postgres
 @pytest.mark.asyncio
-async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_service: PostgresService) -> None:
+async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_service: "PostgresService") -> None:
     """Psycopg async configs use the queue backend."""
 
     migrations_dir = tmp_path / "psycopg_async_events"

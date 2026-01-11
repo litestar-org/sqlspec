@@ -25,16 +25,12 @@ from sqlspec.core import (
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
-    ColumnMetadata,
     ExecutionResult,
-    ForeignKeyMetadata,
-    IndexMetadata,
     SyncDataDictionaryBase,
     SyncDriverAdapterBase,
-    TableMetadata,
-    VersionInfo,
 )
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from tests.conftest import is_compiled
 
 if TYPE_CHECKING:
@@ -609,7 +605,7 @@ class MockAsyncCursor:
         await self.close()
 
 
-class MockSyncDataDictionary(SyncDataDictionaryBase["MockSyncDriver"]):
+class MockSyncDataDictionary(SyncDataDictionaryBase):
     """Mock sync data dictionary for testing."""
 
     def get_version(self, driver: "MockSyncDriver") -> "VersionInfo | None":
@@ -655,7 +651,7 @@ class MockSyncDataDictionary(SyncDataDictionaryBase["MockSyncDriver"]):
         return ["supports_transactions", "supports_prepared_statements"]
 
 
-class MockAsyncDataDictionary(AsyncDataDictionaryBase["MockAsyncDriver"]):
+class MockAsyncDataDictionary(AsyncDataDictionaryBase):
     """Mock async data dictionary for testing."""
 
     async def get_version(self, driver: "MockAsyncDriver") -> "VersionInfo | None":

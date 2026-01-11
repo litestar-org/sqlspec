@@ -22,7 +22,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-def adbc_postgresql_session(postgres_service: PostgresService) -> "Generator[AdbcDriver, None, None]":
+def adbc_postgresql_session(postgres_service: "PostgresService") -> "Generator[AdbcDriver, None, None]":
     """Create an ADBC PostgreSQL session for parameter testing."""
     config = AdbcConfig(
         connection_config={

@@ -1,7 +1,5 @@
 """Integration tests for aiosqlite driver implementation."""
 
-from __future__ import annotations
-
 import math
 from typing import Any, Literal
 

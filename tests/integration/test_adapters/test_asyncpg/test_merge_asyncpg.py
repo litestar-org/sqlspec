@@ -8,8 +8,6 @@ PostgreSQL MERGE syntax differences from Oracle:
 - ON clause can have or omit parentheses
 """
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 
 import pytest
