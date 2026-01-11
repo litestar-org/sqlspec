@@ -92,7 +92,6 @@ class SqliteConnectionPool:
 
             connection.execute("PRAGMA foreign_keys = ON")
 
-        logger.debug("Created SQLite connection for thread %s", threading.current_thread().name)
         return connection  # type: ignore[no-any-return]
 
     def _is_connection_alive(self, connection: SqliteConnection) -> bool:

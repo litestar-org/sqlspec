@@ -16,7 +16,7 @@ Public API exports:
 
 Example (async):
     from sqlspec.adapters.asyncpg import AsyncpgConfig
-    from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+    from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKMemoryStore
     from sqlspec.extensions.adk.memory import SQLSpecMemoryService
 
     config = AsyncpgConfig(
@@ -31,7 +31,7 @@ Example (async):
     )
 
     store = AsyncpgADKMemoryStore(config)
-    await store.create_tables()
+    await store.ensure_tables()
 
     service = SQLSpecMemoryService(store)
 

@@ -11,7 +11,7 @@ SQLSpec configuration is organized into three main areas:
 
 1. **Database Configuration**: Connection parameters and pool settings
 2. **Statement Configuration**: SQL processing pipeline behavior
-3. **Cache Configuration**: Multi-tier caching system settings
+3. **Cache Configuration**: Namespaced caching system settings
 
 Basic Configuration
 -------------------
@@ -193,7 +193,7 @@ Disable validation for performance-critical paths where input is trusted:
 Cache Configuration
 -------------------
 
-SQLSpec uses multi-tier caching to avoid recompiling SQL statements.
+SQLSpec uses namespaced caching to avoid recompiling SQL statements.
 
 Global Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,7 +1,7 @@
 """Psycopg event queue stores for sync and async drivers."""
 
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("PsycopgAsyncEventQueueStore", "PsycopgSyncEventQueueStore")
 
@@ -15,7 +15,7 @@ class PsycopgSyncEventQueueStore(BaseEventQueueStore[PsycopgSyncConfig]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return PostgreSQL-optimized column types for the event queue.
 
         Returns:
@@ -33,7 +33,7 @@ class PsycopgAsyncEventQueueStore(BaseEventQueueStore[PsycopgAsyncConfig]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return PostgreSQL-optimized column types for the event queue.
 
         Returns:

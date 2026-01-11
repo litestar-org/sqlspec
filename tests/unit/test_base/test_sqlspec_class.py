@@ -23,21 +23,7 @@ import pytest
 
 from sqlspec.base import SQLSpec
 from sqlspec.core import CacheConfig
-
-
-def _is_compiled() -> bool:
-    """Check if core modules are mypyc-compiled."""
-    try:
-        from sqlspec.core import cache
-
-        return hasattr(cache, "__file__") and (cache.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-requires_interpreted = pytest.mark.skipif(
-    _is_compiled(), reason="Test uses @patch which doesn't work with mypyc-compiled modules"
-)
+from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("base")
 
@@ -156,9 +142,9 @@ def test_get_cache_stats_returns_statistics() -> None:
     stats = SQLSpec.get_cache_stats()
 
     assert isinstance(stats, dict)
-    assert "multi_level" in stats
+    assert "namespaced" in stats
 
-    multi_stats = stats["multi_level"]
+    multi_stats = stats["namespaced"]
 
     assert hasattr(multi_stats, "hit_rate")
     assert hasattr(multi_stats, "hits")
@@ -172,7 +158,7 @@ def test_reset_cache_stats_clears_statistics() -> None:
     SQLSpec.reset_cache_stats()
     stats = SQLSpec.get_cache_stats()
 
-    multi_stats = stats["multi_level"]
+    multi_stats = stats["namespaced"]
 
     assert multi_stats.hits == 0
     assert multi_stats.misses == 0
@@ -190,29 +176,34 @@ def test_log_cache_stats_logs_to_configured_logger() -> None:
         SQLSpec.log_cache_stats()
 
         mock_get_logger.assert_called_once_with("sqlspec.cache")
-        mock_logger.info.assert_called_once()
+        mock_logger.log.assert_called_once()
 
-        call_args = mock_logger.info.call_args
+        call_args = mock_logger.log.call_args
         assert call_args is not None
-        assert "Cache Statistics" in call_args[0][0]
+        assert "cache.stats" in call_args[0][1]
 
 
 @requires_interpreted
-@patch("sqlspec.core.cache.get_cache")
-@patch("sqlspec.core.cache.get_default_cache")
-def test_update_cache_config_clears_all_caches(mock_get_default_cache: MagicMock, mock_get_cache: MagicMock) -> None:
+def test_update_cache_config_clears_all_caches() -> None:
     """Test that updating cache configuration clears all existing caches."""
+    import sqlspec.core.cache as cache_module
+
     mock_default_cache = MagicMock()
-    mock_multi_cache = MagicMock()
-    mock_get_default_cache.return_value = mock_default_cache
-    mock_get_cache.return_value = mock_multi_cache
+    mock_namespaced_cache = MagicMock()
+    original_default, original_namespaced = cache_module.get_cache_instances()
+    cache_module.set_cache_instances(mock_default_cache, mock_namespaced_cache)
 
-    new_config = CacheConfig(sql_cache_size=1000)
+    try:
+        new_config = CacheConfig(sql_cache_size=1000)
+        SQLSpec.update_cache_config(new_config)
 
-    SQLSpec.update_cache_config(new_config)
-
-    mock_default_cache.clear.assert_called_once()
-    mock_multi_cache.clear.assert_called_once()
+        mock_default_cache.clear.assert_called_once()
+        mock_namespaced_cache.clear.assert_called_once()
+        default_cache, namespaced_cache = cache_module.get_cache_instances()
+        assert default_cache is None
+        assert namespaced_cache is None
+    finally:
+        cache_module.set_cache_instances(original_default, original_namespaced)
 
 
 def test_multiple_sqlspec_instances_share_cache_configuration() -> None:
@@ -304,7 +295,7 @@ def test_concurrent_statistics_access_is_thread_safe() -> None:
             for _ in range(50):
                 stats = SQLSpec.get_cache_stats()
                 SQLSpec.reset_cache_stats()
-                multi_stats = stats["multi_level"]
+                multi_stats = stats["namespaced"]
                 total_ops = multi_stats.hits + multi_stats.misses
                 results.append(total_ops)
                 time.sleep(0.001)
@@ -469,9 +460,9 @@ def test_cache_configuration_logging_integration(mock_get_logger: MagicMock) -> 
         new_config = CacheConfig(sql_cache_size=3333, fragment_cache_enabled=False)
         SQLSpec.update_cache_config(new_config)
 
-        mock_logger.info.assert_called()
-        log_call = mock_logger.info.call_args
-        assert "Cache configuration updated" in log_call[0][0]
+        mock_logger.log.assert_called()
+        log_calls = [call[0][1] for call in mock_logger.log.call_args_list]
+        assert any("cache.config" in msg for msg in log_calls)
 
     finally:
         SQLSpec.update_cache_config(original_config)
@@ -572,8 +563,8 @@ def test_statistics_collection_during_configuration_changes() -> None:
 
             stats = SQLSpec.get_cache_stats()
             assert isinstance(stats, dict)
-            assert "multi_level" in stats
-            multi_stats = stats["multi_level"]
+            assert "namespaced" in stats
+            multi_stats = stats["namespaced"]
             assert hasattr(multi_stats, "hit_rate")
 
             SQLSpec.reset_cache_stats()

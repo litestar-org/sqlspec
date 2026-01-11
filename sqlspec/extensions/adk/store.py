@@ -1,10 +1,12 @@
 """Base store classes for ADK session backend (sync and async)."""
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
-from sqlspec.utils.logging import get_logger
+from sqlspec.observability import resolve_db_system
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
-logger = get_logger("extensions.adk.store")
+logger = get_logger("sqlspec.extensions.adk.store")
 
 __all__ = ("BaseAsyncADKStore", "BaseSyncADKStore")
 
@@ -269,6 +271,12 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         """Create the sessions and events tables if they don't exist."""
         raise NotImplementedError
 
+    async def ensure_tables(self) -> None:
+        """Create tables and emit a standardized log entry."""
+
+        await self.create_tables()
+        self._log_tables_created()
+
     @abstractmethod
     async def _get_create_sessions_table_sql(self) -> str:
         """Get the CREATE TABLE SQL for the sessions table.
@@ -300,6 +308,16 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             to allow idempotent migrations.
         """
         raise NotImplementedError
+
+    def _log_tables_created(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.ready",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
+        )
 
 
 class BaseSyncADKStore(ABC, Generic[ConfigT]):
@@ -504,6 +522,12 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         """Create both sessions and events tables if they don't exist."""
         raise NotImplementedError
 
+    def ensure_tables(self) -> None:
+        """Create tables and emit a standardized log entry."""
+
+        self.create_tables()
+        self._log_tables_created()
+
     @abstractmethod
     def _get_create_sessions_table_sql(self) -> str:
         """Get SQL to create sessions table.
@@ -521,6 +545,16 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
             SQL statement to create adk_events table with indexes.
         """
         raise NotImplementedError
+
+    def _log_tables_created(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.ready",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
+        )
 
     @abstractmethod
     def _get_drop_tables_sql(self) -> "list[str]":

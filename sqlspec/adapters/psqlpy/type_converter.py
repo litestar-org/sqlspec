@@ -110,7 +110,4 @@ def register_pgvector(connection: "Connection") -> None:
         - Support vector similarity search operations
     """
     if not PGVECTOR_INSTALLED:
-        logger.debug("pgvector not installed - skipping vector type handlers")
         return
-
-    logger.debug("pgvector registration for psqlpy is not yet implemented")

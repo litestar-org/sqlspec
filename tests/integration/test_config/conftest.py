@@ -7,7 +7,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 
 @pytest.fixture(scope="function")
-def asyncpg_connection_config(postgres_service: PostgresService) -> "dict[str, Any]":
+def asyncpg_connection_config(postgres_service: "PostgresService") -> "dict[str, Any]":
     """Base pool configuration for AsyncPG tests."""
     return {
         "host": postgres_service.host,

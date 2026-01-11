@@ -3,16 +3,21 @@
 
 import asyncio
 import contextlib
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import SQL
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
-from sqlspec.extensions.events import EventMessage
-from sqlspec.extensions.events._payload import decode_notify_payload, encode_notify_payload
-from sqlspec.extensions.events._queue import AsyncTableEventQueue, build_queue_backend
-from sqlspec.extensions.events._store import normalize_event_channel_name
-from sqlspec.utils.logging import get_logger
+from sqlspec.extensions.events import (
+    AsyncTableEventQueue,
+    EventMessage,
+    build_queue_backend,
+    decode_notify_payload,
+    encode_notify_payload,
+    normalize_event_channel_name,
+)
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_add_listener, has_notifies, is_notification
 from sqlspec.utils.uuids import uuid4
@@ -20,9 +25,23 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 
-logger = get_logger("events.postgres")
+logger = get_logger("sqlspec.events.postgres")
 
 __all__ = ("AsyncpgEventsBackend", "AsyncpgHybridEventsBackend", "create_event_backend")
+
+
+class _AsyncpgNotificationListener:
+    __slots__ = ("_channel", "_future", "_loop")
+
+    def __init__(self, channel: str, future: "asyncio.Future[str]", loop: "asyncio.AbstractEventLoop") -> None:
+        self._channel = channel
+        self._future = future
+        self._loop = loop
+
+    def __call__(self, _conn: Any, _pid: int, notified_channel: str, payload: str) -> None:
+        if notified_channel != self._channel or self._future.done():
+            return
+        self._loop.call_soon_threadsafe(self._future.set_result, payload)
 
 
 class AsyncpgHybridEventsBackend:
@@ -43,6 +62,15 @@ class AsyncpgHybridEventsBackend:
         self._queue = queue
         self._listen_connection: Any | None = None
         self._listen_connection_cm: Any | None = None
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="asyncpg",
+            backend_name=self.backend_name,
+            mode="async",
+            status="backend_ready",
+        )
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
@@ -144,6 +172,15 @@ class AsyncpgEventsBackend:
         self._listen_connection: Any | None = None
         self._listen_connection_cm: Any | None = None
         self._notify_mode: str | None = None
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.listen",
+            adapter_name="asyncpg",
+            backend_name=self.backend_name,
+            mode="async",
+            status="backend_ready",
+        )
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
@@ -203,20 +240,16 @@ class AsyncpgEventsBackend:
         """Wait for notification using add_listener callback API."""
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
+        listener = _AsyncpgNotificationListener(channel, future, loop)
 
-        def _listener(_conn: Any, _pid: int, notified_channel: str, payload: str) -> None:
-            if notified_channel != channel or future.done():
-                return
-            loop.call_soon_threadsafe(future.set_result, payload)
-
-        await connection.add_listener(channel, _listener)
+        await connection.add_listener(channel, listener)
         try:
             payload_str = await asyncio.wait_for(future, timeout=poll_interval)
         except asyncio.TimeoutError:
             return None
         finally:
             with contextlib.suppress(Exception):
-                await connection.remove_listener(channel, _listener)
+                await connection.remove_listener(channel, listener)
         return decode_notify_payload(channel, payload_str)
 
     async def _dequeue_with_notifies(self, connection: Any, channel: str, poll_interval: float) -> EventMessage | None:

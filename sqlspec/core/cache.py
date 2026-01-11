@@ -1,30 +1,32 @@
 """Caching system for SQL statement processing.
 
 This module provides a caching system with LRU eviction and TTL support for
-SQL statement processing, parameter processing, and expression caching.
+SQL statement processing and SQLGlot expression caching.
 
 Components:
 - CacheKey: Immutable cache key
-- UnifiedCache: Cache implementation with LRU eviction and TTL
-- StatementCache: Cache for compiled SQL statements
-- ExpressionCache: Cache for parsed expressions
-- ParameterCache: Cache for processed parameters
+- LRUCache: LRU + TTL cache implementation
+- NamespacedCache: Namespace-aware cache wrapper for statement processing
 """
 
+import logging
 import threading
 import time
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
-from sqlspec.core.pipeline import get_statement_pipeline_metrics, reset_statement_pipeline_cache
-from sqlspec.utils.logging import get_logger
+from sqlspec.core.pipeline import (
+    configure_statement_pipeline_cache,
+    get_statement_pipeline_metrics,
+    reset_statement_pipeline_cache,
+)
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_field_name, has_filter_attributes
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     import sqlglot.expressions as exp
 
@@ -34,17 +36,20 @@ __all__ = (
     "CacheStats",
     "CachedStatement",
     "FiltersView",
-    "MultiLevelCache",
-    "ParametersView",
-    "UnifiedCache",
+    "LRUCache",
+    "NamespacedCache",
     "canonicalize_filters",
     "create_cache_key",
     "get_cache",
     "get_cache_config",
+    "get_cache_instances",
     "get_default_cache",
     "get_pipeline_metrics",
     "reset_pipeline_registry",
+    "set_cache_instances",
 )
+
+logger = get_logger("sqlspec.cache")
 
 T = TypeVar("T")
 CacheValueT = TypeVar("CacheValueT")
@@ -57,7 +62,7 @@ CACHE_STATS_UPDATE_INTERVAL: Final = 100
 
 CACHE_KEY_SLOTS: Final = ("_hash", "_key_data")
 CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp", "access_count")
-UNIFIED_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats")
+LRU_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats")
 CACHE_STATS_SLOTS: Final = ("hits", "misses", "evictions", "total_operations", "memory_usage")
 
 
@@ -71,7 +76,7 @@ class CacheKey:
 
     __slots__ = ("_hash", "_key_data")
 
-    def __init__(self, key_data: tuple[Any, ...]) -> None:
+    def __init__(self, key_data: "tuple[Any, ...]") -> None:
         """Initialize cache key.
 
         Args:
@@ -81,7 +86,7 @@ class CacheKey:
         self._hash = hash(key_data)
 
     @property
-    def key_data(self) -> tuple[Any, ...]:
+    def key_data(self) -> "tuple[Any, ...]":
         """Get the key data tuple."""
         return self._key_data
 
@@ -184,7 +189,7 @@ class CacheNode:
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class UnifiedCache:
+class LRUCache:
     """Cache with LRU eviction and TTL support.
 
     Args:
@@ -192,10 +197,10 @@ class UnifiedCache:
         ttl_seconds: Time-to-live in seconds (None for no expiration)
     """
 
-    __slots__ = UNIFIED_CACHE_SLOTS
+    __slots__ = LRU_CACHE_SLOTS
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
-        """Initialize unified cache.
+        """Initialize LRU cache.
 
         Args:
             max_size: Maximum number of cache entries
@@ -225,6 +230,8 @@ class UnifiedCache:
             node = self._cache.get(key)
             if node is None:
                 self._stats.record_miss()
+                if logger.isEnabledFor(logging.DEBUG):
+                    log_with_context(logger, logging.DEBUG, "cache.miss", cache_size=len(self._cache))
                 return None
 
             ttl = self._ttl
@@ -235,11 +242,17 @@ class UnifiedCache:
                     del self._cache[key]
                     self._stats.record_miss()
                     self._stats.record_eviction()
+                    if logger.isEnabledFor(logging.DEBUG):
+                        log_with_context(
+                            logger, logging.DEBUG, "cache.evict", cache_size=len(self._cache), reason="expired"
+                        )
                     return None
 
             self._move_to_head(node)
             node.access_count += 1
             self._stats.record_hit()
+            if logger.isEnabledFor(logging.DEBUG):
+                log_with_context(logger, logging.DEBUG, "cache.hit", cache_size=len(self._cache))
             return node.value
 
     def put(self, key: CacheKey, value: Any) -> None:
@@ -268,6 +281,10 @@ class UnifiedCache:
                     self._remove_node(tail_node)
                     del self._cache[tail_node.key]
                     self._stats.record_eviction()
+                    if logger.isEnabledFor(logging.DEBUG):
+                        log_with_context(
+                            logger, logging.DEBUG, "cache.evict", cache_size=len(self._cache), reason="max_size"
+                        )
 
     def delete(self, key: CacheKey) -> bool:
         """Delete entry from cache.
@@ -345,12 +362,12 @@ class UnifiedCache:
             return not (ttl is not None and time.time() - node.timestamp > ttl)
 
 
-_default_cache: UnifiedCache | None = None
+_default_cache: LRUCache | None = None
 _cache_lock = threading.Lock()
 
 
-def get_default_cache() -> UnifiedCache:
-    """Get the default unified cache instance.
+def get_default_cache() -> LRUCache:
+    """Get the default LRU cache instance.
 
     Returns:
         Singleton default cache instance
@@ -359,8 +376,30 @@ def get_default_cache() -> UnifiedCache:
     if _default_cache is None:
         with _cache_lock:
             if _default_cache is None:
-                _default_cache = UnifiedCache()
+                config = get_cache_config()
+                _default_cache = LRUCache(config.sql_cache_size)
     return _default_cache
+
+
+def get_cache_instances() -> "tuple[LRUCache | None, NamespacedCache | None]":
+    """Return the current cache instances.
+
+    Returns:
+        Tuple of (default_cache, namespaced_cache).
+    """
+    return _default_cache, _namespaced_cache
+
+
+def set_cache_instances(default_cache: "LRUCache | None", namespaced_cache: "NamespacedCache | None") -> None:
+    """Replace cache instances (used by tests and diagnostics).
+
+    Args:
+        default_cache: Default cache instance or None.
+        namespaced_cache: Namespaced cache instance or None.
+    """
+    global _default_cache, _namespaced_cache
+    _default_cache = default_cache
+    _namespaced_cache = namespaced_cache
 
 
 def clear_all_caches() -> None:
@@ -369,19 +408,20 @@ def clear_all_caches() -> None:
         _default_cache.clear()
     cache = get_cache()
     cache.clear()
+    reset_statement_pipeline_cache()
 
 
-def get_cache_statistics() -> dict[str, CacheStats]:
+def get_cache_statistics() -> "dict[str, CacheStats]":
     """Get statistics from all cache instances.
 
     Returns:
         Dictionary mapping cache type to statistics
     """
-    stats = {}
-    if _default_cache is not None:
-        stats["default"] = _default_cache.get_stats()
+    stats: dict[str, CacheStats] = {}
+    default_cache = get_default_cache()
+    stats["default"] = default_cache.get_stats()
     cache = get_cache()
-    stats["multi_level"] = cache.get_stats()
+    stats["namespaced"] = cache.get_stats()
     return stats
 
 
@@ -406,13 +446,13 @@ class CacheConfig:
         """Initialize cache configuration.
 
         Args:
-            compiled_cache_enabled: Enable compiled SQL caching
-            sql_cache_enabled: Enable SQL statement caching
-            fragment_cache_enabled: Enable AST fragment caching
-            optimized_cache_enabled: Enable optimized expression caching
-            sql_cache_size: Maximum SQL cache entries
-            fragment_cache_size: Maximum fragment cache entries
-            optimized_cache_size: Maximum optimized cache entries
+            compiled_cache_enabled: Master switch for namespaced caches and compiled SQL caching.
+            sql_cache_enabled: Enable statement and builder caching.
+            fragment_cache_enabled: Enable expression, parameter, and file caching.
+            optimized_cache_enabled: Enable optimized expression caching.
+            sql_cache_size: Maximum statement/builder cache entries.
+            fragment_cache_size: Maximum expression/parameter/file cache entries.
+            optimized_cache_size: Maximum optimized cache entries.
         """
         self.compiled_cache_enabled = compiled_cache_enabled
         self.sql_cache_enabled = sql_cache_enabled
@@ -432,7 +472,18 @@ def get_cache_config() -> CacheConfig:
     global _global_cache_config
     if _global_cache_config is None:
         _global_cache_config = CacheConfig()
+        _configure_pipeline_cache(_global_cache_config)
     return _global_cache_config
+
+
+def _configure_pipeline_cache(config: "CacheConfig") -> None:
+    compiled_cache_enabled = config.compiled_cache_enabled and config.sql_cache_enabled
+    fragment_cache_enabled = config.compiled_cache_enabled and config.fragment_cache_enabled
+    cache_size = config.sql_cache_size if compiled_cache_enabled else 0
+    parse_cache_size = config.fragment_cache_size if fragment_cache_enabled else 0
+    configure_statement_pipeline_cache(
+        cache_size=cache_size, parse_cache_size=parse_cache_size, cache_enabled=compiled_cache_enabled
+    )
 
 
 def update_cache_config(config: CacheConfig) -> None:
@@ -444,29 +495,43 @@ def update_cache_config(config: CacheConfig) -> None:
         config: New cache configuration to apply globally
     """
     logger = get_logger("sqlspec.cache")
-    logger.info("Cache configuration updated: %s", config)
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "cache.config.updated",
+        compiled_cache_enabled=config.compiled_cache_enabled,
+        sql_cache_enabled=config.sql_cache_enabled,
+        fragment_cache_enabled=config.fragment_cache_enabled,
+        optimized_cache_enabled=config.optimized_cache_enabled,
+        sql_cache_size=config.sql_cache_size,
+        fragment_cache_size=config.fragment_cache_size,
+        optimized_cache_size=config.optimized_cache_size,
+    )
 
-    global _global_cache_config
+    global _default_cache, _global_cache_config, _namespaced_cache
     _global_cache_config = config
 
-    unified_cache = get_default_cache()
-    unified_cache.clear()
-    cache = get_cache()
-    cache.clear()
+    _configure_pipeline_cache(config)
 
-    logger = get_logger("sqlspec.cache")
-    logger.info(
-        "Cache configuration updated - all caches cleared",
-        extra={
-            "compiled_cache_enabled": config.compiled_cache_enabled,
-            "sql_cache_enabled": config.sql_cache_enabled,
-            "fragment_cache_enabled": config.fragment_cache_enabled,
-            "optimized_cache_enabled": config.optimized_cache_enabled,
-        },
+    if _default_cache is not None:
+        _default_cache.clear()
+    if _namespaced_cache is not None:
+        _namespaced_cache.clear()
+    _default_cache = None
+    _namespaced_cache = None
+
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "cache.config.cleared",
+        compiled_cache_enabled=config.compiled_cache_enabled,
+        sql_cache_enabled=config.sql_cache_enabled,
+        fragment_cache_enabled=config.fragment_cache_enabled,
+        optimized_cache_enabled=config.optimized_cache_enabled,
     )
 
 
-def get_cache_stats() -> dict[str, CacheStats]:
+def get_cache_stats() -> "dict[str, CacheStats]":
     """Get cache statistics from all caches.
 
     Returns:
@@ -484,75 +549,20 @@ def log_cache_stats() -> None:
     """Log cache statistics."""
     logger = get_logger("sqlspec.cache")
     stats = get_cache_stats()
-    logger.info("Cache Statistics: %s", stats)
+    stats_summary = {
+        name: {
+            "hits": stat.hits,
+            "misses": stat.misses,
+            "evictions": stat.evictions,
+            "total_operations": stat.total_operations,
+            "memory_usage": stat.memory_usage,
+        }
+        for name, stat in stats.items()
+    }
+    log_with_context(logger, logging.DEBUG, "cache.stats", stats=stats_summary)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class ParametersView:
-    """Read-only view of parameters without copying.
-
-    Provides read-only access to parameters without making copies,
-    enabling zero-copy parameter access patterns.
-    """
-
-    __slots__ = ("_named_ref", "_positional_ref")
-
-    def __init__(self, positional: list[Any], named: dict[str, Any]) -> None:
-        """Initialize parameters view.
-
-        Args:
-            positional: List of positional parameters (will be referenced, not copied)
-            named: Dictionary of named parameters (will be referenced, not copied)
-        """
-        self._positional_ref = positional
-        self._named_ref = named
-
-    def get_positional(self, index: int) -> Any:
-        """Get positional parameter by index.
-
-        Args:
-            index: Parameter index
-
-        Returns:
-            Parameter value
-        """
-        return self._positional_ref[index]
-
-    def get_named(self, key: str) -> Any:
-        """Get named parameter by key.
-
-        Args:
-            key: Parameter name
-
-        Returns:
-            Parameter value
-        """
-        return self._named_ref[key]
-
-    def has_named(self, key: str) -> bool:
-        """Check if named parameter exists.
-
-        Args:
-            key: Parameter name
-
-        Returns:
-            True if parameter exists
-        """
-        return key in self._named_ref
-
-    @property
-    def positional_count(self) -> int:
-        """Number of positional parameters."""
-        return len(self._positional_ref)
-
-    @property
-    def named_count(self) -> int:
-        """Number of named parameters."""
-        return len(self._named_ref)
-
-
-@mypyc_attr(allow_interpreted_subclasses=False)
-@dataclass(frozen=True)
 class CachedStatement:
     """Immutable cached statement result.
 
@@ -561,135 +571,404 @@ class CachedStatement:
     risk of mutation. Tuple parameters ensure no copying is needed.
     """
 
-    compiled_sql: str
-    parameters: tuple[Any, ...] | dict[str, Any] | None  # None allowed for static script compilation
-    expression: Optional["exp.Expression"]
+    __slots__ = ("compiled_sql", "expression", "parameters")
 
-    def get_parameters_view(self) -> "ParametersView":
-        """Get read-only parameter view.
+    def __init__(
+        self,
+        compiled_sql: str,
+        parameters: "tuple[Any, ...] | dict[str, Any] | None",
+        expression: "exp.Expression | None",
+    ) -> None:
+        self.compiled_sql = compiled_sql
+        self.parameters = parameters
+        self.expression = expression
 
-        Returns:
-            View object that provides read-only access to parameters
-        """
-        if self.parameters is None:
-            return ParametersView([], {})
-        return ParametersView(list(self.parameters), {})
+    def __repr__(self) -> str:
+        return (
+            "CachedStatement("
+            f"compiled_sql={self.compiled_sql!r}, "
+            f"parameters={self.parameters!r}, "
+            f"expression={self.expression!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CachedStatement):
+            return False
+        return (
+            self.compiled_sql == other.compiled_sql
+            and self.parameters == other.parameters
+            and self.expression == other.expression
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.compiled_sql, self.parameters, self.expression))
 
 
-def create_cache_key(level: str, key: str, dialect: str | None = None) -> str:
+def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> str:
     """Create optimized cache key using string concatenation.
 
     Args:
-        level: Cache level (statement, expression, parameter)
-        key: Base cache key
-        dialect: SQL dialect (optional)
+        namespace: Cache namespace name.
+        key: Base cache key.
+        dialect: SQL dialect (optional).
 
     Returns:
-        Optimized cache key string
+        Optimized cache key string.
     """
-    return f"{level}:{dialect or 'default'}:{key}"
+    return f"{namespace}:{dialect or 'default'}:{key}"
+
+
+def _sql_cache_enabled(config: "CacheConfig") -> bool:
+    return config.sql_cache_enabled
+
+
+def _sql_cache_size(config: "CacheConfig") -> int:
+    return config.sql_cache_size
+
+
+def _fragment_cache_enabled(config: "CacheConfig") -> bool:
+    return config.fragment_cache_enabled
+
+
+def _fragment_cache_size(config: "CacheConfig") -> int:
+    return config.fragment_cache_size
+
+
+def _optimized_cache_enabled(config: "CacheConfig") -> bool:
+    return config.optimized_cache_enabled
+
+
+def _optimized_cache_size(config: "CacheConfig") -> int:
+    return config.optimized_cache_size
+
+
+NAMESPACED_CACHE_CONFIG: "dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]" = {
+    "statement": (_sql_cache_enabled, _sql_cache_size),
+    "builder": (_sql_cache_enabled, _sql_cache_size),
+    "expression": (_fragment_cache_enabled, _fragment_cache_size),
+    "file": (_fragment_cache_enabled, _fragment_cache_size),
+    "optimized": (_optimized_cache_enabled, _optimized_cache_size),
+}
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class MultiLevelCache:
-    """Single cache with namespace isolation - no connection pool complexity."""
+class NamespacedCache:
+    """Single cache with namespace isolation.
 
-    __slots__ = ("_cache",)
+    Uses per-namespace LRU caches sized by CacheConfig to keep memory usage
+    predictable while avoiding stringly-typed cache access.
+    """
 
-    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
-        """Initialize multi-level cache.
+    __slots__ = ("_caches", "_config")
+
+    def __init__(self, config: "CacheConfig | None" = None, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
+        """Initialize namespaced cache.
 
         Args:
-            max_size: Maximum number of cache entries
-            ttl_seconds: Time-to-live in seconds (None for no expiration)
+            config: Cache configuration to apply.
+            ttl_seconds: Time-to-live in seconds (None for no expiration).
         """
-        self._cache = UnifiedCache(max_size, ttl_seconds)
+        self._config = config or get_cache_config()
+        self._caches = self._build_caches(self._config, ttl_seconds)
 
-    def get(self, level: str, key: str, dialect: str | None = None) -> Any | None:
-        """Get value from cache with level and dialect namespace.
+    @staticmethod
+    def _build_caches(config: "CacheConfig", ttl_seconds: int | None) -> "dict[str, LRUCache]":
+        caches: dict[str, LRUCache] = {}
+        for namespace, (_, size_getter) in NAMESPACED_CACHE_CONFIG.items():
+            size = size_getter(config)
+            caches[namespace] = LRUCache(size, ttl_seconds)
+        return caches
+
+    def _is_enabled(self, namespace: str) -> bool:
+        if not self._config.compiled_cache_enabled:
+            return False
+        enabled_getter = NAMESPACED_CACHE_CONFIG[namespace][0]
+        return bool(enabled_getter(self._config))
+
+    def _get(self, namespace: str, key: str, dialect: str | None = None) -> Any | None:
+        """Get cached value by namespace.
 
         Args:
-            level: Cache level (e.g., "statement", "expression", "parameter")
-            key: Cache key
-            dialect: SQL dialect (optional)
+            namespace: Cache namespace.
+            key: Cache key.
+            dialect: Optional SQL dialect.
 
         Returns:
-            Cached value or None if not found
+            Cached value or None if not found.
         """
-        full_key = create_cache_key(level, key, dialect)
+        if not self._is_enabled(namespace):
+            return None
+        cache = self._caches[namespace]
+        full_key = create_cache_key(namespace, key, dialect)
         cache_key = CacheKey((full_key,))
-        return self._cache.get(cache_key)
+        return cache.get(cache_key)
 
-    def put(self, level: str, key: str, value: Any, dialect: str | None = None) -> None:
-        """Put value in cache with level and dialect namespace.
+    def _put(self, namespace: str, key: str, value: Any, dialect: str | None = None) -> None:
+        """Put cached value by namespace.
 
         Args:
-            level: Cache level (e.g., "statement", "expression", "parameter")
-            key: Cache key
-            value: Value to cache
-            dialect: SQL dialect (optional)
+            namespace: Cache namespace.
+            key: Cache key.
+            value: Value to cache.
+            dialect: Optional SQL dialect.
         """
-        full_key = create_cache_key(level, key, dialect)
+        if not self._is_enabled(namespace):
+            return
+        cache = self._caches[namespace]
+        full_key = create_cache_key(namespace, key, dialect)
         cache_key = CacheKey((full_key,))
-        self._cache.put(cache_key, value)
+        cache.put(cache_key, value)
 
-    def delete(self, level: str, key: str, dialect: str | None = None) -> bool:
-        """Delete entry from cache.
+    def _delete(self, namespace: str, key: str, dialect: str | None = None) -> bool:
+        """Delete cached value by namespace.
 
         Args:
-            level: Cache level
-            key: Cache key to delete
-            dialect: SQL dialect (optional)
+            namespace: Cache namespace.
+            key: Cache key.
+            dialect: Optional SQL dialect.
 
         Returns:
-            True if key was found and deleted, False otherwise
+            True when the key was found and deleted.
         """
-        full_key = create_cache_key(level, key, dialect)
+        if not self._is_enabled(namespace):
+            return False
+        cache = self._caches[namespace]
+        full_key = create_cache_key(namespace, key, dialect)
         cache_key = CacheKey((full_key,))
-        return self._cache.delete(cache_key)
+        return cache.delete(cache_key)
+
+    def get_statement(self, key: str, dialect: str | None = None) -> Any | None:
+        """Get cached statement data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            Cached value or None if not found.
+        """
+        return self._get("statement", key, dialect)
+
+    def put_statement(self, key: str, value: Any, dialect: str | None = None) -> None:
+        """Cache compiled statement data.
+
+        Args:
+            key: Cache key.
+            value: Value to cache.
+            dialect: Optional SQL dialect.
+        """
+        self._put("statement", key, value, dialect)
+
+    def delete_statement(self, key: str, dialect: str | None = None) -> bool:
+        """Delete cached statement data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            True when the key was found and deleted.
+        """
+        return self._delete("statement", key, dialect)
+
+    def get_expression(self, key: str, dialect: str | None = None) -> Any | None:
+        """Get cached expression data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            Cached value or None if not found.
+        """
+        return self._get("expression", key, dialect)
+
+    def put_expression(self, key: str, value: Any, dialect: str | None = None) -> None:
+        """Cache parsed expression data.
+
+        Args:
+            key: Cache key.
+            value: Value to cache.
+            dialect: Optional SQL dialect.
+        """
+        self._put("expression", key, value, dialect)
+
+    def delete_expression(self, key: str, dialect: str | None = None) -> bool:
+        """Delete cached expression data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            True when the key was found and deleted.
+        """
+        return self._delete("expression", key, dialect)
+
+    def get_optimized(self, key: str, dialect: str | None = None) -> Any | None:
+        """Get cached optimized expression data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            Cached value or None if not found.
+        """
+        return self._get("optimized", key, dialect)
+
+    def put_optimized(self, key: str, value: Any, dialect: str | None = None) -> None:
+        """Cache optimized expression data.
+
+        Args:
+            key: Cache key.
+            value: Value to cache.
+            dialect: Optional SQL dialect.
+        """
+        self._put("optimized", key, value, dialect)
+
+    def delete_optimized(self, key: str, dialect: str | None = None) -> bool:
+        """Delete cached optimized expression data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            True when the key was found and deleted.
+        """
+        return self._delete("optimized", key, dialect)
+
+    def get_builder(self, key: str, dialect: str | None = None) -> Any | None:
+        """Get cached builder statement data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            Cached value or None if not found.
+        """
+        return self._get("builder", key, dialect)
+
+    def put_builder(self, key: str, value: Any, dialect: str | None = None) -> None:
+        """Cache builder statement data.
+
+        Args:
+            key: Cache key.
+            value: Value to cache.
+            dialect: Optional SQL dialect.
+        """
+        self._put("builder", key, value, dialect)
+
+    def delete_builder(self, key: str, dialect: str | None = None) -> bool:
+        """Delete cached builder statement data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            True when the key was found and deleted.
+        """
+        return self._delete("builder", key, dialect)
+
+    def get_file(self, key: str, dialect: str | None = None) -> Any | None:
+        """Get cached SQL file data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            Cached value or None if not found.
+        """
+        return self._get("file", key, dialect)
+
+    def put_file(self, key: str, value: Any, dialect: str | None = None) -> None:
+        """Cache SQL file data.
+
+        Args:
+            key: Cache key.
+            value: Value to cache.
+            dialect: Optional SQL dialect.
+        """
+        self._put("file", key, value, dialect)
+
+    def delete_file(self, key: str, dialect: str | None = None) -> bool:
+        """Delete cached SQL file data.
+
+        Args:
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            True when the key was found and deleted.
+        """
+        return self._delete("file", key, dialect)
 
     def clear(self) -> None:
         """Clear all cache entries."""
-        self._cache.clear()
+        for cache in self._caches.values():
+            cache.clear()
 
     def get_stats(self) -> CacheStats:
         """Get cache statistics."""
-        return self._cache.get_stats()
+        aggregated = CacheStats()
+        for cache in self._caches.values():
+            stats = cache.get_stats()
+            aggregated.hits += stats.hits
+            aggregated.misses += stats.misses
+            aggregated.evictions += stats.evictions
+            aggregated.total_operations += stats.total_operations
+            aggregated.memory_usage += stats.memory_usage
+        return aggregated
 
 
-_multi_level_cache: MultiLevelCache | None = None
+_namespaced_cache: NamespacedCache | None = None
 
 
-def get_cache() -> MultiLevelCache:
-    """Get the multi-level cache instance.
+def get_cache() -> NamespacedCache:
+    """Get the namespaced cache instance.
 
     Returns:
-        Singleton multi-level cache instance
+        Singleton namespaced cache instance
     """
-    global _multi_level_cache
-    if _multi_level_cache is None:
+    global _namespaced_cache
+    if _namespaced_cache is None:
         with _cache_lock:
-            if _multi_level_cache is None:
-                _multi_level_cache = MultiLevelCache()
-    return _multi_level_cache
+            if _namespaced_cache is None:
+                _namespaced_cache = NamespacedCache(get_cache_config())
+    return _namespaced_cache
 
 
-@dataclass(frozen=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Filter:
     """Immutable filter that can be safely shared."""
 
-    field_name: str
-    operation: str
-    value: Any
+    __slots__ = ("field_name", "operation", "value")
 
-    def __post_init__(self) -> None:
-        """Validate filter parameters."""
-        if not self.field_name:
+    def __init__(self, field_name: str, operation: str, value: Any) -> None:
+        if not field_name:
             msg = "Field name cannot be empty"
             raise ValueError(msg)
-        if not self.operation:
+        if not operation:
             msg = "Operation cannot be empty"
             raise ValueError(msg)
+        self.field_name = field_name
+        self.operation = operation
+        self.value = value
+
+    def __repr__(self) -> str:
+        return f"Filter(field_name={self.field_name!r}, operation={self.operation!r}, value={self.value!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Filter):
+            return False
+        return self.field_name == other.field_name and self.operation == other.operation and self.value == other.value
+
+    def __hash__(self) -> int:
+        return hash((self.field_name, self.operation, self.value))
 
 
 def canonicalize_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
@@ -706,7 +985,11 @@ def canonicalize_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
 
     # Deduplicate and sort for canonical representation
     unique_filters = set(filters)
-    return tuple(sorted(unique_filters, key=lambda f: (f.field_name, f.operation, str(f.value))))
+    return tuple(sorted(unique_filters, key=_filter_sort_key))
+
+
+def _filter_sort_key(filter_obj: "Filter") -> "tuple[str, str, str]":
+    return filter_obj.field_name, filter_obj.operation, str(filter_obj.value)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

@@ -29,7 +29,7 @@ def test_index_2() -> None:
                 (3, 'carol', 'carol@example.com', 1)
             """
         )
-        users = session.select(query, True)  # noqa: FBT003
+        users = session.select(query, True)
     # end-example
 
     names = [user["name"] for user in users]

@@ -13,7 +13,7 @@ Configuration:
 """
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("BigQueryEventQueueStore",)
 
@@ -52,7 +52,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return BigQuery-specific column types.
 
         Returns:

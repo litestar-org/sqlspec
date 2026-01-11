@@ -242,6 +242,71 @@ Subqueries
        .where_exists(has_orders)
    )
 
+Temporal Queries (Time Travel)
+------------------------------
+
+Query historical data at a specific point in time using the ``as_of`` parameter.
+The builder generates dialect-specific syntax automatically:
+
+.. code-block:: python
+
+   # Query data from 10 seconds ago (CockroachDB/default)
+   query = sql.select("*").from_("users", as_of="-10s")
+   # → SELECT * FROM users AS OF SYSTEM TIME '-10s'
+
+   # Query with timestamp expression
+   query = sql.select("*").from_(
+       "orders",
+       as_of=sql.raw("TIMESTAMP '2024-01-01 00:00:00'")
+   )
+
+   # JOIN with time-travel
+   query = (
+       sql.select("*")
+       .from_("orders")
+       .join(
+           sql.left_join_("audit_log", alias="log")
+           .as_of("-1h")
+           .on("orders.id = log.order_id")
+       )
+   )
+
+**Database-Specific Syntax:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Database
+     - Generated SQL
+   * - Default/CockroachDB
+     - ``table AS OF SYSTEM TIME timestamp``
+   * - BigQuery
+     - ``table FOR SYSTEM_TIME AS OF timestamp``
+   * - Oracle
+     - ``table AS OF TIMESTAMP timestamp`` or ``AS OF SCN scn``
+   * - Snowflake
+     - ``table AT (TIMESTAMP => timestamp)``
+   * - DuckDB
+     - ``table AT (TIMESTAMP => timestamp)``
+
+**Helper Function:**
+
+For direct table expressions with temporal clauses:
+
+.. code-block:: python
+
+   from sqlspec.builder import create_temporal_table
+   from sqlglot import exp
+
+   # Create temporal table expression
+   table = create_temporal_table("orders", exp.Literal.string("2024-01-01"))
+
+   # Use with different dialects
+   table.sql(dialect="oracle")    # → orders AS OF TIMESTAMP '2024-01-01'
+   table.sql(dialect="bigquery")  # → orders FOR SYSTEM_TIME AS OF '2024-01-01'
+   table.sql(dialect="snowflake") # → orders AT (TIMESTAMP => '2024-01-01')
+
 INSERT Queries
 ==============
 

@@ -4,13 +4,13 @@ These functions are extracted from StorageDriverMixin to eliminate
 cross-trait attribute access that causes mypyc segmentation faults.
 """
 
-from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.storage import StorageBridgeJob, StorageTelemetry, create_storage_bridge_job
-from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
+from sqlspec.utils.arrow_impl import arrow_table_to_rows as _arrow_table_to_rows_impl
+from sqlspec.utils.arrow_impl import build_ingest_telemetry as _build_ingest_telemetry_impl
+from sqlspec.utils.arrow_impl import coerce_arrow_table as _coerce_arrow_table_impl
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
@@ -67,23 +67,7 @@ def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
         TypeError: If source type is not supported.
 
     """
-    ensure_pyarrow()
-    import pyarrow as pa
-
-    if has_get_data(source):
-        table = source.get_data()
-        if isinstance(table, pa.Table):
-            return table
-        msg = "ArrowResult did not return a pyarrow.Table instance"
-        raise TypeError(msg)
-    if isinstance(source, pa.Table):
-        return source
-    if isinstance(source, pa.RecordBatch):
-        return pa.Table.from_batches([source])
-    if isinstance(source, Iterable):
-        return pa.Table.from_pylist(list(source))
-    msg = f"Unsupported Arrow source type: {type(source).__name__}"
-    raise TypeError(msg)
+    return _coerce_arrow_table_impl(source)
 
 
 def arrow_table_to_rows(
@@ -102,17 +86,7 @@ def arrow_table_to_rows(
         ValueError: If table has no columns to import.
 
     """
-    ensure_pyarrow()
-    resolved_columns = columns or list(table.column_names)
-    if not resolved_columns:
-        msg = "Arrow table has no columns to import"
-        raise ValueError(msg)
-    batches = table.to_pylist()
-    records: list[tuple[Any, ...]] = []
-    for row in batches:
-        record = tuple(row.get(col) for col in resolved_columns)
-        records.append(record)
-    return resolved_columns, records
+    return _arrow_table_to_rows_impl(table, columns)
 
 
 def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
@@ -126,13 +100,8 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
         StorageTelemetry dict with row/byte counts.
 
     """
-    if has_arrow_table_stats(table):
-        rows = int(table.num_rows)
-        bytes_processed = int(table.nbytes)
-    else:
-        rows = 0
-        bytes_processed = 0
-    return {"rows_processed": rows, "bytes_processed": bytes_processed, "format": format_label}
+    telemetry = _build_ingest_telemetry_impl(table, format_label=format_label)
+    return cast("StorageTelemetry", telemetry)
 
 
 def attach_partition_telemetry(telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None") -> None:

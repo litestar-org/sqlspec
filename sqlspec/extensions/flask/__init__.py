@@ -31,6 +31,7 @@ Example:
         return {"users": result.all()}
 """
 
+from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask.extension import SQLSpecPlugin
 
-__all__ = ("SQLSpecPlugin",)
+__all__ = ("FlaskConfigState", "SQLSpecPlugin")

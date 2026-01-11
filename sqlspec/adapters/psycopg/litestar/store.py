@@ -7,13 +7,11 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
-logger = get_logger("adapters.psycopg.litestar.store")
 
 __all__ = ("PsycopgAsyncStore", "PsycopgSyncStore")
 
@@ -99,7 +97,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
             await driver.commit()
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -194,7 +192,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         async with conn_context as conn:
             await conn.execute(sql.encode())
             await conn.commit()
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+        self._log_delete_all()
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -270,7 +268,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
             await conn.commit()
             count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             if count > 0:
-                logger.debug("Cleaned up %d expired sessions", count)
+                self._log_delete_expired(count)
             return count
 
 
@@ -361,7 +359,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
             driver.commit()
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -468,7 +466,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn:
             conn.execute(sql.encode())
             conn.commit()
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+        self._log_delete_all()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
@@ -542,7 +540,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             conn.commit()
             count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             if count > 0:
-                logger.debug("Cleaned up %d expired sessions", count)
+                self._log_delete_expired(count)
             return count
 
     async def delete_expired(self) -> int:

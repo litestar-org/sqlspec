@@ -220,7 +220,7 @@ Migration Files
 SQL Migrations
 --------------
 
-SQL migrations use the aiosql-style named query format:
+SQL migrations use the named SQL query format:
 
 .. code-block:: sql
 

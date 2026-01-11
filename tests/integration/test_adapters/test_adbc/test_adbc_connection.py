@@ -12,7 +12,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
 @xfail_if_driver_missing
-def test_connection(postgres_service: PostgresService) -> None:
+def test_connection(postgres_service: "PostgresService") -> None:
     """Test ADBC connection to PostgreSQL."""
     config = AdbcConfig(
         connection_config={
@@ -85,7 +85,7 @@ def test_bigquery_connection() -> None:
 
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
-def test_connection_info_retrieval(postgres_service: PostgresService) -> None:
+def test_connection_info_retrieval(postgres_service: "PostgresService") -> None:
     """Test ADBC connection info retrieval for dialect detection."""
     config = AdbcConfig(
         connection_config={
@@ -105,7 +105,7 @@ def test_connection_info_retrieval(postgres_service: PostgresService) -> None:
 
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
-def test_connection_with_session_management(postgres_service: PostgresService) -> None:
+def test_connection_with_session_management(postgres_service: "PostgresService") -> None:
     """Test ADBC connection with session management."""
     config = AdbcConfig(
         connection_config={
@@ -169,7 +169,7 @@ def test_duckdb_connection_with_arrow_features() -> None:
 
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
-def test_connection_transaction_handling(postgres_service: PostgresService) -> None:
+def test_connection_transaction_handling(postgres_service: "PostgresService") -> None:
     """Test ADBC connection transaction handling."""
     config = AdbcConfig(
         connection_config={

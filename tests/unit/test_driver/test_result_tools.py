@@ -12,7 +12,7 @@ import msgspec
 import pytest
 from typing_extensions import TypedDict
 
-from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.schema import (
     _DEFAULT_TYPE_DECODERS,

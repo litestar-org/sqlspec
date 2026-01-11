@@ -105,8 +105,6 @@ def register_type_handlers(
     sqlite3.register_adapter(list, list_adapter)
     sqlite3.register_converter(DEFAULT_JSON_TYPE, converter)
 
-    logger.debug("Registered SQLite custom type handlers (JSON dict/list adapters)")
-
 
 def unregister_type_handlers() -> None:
     """Unregister custom type handlers from sqlite3 module.
@@ -114,4 +112,3 @@ def unregister_type_handlers() -> None:
     Note: sqlite3 module does not provide an official unregister API, so this
     function is a no-op placeholder for API consistency with other adapters.
     """
-    logger.debug("SQLite type handler unregistration requested (no-op - not supported by sqlite3)")

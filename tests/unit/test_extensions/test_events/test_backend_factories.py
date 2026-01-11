@@ -231,7 +231,7 @@ def test_shared_encode_notify_payload() -> None:
     """Shared encode_notify_payload encodes payloads correctly."""
     import json
 
-    from sqlspec.extensions.events._payload import encode_notify_payload
+    from sqlspec.extensions.events import encode_notify_payload
 
     encoded = encode_notify_payload("evt123", {"action": "test"}, {"user": "admin"})
     decoded = json.loads(encoded)
@@ -246,7 +246,7 @@ def test_shared_decode_notify_payload() -> None:
     """Shared decode_notify_payload decodes payloads correctly."""
     import json
 
-    from sqlspec.extensions.events._payload import decode_notify_payload
+    from sqlspec.extensions.events import decode_notify_payload
 
     payload = json.dumps({
         "event_id": "evt456",
@@ -267,7 +267,7 @@ def test_shared_decode_notify_payload_non_dict() -> None:
     """Shared decode_notify_payload wraps non-dict payloads."""
     import json
 
-    from sqlspec.extensions.events._payload import decode_notify_payload
+    from sqlspec.extensions.events import decode_notify_payload
 
     payload = json.dumps("simple_string")
     message = decode_notify_payload("channel", payload)
@@ -279,7 +279,7 @@ def test_shared_parse_event_timestamp() -> None:
     """Shared parse_event_timestamp decodes timestamps correctly."""
     import json
 
-    from sqlspec.extensions.events._payload import decode_notify_payload
+    from sqlspec.extensions.events import decode_notify_payload
 
     payload = json.dumps({"event_id": "evt_decode", "payload": {"action": "refresh"}, "metadata": None})
 
@@ -308,7 +308,7 @@ def test_shared_parse_timestamp_iso_string() -> None:
     """Shared parse_event_timestamp parses ISO timestamp strings."""
     from datetime import datetime
 
-    from sqlspec.extensions.events._payload import parse_event_timestamp
+    from sqlspec.extensions.events import parse_event_timestamp
 
     result = parse_event_timestamp("2024-01-15T10:30:00+00:00")
 
@@ -320,7 +320,7 @@ def test_shared_parse_timestamp_datetime() -> None:
     """Shared parse_event_timestamp passes through datetime objects."""
     from datetime import datetime, timezone
 
-    from sqlspec.extensions.events._payload import parse_event_timestamp
+    from sqlspec.extensions.events import parse_event_timestamp
 
     now = datetime.now(timezone.utc)
     result = parse_event_timestamp(now)
@@ -332,7 +332,7 @@ def test_shared_parse_timestamp_invalid() -> None:
     """Shared parse_event_timestamp returns current time for invalid timestamps."""
     from datetime import datetime
 
-    from sqlspec.extensions.events._payload import parse_event_timestamp
+    from sqlspec.extensions.events import parse_event_timestamp
 
     result = parse_event_timestamp("not a timestamp")
 
@@ -343,7 +343,7 @@ def test_shared_parse_timestamp_naive_datetime() -> None:
     """Shared parse_event_timestamp adds UTC timezone to naive datetimes."""
     from datetime import datetime, timezone
 
-    from sqlspec.extensions.events._payload import parse_event_timestamp
+    from sqlspec.extensions.events import parse_event_timestamp
 
     result = parse_event_timestamp("2024-06-15T12:00:00")
 

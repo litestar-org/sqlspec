@@ -10,8 +10,8 @@ def test_global_cache_config() -> None:
 
     cache_config = CacheConfig(
         compiled_cache_enabled=True,  # Cache compiled SQL
-        sql_cache_enabled=True,  # Cache SQL strings
-        fragment_cache_enabled=True,  # Cache SQL fragments
+        sql_cache_enabled=True,  # Cache statements/builders
+        fragment_cache_enabled=True,  # Cache expressions/files
         optimized_cache_enabled=True,  # Cache optimized AST
         sql_cache_size=1000,  # Maximum cached SQL items
     )

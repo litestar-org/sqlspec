@@ -45,11 +45,9 @@ Key Components:
         - SearchFilter for text search operations
         - Parameter conflict resolution
 
-    cache.py: Unified caching system with LRU eviction
-        - UnifiedCache with configurable TTL and size limits
-        - StatementCache for compiled SQL statements
-        - ExpressionCache for parsed SQLGlot expressions
-        - ParameterCache for processed parameters
+    cache.py: Caching system with LRU eviction
+        - LRUCache with configurable TTL and size limits
+        - NamespacedCache for statement, expression, optimized, builder, and file caching
         - Thread-safe operations with fine-grained locking
         - Cache statistics and monitoring
 
@@ -96,9 +94,8 @@ from sqlspec.core.cache import (
     CacheKey,
     CacheStats,
     FiltersView,
-    MultiLevelCache,
-    ParametersView,
-    UnifiedCache,
+    LRUCache,
+    NamespacedCache,
     canonicalize_filters,
     clear_all_caches,
     create_cache_key,
@@ -180,6 +177,7 @@ from sqlspec.core.result import (
     SQLResult,
     StackResult,
     StatementResult,
+    build_arrow_result_from_table,
     create_arrow_result,
     create_sql_result,
 )
@@ -235,8 +233,9 @@ __all__ = (
     "FilterTypes",
     "FiltersView",
     "InCollectionFilter",
+    "LRUCache",
     "LimitOffsetFilter",
-    "MultiLevelCache",
+    "NamespacedCache",
     "NotInCollectionFilter",
     "NotNullFilter",
     "NullFilter",
@@ -251,7 +250,6 @@ __all__ = (
     "ParameterStyle",
     "ParameterStyleConfig",
     "ParameterValidator",
-    "ParametersView",
     "ProcessedState",
     "SQLProcessor",
     "SQLResult",
@@ -266,8 +264,8 @@ __all__ = (
     "StatementResult",
     "StatementStack",
     "TypedParameter",
-    "UnifiedCache",
     "apply_filter",
+    "build_arrow_result_from_table",
     "build_literal_inlining_transform",
     "build_null_pruning_transform",
     "build_statement_config_from_profile",

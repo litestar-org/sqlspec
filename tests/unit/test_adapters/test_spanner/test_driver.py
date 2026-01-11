@@ -45,7 +45,7 @@ def test_execute_statement_select(mock_connection: MagicMock) -> None:
     mock_connection.execute_sql.return_value = mock_result
 
     statement = driver.prepare_statement("SELECT * FROM users", statement_config=driver.statement_config)
-    result = driver._execute_statement(mock_connection, statement)  # type: ignore[protected-access]
+    result = driver.dispatch_execute(mock_connection, statement)  # type: ignore[protected-access]
 
     assert result.is_select_result
     assert result.selected_data is not None
@@ -59,7 +59,7 @@ def test_execute_statement_dml_in_transaction(mock_transaction: MagicMock) -> No
     mock_transaction.execute_update.return_value = 10
 
     statement = driver.prepare_statement("UPDATE users SET name = 'Bob'", statement_config=driver.statement_config)
-    result = driver._execute_statement(mock_transaction, statement)  # type: ignore[protected-access]
+    result = driver.dispatch_execute(mock_transaction, statement)  # type: ignore[protected-access]
 
     assert result.rowcount_override == 10
     mock_transaction.execute_update.assert_called_once()
@@ -76,4 +76,4 @@ def test_insert_requires_transaction_or_update_method(mock_connection: MagicMock
     )
 
     with pytest.raises(SQLConversionError, match="Cannot execute DML"):
-        driver._execute_statement(mock_connection, statement)  # type: ignore[protected-access]
+        driver.dispatch_execute(mock_connection, statement)  # type: ignore[protected-access]

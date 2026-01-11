@@ -36,8 +36,6 @@ suppress_warnings = [
     "docutils",  # Suppress docstring formatting warnings from source code
     "ref.doc",  # Suppress document reference warnings
     "toc.not_readable",  # Suppress cheat sheet files not in toctree warnings
-    "toc.excluded",  # Suppress toctree warnings for excluded guide documents
-    "ref.python",  # Suppress duplicate object description warnings
 ]
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -154,15 +152,7 @@ html_favicon = "_static/favicon.png"
 templates_path = ["_templates"]
 html_js_files = ["versioning.js"]
 html_css_files = ["custom.css"]
-exclude_patterns = [
-    "_build",
-    "Thumbs.db",
-    ".DS_Store",
-    "PYPI_README.md",
-    "STYLE_GUIDE.md",
-    "VOICE_AUDIT_REPORT.md",
-    "guides/**",
-]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "PYPI_README.md", "STYLE_GUIDE.md", "VOICE_AUDIT_REPORT.md"]
 html_show_sourcelink = True
 html_copy_source = True
 

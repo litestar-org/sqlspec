@@ -30,6 +30,7 @@ from sqlspec.core import (
     CompiledSQL,
     OperationType,
     ParameterProcessor,
+    ParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
     SQLProcessor,
@@ -216,6 +217,8 @@ def test_sql_processor_initialization(basic_statement_config: "StatementConfig")
     assert processor._config == basic_statement_config
     assert isinstance(processor._cache, OrderedDict)
     assert processor._max_cache_size == 1000
+    assert processor._parse_cache_max_size == 1000
+    assert processor._cache_enabled is True
     assert processor._cache_hits == 0
     assert processor._cache_misses == 0
     assert isinstance(processor._parameter_processor, ParameterProcessor)
@@ -225,6 +228,7 @@ def test_sql_processor_custom_cache_size(basic_statement_config: "StatementConfi
     """Test SQLProcessor with custom cache size."""
     processor = SQLProcessor(basic_statement_config, max_cache_size=500)
     assert processor._max_cache_size == 500
+    assert processor._parse_cache_max_size == 500
 
 
 def test_basic_compilation(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
@@ -274,6 +278,24 @@ def test_compilation_without_caching(no_cache_config: "StatementConfig", sample_
     assert processor._cache_misses == 0
 
     assert result1 == result2
+
+
+def test_parse_cache_when_compiled_cache_disabled(
+    basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
+) -> None:
+    """Parse cache should still be active when compiled cache is disabled."""
+    processor = SQLProcessor(basic_statement_config, cache_enabled=False, parse_cache_size=10)
+
+    sql = sample_sql_queries["select"]
+    parameters = [123]
+
+    processor.compile(sql, parameters)
+    processor.compile(sql, parameters)
+
+    assert processor._cache_hits == 0
+    assert processor._cache_misses == 0
+    assert processor._parse_cache_hits == 1
+    assert processor._parse_cache_misses == 1
 
 
 def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None:
@@ -422,6 +444,76 @@ def test_compilation_with_transformations(basic_statement_config: "StatementConf
     assert isinstance(result, CompiledSQL)
 
 
+def test_statement_transformers_apply(basic_statement_config: "StatementConfig") -> None:
+    """Statement transformers should update the AST before compilation."""
+
+    def rename_table(expression: exp.Expression, parameters: Any) -> "tuple[exp.Expression, Any]":
+        updated = expression.transform(
+            lambda node: exp.to_table("users_archive") if isinstance(node, exp.Table) else node
+        )
+        return updated, parameters
+
+    config = basic_statement_config.replace(statement_transformers=(rename_table,))
+    processor = SQLProcessor(config)
+
+    result = processor.compile("SELECT * FROM users WHERE id = ?", [123])
+
+    assert "users_archive" in result.compiled_sql
+    assert result.operation_type == "SELECT"
+
+
+def test_ast_transformer_single_parse(basic_statement_config: "StatementConfig") -> None:
+    """AST transformers should not trigger a second parse."""
+
+    def pass_through(
+        expression: exp.Expression, parameters: Any, _parameter_profile: "ParameterProfile"
+    ) -> "tuple[exp.Expression, Any]":
+        return expression, parameters
+
+    parameter_config = basic_statement_config.parameter_config.replace(ast_transformer=pass_through)
+    config = basic_statement_config.replace(parameter_config=parameter_config)
+    processor = SQLProcessor(config)
+
+    with patch("sqlspec.core.compiler.sqlglot.parse_one", wraps=sqlglot.parse_one) as mock_parse:
+        processor.compile("SELECT * FROM users WHERE id = ?", [123])
+
+    assert mock_parse.call_count == 1
+
+
+def test_ast_transformer_receives_parameter_profile(basic_statement_config: "StatementConfig") -> None:
+    """AST transformers should receive the detected parameter profile."""
+    captured: dict[str, int] = {}
+
+    def capture_profile(
+        expression: exp.Expression, parameters: Any, parameter_profile: "ParameterProfile"
+    ) -> "tuple[exp.Expression, Any]":
+        captured["count"] = parameter_profile.total_count
+        return expression, parameters
+
+    parameter_config = basic_statement_config.parameter_config.replace(ast_transformer=capture_profile)
+    config = basic_statement_config.replace(parameter_config=parameter_config)
+    processor = SQLProcessor(config)
+
+    processor.compile("SELECT * FROM users WHERE id = ?", [123])
+
+    assert captured["count"] == 1
+
+
+def test_statement_transformer_updates_operation_type(basic_statement_config: "StatementConfig") -> None:
+    """Statement transformers should refresh detected operation metadata."""
+
+    def to_delete(expression: exp.Expression, parameters: Any) -> "tuple[exp.Expression, Any]":
+        return exp.Delete(this=exp.to_table("users")), parameters
+
+    config = basic_statement_config.replace(statement_transformers=(to_delete,))
+    processor = SQLProcessor(config)
+
+    result = processor.compile("SELECT * FROM users", None)
+
+    assert result.operation_type == "DELETE"
+    assert "DELETE" in result.compiled_sql
+
+
 def test_parsing_enabled_optimization(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:
@@ -433,6 +525,19 @@ def test_parsing_enabled_optimization(
     assert isinstance(result, CompiledSQL)
     assert result.expression is not None
     assert result.operation_type == "SELECT"
+
+
+def test_parsing_reuses_expression_override(basic_statement_config: "StatementConfig") -> None:
+    """Expressions supplied to compile should bypass re-parsing."""
+    processor = SQLProcessor(basic_statement_config)
+    expression = exp.select("*").from_("users")
+    sql_text = expression.sql(dialect=basic_statement_config.dialect)
+
+    with patch("sqlspec.core.compiler.sqlglot.parse_one") as mock_parse:
+        result = processor.compile(sql_text, None, expression=expression)
+
+    mock_parse.assert_not_called()
+    assert result.expression is expression
 
 
 def test_parsing_disabled_fallback(
@@ -623,6 +728,19 @@ def test_cache_statistics(basic_statement_config: "StatementConfig", sample_sql_
     assert stats["hit_rate_percent"] == 33
 
 
+def test_parameter_cache_statistics(basic_statement_config: "StatementConfig") -> None:
+    """Parameter processor cache stats should reflect reuse."""
+    processor = SQLProcessor(basic_statement_config, cache_enabled=False, parse_cache_size=10, parameter_cache_size=10)
+
+    processor.compile("SELECT * FROM users WHERE id = ?", [123])
+    processor.compile("SELECT * FROM users WHERE id = ?", [123])
+
+    stats = processor.cache_stats
+    assert stats["parameter_hits"] >= 1
+    assert stats["parameter_misses"] >= 1
+    assert stats["parameter_size"] >= 1
+
+
 def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
     """Test cache clearing functionality."""
     processor = SQLProcessor(basic_statement_config)
@@ -638,6 +756,10 @@ def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queri
     assert len(processor._cache) == 0
     assert processor._cache_hits == 0
     assert processor._cache_misses == 0
+    stats = processor.cache_stats
+    assert stats["parameter_hits"] == 0
+    assert stats["parameter_misses"] == 0
+    assert stats["parameter_size"] == 0
 
 
 def test_memory_efficiency_with_slots() -> None:
@@ -670,7 +792,19 @@ def test_processor_memory_efficiency_with_slots() -> None:
 
     assert not hasattr(processor, "__dict__")
 
-    expected_slots = {"_cache", "_cache_hits", "_cache_misses", "_config", "_max_cache_size", "_parameter_processor"}
+    expected_slots = {
+        "_cache",
+        "_cache_enabled",
+        "_cache_hits",
+        "_cache_misses",
+        "_config",
+        "_max_cache_size",
+        "_parameter_processor",
+        "_parse_cache",
+        "_parse_cache_hits",
+        "_parse_cache_max_size",
+        "_parse_cache_misses",
+    }
     slots = getattr(type(processor), "__slots__", None)
     if slots is not None:
         assert set(slots) == expected_slots

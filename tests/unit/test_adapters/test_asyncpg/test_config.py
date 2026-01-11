@@ -1,10 +1,10 @@
 """AsyncPG configuration tests covering statement config builders."""
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.adapters.asyncpg.driver import build_asyncpg_statement_config
+from sqlspec.adapters.asyncpg.core import build_statement_config
 
 
-def test_build_asyncpg_statement_config_custom_serializers() -> None:
+def test_build_default_statement_config_custom_serializers() -> None:
     """Custom serializers should propagate into the parameter configuration."""
 
     def serializer(_: object) -> str:
@@ -13,7 +13,7 @@ def test_build_asyncpg_statement_config_custom_serializers() -> None:
     def deserializer(_: str) -> object:
         return {"value": "deserialized"}
 
-    statement_config = build_asyncpg_statement_config(json_serializer=serializer, json_deserializer=deserializer)
+    statement_config = build_statement_config(json_serializer=serializer, json_deserializer=deserializer)
 
     parameter_config = statement_config.parameter_config
     assert parameter_config.json_serializer is serializer

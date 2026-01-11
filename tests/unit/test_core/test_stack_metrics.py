@@ -1,5 +1,5 @@
+from sqlspec import ObservabilityRuntime
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.observability import ObservabilityRuntime
 
 
 def test_stack_execution_metrics_emit() -> None:

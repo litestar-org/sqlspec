@@ -1,7 +1,7 @@
 """Unit tests for sql.merge_ property shorthand."""
 
 from sqlspec import sql
-from sqlspec.builder._merge import Merge
+from sqlspec.builder import Merge
 
 
 def test_merge_property_returns_merge_builder() -> None:

@@ -81,7 +81,7 @@ SQLSpecMemoryService
 
    .. code-block:: python
 
-      from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+      from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKMemoryStore
       from sqlspec.extensions.adk.memory import SQLSpecMemoryService
 
       store = AsyncpgADKMemoryStore(config)
@@ -251,7 +251,7 @@ Type Definitions
 SessionRecord
 -------------
 
-.. autoclass:: sqlspec.extensions.adk._types.SessionRecord
+.. autoclass:: sqlspec.extensions.adk.SessionRecord
 
    TypedDict representing a session database record.
 
@@ -296,7 +296,7 @@ SessionRecord
 MemoryRecord
 ------------
 
-.. autoclass:: sqlspec.extensions.adk.memory._types.MemoryRecord
+.. autoclass:: sqlspec.extensions.adk.MemoryRecord
 
    TypedDict representing a memory database record.
 
@@ -312,7 +312,7 @@ MemoryRecord
 EventRecord
 -----------
 
-.. autoclass:: sqlspec.extensions.adk._types.EventRecord
+.. autoclass:: sqlspec.extensions.adk.EventRecord
 
    TypedDict representing an event database record.
 

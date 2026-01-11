@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec import sql
-from sqlspec.builder._merge import Merge
+from sqlspec.builder import Merge
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 
 pytestmark = pytest.mark.xdist_group("builder")

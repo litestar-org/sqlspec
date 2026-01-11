@@ -23,7 +23,7 @@ SQLSpec is currently in active development. The public API may change. Follow th
 - Raw SQL strings with automatic parameter binding and dialect translation
 - SQL AST parsing via sqlglot for validation, optimization, and dialect conversion
 - Builder API for programmatic query construction without string concatenation
-- SQL file loading to keep queries organized alongside your code (aiosql-style)
+- SQL file loading to keep queries organized alongside your code (named SQL queries)
 - Statement stacks for batching multiple operations with transaction control
 
 **Result Handling**

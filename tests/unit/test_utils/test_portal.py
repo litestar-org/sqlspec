@@ -8,7 +8,6 @@ import pytest
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.portal import Portal, PortalManager, PortalProvider, get_global_portal
-from sqlspec.utils.singleton import SingletonMeta
 
 pytestmark = pytest.mark.xdist_group("portal")
 
@@ -20,8 +19,9 @@ def _cleanup_portal_manager() -> Generator[None, None, None]:
     manager = PortalManager()
     if manager.is_running:
         manager.stop()
-    if PortalManager in SingletonMeta._instances:  # pyright: ignore
-        del SingletonMeta._instances[PortalManager]  # pyright: ignore
+
+    # Reset singleton instance
+    PortalManager._instance = None  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.fixture()

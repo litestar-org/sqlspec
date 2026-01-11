@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -34,7 +35,7 @@ from sqlspec.extensions.litestar.handlers import (
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import numpy_array_dec_hook, numpy_array_enc_hook, numpy_array_predicate
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
 
-logger = get_logger("extensions.litestar")
+logger = get_logger("sqlspec.extensions.litestar")
 
 CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
 DEFAULT_COMMIT_MODE: CommitMode = "manual"
@@ -243,6 +244,15 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 if header not in correlation_headers:
                     correlation_headers.append(header)
         self._correlation_headers = tuple(correlation_headers)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "extension.init",
+            framework="litestar",
+            stage="init",
+            config_count=len(self._plugin_configs),
+            correlation_headers=len(self._correlation_headers),
+        )
 
     def _extract_litestar_settings(
         self,
@@ -414,6 +424,16 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             existing_middleware.append(middleware)
             app_config.middleware = existing_middleware
 
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "extension.init",
+            framework="litestar",
+            stage="configured",
+            config_count=len(self._plugin_configs),
+            correlation_headers=len(self._correlation_headers),
+            numpy_enabled=bool(NUMPY_INSTALLED),
+        )
         return app_config
 
     def get_annotations(

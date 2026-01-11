@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.events import AsyncEventChannel
 
-logger = get_logger("extensions.litestar.channels")
+logger = get_logger("sqlspec.extensions.litestar.channels")
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

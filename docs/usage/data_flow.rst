@@ -9,7 +9,7 @@ This guide provides a comprehensive overview of the execution flow, from the mom
 Execution Pipeline Overview
 ----------------------------
 
-SQLSpec's execution flow can be visualized as a series of well-defined stages that transform user input into database results. The architecture is designed around **single-pass processing** with **multi-tier caching** for optimal performance.
+SQLSpec's execution flow can be visualized as a series of well-defined stages that transform user input into database results. The architecture is designed around **single-pass processing** with **namespaced caching** for optimal performance.
 
 High-Level Flow Diagram
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -127,6 +127,10 @@ Instead of treating SQL as plain text, SQLSpec uses the AST to:
 - Identify security risks (SQL injection patterns)
 - Detect performance issues (missing JOINs, unbounded queries)
 - Transform queries safely (add filters, parameterize literals)
+
+If you need custom AST rewrites (for example, soft delete transforms), supply
+``statement_transformers`` on ``StatementConfig``. These run after parsing and
+before SQL compilation.
 
 **Step 3: Compilation**
 
@@ -304,7 +308,7 @@ By understanding this execution flow, you can:
 
 **Extend SQLSpec**
 
-- Write custom transformers
+- Provide statement_transformers for AST rewrites
 - Create new validators
 - Implement custom drivers
 

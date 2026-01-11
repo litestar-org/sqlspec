@@ -175,7 +175,9 @@ class OracleOutputConverter(CachedOutputConverter):
             return value
 
         if isinstance(value, array.array):
-            from sqlspec.adapters.oracledb._numpy_handlers import numpy_converter_out
+            from sqlspec.adapters.oracledb._numpy_handlers import (  # pyright: ignore[reportPrivateUsage]
+                numpy_converter_out,
+            )
 
             return numpy_converter_out(value)
 
@@ -200,7 +202,9 @@ class OracleOutputConverter(CachedOutputConverter):
         import numpy as np
 
         if isinstance(value, np.ndarray):
-            from sqlspec.adapters.oracledb._numpy_handlers import numpy_converter_in
+            from sqlspec.adapters.oracledb._numpy_handlers import (  # pyright: ignore[reportPrivateUsage]
+                numpy_converter_in,
+            )
 
             return numpy_converter_in(value)
 

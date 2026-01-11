@@ -4,8 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sqlspec.extensions.starlette._state import SQLSpecConfigState
-from sqlspec.extensions.starlette._utils import get_connection_from_request, get_or_create_session
+from sqlspec.extensions.starlette import SQLSpecConfigState, get_connection_from_request, get_or_create_session
 
 
 def test_get_connection_from_request() -> None:

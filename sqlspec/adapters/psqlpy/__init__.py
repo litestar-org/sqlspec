@@ -2,7 +2,8 @@
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyConnectionParams, PsqlpyPoolParams
-from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, PsqlpyExceptionHandler, psqlpy_statement_config
+from sqlspec.adapters.psqlpy.core import default_statement_config
+from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, PsqlpyExceptionHandler
 
 __all__ = (
     "PsqlpyConfig",
@@ -12,5 +13,5 @@ __all__ = (
     "PsqlpyDriver",
     "PsqlpyExceptionHandler",
     "PsqlpyPoolParams",
-    "psqlpy_statement_config",
+    "default_statement_config",
 )

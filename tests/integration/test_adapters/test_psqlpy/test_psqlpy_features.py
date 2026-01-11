@@ -1,7 +1,5 @@
 """Test PSQLPy-specific features and capabilities."""
 
-from __future__ import annotations
-
 import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyDriver

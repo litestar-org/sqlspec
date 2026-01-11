@@ -3,8 +3,7 @@
 from collections.abc import Iterable
 from typing import Any
 
-from sqlspec.observability import ObservabilityConfig
-from sqlspec.observability._observer import StatementEvent, StatementObserver
+from sqlspec.observability import ObservabilityConfig, StatementEvent, StatementObserver, resolve_db_system
 from sqlspec.typing import Counter, Histogram
 from sqlspec.utils.module_loader import ensure_prometheus
 
@@ -22,7 +21,7 @@ class PrometheusStatementObserver:
         namespace: str = "sqlspec",
         subsystem: str = "driver",
         registry: Any | None = None,
-        label_names: Iterable[str] = ("driver", "operation"),
+        label_names: Iterable[str] = ("db_system", "operation"),
         duration_buckets: tuple[float, ...] | None = None,
     ) -> None:
         self._label_names = tuple(label_names)
@@ -67,7 +66,12 @@ class PrometheusStatementObserver:
         values: list[str] = []
         payload = event.as_dict()
         for name in self._label_names:
-            if name == "driver":
+            if name == "db_system":
+                db_system = event.db_system
+                if db_system is None:
+                    db_system = resolve_db_system(event.adapter)
+                values.append(db_system)
+            elif name == "driver":
                 values.append(event.driver)
             elif name == "operation":
                 values.append(event.operation or "EXECUTE")
@@ -87,7 +91,7 @@ def enable_metrics(
     namespace: str = "sqlspec",
     subsystem: str = "driver",
     registry: Any | None = None,
-    label_names: Iterable[str] = ("driver", "operation"),
+    label_names: Iterable[str] = ("db_system", "operation"),
     duration_buckets: tuple[float, ...] | None = None,
 ) -> ObservabilityConfig:
     """Attach a Prometheus-backed statement observer to the provided config."""

@@ -1,7 +1,7 @@
 """AsyncPG event queue store for PostgreSQL JSONB storage."""
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("AsyncpgEventQueueStore",)
 
@@ -31,7 +31,7 @@ class AsyncpgEventQueueStore(BaseEventQueueStore[AsyncpgConfig]):
 
     __slots__ = ()
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
         """Return PostgreSQL-native column types.
 
         Returns:

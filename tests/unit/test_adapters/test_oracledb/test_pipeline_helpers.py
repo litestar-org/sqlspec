@@ -8,9 +8,10 @@ import pytest
 pytest.importorskip("oracledb")
 
 from sqlspec import StatementStack
-from sqlspec.adapters.oracledb._typing import OracleAsyncConnection
-from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, oracledb_statement_config
-from sqlspec.driver._common import StackExecutionObserver
+from sqlspec.adapters.oracledb import OracleAsyncConnection
+from sqlspec.adapters.oracledb.core import build_pipeline_stack_result, default_statement_config
+from sqlspec.adapters.oracledb.driver import OracleAsyncDriver
+from sqlspec.driver import StackExecutionObserver
 
 
 class _StubAsyncConnection:
@@ -59,7 +60,7 @@ class _StubColumn:
 
 def _make_driver() -> OracleAsyncDriver:
     connection = cast("OracleAsyncConnection", _StubAsyncConnection())
-    return OracleAsyncDriver(connection=connection, statement_config=oracledb_statement_config, driver_features={})
+    return OracleAsyncDriver(connection=connection, statement_config=default_statement_config, driver_features={})
 
 
 def test_stack_native_blocker_detects_arrow() -> None:
@@ -86,7 +87,14 @@ def test_pipeline_result_to_stack_result_uses_rowcount_attr() -> None:
     compiled = driver._prepare_pipeline_operation(stack.operations[0])
     pipeline_result = _StubPipelineResult(rows=[(1,)], columns=[_StubColumn("VALUE")], warning="warn", rowcount=7)
 
-    stack_result = driver._pipeline_result_to_stack_result(compiled, pipeline_result)
+    stack_result = build_pipeline_stack_result(
+        compiled.statement,
+        compiled.method,
+        compiled.returns_rows,
+        compiled.parameters,
+        pipeline_result,
+        driver.driver_features,
+    )
 
     assert stack_result.rows_affected == 7
     assert stack_result.warning == "warn"
@@ -102,7 +110,14 @@ def test_pipeline_result_execute_many_rowcount_fallback() -> None:
     compiled = driver._prepare_pipeline_operation(stack.operations[0])
     pipeline_result = _StubPipelineResult()
 
-    stack_result = driver._pipeline_result_to_stack_result(compiled, pipeline_result)
+    stack_result = build_pipeline_stack_result(
+        compiled.statement,
+        compiled.method,
+        compiled.returns_rows,
+        compiled.parameters,
+        pipeline_result,
+        driver.driver_features,
+    )
 
     assert stack_result.rows_affected == 2
 

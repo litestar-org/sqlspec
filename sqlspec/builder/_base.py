@@ -1,14 +1,14 @@
-# ruff: noqa: FBT003
 """Base query builder with validation and parameter binding.
 
 Provides abstract base classes and core functionality for SQL query builders.
 """
 
 import hashlib
+import re
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from collections.abc import Callable, Iterable, Mapping
+from typing import Any, NoReturn, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -22,6 +22,7 @@ from sqlspec.core import (
     SQL,
     ParameterStyle,
     ParameterStyleConfig,
+    SQLResult,
     StatementConfig,
     get_cache,
     get_cache_config,
@@ -31,17 +32,61 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
 
-if TYPE_CHECKING:
-    from sqlspec.core import SQLResult
-
-__all__ = ("QueryBuilder", "SafeQuery")
+__all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
+PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
+
+
+class _ExpressionParameterizer:
+    __slots__ = ("_builder",)
+
+    def __init__(self, builder: "QueryBuilder") -> None:
+        self._builder = builder
+
+    def __call__(self, node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Literal):
+            if node.this in {True, False, None}:
+                return node
+
+            parent = node.parent
+            if isinstance(parent, exp.Array) and node.find_ancestor(VectorDistance) is not None:
+                return node
+
+            value = node.this
+            if node.is_number and isinstance(node.this, str):
+                try:
+                    value = float(node.this) if "." in node.this or "e" in node.this.lower() else int(node.this)
+                except ValueError:
+                    value = node.this
+
+            param_name = self._builder.add_parameter_for_expression(value, context="where")
+            return exp.Placeholder(this=param_name)
+        return node
+
+
+class _PlaceholderReplacer:
+    __slots__ = ("_param_mapping",)
+
+    def __init__(self, param_mapping: dict[str, str]) -> None:
+        self._param_mapping = param_mapping
+
+    def __call__(self, node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Placeholder) and str(node.this) in self._param_mapping:
+            return exp.Placeholder(this=self._param_mapping[str(node.this)])
+        return node
+
+
+def _unquote_identifier(node: exp.Expression) -> exp.Expression:
+    if isinstance(node, exp.Identifier):
+        node.set("quoted", False)
+    return node
+
 
 logger = get_logger(__name__)
 
 
-class SafeQuery:
+class BuiltQuery:
     """SQL query with bound parameters."""
 
     __slots__ = ("dialect", "parameters", "sql")
@@ -53,10 +98,10 @@ class SafeQuery:
 
     def __repr__(self) -> str:
         parameter_keys = sorted(self.parameters.keys())
-        return f"SafeQuery(sql={self.sql!r}, parameters={parameter_keys!r}, dialect={self.dialect!r})"
+        return f"BuiltQuery(sql={self.sql!r}, parameters={parameter_keys!r}, dialect={self.dialect!r})"
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SafeQuery):
+        if not isinstance(other, BuiltQuery):
             return NotImplemented
         return self.sql == other.sql and self.parameters == other.parameters and self.dialect == other.dialect
 
@@ -110,6 +155,23 @@ class QueryBuilder(ABC):
         self._with_ctes: dict[str, exp.CTE] = {}
         self._lock_targets_quoted = False
         self._merge_target_quoted = False
+
+    @classmethod
+    def _parse_query_builder_kwargs(
+        cls, kwargs: "dict[str, Any]"
+    ) -> "tuple[DialectType | None, dict[str, dict[str, str]] | None, bool, bool, bool, bool]":
+        dialect = kwargs.pop("dialect", None)
+        schema = kwargs.pop("schema", None)
+        enable_optimization = kwargs.pop("enable_optimization", True)
+        optimize_joins = kwargs.pop("optimize_joins", True)
+        optimize_predicates = kwargs.pop("optimize_predicates", True)
+        simplify_expressions = kwargs.pop("simplify_expressions", True)
+
+        if kwargs:
+            unknown = ", ".join(sorted(kwargs.keys()))
+            cls._raise_sql_builder_error(f"Unexpected QueryBuilder arguments: {unknown}")
+
+        return (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions)
 
     def _initialize_expression(self) -> None:
         """Initialize the base expression. Called after __init__."""
@@ -306,6 +368,18 @@ class QueryBuilder(ABC):
         self._parameters[param_name] = value
         return param_name
 
+    def add_parameter_for_expression(self, value: Any, context: str | None = None) -> str:
+        """Add a parameter for expression parameterization.
+
+        Args:
+            value: The value of the parameter.
+            context: Optional context hint for parameter naming.
+
+        Returns:
+            Parameter placeholder name.
+        """
+        return self._add_parameter(value, context=context)
+
     def _parameterize_expression(self, expression: exp.Expression) -> exp.Expression:
         """Replace literal values in an expression with bound parameters.
 
@@ -320,27 +394,7 @@ class QueryBuilder(ABC):
             A new expression with literals replaced by parameter placeholders
         """
 
-        def replacer(node: exp.Expression) -> exp.Expression:
-            if isinstance(node, exp.Literal):
-                if node.this in {True, False, None}:
-                    return node
-
-                parent = node.parent
-                if isinstance(parent, exp.Array) and node.find_ancestor(VectorDistance) is not None:
-                    return node
-
-                value = node.this
-                if node.is_number and isinstance(node.this, str):
-                    try:
-                        value = float(node.this) if "." in node.this or "e" in node.this.lower() else int(node.this)
-                    except ValueError:
-                        value = node.this
-
-                param_name = self._add_parameter(value, context="where")
-                return exp.Placeholder(this=param_name)
-            return node
-
-        return expression.transform(replacer, copy=False)
+        return expression.transform(_ExpressionParameterizer(self), copy=False)
 
     def add_parameter(self: Self, value: Any, name: str | None = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
@@ -366,6 +420,52 @@ class QueryBuilder(ABC):
         param_name = f"param_{self._parameter_counter}"
         self._parameters[param_name] = value
         return self, param_name
+
+    def load_parameters(self, parameters: "Mapping[str, Any]") -> None:
+        """Load a parameter mapping into the builder.
+
+        Args:
+            parameters: Mapping of parameter names to values.
+
+        Raises:
+            SQLBuilderError: If a parameter name already exists on the builder.
+        """
+        if not parameters:
+            return
+
+        for name, value in parameters.items():
+            if name in self._parameters:
+                self._raise_sql_builder_error(f"Parameter name '{name}' already exists.")
+            self._parameters[name] = value
+            self._update_parameter_counter(name)
+
+    def load_ctes(self, ctes: "Iterable[exp.CTE]") -> None:
+        """Load SQLGlot CTE nodes into the builder.
+
+        Args:
+            ctes: Iterable of CTE expressions to register.
+
+        Raises:
+            SQLBuilderError: If a CTE alias is missing or duplicated.
+        """
+        for cte in ctes:
+            alias = self._resolve_cte_alias(cte)
+            if alias in self._with_ctes:
+                self._raise_sql_builder_error(f"CTE '{alias}' already exists.")
+            self._with_ctes[alias] = cte
+
+    def _resolve_cte_alias(self, cte: exp.CTE) -> str:
+        alias_name = cte.alias_or_name
+        if not alias_name:
+            self._raise_sql_builder_error("CTE alias is required.")
+        return str(alias_name)
+
+    def _update_parameter_counter(self, name: str) -> None:
+        match = PARAMETER_INDEX_PATTERN.match(name)
+        if not match:
+            return
+        index = int(match.group("index"))
+        self._parameter_counter = max(self._parameter_counter, index)
 
     def _generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name when collision occurs.
@@ -443,12 +543,7 @@ class QueryBuilder(ABC):
             Updated expression with new placeholder names
         """
 
-        def placeholder_replacer(node: exp.Expression) -> exp.Expression:
-            if isinstance(node, exp.Placeholder) and str(node.this) in param_mapping:
-                return exp.Placeholder(this=param_mapping[str(node.this)])
-            return node
-
-        return expression.transform(placeholder_replacer, copy=False)
+        return expression.transform(_PlaceholderReplacer(param_mapping), copy=False)
 
     def _generate_builder_cache_key(self, config: "StatementConfig | None" = None) -> str:
         """Generate cache key based on builder state and configuration.
@@ -513,7 +608,7 @@ class QueryBuilder(ABC):
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
 
-    def build(self, dialect: DialectType = None) -> "SafeQuery":
+    def build(self, dialect: DialectType = None) -> "BuiltQuery":
         """Builds the SQL query string and parameters.
 
         Args:
@@ -521,7 +616,7 @@ class QueryBuilder(ABC):
                     instead of the builder's default dialect.
 
         Returns:
-            SafeQuery: A dataclass containing the SQL string and parameters.
+            BuiltQuery: A dataclass containing the SQL string and parameters.
 
         Examples:
             # Use builder's default dialect
@@ -555,7 +650,7 @@ class QueryBuilder(ABC):
             err_msg = f"Error generating SQL from expression: {e!s}"
             self._raise_sql_builder_error(err_msg, e)
 
-        return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=dialect or self.dialect)
+        return BuiltQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=dialect or self.dialect)
 
     def to_sql(self, show_parameters: bool = False, dialect: DialectType = None) -> str:
         """Return SQL string with optional parameter substitution.
@@ -636,7 +731,7 @@ class QueryBuilder(ABC):
         )
 
         cache = get_cache()
-        cached_optimized = cache.get("optimized", cache_key)
+        cached_optimized = cache.get_optimized(cache_key)
         if cached_optimized:
             return cast("exp.Expression", cached_optimized)
 
@@ -644,7 +739,7 @@ class QueryBuilder(ABC):
             optimized = optimize(
                 expression, schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
-            cache.put("optimized", cache_key, optimized)
+            cache.put_optimized(cache_key, optimized)
         except Exception:
             logger.debug("Expression optimization failed, using original expression")
             return expression
@@ -667,12 +762,12 @@ class QueryBuilder(ABC):
         cache_key_str = self._generate_builder_cache_key(config)
 
         cache = get_cache()
-        cached_sql = cache.get("builder", cache_key_str)
+        cached_sql = cache.get_builder(cache_key_str)
         if cached_sql is not None:
             return cast("SQL", cached_sql)
 
         sql_statement = self._to_statement(config)
-        cache.put("builder", cache_key_str, sql_statement)
+        cache.put_builder(cache_key_str, sql_statement)
 
         return sql_statement
 
@@ -722,7 +817,7 @@ class QueryBuilder(ABC):
         """Extract parameters for SQL statement creation.
 
         Args:
-            raw_parameters: Raw parameter data from SafeQuery
+            raw_parameters: Raw parameter data from BuiltQuery
 
         Returns:
             Tuple of (kwargs, parameters) for SQL statement construction
@@ -793,12 +888,7 @@ class QueryBuilder(ABC):
     def _unquote_identifiers_for_oracle(self, expression: exp.Expression) -> exp.Expression:
         """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
 
-        def _strip(node: exp.Expression) -> exp.Expression:
-            if isinstance(node, exp.Identifier):
-                node.set("quoted", False)
-            return node
-
-        return expression.copy().transform(_strip, copy=False)
+        return expression.copy().transform(_unquote_identifier, copy=False)
 
     def _strip_lock_identifier_quotes(self, sql_string: str) -> str:
         for keyword in ("FOR UPDATE OF ", "FOR SHARE OF "):
@@ -842,7 +932,7 @@ class QueryBuilder(ABC):
         copy: bool = True,
         optimize_expression: bool | None = None,
         dialect: DialectType | None = None,
-    ) -> "SafeQuery":
+    ) -> "BuiltQuery":
         """Compile a pre-built expression with optional caching and parameters.
 
         Designed for hot paths that construct an AST once and reuse it with
@@ -858,14 +948,14 @@ class QueryBuilder(ABC):
             dialect: Optional dialect override for SQL generation.
 
         Returns:
-            SafeQuery containing SQL and parameters.
+            BuiltQuery containing SQL and parameters.
         """
 
         expr: exp.Expression | None = None
 
         if cache_key is not None:
             cache = get_cache()
-            cached_expr = cache.get("static_expression", cache_key)
+            cached_expr = cache.get_expression(cache_key)
             if cached_expr is None:
                 if expression_factory is None:
                     msg = "expression_factory is required when cache_key is provided"
@@ -877,7 +967,7 @@ class QueryBuilder(ABC):
                 should_optimize = self.enable_optimization if optimize_expression is None else optimize_expression
                 if should_optimize:
                     expr_to_store = self._optimize_expression(expr_to_store)
-                cache.put("static_expression", cache_key, expr_to_store)
+                cache.put_expression(cache_key, expr_to_store)
                 cached_expr = expr_to_store
             expr = cached_expr.copy() if copy else cached_expr
         else:
@@ -895,6 +985,38 @@ class QueryBuilder(ABC):
         target_dialect = str(dialect) if dialect else self.dialect_name
         identify = self._should_identify(target_dialect)
         sql_string = expr.sql(dialect=target_dialect, pretty=True, identify=identify)
-        return SafeQuery(
+        return BuiltQuery(
             sql=sql_string, parameters=parameters.copy() if parameters else {}, dialect=dialect or self.dialect
         )
+
+
+class ExpressionBuilder(QueryBuilder):
+    """Builder wrapper for a pre-parsed SQLGlot expression."""
+
+    __slots__ = ()
+
+    def __init__(self, expression: exp.Expression, **kwargs: Any) -> None:
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_query_builder_kwargs(kwargs)
+        )
+        super().__init__(
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
+        if not is_expression(expression):
+            self._raise_invalid_expression_type(expression)
+        self._expression = expression
+
+    def _create_base_expression(self) -> exp.Expression:
+        if self._expression is None:
+            msg = "ExpressionBuilder requires an expression at construction."
+            self._raise_sql_builder_error(msg)
+        return self._expression
+
+    @property
+    def _expected_result_type(self) -> "type[SQLResult]":
+        return SQLResult

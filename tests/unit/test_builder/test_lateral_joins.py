@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec import sql
-from sqlspec.builder._select import Select
+from sqlspec.builder import Select
 
 if TYPE_CHECKING:
     pass

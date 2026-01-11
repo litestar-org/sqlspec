@@ -38,6 +38,13 @@ Guidelines for writing code
 - All code should be tested. This is enforced via `pytest <https://docs.pytest.org/en/stable/>`_.
 - All code should be properly formatted. This is enforced via `black <https://black.readthedocs.io/en/stable/>`_ and `Ruff <https://beta.ruff.rs/docs/>`_.
 
+Logging
+++++++++
+
+- Logger names must follow the ``sqlspec.<module>`` hierarchy.
+- Always obtain loggers via ``sqlspec.utils.logging.get_logger`` to ensure filters are attached.
+- Use static event names in structured logs and include context fields instead of dynamic message strings.
+
 Writing and running tests
 +++++++++++++++++++++++++
 

@@ -1,1 +1,0 @@
-"""SQLSpec usage skills package."""

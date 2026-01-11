@@ -5,6 +5,7 @@ from sqlspec.adapters.psycopg.config import (
     PsycopgPoolParams,
     PsycopgSyncConfig,
 )
+from sqlspec.adapters.psycopg.core import default_statement_config
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
     PsycopgAsyncDriver,
@@ -12,7 +13,6 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgSyncCursor,
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
-    psycopg_statement_config,
 )
 
 __all__ = (
@@ -28,5 +28,5 @@ __all__ = (
     "PsycopgSyncCursor",
     "PsycopgSyncDriver",
     "PsycopgSyncExceptionHandler",
-    "psycopg_statement_config",
+    "default_statement_config",
 )

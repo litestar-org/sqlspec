@@ -12,7 +12,7 @@ from google.genai import types
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 
-logger = get_logger("extensions.adk.converters")
+logger = get_logger("sqlspec.extensions.adk.converters")
 
 __all__ = ("event_to_record", "record_to_event", "record_to_session", "session_to_record")
 

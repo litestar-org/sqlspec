@@ -297,8 +297,8 @@ class AiosqliteConnectionPool:
             if is_shared_cache:
                 self._wal_initialized = True
 
-        except Exception as e:
-            logger.warning("Failed to configure connection: %s", e)
+        except Exception:
+            logger.exception("Failed to configure connection")
             await connection.execute("PRAGMA foreign_keys = ON")
             await connection.execute("PRAGMA busy_timeout = 30000")
             await connection.commit()
@@ -309,7 +309,6 @@ class AiosqliteConnectionPool:
         async with self._lock:
             self._connection_registry[pool_connection.id] = pool_connection
 
-        logger.debug("Created aiosqlite connection: %s", pool_connection.id)
         return pool_connection
 
     async def _claim_if_healthy(self, connection: AiosqlitePoolConnection) -> bool:
@@ -326,36 +325,35 @@ class AiosqliteConnectionPool:
             True if connection was claimed
         """
         if connection.idle_time > self._idle_timeout:
-            logger.debug("Connection %s exceeded idle timeout, retiring", connection.id)
-            await self._retire_connection(connection)
+            await self._retire_connection(connection, reason="idle_timeout")
             return False
 
         if not connection.is_healthy:
-            logger.debug("Connection %s marked unhealthy, retiring", connection.id)
-            await self._retire_connection(connection)
+            await self._retire_connection(connection, reason="unhealthy")
             return False
 
         if connection.idle_time > self._health_check_interval:
             try:
                 is_alive = await asyncio.wait_for(connection.is_alive(), timeout=self._operation_timeout)
                 if not is_alive:
-                    logger.debug("Connection %s failed health check, retiring", connection.id)
-                    await self._retire_connection(connection)
+                    await self._retire_connection(connection, reason="health_check_failed")
                     return False
             except asyncio.TimeoutError:
-                logger.debug("Connection %s health check timed out, retiring", connection.id)
-                await self._retire_connection(connection)
+                await self._retire_connection(connection, reason="health_check_timeout")
                 return False
 
         connection.mark_as_in_use()
         return True
 
-    async def _retire_connection(self, connection: AiosqlitePoolConnection) -> None:
+    async def _retire_connection(self, connection: AiosqlitePoolConnection, *, reason: str | None = None) -> None:
         """Retire a connection from the pool.
 
         Args:
             connection: Connection to retire
+            reason: Optional reason for retirement
         """
+        if reason:
+            logger.debug("Retiring connection %s", connection.id, extra={"reason": reason})
         async with self._lock:
             self._connection_registry.pop(connection.id, None)
 
@@ -504,7 +502,6 @@ class AiosqliteConnectionPool:
             await asyncio.wait_for(connection.reset(), timeout=self._operation_timeout)
             connection.mark_as_idle()
             self._queue.put_nowait(connection)
-            logger.debug("Released connection back to pool: %s", connection.id)
         except Exception as e:
             logger.warning("Failed to reset connection %s during release: %s", connection.id, e)
             connection.mark_unhealthy()
@@ -534,5 +531,3 @@ class AiosqliteConnectionPool:
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     logger.warning("Error closing connection %s: %s", connections[i].id, result)
-
-        logger.debug("Aiosqlite connection pool closed")

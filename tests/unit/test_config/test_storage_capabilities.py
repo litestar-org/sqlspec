@@ -1,24 +1,17 @@
 from contextlib import AbstractContextManager, contextmanager
-from typing import Any
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.config import NoPoolSyncConfig
-from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDataDictionaryBase
+from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
+from tests.conftest import requires_interpreted
+
+pytestmark = requires_interpreted
 
 
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-pytestmark = pytest.mark.skipif(_is_compiled(), reason="Test requires interpreted subclasses of compiled driver bases.")
+if TYPE_CHECKING:
+    _NoPoolSyncConfigBase = NoPoolSyncConfig[Any, "_DummyDriver"]
+else:
+    _NoPoolSyncConfigBase = NoPoolSyncConfig
 
 
 class _DummyDriver(SyncDriverAdapterBase):
@@ -51,20 +44,20 @@ class _DummyDriver(SyncDriverAdapterBase):
     def commit(self) -> None:  # type: ignore[override]
         raise NotImplementedError
 
-    def _try_special_handling(self, cursor: Any, statement: Any):  # type: ignore[override]
+    def dispatch_special_handling(self, cursor: Any, statement: Any):  # type: ignore[override]
         return None
 
-    def _execute_script(self, cursor: Any, statement: Any):  # type: ignore[override]
+    def dispatch_execute_script(self, cursor: Any, statement: Any):  # type: ignore[override]
         raise NotImplementedError
 
-    def _execute_many(self, cursor: Any, statement: Any):  # type: ignore[override]
+    def dispatch_execute_many(self, cursor: Any, statement: Any):  # type: ignore[override]
         raise NotImplementedError
 
-    def _execute_statement(self, cursor: Any, statement: Any):  # type: ignore[override]
+    def dispatch_execute(self, cursor: Any, statement: Any):  # type: ignore[override]
         raise NotImplementedError
 
 
-class _CapabilityConfig(NoPoolSyncConfig[Any, "_DummyDriver"]):
+class _CapabilityConfig(_NoPoolSyncConfigBase):
     driver_type = _DummyDriver
     connection_type = object
     supports_native_arrow_export = True

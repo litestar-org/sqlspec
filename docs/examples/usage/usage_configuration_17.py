@@ -25,7 +25,7 @@ def test_cache_statistics() -> None:
         stats = get_cache_statistics()
         # end-example
         assert isinstance(stats, dict)
-        assert "multi_level" in stats
+        assert "namespaced" in stats
 
         # Log statistics (logs to configured logger)
         log_cache_stats()

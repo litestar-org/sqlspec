@@ -25,7 +25,6 @@ from sqlspec.protocols import (
     CursorMetadataProtocol,
     DictProtocol,
     HasAddListenerProtocol,
-    HasArrowStoreProtocol,
     HasConfigProtocol,
     HasConnectionConfigProtocol,
     HasDatabaseUrlAndBindKeyProtocol,
@@ -42,7 +41,6 @@ from sqlspec.protocols import (
     HasNameProtocol,
     HasNotifiesProtocol,
     HasParameterBuilderProtocol,
-    HasReadArrowProtocol,
     HasRowcountProtocol,
     HasSQLGlotExpressionProtocol,
     HasSqliteErrorProtocol,
@@ -56,7 +54,6 @@ from sqlspec.protocols import (
     HasValueProtocol,
     HasWhereProtocol,
     NotificationProtocol,
-    ObjectStoreProtocol,
     PipelineCapableProtocol,
     QueryResultProtocol,
     ReadableProtocol,
@@ -66,7 +63,6 @@ from sqlspec.protocols import (
     SupportsCloseProtocol,
     SupportsDtypeStrProtocol,
     SupportsJsonTypeProtocol,
-    ToSchemaProtocol,
     WithMethodProtocol,
 )
 from sqlspec.typing import (
@@ -87,13 +83,11 @@ if TYPE_CHECKING:
     from typing import TypeGuard
 
     from sqlspec._typing import AttrsInstanceStub, BaseModelStub, DTODataStub, StructStub
-    from sqlspec.builder import Select
-    from sqlspec.core import LimitOffsetFilter, StatementFilter
+    from sqlspec.core import StatementFilter
     from sqlspec.core.parameters import TypedParameter
     from sqlspec.typing import SupportedSchemaModel
 
 __all__ = (
-    "can_convert_to_schema",
     "dataclass_to_dict",
     "expression_has_limit",
     "extract_dataclass_fields",
@@ -162,7 +156,6 @@ __all__ = (
     "is_dto_data",
     "is_expression",
     "is_iterable_parameters",
-    "is_limit_offset_filter",
     "is_local_path",
     "is_msgspec_struct",
     "is_msgspec_struct_with_field",
@@ -179,12 +172,10 @@ __all__ = (
     "is_schema_or_dict_without_field",
     "is_schema_with_field",
     "is_schema_without_field",
-    "is_select_builder",
     "is_statement_filter",
     "is_string_literal",
     "is_typed_dict",
     "is_typed_parameter",
-    "supports_arrow_native",
     "supports_arrow_results",
     "supports_async_delete",
     "supports_async_read_bytes",
@@ -322,11 +313,7 @@ def has_type_code(obj: Any) -> "TypeGuard[HasTypeCodeProtocol]":
 
 def has_sqlstate(obj: Any) -> "TypeGuard[HasSqlStateProtocol]":
     """Check if an exception exposes sqlstate."""
-    try:
-        _ = obj.sqlstate
-    except Exception:
-        return False
-    return True
+    return isinstance(obj, HasSqlStateProtocol)
 
 
 def has_sqlite_error(obj: Any) -> "TypeGuard[HasSqliteErrorProtocol]":
@@ -407,39 +394,7 @@ def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":
     """
     from sqlspec.core.filters import StatementFilter as FilterProtocol
 
-    if isinstance(obj, FilterProtocol):
-        return True
-    append_to_statement = getattr(obj, "append_to_statement", None)
-    get_cache_key = getattr(obj, "get_cache_key", None)
-    return callable(append_to_statement) and callable(get_cache_key)
-
-
-def is_limit_offset_filter(obj: Any) -> "TypeGuard[LimitOffsetFilter]":
-    """Check if an object is a LimitOffsetFilter.
-
-    Args:
-        obj: The object to check
-
-    Returns:
-        True if the object is a LimitOffsetFilter, False otherwise
-    """
-    from sqlspec.core import LimitOffsetFilter
-
-    return isinstance(obj, LimitOffsetFilter)
-
-
-def is_select_builder(obj: Any) -> "TypeGuard[Select]":
-    """Check if an object is a Select.
-
-    Args:
-        obj: The object to check
-
-    Returns:
-        True if the object is a Select, False otherwise
-    """
-    from sqlspec.builder import Select
-
-    return isinstance(obj, Select)
+    return isinstance(obj, FilterProtocol)
 
 
 def is_dict_row(row: Any) -> "TypeGuard[dict[str, Any]]":
@@ -478,20 +433,6 @@ def has_with_method(obj: Any) -> "TypeGuard[WithMethodProtocol]":
         True if the object has a callable with_ method, False otherwise
     """
     return isinstance(obj, WithMethodProtocol)
-
-
-def can_convert_to_schema(obj: Any) -> "TypeGuard[ToSchemaProtocol]":
-    """Check if an object has to_schema capabilities.
-
-    This provides better DX than isinstance checks for driver classes.
-
-    Args:
-        obj: The object to check (typically a driver instance)
-
-    Returns:
-        True if the object has to_schema method, False otherwise
-    """
-    return isinstance(obj, ToSchemaProtocol)
 
 
 def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
@@ -943,7 +884,7 @@ def has_dict_attribute(obj: Any) -> "TypeGuard[DictProtocol]":
     Returns:
         bool
     """
-    return hasattr(obj, "__dict__")
+    return isinstance(obj, DictProtocol)
 
 
 def extract_dataclass_fields(
@@ -1218,10 +1159,9 @@ def get_value_attribute(obj: Any) -> Any:
     Returns:
         The value attribute or the object itself if no value attribute
     """
-    try:
+    if isinstance(obj, HasValueProtocol):
         return obj.value
-    except AttributeError:
-        return obj
+    return obj
 
 
 def get_param_style_and_name(param: Any) -> "tuple[str | None, str | None]":
@@ -1276,7 +1216,7 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[TypedParameter]":
     Returns:
         True if the object is a TypedParameter, False otherwise
     """
-    from sqlspec.core.parameters._types import TypedParameter
+    from sqlspec.core.parameters import TypedParameter
 
     return isinstance(obj, TypedParameter)
 
@@ -1354,31 +1294,6 @@ def is_local_path(uri: str) -> bool:
         return True
 
     return "/" in uri or "\\" in uri
-
-
-def supports_arrow_native(backend: Any) -> bool:
-    """Check if storage backend supports native Arrow operations.
-
-    Some storage backends (like certain obstore stores) have native
-    Arrow read/write support, which is faster than going through bytes.
-
-    Args:
-        backend: Storage backend instance to check.
-
-    Returns:
-        True if backend has native read_arrow/write_arrow methods.
-
-    Examples:
-        >>> from sqlspec.storage.backends.obstore import ObStoreBackend
-        >>> backend = ObStoreBackend("file:///tmp")
-        >>> supports_arrow_native(backend)
-        False
-    """
-    if not isinstance(backend, ObjectStoreProtocol):
-        return False
-    if not isinstance(backend, HasArrowStoreProtocol):
-        return False
-    return isinstance(backend.store, HasReadArrowProtocol)
 
 
 def supports_arrow_results(obj: Any) -> "TypeGuard[SupportsArrowResults]":

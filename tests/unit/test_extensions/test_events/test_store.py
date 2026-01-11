@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.exceptions import EventChannelError
-from sqlspec.extensions.events._store import normalize_event_channel_name, normalize_queue_table_name
+from sqlspec.extensions.events import normalize_event_channel_name, normalize_queue_table_name
 
 
 def test_normalize_queue_table_name_simple() -> None:

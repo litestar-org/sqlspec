@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from sqlspec.extensions.litestar.store import BaseSQLSpecStore
     from sqlspec.migrations.context import MigrationContext
 
-logger = get_logger("migrations.litestar.session")
+logger = get_logger("sqlspec.migrations.litestar.session")
 
 __all__ = ("down", "up")
 

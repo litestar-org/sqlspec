@@ -2,33 +2,31 @@
 
 from sqlspec.driver._async import AsyncDataDictionaryBase, AsyncDriverAdapterBase
 from sqlspec.driver._common import (
-    ColumnMetadata,
     CommonDriverAttributesMixin,
+    DataDictionaryDialectMixin,
     DataDictionaryMixin,
     ExecutionResult,
-    ForeignKeyMetadata,
-    IndexMetadata,
     StackExecutionObserver,
-    VersionInfo,
     describe_stack_statement,
+    hash_stack_operations,
 )
+from sqlspec.driver._sql_helpers import convert_to_dialect
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 
 __all__ = (
     "AsyncDataDictionaryBase",
     "AsyncDriverAdapterBase",
-    "ColumnMetadata",
     "CommonDriverAttributesMixin",
+    "DataDictionaryDialectMixin",
     "DataDictionaryMixin",
     "DriverAdapterProtocol",
     "ExecutionResult",
-    "ForeignKeyMetadata",
-    "IndexMetadata",
     "StackExecutionObserver",
     "SyncDataDictionaryBase",
     "SyncDriverAdapterBase",
-    "VersionInfo",
+    "convert_to_dialect",
     "describe_stack_statement",
+    "hash_stack_operations",
 )
 
 DriverAdapterProtocol = SyncDriverAdapterBase | AsyncDriverAdapterBase

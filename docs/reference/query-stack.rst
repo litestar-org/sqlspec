@@ -46,12 +46,12 @@ StackResult
 Driver APIs
 ===========
 
-.. currentmodule:: sqlspec.driver._async
+.. currentmodule:: sqlspec.driver
 
 .. automethod:: AsyncDriverAdapterBase.execute_stack
    :noindex:
 
-.. currentmodule:: sqlspec.driver._sync
+.. currentmodule:: sqlspec.driver
 
 .. automethod:: SyncDriverAdapterBase.execute_stack
    :noindex:

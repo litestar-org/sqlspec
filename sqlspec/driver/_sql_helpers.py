@@ -108,7 +108,7 @@ def convert_to_dialect(
     return generate_sql_safely(parsed_expression, target_dialect, pretty)
 
 
-def raise_statement_parse_error() -> NoReturn:
+def raise_statement_parse_error() -> "NoReturn":
     """Raise error for unparsable statements.
 
     Raises:
@@ -119,7 +119,7 @@ def raise_statement_parse_error() -> NoReturn:
     raise SQLConversionError(msg)
 
 
-def raise_parse_error(e: Exception) -> NoReturn:
+def raise_parse_error(e: Exception) -> "NoReturn":
     """Raise error for parsing failures.
 
     Args:
@@ -133,7 +133,7 @@ def raise_parse_error(e: Exception) -> NoReturn:
     raise SQLConversionError(error_msg) from e
 
 
-def raise_conversion_error(dialect: "DialectType | None", e: Exception) -> NoReturn:
+def raise_conversion_error(dialect: "DialectType | None", e: Exception) -> "NoReturn":
     """Raise error for conversion failures.
 
     Args:

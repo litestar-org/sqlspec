@@ -22,6 +22,8 @@ def test_cached_static_expression_reuses_factory() -> None:
     builder = sql.select()
 
     first = builder.build_static_expression(cache_key="static:test", expression_factory=factory, parameters={"p": 1})
+    assert cache.get_expression("static:test") is not None
+    assert cache.get_statement("static:test") is None
 
     second = builder.build_static_expression(cache_key="static:test", expression_factory=factory, parameters={"p": 2})
 
@@ -42,6 +44,7 @@ def test_cached_static_expression_respects_copy_flag() -> None:
     result = builder.build_static_expression(
         cache_key="static:copy", expression_factory=lambda: base_expr, copy=True, parameters={"val": 123}
     )
+    assert cache.get_expression("static:copy") is not None
 
     # Cached expression should remain unchanged when caller mutates the original
     base_expr.set("from", exp.from_("tbl"))

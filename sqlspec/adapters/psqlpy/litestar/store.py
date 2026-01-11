@@ -4,12 +4,10 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
-logger = get_logger("adapters.psqlpy.litestar.store")
 
 __all__ = ("PsqlpyStore",)
 
@@ -94,7 +92,7 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         sql = self._get_create_table_sql()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -182,7 +180,7 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
         async with self._config.provide_connection() as conn:
             await conn.execute(sql)
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+        self._log_delete_all()
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -268,5 +266,5 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
             rows = query_result.result()
             count = len(rows)
             if count > 0:
-                logger.debug("Cleaned up %d expired sessions", count)
+                self._log_delete_expired(count)
             return count

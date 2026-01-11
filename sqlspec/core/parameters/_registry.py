@@ -1,6 +1,6 @@
 """Driver parameter profile registry and StatementConfig factory."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlspec.exceptions
@@ -20,7 +20,7 @@ __all__ = (
 _DEFAULT_JSON_SERIALIZER: Callable[[Any], str] = to_json
 _DEFAULT_JSON_DESERIALIZER: Callable[[str], Any] = from_json
 
-DRIVER_PARAMETER_PROFILES: dict[str, DriverParameterProfile] = {}
+DRIVER_PARAMETER_PROFILES: "dict[str, DriverParameterProfile]" = {}
 
 
 def get_driver_profile(adapter_key: str) -> "DriverParameterProfile":
@@ -122,6 +122,7 @@ def _build_parameter_style_config_from_profile(
         "preserve_original_params_for_many": overrides.pop(
             "preserve_original_params_for_many", profile.preserve_original_params_for_many
         ),
+        "strict_named_parameters": overrides.pop("strict_named_parameters", profile.strict_named_parameters),
         "output_transformer": overrides.pop("output_transformer", profile.default_output_transformer),
         "ast_transformer": overrides.pop("ast_transformer", profile.default_ast_transformer),
     }
@@ -137,9 +138,12 @@ def _build_parameter_style_config_from_profile(
     if deserializer_value is None:
         deserializer_value = profile.extras.get("default_json_deserializer", _DEFAULT_JSON_DESERIALIZER)
 
+    serializer = cast("Callable[[Any], str]", serializer_value)
+    deserializer = cast("Callable[[str], Any] | None", deserializer_value)
+
     if strategy == "driver":
-        parameter_kwargs["json_serializer"] = serializer_value
-        parameter_kwargs["json_deserializer"] = deserializer_value
+        parameter_kwargs["json_serializer"] = serializer
+        parameter_kwargs["json_deserializer"] = deserializer
 
     parameter_kwargs.update(overrides)
     parameter_config = ParameterStyleConfig(**parameter_kwargs)
@@ -148,16 +152,17 @@ def _build_parameter_style_config_from_profile(
         tuple_strategy = tuple_strategy_override or profile.extras.get("json_tuple_strategy", "list")
         tuple_strategy_literal = cast("Literal['list', 'tuple']", tuple_strategy)
         parameter_config = parameter_config.with_json_serializers(
-            serializer_value, tuple_strategy=tuple_strategy_literal, deserializer=deserializer_value
+            serializer, tuple_strategy=tuple_strategy_literal, deserializer=deserializer
         )
     elif strategy == "driver":
-        parameter_config = parameter_config.replace(
-            json_serializer=serializer_value, json_deserializer=deserializer_value
-        )
+        parameter_config = parameter_config.replace(json_serializer=serializer, json_deserializer=deserializer)
 
     type_overrides = profile.extras.get("type_coercion_overrides")
     if type_overrides:
-        updated_map = {**parameter_config.type_coercion_map, **dict(type_overrides)}
+        coercion_overrides = cast("Mapping[type, Callable[[Any], Any]]", type_overrides)
+        updated_map: dict[type, Callable[[Any], Any]] = {}
+        updated_map.update(parameter_config.type_coercion_map)
+        updated_map.update(coercion_overrides)
         parameter_config = parameter_config.replace(type_coercion_map=updated_map)
 
     return parameter_config

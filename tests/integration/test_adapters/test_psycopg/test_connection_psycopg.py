@@ -1,0 +1,68 @@
+import pytest
+from pytest_databases.docker.postgres import PostgresService
+
+from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
+
+pytestmark = pytest.mark.xdist_group("postgres")
+
+
+async def test_async_connection(psycopg_async_config: PsycopgAsyncConfig) -> None:
+    """Test async connection components."""
+    async with await psycopg_async_config.create_connection() as conn:
+        assert conn is not None
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT 1 AS id")
+            result = await cur.fetchone()
+            assert result == {"id": 1}
+
+    async with psycopg_async_config.provide_connection() as conn:
+        assert conn is not None
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT 1 AS value")
+            result = await cur.fetchone()
+            assert result == {"value": 1}  # type: ignore[comparison-overlap]
+
+    await psycopg_async_config.close_pool()
+
+
+def test_sync_connection(postgres_service: "PostgresService") -> None:
+    """Test sync connection components."""
+    # Test direct connection
+    sync_config = PsycopgSyncConfig(
+        connection_config={
+            "conninfo": f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}"
+        }
+    )
+
+    try:
+        with sync_config.create_connection() as conn:
+            assert conn is not None
+            # Test basic query
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 as id")
+                result = cur.fetchone()
+                assert result == {"id": 1}
+    finally:
+        # Ensure pool is closed properly with timeout
+        sync_config.close_pool()
+
+    # Test connection pool
+    another_config = PsycopgSyncConfig(
+        connection_config={
+            "conninfo": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "min_size": 1,
+            "max_size": 5,
+        }
+    )
+    try:
+        # Remove explicit pool creation and manual context management
+        with another_config.provide_connection() as conn:
+            assert conn is not None
+            # Test basic query
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 AS id")
+                result = cur.fetchone()
+                assert result == {"id": 1}
+    finally:
+        # Ensure pool is closed properly with timeout
+        another_config.close_pool()

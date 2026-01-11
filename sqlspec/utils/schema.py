@@ -53,7 +53,7 @@ _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.
 _DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
 
 
-def _is_list_type_target(target_type: Any) -> TypeGuard[list[object]]:
+def _is_list_type_target(target_type: Any) -> "TypeGuard[list[object]]":
     """Check if target type is a list type (e.g., list[float])."""
     try:
         origin = target_type.__origin__
@@ -98,6 +98,36 @@ def _detect_schema_type(schema_type: type) -> "str | None":
         if is_attrs_schema(schema_type)
         else None
     )
+
+
+def _is_foreign_key_metadata_type(schema_type: type) -> bool:
+    if schema_type.__name__ != "ForeignKeyMetadata":
+        return False
+
+    # Check module for stronger guarantee without importing
+    module = getattr(schema_type, "__module__", "")
+    if "sqlspec" in module and ("driver" in module or "data_dictionary" in module):
+        return True
+
+    slots = getattr(schema_type, "__slots__", None)
+    if not slots:
+        return False
+    return {"table_name", "column_name", "referenced_table", "referenced_column"}.issubset(set(slots))
+
+
+def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
+    if not is_dict(data):
+        return data
+    payload = {
+        "table_name": data.get("table_name") or data.get("table"),
+        "column_name": data.get("column_name") or data.get("column"),
+        "referenced_table": data.get("referenced_table") or data.get("referenced_table_name"),
+        "referenced_column": data.get("referenced_column") or data.get("referenced_column_name"),
+        "constraint_name": data.get("constraint_name"),
+        "schema": data.get("schema") or data.get("table_schema"),
+        "referenced_schema": data.get("referenced_schema") or data.get("referenced_table_schema"),
+    }
+    return schema_type(**payload)
 
 
 def _convert_typed_dict(data: Any, schema_type: Any) -> Any:
@@ -151,7 +181,7 @@ class _EnumDecoder:
         return t(v.value)
 
 
-_DEFAULT_TYPE_DECODERS: Final["list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]"] = [
+_DEFAULT_TYPE_DECODERS: Final[list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]] = [
     (_IsTypePredicate(UUID), _UUIDDecoder()),
     (_IsTypePredicate(datetime.datetime), _ISOFormatDecoder()),
     (_IsTypePredicate(datetime.date), _ISOFormatDecoder()),
@@ -332,6 +362,10 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
 
     schema_type_key = _detect_schema_type(schema_type)
     if schema_type_key is None:
+        if _is_foreign_key_metadata_type(schema_type):
+            if isinstance(data, list):
+                return [_convert_foreign_key_metadata(item, schema_type) for item in data]
+            return _convert_foreign_key_metadata(data, schema_type)
         msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
         raise SQLSpecError(msg)
 

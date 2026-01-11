@@ -1,63 +1,41 @@
 """DuckDB driver implementation."""
 
 import contextlib
-import typing
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import duckdb
 
-from sqlspec.adapters.duckdb.core import build_duckdb_profile
-from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
+from sqlspec.adapters.duckdb.core import (
+    apply_driver_features,
+    collect_rows,
+    default_statement_config,
+    driver_profile,
+    normalize_execute_parameters,
+    raise_exception,
+    resolve_rowcount,
+)
+from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
-from sqlspec.core import (
-    SQL,
-    StatementConfig,
-    build_statement_config_from_profile,
-    create_arrow_result,
-    get_cache_config,
-    register_driver_profile,
-)
+from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.exceptions import (
-    CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
-    ForeignKeyViolationError,
-    IntegrityError,
-    NotFoundError,
-    NotNullViolationError,
-    OperationalError,
-    SQLParsingError,
-    SQLSpecError,
-    UniqueViolationError,
-)
+from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._sync import SyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 from sqlspec.adapters.duckdb._typing import DuckDBSessionContext
 
-__all__ = (
-    "DuckDBCursor",
-    "DuckDBDriver",
-    "DuckDBExceptionHandler",
-    "DuckDBSessionContext",
-    "build_duckdb_statement_config",
-    "duckdb_statement_config",
-)
+__all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
-logger = get_logger("adapters.duckdb")
+logger = get_logger("sqlspec.adapters.duckdb")
 
 _type_converter = DuckDBOutputConverter()
 
@@ -104,94 +82,11 @@ class DuckDBExceptionHandler:
         if exc_type is None:
             return False
         try:
-            self._map_duckdb_exception(exc_type, exc_val)
+            raise_exception(exc_type, exc_val)
         except Exception as mapped:
             self.pending_exception = mapped
             return True
         return False
-
-    def _map_duckdb_exception(self, exc_type: Any, e: Any) -> None:
-        """Map DuckDB exception to SQLSpec exception.
-
-        Uses exception type and message-based detection.
-
-        Args:
-            exc_type: Exception type
-            e: Exception instance
-        """
-        error_msg = str(e).lower()
-        exc_name = exc_type.__name__
-
-        if "constraintexception" in exc_name.lower():
-            self._handle_constraint_exception(e, error_msg)
-        elif "catalogexception" in exc_name.lower():
-            self._raise_not_found_error(e)
-        elif "parserexception" in exc_name.lower() or "binderexception" in exc_name.lower():
-            self._raise_parsing_error(e)
-        elif "ioexception" in exc_name.lower():
-            self._raise_operational_error(e)
-        elif "conversionexception" in exc_name.lower() or "type mismatch" in error_msg:
-            self._raise_data_error(e)
-        else:
-            self._raise_generic_error(e)
-
-    def _handle_constraint_exception(self, e: Any, error_msg: str) -> None:
-        """Handle constraint exceptions using message-based detection.
-
-        Args:
-            e: Exception instance
-            error_msg: Lowercase error message
-        """
-        if "unique" in error_msg or "duplicate" in error_msg:
-            self._raise_unique_violation(e)
-        elif "foreign key" in error_msg or "violates foreign key" in error_msg:
-            self._raise_foreign_key_violation(e)
-        elif "not null" in error_msg or "null value" in error_msg:
-            self._raise_not_null_violation(e)
-        elif "check constraint" in error_msg or "check condition" in error_msg:
-            self._raise_check_violation(e)
-        else:
-            self._raise_integrity_error(e)
-
-    def _raise_unique_violation(self, e: Any) -> None:
-        msg = f"DuckDB unique constraint violation: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any) -> None:
-        msg = f"DuckDB foreign key constraint violation: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any) -> None:
-        msg = f"DuckDB not-null constraint violation: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any) -> None:
-        msg = f"DuckDB check constraint violation: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any) -> None:
-        msg = f"DuckDB integrity constraint violation: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_not_found_error(self, e: Any) -> None:
-        msg = f"DuckDB catalog error: {e}"
-        raise NotFoundError(msg) from e
-
-    def _raise_parsing_error(self, e: Any) -> None:
-        msg = f"DuckDB SQL parsing error: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_operational_error(self, e: Any) -> None:
-        msg = f"DuckDB operational error: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_data_error(self, e: Any) -> None:
-        msg = f"DuckDB data error: {e}"
-        raise DataError(msg) from e
-
-    def _raise_generic_error(self, e: Any) -> None:
-        msg = f"DuckDB database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class DuckDBDriver(SyncDriverAdapterBase):
@@ -215,33 +110,132 @@ class DuckDBDriver(SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            updated_config = duckdb_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="duckdb",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
-            statement_config = updated_config
 
-        if driver_features:
-            param_config = statement_config.parameter_config
-            json_serializer = driver_features.get("json_serializer")
-            if json_serializer:
-                param_config = param_config.with_json_serializers(json_serializer, tuple_strategy="tuple")
-
-            enable_uuid_conversion = driver_features.get("enable_uuid_conversion", True)
-            if not enable_uuid_conversion:
-                type_converter = DuckDBOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
-                type_coercion_map = dict(param_config.type_coercion_map)
-                type_coercion_map[str] = type_converter.convert_if_detected
-                param_config = param_config.replace(type_coercion_map=type_coercion_map)
-
-            if param_config is not statement_config.parameter_config:
-                statement_config = statement_config.replace(parameter_config=param_config)
+        statement_config = apply_driver_features(statement_config, driver_features)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase | None = None
+        self._data_dictionary: DuckDBDataDictionary | None = None
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        """Execute single SQL statement with data handling.
+
+        Executes a SQL statement with parameter binding and processes the results.
+        Handles both data-returning queries and data modification operations.
+
+        Args:
+            cursor: DuckDB cursor object
+            statement: SQL statement to execute
+
+        Returns:
+            ExecutionResult with execution metadata
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
+
+        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
+
+        if is_select_like:
+            fetched_data = cursor.fetchall()
+            dict_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
+
+            return self.create_execution_result(
+                cursor,
+                selected_data=dict_data,
+                column_names=column_names,
+                data_row_count=len(dict_data),
+                is_select_result=True,
+            )
+
+        row_count = resolve_rowcount(cursor)
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
+
+    def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets using batch processing.
+
+        Uses DuckDB's executemany method for batch operations and calculates
+        row counts for both data modification and query operations.
+
+        Args:
+            cursor: DuckDB cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            ExecutionResult with batch execution metadata
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        if prepared_parameters:
+            parameter_sets = cast("list[Any]", prepared_parameters)
+            cursor.executemany(sql, parameter_sets)
+
+            row_count = len(parameter_sets) if statement.is_modifying_operation() else resolve_rowcount(cursor)
+        else:
+            row_count = 0
+
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+
+    def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        """Execute SQL script with statement splitting and parameter handling.
+
+        Parses multi-statement scripts and executes each statement sequentially
+        with the provided parameters.
+
+        Args:
+            cursor: DuckDB cursor object
+            statement: SQL statement with script content
+
+        Returns:
+            ExecutionResult with script execution metadata
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        last_result = None
+
+        for stmt in statements:
+            last_result = cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            successful_count += 1
+
+        return self.create_execution_result(
+            last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def begin(self) -> None:
+        """Begin a database transaction."""
+        try:
+            self.connection.execute("BEGIN TRANSACTION")
+        except duckdb.Error as e:
+            msg = f"Failed to begin DuckDB transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        try:
+            self.connection.commit()
+        except duckdb.Error as e:
+            msg = f"Failed to commit DuckDB transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def rollback(self) -> None:
+        """Rollback the current transaction."""
+        try:
+            self.connection.rollback()
+        except duckdb.Error as e:
+            msg = f"Failed to rollback DuckDB transaction: {e}"
+            raise SQLSpecError(msg) from e
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.
@@ -262,151 +256,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return DuckDBExceptionHandler()
 
-    def _execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Parses multi-statement scripts and executes each statement sequentially
-        with the provided parameters.
-
-        Args:
-            cursor: DuckDB cursor object
-            statement: SQL statement with script content
-
-        Returns:
-            ExecutionResult with script execution metadata
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_result = None
-
-        for stmt in statements:
-            last_result = cursor.execute(stmt, prepared_parameters or ())
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    def _execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using batch processing.
-
-        Uses DuckDB's executemany method for batch operations and calculates
-        row counts for both data modification and query operations.
-
-        Args:
-            cursor: DuckDB cursor object
-            statement: SQL statement with multiple parameter sets
-
-        Returns:
-            ExecutionResult with batch execution metadata
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if prepared_parameters:
-            cursor.executemany(sql, prepared_parameters)
-
-            if statement.is_modifying_operation():
-                row_count = len(prepared_parameters)
-            else:
-                try:
-                    result = cursor.fetchone()
-                    row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
-                except Exception:
-                    row_count = max(cursor.rowcount, 0) if has_rowcount(cursor) else 0
-        else:
-            row_count = 0
-
-        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
-
-    def _execute_statement(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Execute single SQL statement with data handling.
-
-        Executes a SQL statement with parameter binding and processes the results.
-        Handles both data-returning queries and data modification operations.
-
-        Args:
-            cursor: DuckDB cursor object
-            statement: SQL statement to execute
-
-        Returns:
-            ExecutionResult with execution metadata
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.execute(sql, prepared_parameters or ())
-
-        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
-
-        if is_select_like:
-            fetched_data = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-
-            if fetched_data and isinstance(fetched_data[0], tuple):
-                dict_data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-            else:
-                dict_data = fetched_data
-
-            return self.create_execution_result(
-                cursor,
-                selected_data=dict_data,
-                column_names=column_names,
-                data_row_count=len(dict_data),
-                is_select_result=True,
-            )
-
-        try:
-            result = cursor.fetchone()
-            row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
-        except Exception:
-            row_count = max(cursor.rowcount, 0) if has_rowcount(cursor) else 0
-
-        return self.create_execution_result(cursor, rowcount_override=row_count)
-
-    def begin(self) -> None:
-        """Begin a database transaction."""
-        try:
-            self.connection.execute("BEGIN TRANSACTION")
-        except duckdb.Error as e:
-            msg = f"Failed to begin DuckDB transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def rollback(self) -> None:
-        """Rollback the current transaction."""
-        try:
-            self.connection.rollback()
-        except duckdb.Error as e:
-            msg = f"Failed to rollback DuckDB transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def commit(self) -> None:
-        """Commit the current transaction."""
-        try:
-            self.connection.commit()
-        except duckdb.Error as e:
-            msg = f"Failed to commit DuckDB transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        DuckDB uses explicit BEGIN TRANSACTION and does not expose transaction state.
-
-        Returns:
-            False - DuckDB requires explicit transaction management.
-        """
-        return False
-
-    @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = DuckDBSyncDataDictionary()
-        return self._data_dictionary
+    # ─────────────────────────────────────────────────────────────────────────────
+    # ARROW API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_arrow(
         self,
@@ -446,8 +298,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        import pyarrow as pa
-
         # Prepare statement
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
@@ -468,30 +318,19 @@ class DuckDBDriver(SyncDriverAdapterBase):
             arrow_reader = cursor.arrow()
             arrow_table = arrow_reader.read_all()
 
-            # Apply schema casting if requested
-            if arrow_schema is not None:
-                if not isinstance(arrow_schema, pa.Schema):
-                    msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
-                    raise TypeError(msg)
-                arrow_table = arrow_table.cast(arrow_schema)
-
-            if return_format == "batch":
-                batches = arrow_table.to_batches(max_chunksize=batch_size)
-                arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
-            elif return_format == "batches":
-                arrow_data = arrow_table.to_batches(max_chunksize=batch_size)
-            elif return_format == "reader":
-                batches = arrow_table.to_batches(max_chunksize=batch_size)
-                arrow_data = pa.RecordBatchReader.from_batches(arrow_table.schema, batches)
-            else:
-                arrow_data = arrow_table
-
-            # Create ArrowResult
-            return create_arrow_result(
-                statement=prepared_statement, data=arrow_data, rows_affected=arrow_table.num_rows
+            return build_arrow_result_from_table(
+                prepared_statement,
+                arrow_table,
+                return_format=return_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
             )
         msg = "Unreachable"
         raise RuntimeError(msg)  # pragma: no cover
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -559,22 +398,37 @@ class DuckDBDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
-_DUCKDB_PROFILE = build_duckdb_profile()
+    @property
+    def data_dictionary(self) -> "DuckDBDataDictionary":
+        """Get the data dictionary for this driver.
 
-register_driver_profile("duckdb", _DUCKDB_PROFILE)
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = DuckDBDataDictionary()
+        return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE / INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        DuckDB uses explicit BEGIN TRANSACTION and does not expose transaction state.
+
+        Returns:
+            False - DuckDB requires explicit transaction management.
+        """
+        return False
 
 
-def build_duckdb_statement_config(*, json_serializer: "typing.Callable[[Any], str] | None" = None) -> StatementConfig:
-    """Construct the DuckDB statement configuration with optional JSON serializer."""
-
-    serializer = json_serializer or to_json
-    return build_statement_config_from_profile(
-        _DUCKDB_PROFILE, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
-    )
+register_driver_profile("duckdb", driver_profile)
 
 
-duckdb_statement_config = build_duckdb_statement_config()
-
-
-MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")
+MODIFYING_OPERATIONS: "tuple[str, ...]" = ("INSERT", "UPDATE", "DELETE")

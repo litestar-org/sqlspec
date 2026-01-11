@@ -1,10 +1,14 @@
 """SQL file loader for managing SQL statements from files.
 
 Provides functionality to load, cache, and manage SQL statements
-from files using aiosql-style named queries.
+from files using named SQL queries.
+
+SQL files declare query metadata with comment directives like ``-- name: query_name`` (hyphens and suffixes allowed)
+and ``-- dialect: dialect_name``.
 """
 
 import hashlib
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -21,23 +25,20 @@ from sqlspec.exceptions import (
 )
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage.registry import StorageRegistry
 
-__all__ = ("CachedSQLFile", "NamedStatement", "SQLFile", "SQLFileLoader")
+__all__ = ("NamedStatement", "SQLFile", "SQLFileCacheEntry", "SQLFileLoader")
 
-logger = get_logger("loader")
+logger = get_logger("sqlspec.loader")
 
-# Matches: -- name: query_name (supports hyphens and special suffixes)
-# We capture the name plus any trailing special characters
 QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
 TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 
-# Matches: -- dialect: dialect_name (optional dialect specification)
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
@@ -65,12 +66,10 @@ def _normalize_query_name(name: str) -> str:
     Returns:
         Normalized query name suitable as Python identifier.
     """
-    # Handle namespace parts separately to preserve dots
     parts = name.split(".")
     normalized_parts = []
 
     for part in parts:
-        # Use slugify with underscore separator and remove any remaining invalid chars
         normalized_part = slugify(part, separator="_")
         normalized_parts.append(normalized_part)
 
@@ -134,7 +133,7 @@ class SQLFile:
         self.checksum = hashlib.md5(self.content.encode(), usedforsecurity=False).hexdigest()
 
 
-class CachedSQLFile:
+class SQLFileCacheEntry:
     """Cached SQL file with parsed statements.
 
     Stored in the file cache to avoid re-parsing SQL files when their
@@ -156,7 +155,7 @@ class CachedSQLFile:
 
 
 class SQLFileLoader:
-    """Loads and parses SQL files with aiosql-style named queries.
+    """Loads and parses SQL files with named SQL queries.
 
     Loads SQL files containing named queries (using -- name: syntax)
     and retrieves them by name.
@@ -236,7 +235,7 @@ class SQLFileLoader:
         except Exception as e:
             raise SQLFileParseError(str(path), str(path), e) from e
 
-    def _is_file_unchanged(self, path: str | Path, cached_file: CachedSQLFile) -> bool:
+    def _is_file_unchanged(self, path: str | Path, cached_file: SQLFileCacheEntry) -> bool:
         """Check if file has changed since caching.
 
         Args:
@@ -265,18 +264,19 @@ class SQLFileLoader:
         Raises:
             SQLFileNotFoundError: If file does not exist.
             SQLFileParseError: If file cannot be read or parsed.
+
+        Notes:
+            File:// URIs are normalized before delegation to the backend, including trimming Windows-style leading slashes so filenames resolve correctly.
         """
         path_str = str(path)
 
         try:
             backend = self.storage_registry.get(path)
-            # For file:// URIs, extract just the filename for the backend call
             if path_str.startswith("file://"):
                 parsed = urlparse(path_str)
                 file_path = unquote(parsed.path)
-                # Handle Windows paths (file:///C:/path)
                 if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
-                    file_path = file_path[1:]  # Remove leading slash for Windows
+                    file_path = file_path[1:]
                 filename = Path(file_path).name
                 return backend.read_text(filename, encoding=self.encoding)
             return backend.read_text(path_str, encoding=self.encoding)
@@ -365,6 +365,9 @@ class SQLFileLoader:
 
                 statements[normalized_name] = NamedStatement(
                     name=normalized_name, sql=clean_sql, dialect=dialect, start_line=statement_start_line
+                )
+                log_with_context(
+                    logger, logging.DEBUG, "sql.parse", file_path=file_path, query_name=normalized_name, dialect=dialect
                 )
 
         if not statements:
@@ -467,11 +470,11 @@ class SQLFileLoader:
 
         cache_key_str = self._generate_file_cache_key(file_path)
         cache = get_cache()
-        cached_file = cache.get("file", cache_key_str)
+        cached_file = cache.get_file(cache_key_str)
 
         if (
             cached_file is not None
-            and isinstance(cached_file, CachedSQLFile)
+            and isinstance(cached_file, SQLFileCacheEntry)
             and self._is_file_unchanged(file_path, cached_file)
         ):
             self._files[path_str] = cached_file.sql_file
@@ -503,8 +506,8 @@ class SQLFileLoader:
                         stored_name = query_name[len(namespace) + 1 :]
                     file_statements[stored_name] = self._queries[query_name]
 
-            cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
-            cache.put("file", cache_key_str, cached_file_data)
+            cached_file_data = SQLFileCacheEntry(sql_file=sql_file, parsed_statements=file_statements)
+            cache.put_file(cache_key_str, cached_file_data)
             if runtime is not None:
                 runtime.increment_metric("loader.cache.miss")
                 runtime.increment_metric("loader.files.loaded")
@@ -525,10 +528,8 @@ class SQLFileLoader:
         statements = self._parse_sql_content(content, path_str)
 
         if not statements:
-            logger.debug(
-                "Skipping SQL file without named statements: %s",
-                path_str,
-                extra={"file_path": path_str, "correlation_id": CorrelationContext.get()},
+            log_with_context(
+                logger, logging.DEBUG, "sql.load", file_path=path_str, status="skipped", reason="no_named_statements"
             )
             return
 
@@ -547,6 +548,9 @@ class SQLFileLoader:
                     )
             self._queries[namespaced_name] = statement
             self._query_to_file[namespaced_name] = path_str
+        log_with_context(
+            logger, logging.DEBUG, "sql.load", file_path=path_str, statement_count=len(statements), status="loaded"
+        )
         if runtime is not None:
             runtime.increment_metric("loader.files.loaded")
             runtime.increment_metric("loader.statements.loaded", len(statements))

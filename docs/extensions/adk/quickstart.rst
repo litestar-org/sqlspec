@@ -107,7 +107,7 @@ If you want long-term memory search, create a memory store and service alongside
 
 .. code-block:: python
 
-   from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+   from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKMemoryStore
    from sqlspec.extensions.adk.memory import SQLSpecMemoryService
 
    async def create_memory_service(config):

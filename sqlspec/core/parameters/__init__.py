@@ -8,7 +8,7 @@ from sqlspec.core.parameters._alignment import (
     validate_parameter_alignment,
 )
 from sqlspec.core.parameters._converter import ParameterConverter
-from sqlspec.core.parameters._processor import ParameterProcessor
+from sqlspec.core.parameters._processor import ParameterProcessor, fingerprint_parameters
 from sqlspec.core.parameters._registry import (
     DRIVER_PARAMETER_PROFILES,
     build_statement_config_from_profile,
@@ -52,6 +52,7 @@ __all__ = (
     "build_null_pruning_transform",
     "build_statement_config_from_profile",
     "collect_null_parameter_ordinals",
+    "fingerprint_parameters",
     "get_driver_profile",
     "is_iterable_parameters",
     "looks_like_execute_many",

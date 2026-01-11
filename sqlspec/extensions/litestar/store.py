@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
+from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_extension_config
 
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 ConfigT = TypeVar("ConfigT")
 
 
-logger = get_logger("extensions.litestar.store")
+logger = get_logger("sqlspec.extensions.litestar.store")
 
 __all__ = ("BaseSQLSpecStore",)
 
@@ -211,6 +212,28 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
     ) -> None:
         """Exit context manager."""
         return
+
+    def _log_table_created(self) -> None:
+        logger.debug(
+            "Litestar session table ready",
+            extra={"db.system": resolve_db_system(type(self).__name__), "session_table": self._table_name},
+        )
+
+    def _log_delete_all(self) -> None:
+        logger.debug(
+            "Litestar sessions cleared",
+            extra={"db.system": resolve_db_system(type(self).__name__), "session_table": self._table_name},
+        )
+
+    def _log_delete_expired(self, count: int) -> None:
+        logger.debug(
+            "Litestar sessions expired cleanup",
+            extra={
+                "db.system": resolve_db_system(type(self).__name__),
+                "session_table": self._table_name,
+                "deleted_sessions": count,
+            },
+        )
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
         """Calculate expiration timestamp from expires_in.

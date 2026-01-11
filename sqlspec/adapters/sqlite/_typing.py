@@ -7,6 +7,8 @@ compilation to avoid ABI boundary issues.
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
+_SqliteConnection = sqlite3.Connection
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
@@ -14,9 +16,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.driver import SqliteDriver
     from sqlspec.core import StatementConfig
 
-    SqliteConnection: TypeAlias = sqlite3.Connection
-else:
-    SqliteConnection = sqlite3.Connection
+    SqliteConnection: TypeAlias = _SqliteConnection
+
+if not TYPE_CHECKING:
+    SqliteConnection = _SqliteConnection
 
 
 class SqliteSessionContext:

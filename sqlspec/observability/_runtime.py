@@ -1,12 +1,12 @@
 """Runtime helpers that bundle lifecycle, observer, and span orchestration."""
 
-import hashlib
 import re
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.observability._config import ObservabilityConfig
+from sqlspec.observability._common import compute_sql_hash, get_trace_context, resolve_db_system
+from sqlspec.observability._config import LoggingConfig, ObservabilityConfig
 from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
-from sqlspec.observability._observer import StatementObserver, create_event, default_statement_observer
+from sqlspec.observability._observer import StatementObserver, create_event, create_statement_observer
 from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.type_guards import has_span_attribute
@@ -40,6 +40,8 @@ class ObservabilityRuntime:
         self, config: ObservabilityConfig | None = None, *, bind_key: str | None = None, config_name: str | None = None
     ) -> None:
         config = config.copy() if config else ObservabilityConfig()
+        if config.logging is None:
+            config.logging = LoggingConfig()
         self.config = config
         self.bind_key = bind_key
         self.config_name = config_name or "SQLSpecConfig"
@@ -50,7 +52,7 @@ class ObservabilityRuntime:
         if config.statement_observers:
             observers.extend(config.statement_observers)
         if config.print_sql:
-            observers.append(default_statement_observer)
+            observers.append(create_statement_observer(config.logging))
         self._statement_observers = tuple(observers)
         self._redaction = config.redaction.copy() if config.redaction else None
         self._metrics: dict[str, float] = {}
@@ -225,12 +227,25 @@ class ObservabilityRuntime:
         sanitized_sql = self._redact_sql(sql)
         sanitized_params = self._redact_parameters(parameters)
         correlation_id = CorrelationContext.get()
+        logging_config = self.config.logging
+        db_system = resolve_db_system(self.config_name)
+        sql_hash = None
+        if logging_config and logging_config.include_sql_hash:
+            sql_hash = compute_sql_hash(sanitized_sql)
+        sql_truncation_length = logging_config.sql_truncation_length if logging_config else 2000
+        sql_original_length = len(sanitized_sql)
+        sql_truncated = sql_original_length > sql_truncation_length
+        trace_id = None
+        span_id = None
+        if logging_config and logging_config.include_trace_context:
+            trace_id, span_id = get_trace_context()
         event = create_event(
             sql=sanitized_sql,
             parameters=sanitized_params,
             driver=driver,
             adapter=self.config_name,
             bind_key=self.bind_key,
+            db_system=db_system,
             operation=operation,
             execution_mode=execution_mode,
             is_many=is_many,
@@ -240,6 +255,11 @@ class ObservabilityRuntime:
             correlation_id=correlation_id,
             storage_backend=storage_backend,
             started_at=started_at,
+            sql_hash=sql_hash,
+            sql_truncated=sql_truncated,
+            sql_original_length=sql_original_length,
+            trace_id=trace_id,
+            span_id=span_id,
         )
         for observer in self._statement_observers:
             observer(event)
@@ -247,7 +267,7 @@ class ObservabilityRuntime:
     def start_query_span(self, sql: str, operation: str, driver: str) -> Any:
         """Start a query span with runtime metadata."""
 
-        sql_hash = _hash_sql(sql)
+        sql_hash = compute_sql_hash(sql)
         connection_info = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}
         sql_payload = ""
         if self.config.print_sql:
@@ -395,10 +415,6 @@ def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
     if len(value) <= max_chars:
         return value, False
     return value[:max_chars], True
-
-
-def _hash_sql(sql: str) -> str:
-    return hashlib.sha256(sql.encode("utf-8")).hexdigest()[:16]
 
 
 __all__ = ("ObservabilityRuntime",)

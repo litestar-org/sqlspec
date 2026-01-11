@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from google.adk.sessions import Session
     from google.genai import types
 
-logger = get_logger("extensions.adk.memory.converters")
+logger = get_logger("sqlspec.extensions.adk.memory.converters")
 
 __all__ = ("event_to_memory_record", "extract_content_text", "record_to_memory_entry", "session_to_memory_records")
 
@@ -72,7 +72,7 @@ def event_to_memory_record(event: "Event", session_id: str, app_name: str, user_
 
     content_dict = event.content.model_dump(exclude_none=True, mode="json")
 
-    custom_metadata = event.custom_metadata if event.custom_metadata else None
+    custom_metadata = event.custom_metadata or None
 
     now = datetime.now(timezone.utc)
 

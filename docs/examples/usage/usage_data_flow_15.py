@@ -13,7 +13,7 @@ def test_configuration_driven_processing() -> None:
         enable_parsing=True,  # AST generation
         enable_validation=True,  # Security/performance checks
         enable_transformations=True,  # AST transformations
-        enable_caching=True,  # Multi-tier caching
+        enable_caching=True,  # Namespaced caching
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.NUMERIC, has_native_list_expansion=False
         ),

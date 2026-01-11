@@ -192,6 +192,55 @@ class VectorDistance(exp.Expression):
         return f"VECTOR_DISTANCE({left}, {right}, '{metric.upper()}')"
 
 
+def _vector_distance_sql_base(generator: "Generator", expression: "VectorDistance") -> str:
+    """Base generator for VectorDistance expressions."""
+    return expression._sql_generic(  # pyright: ignore[reportPrivateUsage]
+        generator.sql(expression.left), generator.sql(expression.right), expression.metric
+    )
+
+
+def _vector_distance_sql_postgres(generator: "Generator", expression: "VectorDistance") -> str:
+    """PostgreSQL generator for VectorDistance expressions."""
+    return expression._sql_postgres(  # pyright: ignore[reportPrivateUsage]
+        generator.sql(expression.left), generator.sql(expression.right), expression.metric
+    )
+
+
+def _vector_distance_sql_mysql(generator: "Generator", expression: "VectorDistance") -> str:
+    """MySQL generator for VectorDistance expressions."""
+    return expression._sql_mysql(  # pyright: ignore[reportPrivateUsage]
+        generator.sql(expression.left), generator.sql(expression.right), expression.metric
+    )
+
+
+def _vector_distance_sql_oracle(generator: "Generator", expression: "VectorDistance") -> str:
+    """Oracle generator for VectorDistance expressions."""
+    return expression._sql_oracle(  # pyright: ignore[reportPrivateUsage]
+        generator.sql(expression.left), generator.sql(expression.right), expression.metric
+    )
+
+
+def _vector_distance_sql_bigquery(generator: "Generator", expression: "VectorDistance") -> str:
+    """BigQuery generator for VectorDistance expressions."""
+    return expression._sql_bigquery(  # pyright: ignore[reportPrivateUsage]
+        generator.sql(expression.left), generator.sql(expression.right), expression.metric
+    )
+
+
+def _vector_distance_sql_spanner(generator: "Generator", expression: "VectorDistance") -> str:
+    """Spanner generator for VectorDistance expressions (same as BigQuery)."""
+    return expression._sql_bigquery(  # pyright: ignore[reportPrivateUsage]
+        generator.sql(expression.left), generator.sql(expression.right), expression.metric
+    )
+
+
+def _vector_distance_sql_duckdb(generator: "Generator", expression: "VectorDistance") -> str:
+    """DuckDB generator for VectorDistance expressions."""
+    return expression._sql_duckdb(  # pyright: ignore[reportPrivateUsage]
+        generator.sql(expression.left), generator.sql(expression.right), expression.metric
+    )
+
+
 def _register_with_sqlglot() -> None:
     """Register VectorDistance with SQLGlot's generator dispatch system."""
     spanner_dialect: type | None = None
@@ -202,57 +251,17 @@ def _register_with_sqlglot() -> None:
         spanner_dialect = Spanner
         spangres_dialect = Spangres
 
-    def vector_distance_sql_base(generator: "Generator", expression: "VectorDistance") -> str:
-        """Base generator for VectorDistance expressions."""
-        return expression._sql_generic(  # pyright: ignore[reportPrivateUsage]
-            generator.sql(expression.left), generator.sql(expression.right), expression.metric
-        )
+    Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_base
 
-    def vector_distance_sql_postgres(generator: "Generator", expression: "VectorDistance") -> str:
-        """PostgreSQL generator for VectorDistance expressions."""
-        return expression._sql_postgres(  # pyright: ignore[reportPrivateUsage]
-            generator.sql(expression.left), generator.sql(expression.right), expression.metric
-        )
-
-    def vector_distance_sql_mysql(generator: "Generator", expression: "VectorDistance") -> str:
-        """MySQL generator for VectorDistance expressions."""
-        return expression._sql_mysql(generator.sql(expression.left), generator.sql(expression.right), expression.metric)  # pyright: ignore[reportPrivateUsage]
-
-    def vector_distance_sql_oracle(generator: "Generator", expression: "VectorDistance") -> str:
-        """Oracle generator for VectorDistance expressions."""
-        return expression._sql_oracle(  # pyright: ignore[reportPrivateUsage]
-            generator.sql(expression.left), generator.sql(expression.right), expression.metric
-        )
-
-    def vector_distance_sql_bigquery(generator: "Generator", expression: "VectorDistance") -> str:
-        """BigQuery generator for VectorDistance expressions."""
-        return expression._sql_bigquery(  # pyright: ignore[reportPrivateUsage]
-            generator.sql(expression.left), generator.sql(expression.right), expression.metric
-        )
-
-    def vector_distance_sql_spanner(generator: "Generator", expression: "VectorDistance") -> str:
-        """Spanner generator for VectorDistance expressions (same as BigQuery)."""
-        return expression._sql_bigquery(  # pyright: ignore[reportPrivateUsage]
-            generator.sql(expression.left), generator.sql(expression.right), expression.metric
-        )
-
-    def vector_distance_sql_duckdb(generator: "Generator", expression: "VectorDistance") -> str:
-        """DuckDB generator for VectorDistance expressions."""
-        return expression._sql_duckdb(  # pyright: ignore[reportPrivateUsage]
-            generator.sql(expression.left), generator.sql(expression.right), expression.metric
-        )
-
-    Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_base
-
-    Postgres.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_postgres
-    MySQL.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_mysql
-    Oracle.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_oracle
-    BigQuery.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_bigquery
-    DuckDB.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_duckdb
+    Postgres.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_postgres
+    MySQL.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_mysql
+    Oracle.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_oracle
+    BigQuery.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_bigquery
+    DuckDB.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_duckdb
     if spanner_dialect is not None:
-        spanner_dialect.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_spanner  # type: ignore[attr-defined]
+        spanner_dialect.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_spanner  # type: ignore[attr-defined]
     if spangres_dialect is not None:
-        spangres_dialect.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_postgres  # type: ignore[attr-defined]
+        spangres_dialect.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_postgres  # type: ignore[attr-defined]
 
 
 _register_with_sqlglot()

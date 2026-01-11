@@ -243,7 +243,7 @@ class ExplainOptions:
             generic_plan=generic_plan if generic_plan is not None else self.generic_plan,
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> "dict[str, Any]":
         """Convert options to dictionary (only non-None values).
 
         Returns:

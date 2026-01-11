@@ -4,38 +4,13 @@ from importlib import import_module
 from typing import Any
 
 from sqlspec.exceptions import MissingDependencyError
+from sqlspec.observability._common import resolve_db_system
 from sqlspec.observability._config import TelemetryConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_opentelemetry
 from sqlspec.utils.type_guards import has_tracer_provider
 
 logger = get_logger("sqlspec.observability.spans")
-
-_DB_SYSTEM_MAP: tuple[tuple[str, str], ...] = (
-    ("asyncpg", "postgresql"),
-    ("psycopg", "postgresql"),
-    ("psqlpy", "postgresql"),
-    ("postgres", "postgresql"),
-    ("asyncmy", "mysql"),
-    ("mysql", "mysql"),
-    ("mariadb", "mysql"),
-    ("aiosqlite", "sqlite"),
-    ("sqlite", "sqlite"),
-    ("duckdb", "duckdb"),
-    ("bigquery", "bigquery"),
-    ("spanner", "spanner"),
-    ("oracle", "oracle"),
-    ("oracledb", "oracle"),
-    ("adbc", "adbc"),
-)
-
-
-def _resolve_db_system(adapter: str) -> str:
-    normalized = adapter.lower()
-    for needle, system in _DB_SYSTEM_MAP:
-        if needle in normalized:
-            return system
-    return "other_sql"
 
 
 class SpanManager:
@@ -88,7 +63,7 @@ class SpanManager:
         if not self._enabled:
             return None
         attributes: dict[str, Any] = {
-            "db.system": _resolve_db_system(adapter),
+            "db.system": resolve_db_system(adapter),
             "db.operation": operation,
             "sqlspec.driver": driver,
         }
@@ -183,4 +158,4 @@ class SpanManager:
         self._span_kind = span_kind_cls.CLIENT
 
 
-__all__ = ("SpanManager",)
+__all__ = ("SpanManager", "resolve_db_system")

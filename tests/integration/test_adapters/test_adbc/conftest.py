@@ -33,7 +33,7 @@ def xfail_if_driver_missing(func: F) -> F:
 
 
 @pytest.fixture(scope="session")
-def adbc_postgres_connection_config(postgres_service: PostgresService) -> "dict[str, str]":
+def adbc_postgres_connection_config(postgres_service: "PostgresService") -> "dict[str, str]":
     """Shared PostgreSQL connection configuration for ADBC tests."""
 
     return {

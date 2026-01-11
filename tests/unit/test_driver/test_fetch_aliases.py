@@ -13,23 +13,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDriverAdapterBase
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-requires_interpreted = pytest.mark.skipif(
-    _is_compiled(), reason="Test uses Mock with compiled classes (mypyc descriptors don't work with mocks)"
-)
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("driver")
 

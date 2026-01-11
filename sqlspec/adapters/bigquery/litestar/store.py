@@ -4,13 +4,11 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.config import BigQueryConfig
 
-logger = get_logger("adapters.bigquery.litestar.store")
 
 __all__ = ("BigQueryStore",)
 
@@ -134,7 +132,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         sql = self._get_create_table_sql()
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -238,7 +236,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
         with self._config.provide_session() as driver:
             driver.execute(sql)
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+        self._log_delete_all()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
@@ -315,7 +313,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             result = driver.execute(sql)
             count = result.get_affected_count()
             if count > 0:
-                logger.debug("Cleaned up %d expired sessions", count)
+                self._log_delete_expired(count)
             return count
 
     async def delete_expired(self) -> int:

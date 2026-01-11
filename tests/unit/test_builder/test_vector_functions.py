@@ -8,8 +8,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import sql
-from sqlspec.builder import Column
-from sqlspec.builder._vector_expressions import VectorDistance
+from sqlspec.builder import Column, VectorDistance
 
 pytestmark = pytest.mark.xdist_group("builder")
 

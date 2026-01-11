@@ -162,6 +162,26 @@ _TYPE_CONVERTERS: Final[dict[str, Callable[[str], Any]]] = {
 }
 
 
+class _CachedConverter:
+    __slots__ = ("_cached", "_converter", "_special_chars")
+
+    def __init__(self, converter: "CachedOutputConverter", special_chars: "frozenset[str]", cache_size: int) -> None:
+        self._converter = converter
+        self._special_chars = special_chars
+        self._cached = lru_cache(maxsize=cache_size)(self._convert)
+
+    def _convert(self, value: str) -> "Any":
+        if not value or not any(c in value for c in self._special_chars):
+            return value
+        detected_type = self._converter.detect_type(value)
+        if detected_type:
+            return self._converter._convert_detected(value, detected_type)  # pyright: ignore[reportPrivateUsage]
+        return value
+
+    def __call__(self, value: str) -> "Any":
+        return self._cached(value)
+
+
 def _make_cached_converter(
     converter: "CachedOutputConverter", special_chars: "frozenset[str]", cache_size: int
 ) -> "Callable[[str], Any]":
@@ -176,16 +196,7 @@ def _make_cached_converter(
         A cached function that converts string values.
     """
 
-    @lru_cache(maxsize=cache_size)
-    def _cached_convert(value: str) -> "Any":
-        if not value or not any(c in value for c in special_chars):
-            return value
-        detected_type = converter.detect_type(value)
-        if detected_type:
-            return converter._convert_detected(value, detected_type)  # pyright: ignore[reportPrivateUsage]
-        return value
-
-    return _cached_convert
+    return _CachedConverter(converter, special_chars, cache_size)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

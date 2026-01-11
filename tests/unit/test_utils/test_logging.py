@@ -4,8 +4,6 @@ Tests for structured logging utilities with correlation ID support.
 Covers logger configuration, structured formatting, and context tracking.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import threading

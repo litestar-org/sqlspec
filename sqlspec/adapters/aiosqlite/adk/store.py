@@ -1,21 +1,21 @@
 """Aiosqlite async ADK store for Google Agent Development Kit session/event storage."""
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+    from sqlspec.extensions.adk import MemoryRecord
 
-logger = get_logger("adapters.aiosqlite.adk.store")
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
 
-__all__ = ("AiosqliteADKStore",)
+__all__ = ("AiosqliteADKMemoryStore", "AiosqliteADKStore")
 
 
 def _datetime_to_julian(dt: datetime) -> float:
@@ -110,7 +110,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             }
         )
         store = AiosqliteADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - JSON stored as TEXT with SQLSpec serializers (msgspec/orjson/stdlib)
@@ -232,7 +232,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await self._enable_foreign_keys(driver.connection)
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -534,3 +533,286 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 )
                 for row in rows
             ]
+
+
+class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
+    """Aiosqlite ADK memory store using asynchronous SQLite driver.
+
+    Implements memory entry storage for Google Agent Development Kit
+    using SQLite via the asynchronous aiosqlite driver. Provides:
+    - Session memory storage with JSON as TEXT
+    - Simple LIKE search (simple strategy)
+    - Optional FTS5 full-text search (sqlite_fts5 strategy)
+    - Julian Day timestamps (REAL) for efficient date operations
+    - Deduplication via event_id unique constraint
+    - Efficient upserts using INSERT OR IGNORE
+
+    Args:
+        config: AiosqliteConfig with extension_config["adk"] settings.
+
+    Example:
+        from sqlspec.adapters.aiosqlite import AiosqliteConfig
+        from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore
+
+        config = AiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={
+                "adk": {
+                    "memory_table": "adk_memory_entries",
+                    "memory_use_fts": False,
+                    "memory_max_results": 20,
+                }
+            }
+        )
+        store = AiosqliteADKMemoryStore(config)
+        await store.ensure_tables()
+
+    Notes:
+        - JSON stored as TEXT with SQLSpec serializers
+        - REAL for Julian Day timestamps
+        - event_id UNIQUE constraint for deduplication
+        - Composite index on (app_name, user_id, timestamp DESC)
+        - Optional FTS5 virtual table for full-text search
+        - Configuration is read from config.extension_config["adk"]
+    """
+
+    __slots__ = ()
+
+    def __init__(self, config: "AiosqliteConfig") -> None:
+        """Initialize Aiosqlite ADK memory store.
+
+        Args:
+            config: AiosqliteConfig instance.
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - memory_table: Memory table name (default: "adk_memory_entries")
+            - memory_use_fts: Enable full-text search when supported (default: False)
+            - memory_max_results: Max search results (default: 20)
+            - owner_id_column: Optional owner FK column DDL (default: None)
+            - enable_memory: Whether memory is enabled (default: True)
+        """
+        super().__init__(config)
+
+    async def _get_create_memory_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for memory entries.
+
+        Returns:
+            SQL statement to create memory table with indexes.
+
+        Notes:
+            - TEXT for IDs, names, and JSON content
+            - REAL for Julian Day timestamps
+            - UNIQUE constraint on event_id for deduplication
+            - Composite index on (app_name, user_id, timestamp DESC)
+            - Optional owner ID column for multi-tenancy
+            - Optional FTS5 virtual table for full-text search
+        """
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_table = ""
+        if self._use_fts:
+            fts_table = f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS {self._memory_table}_fts USING fts5(
+            content_text,
+            content={self._memory_table},
+            content_rowid=rowid
+        );
+
+        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ai AFTER INSERT ON {self._memory_table} BEGIN
+            INSERT INTO {self._memory_table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ad AFTER DELETE ON {self._memory_table} BEGIN
+            INSERT INTO {self._memory_table}_fts({self._memory_table}_fts, rowid, content_text)
+            VALUES('delete', old.rowid, old.content_text);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_au AFTER UPDATE ON {self._memory_table} BEGIN
+            INSERT INTO {self._memory_table}_fts({self._memory_table}_fts, rowid, content_text)
+            VALUES('delete', old.rowid, old.content_text);
+            INSERT INTO {self._memory_table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+        END;
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            event_id TEXT NOT NULL UNIQUE,
+            author TEXT{owner_id_line},
+            timestamp REAL NOT NULL,
+            content_json TEXT NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json TEXT,
+            inserted_at REAL NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_table}
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get SQLite DROP TABLE SQL statements."""
+        statements = [f"DROP TABLE IF EXISTS {self._memory_table}"]
+        if self._use_fts:
+            statements.extend([
+                f"DROP TABLE IF EXISTS {self._memory_table}_fts",
+                f"DROP TRIGGER IF EXISTS {self._memory_table}_ai",
+                f"DROP TRIGGER IF EXISTS {self._memory_table}_ad",
+                f"DROP TRIGGER IF EXISTS {self._memory_table}_au",
+            ])
+        return statements
+
+    async def create_tables(self) -> None:
+        """Create the memory table and indexes if they don't exist.
+
+        Skips table creation if memory store is disabled.
+        """
+        if not self._enabled:
+            return
+
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_memory_table_sql())
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication.
+
+        Uses INSERT OR IGNORE to skip duplicates based on event_id unique constraint.
+        """
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not entries:
+            return 0
+
+        inserted_count = 0
+        async with self._config.provide_connection() as conn:
+            for entry in entries:
+                params: tuple[Any, ...]
+                if self._owner_id_column_name:
+                    sql = f"""
+                    INSERT OR IGNORE INTO {self._memory_table}
+                    (id, session_id, app_name, user_id, event_id, author,
+                     {self._owner_id_column_name}, timestamp, content_json,
+                     content_text, metadata_json, inserted_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    params = (
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry["event_id"],
+                        entry["author"],
+                        owner_id,
+                        _datetime_to_julian(entry["timestamp"]),
+                        to_json(entry["content_json"]),
+                        entry["content_text"],
+                        to_json(entry["metadata_json"]),
+                        _datetime_to_julian(entry["inserted_at"]),
+                    )
+                else:
+                    sql = f"""
+                    INSERT OR IGNORE INTO {self._memory_table}
+                    (id, session_id, app_name, user_id, event_id, author,
+                     timestamp, content_json, content_text, metadata_json, inserted_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    params = (
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry["event_id"],
+                        entry["author"],
+                        _datetime_to_julian(entry["timestamp"]),
+                        to_json(entry["content_json"]),
+                        entry["content_text"],
+                        to_json(entry["metadata_json"]),
+                        _datetime_to_julian(entry["inserted_at"]),
+                    )
+                cursor = await conn.execute(sql, params)
+                inserted_count += cursor.rowcount
+                await cursor.close()
+            await conn.commit()
+        return inserted_count
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not query:
+            return []
+
+        limit_value = limit or self._max_results
+        if self._use_fts:
+            sql = f"""
+            SELECT m.* FROM {self._memory_table} AS m
+            JOIN {self._memory_table}_fts AS fts ON m.rowid = fts.rowid
+            WHERE m.app_name = ? AND m.user_id = ? AND fts.content_text MATCH ?
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+            """
+            params = (app_name, user_id, query, limit_value)
+        else:
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE app_name = ? AND user_id = ? AND content_text LIKE ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """
+            params = (app_name, user_id, f"%{query}%", limit_value)
+
+        async with self._config.provide_connection() as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
+            columns = [col[0] for col in cursor.description or []]
+            await cursor.close()
+        records: list[MemoryRecord] = []
+        for row in rows:
+            raw = dict(zip(columns, row, strict=False))
+            raw["timestamp"] = _julian_to_datetime(raw["timestamp"])
+            raw["inserted_at"] = _julian_to_datetime(raw["inserted_at"])
+            raw["content_json"] = from_json(raw["content_json"])
+            raw["metadata_json"] = from_json(raw["metadata_json"]) if raw["metadata_json"] else None
+            records.append(cast("MemoryRecord", raw))
+        return records
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
+        async with self._config.provide_connection() as conn:
+            cursor = await conn.execute(sql, (session_id,))
+            await conn.commit()
+            return cursor.rowcount
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        cutoff = _datetime_to_julian(datetime.now(timezone.utc)) - days
+        sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ?"
+        async with self._config.provide_connection() as conn:
+            cursor = await conn.execute(sql, (cutoff,))
+            await conn.commit()
+            return cursor.rowcount

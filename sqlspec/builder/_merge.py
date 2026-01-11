@@ -1,4 +1,3 @@
-# ruff: noqa: FBT003
 """MERGE statement builder.
 
 Provides a fluent interface for building SQL MERGE queries with
@@ -35,26 +34,11 @@ __all__ = ("Merge",)
 MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb"})
 
 
+@trait
 class _MergeAssignmentMixin:
     """Shared assignment helpers for MERGE clause mixins."""
 
     __slots__ = ()
-
-    def create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
 
     def _is_column_reference(self, value: str) -> bool:
         """Check if value is a SQL expression rather than a literal string.
@@ -113,7 +97,7 @@ class _MergeAssignmentMixin:
 
         column_name = target_column if isinstance(target_column, str) else str(target_column)
         column_leaf = column_name.split(".")[-1]
-        placeholder, _ = self.create_placeholder(value, column_leaf)
+        placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_leaf)
         return exp.EQ(this=column_identifier, expression=placeholder)
 
 
@@ -161,14 +145,6 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
 
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
-
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
 
     def _create_dict_source_expression(
         self, source: "dict[str, Any] | list[dict[str, Any]]", alias: "str | None"
@@ -224,7 +200,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         """
 
         json_value = data if is_list else [data[0]]
-        _, json_param_name = self.create_placeholder(json_value, "json_data")
+        _, json_param_name = cast("QueryBuilder", self).create_placeholder(json_value, "json_data")
 
         sample_values: dict[str, Any] = {}
         for record in data:
@@ -233,22 +209,29 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     sample_values[column] = value
 
         alias_name = alias or "src"
+        recordset_alias = f"{alias_name}_data"
 
         column_type_spec = ", ".join([f"{col} {self._infer_postgres_type(sample_values.get(col))}" for col in columns])
         column_selects = ", ".join(columns)
-        from_sql = f"SELECT {column_selects} FROM jsonb_to_recordset(:{json_param_name}::jsonb) AS {alias_name}({column_type_spec})"
+        from_sql = (
+            f"SELECT {column_selects} FROM jsonb_to_recordset(:{json_param_name}::jsonb) AS "
+            f"{recordset_alias}({column_type_spec})"
+        )
 
         parsed = sg.parse_one(from_sql, dialect="postgres")
-        paren_expr = exp.paren(parsed)
-        paren_expr.set("alias", exp.TableAlias(this=exp.to_identifier(alias_name)))
-        return paren_expr
+        return exp.Subquery(
+            this=parsed,
+            alias=exp.TableAlias(
+                this=exp.to_identifier(alias_name), columns=[exp.to_identifier(col) for col in columns]
+            ),
+        )
 
     def _create_oracle_json_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", alias: "str | None"
     ) -> "exp.Expression":
         """Create Oracle JSON_TABLE source (production-proven pattern from oracledb-vertexai-demo)."""
         json_value = to_json(data)
-        _, json_param_name = self.create_placeholder(json_value, "json_payload")
+        _, json_param_name = cast("QueryBuilder", self).create_placeholder(json_value, "json_payload")
 
         sample_values: dict[str, Any] = {}
         for record in data:
@@ -267,9 +250,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         from_sql = f"SELECT {column_selects} FROM JSON_TABLE(:{json_param_name}, '$[*]' COLUMNS ({columns_clause}))"
 
         parsed = sg.parse_one(from_sql, dialect="oracle")
-        paren_expr = exp.paren(parsed)
-        paren_expr.set("alias", exp.TableAlias(this=exp.to_identifier(alias_name)))
-        return paren_expr
+        return exp.Subquery(this=parsed, alias=exp.TableAlias(this=exp.to_identifier(alias_name)))
 
     def _infer_postgres_type(self, value: "Any") -> str:
         """Infer PostgreSQL column type from Python value.
@@ -324,7 +305,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 column_name = column if isinstance(column, str) else str(column)
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
-                placeholder, _ = self.create_placeholder(value, column_name)
+                placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name)
                 row_params.append(placeholder)
             parameterized_values.append(row_params)
 
@@ -372,8 +353,9 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             else:
                 source_expr = paren_expr
         elif isinstance(source, QueryBuilder):
+            builder = cast("QueryBuilder", self)
             for param_name, param_value in source.parameters.items():
-                self.add_parameter(param_value, name=param_name)
+                builder.add_parameter(param_value, name=param_name)
             subquery_expression_source = source.get_expression()
             if not isinstance(subquery_expression_source, exp.Expression):
                 subquery_expression_source = exp.select()
@@ -447,14 +429,6 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
 
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
-
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
 
     def when_matched_then_update(
         self,
@@ -549,14 +523,6 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
     def when_not_matched_then_insert(
         self,
         columns: Mapping[str, Any] | Sequence[str] | None = None,
@@ -621,10 +587,10 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
                         raise SQLBuilderError(msg)
                     insert_values.append(parsed_value)
                 else:
-                    placeholder, _ = self.create_placeholder(value, column_name.split(".")[-1])
+                    placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name.split(".")[-1])
                     insert_values.append(placeholder)
             else:
-                placeholder, _ = self.create_placeholder(value, column_name.split(".")[-1])
+                placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name.split(".")[-1])
                 insert_values.append(placeholder)
 
         insert_expr.set("this", exp.Tuple(expressions=insert_columns))
@@ -645,14 +611,6 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
 
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
-
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
 
     def when_not_matched_by_source_then_update(
         self, set_values: dict[str, Any] | None = None, **assignments: Any
@@ -688,7 +646,7 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
                     raise SQLBuilderError(msg)
                 value_expr = parsed_value
             else:
-                placeholder, _ = self.create_placeholder(value, column_name)
+                placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name)
                 value_expr = placeholder
             set_expressions.append(exp.EQ(this=column_identifier, expression=value_expr))
 
@@ -745,7 +703,17 @@ class Merge(
         """
         if "enable_optimization" not in kwargs:
             kwargs["enable_optimization"] = False
-        super().__init__(**kwargs)
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_query_builder_kwargs(kwargs)
+        )
+        super().__init__(
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
         self._merge_target_quoted = False
         self._lock_targets_quoted = False
         self._initialize_expression()

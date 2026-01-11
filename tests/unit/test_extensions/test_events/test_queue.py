@@ -8,9 +8,7 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import EventChannelError
-from sqlspec.extensions.events import EventMessage
-from sqlspec.extensions.events._payload import parse_event_timestamp
-from sqlspec.extensions.events._queue import SyncTableEventQueue
+from sqlspec.extensions.events import EventMessage, SyncTableEventQueue, parse_event_timestamp
 
 
 def test_table_event_queue_default_table_name(tmp_path) -> None:
