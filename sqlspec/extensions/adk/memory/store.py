@@ -1,12 +1,14 @@
 """Base store classes for ADK memory backend (sync and async)."""
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.utils.logging import get_logger
+from sqlspec.observability import resolve_db_system
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from sqlspec.config import ADKConfig, DatabaseConfigProtocol
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
-logger = get_logger("extensions.adk.memory.store")
+logger = get_logger("sqlspec.extensions.adk.memory.store")
 
 __all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
 
@@ -92,7 +94,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
     - Text search with optional full-text search support
 
     Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/memory_store.py).
+    in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/store.py).
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
@@ -211,6 +213,15 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
+    async def ensure_tables(self) -> None:
+        """Create tables when enabled and emit a standardized log entry."""
+
+        if not self._enabled:
+            self._log_memory_table_skipped()
+            return
+        await self.create_tables()
+        self._log_memory_table_created()
+
     @abstractmethod
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
@@ -228,6 +239,25 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
             RuntimeError: If memory store is disabled.
         """
         raise NotImplementedError
+
+    def _log_memory_table_created(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.memory.table.ready",
+            db_system=resolve_db_system(type(self).__name__),
+            memory_table=self._memory_table,
+        )
+
+    def _log_memory_table_skipped(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.memory.table.skipped",
+            db_system=resolve_db_system(type(self).__name__),
+            memory_table=self._memory_table,
+            reason="disabled",
+        )
 
     @abstractmethod
     async def search_entries(
@@ -310,7 +340,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
     - Text search with optional full-text search support
 
     Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/sqlite/adk/memory_store.py).
+    in each adapter directory (e.g., sqlspec/adapters/sqlite/adk/store.py).
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
@@ -429,6 +459,15 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
+    def ensure_tables(self) -> None:
+        """Create tables when enabled and emit a standardized log entry."""
+
+        if not self._enabled:
+            self._log_memory_table_skipped()
+            return
+        self.create_tables()
+        self._log_memory_table_created()
+
     @abstractmethod
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
@@ -446,6 +485,22 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
             RuntimeError: If memory store is disabled.
         """
         raise NotImplementedError
+
+    def _log_memory_table_created(self) -> None:
+        logger.debug(
+            "ADK memory table ready",
+            extra={"db.system": resolve_db_system(type(self).__name__), "memory_table": self._memory_table},
+        )
+
+    def _log_memory_table_skipped(self) -> None:
+        logger.debug(
+            "ADK memory table creation skipped",
+            extra={
+                "db.system": resolve_db_system(type(self).__name__),
+                "memory_table": self._memory_table,
+                "reason": "disabled",
+            },
+        )
 
     @abstractmethod
     def search_entries(

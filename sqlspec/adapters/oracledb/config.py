@@ -6,7 +6,7 @@ import oracledb
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers
+from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
@@ -14,6 +14,7 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncConnectionPool,
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
+from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config, requires_session_callback
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncCursor,
     OracleAsyncDriver,
@@ -23,12 +24,10 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncDriver,
     OracleSyncExceptionHandler,
     OracleSyncSessionContext,
-    oracledb_statement_config,
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.typing import NUMPY_INSTALLED
-from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,7 +83,7 @@ class OraclePoolParams(OracleConnectionParams):
     max_sessions_per_shard: NotRequired[int]
     soda_metadata_cache: NotRequired[bool]
     ping_interval: NotRequired[int]
-    extra: NotRequired[dict[str, Any]]
+    extra: NotRequired["dict[str, Any]"]
 
 
 class OracleDriverFeatures(TypedDict):
@@ -118,6 +117,8 @@ class OracleDriverFeatures(TypedDict):
     enable_numpy_vectors: NotRequired[bool]
     enable_lowercase_column_names: NotRequired[bool]
     enable_uuid_binary: NotRequired[bool]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 class OracleSyncConnectionContext:
@@ -145,6 +146,27 @@ class OracleSyncConnectionContext:
         return None
 
 
+class _OracleSyncSessionConnectionHandler:
+    __slots__ = ("_config", "_conn")
+
+    def __init__(self, config: "OracleSyncConfig") -> None:
+        self._config = config
+        self._conn: OracleSyncConnection | None = None
+
+    def acquire_connection(self) -> "OracleSyncConnection":
+        if self._config.connection_instance is None:
+            self._config.connection_instance = self._config.create_pool()
+        self._conn = self._config.connection_instance.acquire()
+        return self._conn
+
+    def release_connection(self, _conn: "OracleSyncConnection") -> None:
+        if self._conn is None:
+            return
+        if self._config.connection_instance:
+            self._config.connection_instance.release(self._conn)
+        self._conn = None
+
+
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections."""
 
@@ -164,7 +186,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         *,
         connection_config: "OraclePoolParams | dict[str, Any] | None" = None,
         connection_instance: "OracleSyncConnectionPool | None" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -181,26 +203,21 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             driver_features: Optional driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
-            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance).
+            **kwargs: Additional keyword arguments.
         """
-        connection_config, connection_instance = apply_pool_deprecations(
-            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
-        )
+        reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
-        statement_config = statement_config or oracledb_statement_config
+        connection_config = normalize_connection_config(connection_config)
+        statement_config = statement_config or default_statement_config
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
-        processed_driver_features.setdefault("enable_lowercase_column_names", True)
-        processed_driver_features.setdefault("enable_uuid_binary", True)
+        driver_features = apply_driver_features(driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=processed_driver_features,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -210,10 +227,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Create the actual connection pool."""
         config = dict(self.connection_config)
 
-        needs_session_callback = self.driver_features.get("enable_numpy_vectors", False) or self.driver_features.get(
-            "enable_uuid_binary", False
-        )
-        if needs_session_callback:
+        if requires_session_callback(self.driver_features):
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool(**config)
@@ -238,6 +252,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Close the actual connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
+            self.connection_instance = None
 
     def create_connection(self) -> "OracleSyncConnection":
         """Create a single connection (not from pool).
@@ -270,24 +285,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         Returns:
             An OracleSyncDriver session context manager.
         """
-        conn_holder: dict[str, OracleSyncConnection] = {}
-
-        def acquire_connection() -> OracleSyncConnection:
-            if self.connection_instance is None:
-                self.connection_instance = self.create_pool()
-            conn = self.connection_instance.acquire()
-            conn_holder["conn"] = conn
-            return conn
-
-        def release_connection(_conn: OracleSyncConnection) -> None:
-            if "conn" in conn_holder and self.connection_instance:
-                self.connection_instance.release(conn_holder["conn"])
-                conn_holder.clear()
+        handler = _OracleSyncSessionConnectionHandler(self)
 
         return OracleSyncSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
-            statement_config=statement_config or self.statement_config or oracledb_statement_config,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -357,6 +360,27 @@ class OracleAsyncConnectionContext:
         return None
 
 
+class _OracleAsyncSessionConnectionHandler:
+    __slots__ = ("_config", "_conn")
+
+    def __init__(self, config: "OracleAsyncConfig") -> None:
+        self._config = config
+        self._conn: OracleAsyncConnection | None = None
+
+    async def acquire_connection(self) -> "OracleAsyncConnection":
+        if self._config.connection_instance is None:
+            self._config.connection_instance = await self._config.create_pool()
+        self._conn = cast("OracleAsyncConnection", await self._config.connection_instance.acquire())
+        return self._conn
+
+    async def release_connection(self, _conn: "OracleAsyncConnection") -> None:
+        if self._conn is None:
+            return
+        if self._config.connection_instance:
+            await self._config.connection_instance.release(self._conn)
+        self._conn = None
+
+
 @mypyc_attr(native_class=False)
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections."""
@@ -377,7 +401,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         *,
         connection_config: "OraclePoolParams | dict[str, Any] | None" = None,
         connection_instance: "OracleAsyncConnectionPool | None" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -394,25 +418,20 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             driver_features: Optional driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
-            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance).
+            **kwargs: Additional keyword arguments.
         """
-        connection_config, connection_instance = apply_pool_deprecations(
-            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
-        )
+        reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
+        connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
-        processed_driver_features.setdefault("enable_lowercase_column_names", True)
-        processed_driver_features.setdefault("enable_uuid_binary", True)
+        driver_features = apply_driver_features(driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or oracledb_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config or default_statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -422,10 +441,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
 
-        needs_session_callback = self.driver_features.get("enable_numpy_vectors", False) or self.driver_features.get(
-            "enable_uuid_binary", False
-        )
-        if needs_session_callback:
+        if requires_session_callback(self.driver_features):
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool_async(**config)
@@ -450,6 +466,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Close the actual async connection pool."""
         if self.connection_instance:
             await self.connection_instance.close()
+            self.connection_instance = None
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
@@ -486,24 +503,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         Returns:
             An OracleAsyncDriver session context manager.
         """
-        conn_holder: dict[str, OracleAsyncConnection] = {}
-
-        async def acquire_connection() -> OracleAsyncConnection:
-            if self.connection_instance is None:
-                self.connection_instance = await self.create_pool()
-            conn = cast("OracleAsyncConnection", await self.connection_instance.acquire())
-            conn_holder["conn"] = conn
-            return conn
-
-        async def release_connection(_conn: OracleAsyncConnection) -> None:
-            if "conn" in conn_holder and self.connection_instance:
-                await self.connection_instance.release(conn_holder["conn"])
-                conn_holder.clear()
+        handler = _OracleAsyncSessionConnectionHandler(self)
 
         return OracleAsyncSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
-            statement_config=statement_config or self.statement_config or oracledb_statement_config,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

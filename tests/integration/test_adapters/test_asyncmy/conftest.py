@@ -5,13 +5,17 @@ from collections.abc import AsyncGenerator
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_statement_config
 
 
-@pytest.fixture
-async def asyncmy_config(mysql_service: MySQLService) -> AsyncmyConfig:
-    """Create AsyncMy configuration for testing."""
-    return AsyncmyConfig(
+@pytest.fixture(scope="function")
+async def asyncmy_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:
+    """Create AsyncMy configuration for testing with proper cleanup.
+
+    Uses pool.close() + wait_closed() for async cleanup to properly clean up
+    Future references on the current event loop before it terminates.
+    """
+    config = AsyncmyConfig(
         connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
@@ -22,8 +26,18 @@ async def asyncmy_config(mysql_service: MySQLService) -> AsyncmyConfig:
             "minsize": 1,
             "maxsize": 5,
         },
-        statement_config=asyncmy_statement_config,
+        statement_config=default_statement_config,
     )
+    try:
+        yield config
+    finally:
+        pool = config.connection_instance
+        if pool is not None:
+            # Use close() + wait_closed() for async cleanup - ensures all Futures
+            # are properly cleaned up on the current loop before termination
+            pool.close()
+            await pool.wait_closed()
+            config.connection_instance = None
 
 
 @pytest.fixture

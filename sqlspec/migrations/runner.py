@@ -3,6 +3,7 @@
 import ast
 import hashlib
 import inspect
+import logging
 import re
 import time
 from abc import ABC, abstractmethod
@@ -14,9 +15,10 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
-from sqlspec.utils.logging import get_logger
+from sqlspec.migrations.version import parse_version
+from sqlspec.observability import resolve_db_system
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_, await_
-from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
@@ -27,7 +29,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner", "create_migration_runner")
 
-logger = get_logger("migrations.runner")
+logger = get_logger("sqlspec.migrations.runner")
 
 
 class _CachedMigrationMetadata:
@@ -336,7 +338,7 @@ class BaseMigrationRunner(ABC):
             metadata=dict(metadata), mtime_ns=stat_result.st_mtime_ns, size=stat_result.st_size
         )
         if cached_metadata:
-            logger.info("Migration metadata cache invalidated: %s", cache_key)
+            logger.debug("Migration metadata cache invalidated: %s", cache_key)
         else:
             logger.debug("Cached migration metadata: %s", cache_key)
         return metadata
@@ -510,6 +512,14 @@ class SyncMigrationRunner(BaseMigrationRunner):
         upgrade_sql_list = self._get_migration_sql(migration, "up")
         if upgrade_sql_list is None:
             self._metric("migrations.upgrade.skipped")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "migration.apply",
+                db_system=resolve_db_system(type(driver).__name__),
+                version=migration.get("version"),
+                status="missing",
+            )
             return None, 0
 
         if use_transaction is None:
@@ -522,6 +532,15 @@ class SyncMigrationRunner(BaseMigrationRunner):
             version = cast("str | None", migration.get("version"))
             span = runtime.start_migration_span("upgrade", version=version)
             runtime.increment_metric("migrations.upgrade.invocations")
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.apply",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            use_transaction=use_transaction,
+            status="start",
+        )
 
         start_time = time.perf_counter()
         execution_time = 0
@@ -550,12 +569,31 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 duration_ms = int((time.perf_counter() - start_time) * 1000)
                 runtime.increment_metric("migrations.upgrade.errors")
                 runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+            log_with_context(
+                logger,
+                logging.ERROR,
+                "migration.apply",
+                db_system=resolve_db_system(type(driver).__name__),
+                version=migration.get("version"),
+                duration_ms=int((time.perf_counter() - start_time) * 1000),
+                error_type=type(exc).__name__,
+                status="failed",
+            )
             raise
 
         if runtime is not None:
             runtime.increment_metric("migrations.upgrade.applied")
             runtime.increment_metric("migrations.upgrade.duration_ms", float(execution_time))
             runtime.end_migration_span(span, duration_ms=execution_time)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.apply",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            duration_ms=execution_time,
+            status="complete",
+        )
 
         return None, execution_time
 
@@ -581,6 +619,14 @@ class SyncMigrationRunner(BaseMigrationRunner):
         downgrade_sql_list = self._get_migration_sql(migration, "down")
         if downgrade_sql_list is None:
             self._metric("migrations.downgrade.skipped")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "migration.rollback",
+                db_system=resolve_db_system(type(driver).__name__),
+                version=migration.get("version"),
+                status="missing",
+            )
             return None, 0
 
         if use_transaction is None:
@@ -593,6 +639,15 @@ class SyncMigrationRunner(BaseMigrationRunner):
             version = cast("str | None", migration.get("version"))
             span = runtime.start_migration_span("downgrade", version=version)
             runtime.increment_metric("migrations.downgrade.invocations")
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.rollback",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            use_transaction=use_transaction,
+            status="start",
+        )
 
         start_time = time.perf_counter()
         execution_time = 0
@@ -621,12 +676,31 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 duration_ms = int((time.perf_counter() - start_time) * 1000)
                 runtime.increment_metric("migrations.downgrade.errors")
                 runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+            log_with_context(
+                logger,
+                logging.ERROR,
+                "migration.rollback",
+                db_system=resolve_db_system(type(driver).__name__),
+                version=migration.get("version"),
+                duration_ms=int((time.perf_counter() - start_time) * 1000),
+                error_type=type(exc).__name__,
+                status="failed",
+            )
             raise
 
         if runtime is not None:
             runtime.increment_metric("migrations.downgrade.applied")
             runtime.increment_metric("migrations.downgrade.duration_ms", float(execution_time))
             runtime.end_migration_span(span, duration_ms=execution_time)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.rollback",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            duration_ms=execution_time,
+            status="complete",
+        )
 
         return None, execution_time
 
@@ -770,6 +844,14 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         upgrade_sql_list = await self._get_migration_sql_async(migration, "up")
         if upgrade_sql_list is None:
             self._metric("migrations.upgrade.skipped")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "migration.apply",
+                db_system=resolve_db_system(type(driver).__name__),
+                version=migration.get("version"),
+                status="missing",
+            )
             return None, 0
 
         if use_transaction is None:
@@ -782,6 +864,15 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             version = cast("str | None", migration.get("version"))
             span = runtime.start_migration_span("upgrade", version=version)
             runtime.increment_metric("migrations.upgrade.invocations")
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.apply",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            use_transaction=use_transaction,
+            status="start",
+        )
 
         start_time = time.perf_counter()
         execution_time = 0
@@ -810,12 +901,31 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 duration_ms = int((time.perf_counter() - start_time) * 1000)
                 runtime.increment_metric("migrations.upgrade.errors")
                 runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+            log_with_context(
+                logger,
+                logging.ERROR,
+                "migration.apply",
+                db_system=resolve_db_system(type(driver).__name__),
+                version=migration.get("version"),
+                duration_ms=int((time.perf_counter() - start_time) * 1000),
+                error_type=type(exc).__name__,
+                status="failed",
+            )
             raise
 
         if runtime is not None:
             runtime.increment_metric("migrations.upgrade.applied")
             runtime.increment_metric("migrations.upgrade.duration_ms", float(execution_time))
             runtime.end_migration_span(span, duration_ms=execution_time)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.apply",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            duration_ms=execution_time,
+            status="complete",
+        )
 
         return None, execution_time
 
@@ -841,6 +951,14 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         downgrade_sql_list = await self._get_migration_sql_async(migration, "down")
         if downgrade_sql_list is None:
             self._metric("migrations.downgrade.skipped")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "migration.rollback",
+                db_system=resolve_db_system(type(driver).__name__),
+                version=migration.get("version"),
+                status="missing",
+            )
             return None, 0
 
         if use_transaction is None:
@@ -853,6 +971,15 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             version = cast("str | None", migration.get("version"))
             span = runtime.start_migration_span("downgrade", version=version)
             runtime.increment_metric("migrations.downgrade.invocations")
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.rollback",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            use_transaction=use_transaction,
+            status="start",
+        )
 
         start_time = time.perf_counter()
         execution_time = 0
@@ -881,12 +1008,31 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 duration_ms = int((time.perf_counter() - start_time) * 1000)
                 runtime.increment_metric("migrations.downgrade.errors")
                 runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+            log_with_context(
+                logger,
+                logging.ERROR,
+                "migration.rollback",
+                db_system=resolve_db_system(type(driver).__name__),
+                version=migration.get("version"),
+                duration_ms=int((time.perf_counter() - start_time) * 1000),
+                error_type=type(exc).__name__,
+                status="failed",
+            )
             raise
 
         if runtime is not None:
             runtime.increment_metric("migrations.downgrade.applied")
             runtime.increment_metric("migrations.downgrade.duration_ms", float(execution_time))
             runtime.end_migration_span(span, duration_ms=execution_time)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.rollback",
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            duration_ms=execution_time,
+            status="complete",
+        )
 
         return None, execution_time
 

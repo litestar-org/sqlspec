@@ -4,8 +4,8 @@ import array
 
 import pytest
 
-from sqlspec._typing import NUMPY_INSTALLED
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
+from sqlspec.typing import NUMPY_INSTALLED
 
 pytestmark = pytest.mark.skipif(not NUMPY_INSTALLED, reason="NumPy not installed")
 

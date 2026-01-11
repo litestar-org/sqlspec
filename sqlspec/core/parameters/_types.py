@@ -6,21 +6,36 @@ from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from mypy_extensions import mypyc_attr
 
 __all__ = (
     "DriverParameterProfile",
     "ParameterInfo",
+    "ParameterMapping",
+    "ParameterPayload",
     "ParameterProcessingResult",
     "ParameterProfile",
+    "ParameterSequence",
     "ParameterStyle",
     "ParameterStyleConfig",
     "TypedParameter",
     "is_iterable_parameters",
     "wrap_with_type",
 )
+
+
+ParameterMapping: TypeAlias = "Mapping[str, object]"
+"""Type alias for mapping-based parameter payloads."""
+
+
+ParameterSequence: TypeAlias = "Sequence[object]"
+"""Type alias for sequence-based parameter payloads."""
+
+
+ParameterPayload: TypeAlias = "ParameterMapping | ParameterSequence | object | None"
+"""Type alias for parameter payloads accepted by the processing pipeline."""
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -69,6 +84,19 @@ class TypedParameter:
     def __repr__(self) -> str:
         name_part = f", semantic_name='{self.semantic_name}'" if self.semantic_name else ""
         return f"TypedParameter({self.value!r}, original_type={self.original_type.__name__}{name_part})"
+
+
+class _TupleAdapter:
+    __slots__ = ("_as_list", "_serializer")
+
+    def __init__(self, serializer: "Callable[[Any], str]", as_list: bool) -> None:
+        self._serializer = serializer
+        self._as_list = as_list
+
+    def __call__(self, value: Any) -> "Any":
+        if self._as_list:
+            return self._serializer(list(value))
+        return self._serializer(value)
 
 
 @singledispatch
@@ -146,6 +174,7 @@ class ParameterStyleConfig:
         "output_transformer",
         "preserve_original_params_for_many",
         "preserve_parameter_format",
+        "strict_named_parameters",
         "supported_execution_parameter_styles",
         "supported_parameter_styles",
         "type_coercion_map",
@@ -164,9 +193,10 @@ class ParameterStyleConfig:
         preserve_parameter_format: bool = True,
         preserve_original_params_for_many: bool = False,
         output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
-        ast_transformer: "Callable[[Any, Any], tuple[Any, Any]] | None" = None,
+        ast_transformer: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]] | None" = None,
         json_serializer: "Callable[[Any], str] | None" = None,
         json_deserializer: "Callable[[str], Any] | None" = None,
+        strict_named_parameters: bool = True,
     ) -> None:
         self.default_parameter_style = default_parameter_style
         self.supported_parameter_styles = frozenset(supported_parameter_styles or (default_parameter_style,))
@@ -182,6 +212,7 @@ class ParameterStyleConfig:
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_parameter_format = preserve_parameter_format
         self.preserve_original_params_for_many = preserve_original_params_for_many
+        self.strict_named_parameters = strict_named_parameters
         self.json_serializer = json_serializer
         self.json_deserializer = json_deserializer
 
@@ -202,6 +233,7 @@ class ParameterStyleConfig:
             self.needs_static_script_compilation,
             self.allow_mixed_parameter_styles,
             self.preserve_parameter_format,
+            self.strict_named_parameters,
             bool(self.ast_transformer),
             self.json_serializer,
             self.json_deserializer,
@@ -233,6 +265,7 @@ class ParameterStyleConfig:
             "allow_mixed_parameter_styles": self.allow_mixed_parameter_styles,
             "preserve_parameter_format": self.preserve_parameter_format,
             "preserve_original_params_for_many": self.preserve_original_params_for_many,
+            "strict_named_parameters": self.strict_named_parameters,
             "output_transformer": self.output_transformer,
             "ast_transformer": self.ast_transformer,
             "json_serializer": self.json_serializer,
@@ -251,15 +284,9 @@ class ParameterStyleConfig:
         """Return a copy configured with JSON serializers for complex parameters."""
 
         if tuple_strategy == "list":
-
-            def tuple_adapter(value: Any) -> Any:
-                return serializer(list(value))
-
+            tuple_adapter = _TupleAdapter(serializer, True)
         elif tuple_strategy == "tuple":
-
-            def tuple_adapter(value: Any) -> Any:
-                return serializer(value)
-
+            tuple_adapter = _TupleAdapter(serializer, False)
         else:
             msg = f"Unsupported tuple_strategy: {tuple_strategy}"
             raise ValueError(msg)
@@ -296,6 +323,7 @@ class DriverParameterProfile:
         "preserve_original_params_for_many",
         "preserve_parameter_format",
         "statement_kwargs",
+        "strict_named_parameters",
         "supported_execution_styles",
         "supported_styles",
     )
@@ -315,10 +343,11 @@ class DriverParameterProfile:
         json_serializer_strategy: "Literal['driver', 'helper', 'none']",
         custom_type_coercions: "Mapping[type, Callable[[Any], Any]] | None" = None,
         default_output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
-        default_ast_transformer: "Callable[[Any, Any], tuple[Any, Any]] | None" = None,
-        extras: "Mapping[str, Any] | None" = None,
+        default_ast_transformer: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]] | None" = None,
+        extras: "Mapping[str, object] | None" = None,
         default_dialect: "str | None" = None,
-        statement_kwargs: "Mapping[str, Any] | None" = None,
+        statement_kwargs: "Mapping[str, object] | None" = None,
+        strict_named_parameters: bool = True,
     ) -> None:
         self.name = name
         self.default_style = default_style
@@ -332,6 +361,7 @@ class DriverParameterProfile:
         self.needs_static_script_compilation = needs_static_script_compilation
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_original_params_for_many = preserve_original_params_for_many
+        self.strict_named_parameters = strict_named_parameters
         self.json_serializer_strategy = json_serializer_strategy
         self.custom_type_coercions = (
             MappingProxyType(dict(custom_type_coercions)) if custom_type_coercions else MappingProxyType({})
@@ -393,12 +423,15 @@ class ParameterProfile:
 class ParameterProcessingResult:
     """Return container for parameter processing output."""
 
-    __slots__ = ("parameter_profile", "parameters", "sql")
+    __slots__ = ("parameter_profile", "parameters", "sql", "sqlglot_sql")
 
-    def __init__(self, sql: str, parameters: Any, parameter_profile: "ParameterProfile") -> None:
+    def __init__(
+        self, sql: str, parameters: Any, parameter_profile: "ParameterProfile", sqlglot_sql: str | None = None
+    ) -> None:
         self.sql = sql
         self.parameters = parameters
         self.parameter_profile = parameter_profile
+        self.sqlglot_sql = sqlglot_sql or sql
 
     def __iter__(self) -> "Generator[str | Any, Any, None]":
         yield self.sql

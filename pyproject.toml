@@ -18,7 +18,6 @@ Source = "https://github.com/litestar-org/sqlspec"
 adbc = ["adbc_driver_manager", "pyarrow"]
 adk = ["google-adk"]
 aioodbc = ["aioodbc"]
-aiosql = ["aiosql"]
 aiosqlite = ["aiosqlite"]
 alloydb = ["google-cloud-alloydb-connector"]
 asyncmy = ["asyncmy"]
@@ -148,40 +147,46 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc", "hatch-cython"]
 enable-by-default = false
 exclude = [
-  "tests/**",                       # Test files
-  "sqlspec/__main__.py",            # Entry point (can't run directly when compiled)
-  "sqlspec/cli.py",                 # CLI module (not performance critical)
-  "sqlspec/typing.py",              # Type aliases
-  "sqlspec/_typing.py",             # Type aliases
-  "sqlspec/**/_typing.py",          # Type aliases (mypyc-incompatible)
-  "sqlspec/config.py",              # Main config
-  "sqlspec/extensions/**",          # All extensions
-  "sqlspec/**/__init__.py",         # Init files (usually just imports)
-  "sqlspec/protocols.py",           # Protocol definitions
-  "sqlspec/builder/**/*.py",        # Builder (not performance critical)
-  "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
+  "tests/**",                                 # Test files
+  "sqlspec/__main__.py",                      # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                           # CLI module (not performance critical)
+  "sqlspec/typing.py",                        # Type aliases
+  "sqlspec/_typing.py",                       # Type aliases
+  "sqlspec/**/_typing.py",                    # Type aliases (mypyc-incompatible)
+  "sqlspec/config.py",                        # Main config
+  "sqlspec/extensions/**",                    # All extensions
+  "sqlspec/**/__init__.py",                   # Init files (usually just imports)
+  "sqlspec/protocols.py",                     # Protocol definitions
+  "sqlspec/adapters/mock/**",                 # Mock adapter (testing only)
+  "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
+  "sqlspec/data_dictionary/_loader.py",       # Loader relies on __file__ which fails in compiled modules
+  "sqlspec/builder/_vector_expressions.py",   # Inherits from sqlglot.exp.Expression which has a metaclass
+  "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
+  "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
+  "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
+  "sqlspec/observability/_formatting.py",     # Inherits from non-compiled logging.Formatter
+  "sqlspec/utils/arrow_helpers.py",           # Arrow operations cause segfaults when compiled
 ]
 include = [
-  "sqlspec/core/**/*.py",                  # Core module
-  "sqlspec/loader.py",                     # Loader module
-  "sqlspec/observability/**/*.py",         # Observability utilities
-  "sqlspec/driver/**/*.py",                # Driver module
-  "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
-  "sqlspec/adapters/**/type_converter.py", # All adapters type converters
-  "sqlspec/utils/text.py",                 # Text utilities
-  "sqlspec/utils/sync_tools.py",           # Synchronous utility functions
-  "sqlspec/utils/type_guards.py",          # Type guard utilities
-  "sqlspec/utils/fixtures.py",             # File fixture loading
-  "sqlspec/utils/data_transformation.py",  # Data transformation utilities
-  "sqlspec/utils/arrow_helpers.py",        # Arrow result helpers
-  "sqlspec/utils/serializers.py",          # Serialization helpers
-  "sqlspec/utils/type_converters.py",      # Adapter type converters
-  "sqlspec/utils/correlation.py",          # Correlation context helpers
-  "sqlspec/utils/portal.py",               # Thread portal utilities
-  "sqlspec/utils/singleton.py",            # Lightweight singleton helpers
-  "sqlspec/utils/schema.py",               # Schema transformation (refactored for mypyc)
-  "sqlspec/utils/uuids.py",                # UUID utilities
-
+  "sqlspec/core/**/*.py",                   # Core module
+  "sqlspec/builder/**/*.py",                # Builder module
+  "sqlspec/loader.py",                      # Loader module
+  "sqlspec/observability/**/*.py",          # Observability utilities
+  "sqlspec/driver/**/*.py",                 # Driver module
+  "sqlspec/data_dictionary/**/*.py",        # Data dictionary mixin (required for adapter inheritance)
+  "sqlspec/adapters/**/core.py",            # Adapter compiled helpers
+  "sqlspec/adapters/**/type_converter.py",  # All adapters type converters
+  "sqlspec/utils/text.py",                  # Text utilities
+  "sqlspec/utils/sync_tools.py",            # Synchronous utility functions
+  "sqlspec/utils/type_guards.py",           # Type guard utilities
+  "sqlspec/utils/fixtures.py",              # File fixture loading
+  "sqlspec/utils/serializers.py",           # Serialization helpers
+  "sqlspec/utils/type_converters.py",       # Adapter type converters
+  "sqlspec/utils/correlation.py",           # Correlation context helpers
+  "sqlspec/utils/portal.py",                # Thread portal utilities
+  "sqlspec/utils/singleton.py",             # Lightweight singleton helpers
+  "sqlspec/utils/schema.py",                # Schema transformation (refactored for mypyc)
+  "sqlspec/utils/uuids.py",                 # UUID utilities
 ]
 mypy-args = [
   "--ignore-missing-imports",
@@ -375,8 +380,6 @@ module = [
   "opentelemetry",
   "prometheus_client",
   "prometheus_client.*",
-  "aiosql",
-  "aiosql.*",
   "fsspec",
   "fsspec.*",
   "sqlglot",
@@ -452,6 +455,7 @@ ignore = [
   "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
   "FBT001",  # Boolean-typed positional argument in function definition
   "FBT002",  # Boolean default positional argument in function definition
+  "FBT003",  # Boolean positional value in function call
   "PLR0913", # pylint - Too many arguments in function definition
   "ARG002",  # Unused method argument
   "ARG001",  # Unused function argument

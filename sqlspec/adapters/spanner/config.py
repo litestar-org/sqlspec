@@ -7,12 +7,12 @@ from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import SpannerConnection
-from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver, spanner_statement_config
+from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events._hints import EventRuntimeHints
-from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.extensions.events import EventRuntimeHints
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
@@ -67,6 +67,8 @@ class SpannerDriverFeatures(TypedDict):
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     session_labels: "NotRequired[dict[str, str]]"
+    enable_events: "NotRequired[bool]"
+    events_backend: "NotRequired[str]"
 
 
 class SpannerConnectionContext:
@@ -134,6 +136,25 @@ class SpannerConnectionContext:
         return None
 
 
+class _SpannerSessionConnectionHandler:
+    __slots__ = ("_connection_ctx",)
+
+    def __init__(self, connection_ctx: "SpannerConnectionContext") -> None:
+        self._connection_ctx = connection_ctx
+
+    def acquire_connection(self) -> "SpannerConnection":
+        return self._connection_ctx.__enter__()
+
+    def release_connection(
+        self,
+        _conn: "SpannerConnection",
+        exc_type: "type[BaseException] | None",
+        exc_val: "BaseException | None",
+        exc_tb: Any,
+    ) -> None:
+        self._connection_ctx.__exit__(exc_type, exc_val, exc_tb)
+
+
 class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSessionPool", SpannerSyncDriver]):
     """Spanner configuration and session management."""
 
@@ -159,9 +180,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config, connection_instance = apply_pool_deprecations(
-            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
-        )
+        reject_pool_aliases(kwargs)
 
         self.connection_config = normalize_connection_config(connection_config)
 
@@ -169,19 +188,16 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self.connection_config.setdefault("max_sessions", 10)
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
-        features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        features.setdefault("enable_uuid_conversion", True)
-        features.setdefault("json_serializer", to_json)
-        features.setdefault("json_deserializer", from_json)
+        driver_features = apply_driver_features(driver_features)
 
-        base_statement_config = statement_config or spanner_statement_config
+        statement_config = statement_config or default_statement_config
 
         super().__init__(
             connection_config=self.connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -286,22 +302,12 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             A Spanner driver session context manager.
         """
         connection_ctx = SpannerConnectionContext(self, transaction=transaction)
-
-        def acquire_connection() -> SpannerConnection:
-            return connection_ctx.__enter__()
-
-        def release_connection(
-            _conn: SpannerConnection,
-            exc_type: "type[BaseException] | None",
-            exc_val: "BaseException | None",
-            exc_tb: Any,
-        ) -> None:
-            connection_ctx.__exit__(exc_type, exc_val, exc_tb)
+        handler = _SpannerSessionConnectionHandler(connection_ctx)
 
         return SpannerSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
-            statement_config=statement_config or self.statement_config or spanner_statement_config,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

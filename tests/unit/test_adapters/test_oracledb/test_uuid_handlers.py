@@ -3,12 +3,12 @@
 import uuid
 from unittest.mock import Mock, patch
 
-from sqlspec.adapters.oracledb._uuid_handlers import (
-    _input_type_handler,  # pyright: ignore
-    _output_type_handler,  # pyright: ignore
+from sqlspec.adapters.oracledb import (
     register_uuid_handlers,
     uuid_converter_in,
     uuid_converter_out,
+    uuid_input_type_handler,
+    uuid_output_type_handler,
 )
 
 
@@ -84,7 +84,7 @@ def test_input_type_handler_with_uuid() -> None:
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
 
-    result = _input_type_handler(cursor, uuid.uuid4(), 1)
+    result = uuid_input_type_handler(cursor, uuid.uuid4(), 1)
 
     assert result is cursor_var
     cursor.var.assert_called_once_with(oracledb.DB_TYPE_RAW, arraysize=1, inconverter=uuid_converter_in)
@@ -94,7 +94,7 @@ def test_input_type_handler_non_uuid() -> None:
     """Input handler should return None for non-UUID values."""
 
     cursor = Mock()
-    assert _input_type_handler(cursor, "not-a-uuid", 1) is None
+    assert uuid_input_type_handler(cursor, "not-a-uuid", 1) is None
 
 
 def test_output_type_handler_raw16() -> None:
@@ -108,7 +108,7 @@ def test_output_type_handler_raw16() -> None:
     cursor.var = Mock(return_value=cursor_var)
 
     metadata = ("RAW_COL", oracledb.DB_TYPE_RAW, 16, 16, None, None, True)
-    result = _output_type_handler(cursor, metadata)
+    result = uuid_output_type_handler(cursor, metadata)
 
     assert result is cursor_var
     cursor.var.assert_called_once_with(oracledb.DB_TYPE_RAW, arraysize=10, outconverter=uuid_converter_out)
@@ -121,7 +121,7 @@ def test_output_type_handler_non_raw16() -> None:
 
     cursor = Mock()
     metadata = ("VARCHAR_COL", oracledb.DB_TYPE_VARCHAR, 36, 36, None, None, True)
-    assert _output_type_handler(cursor, metadata) is None
+    assert uuid_output_type_handler(cursor, metadata) is None
 
 
 def test_register_uuid_handlers_no_existing() -> None:

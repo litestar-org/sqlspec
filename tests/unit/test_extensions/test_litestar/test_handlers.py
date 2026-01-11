@@ -9,7 +9,7 @@ from litestar.constants import HTTP_RESPONSE_START
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
+from sqlspec.extensions.litestar import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
     connection_provider_maker,

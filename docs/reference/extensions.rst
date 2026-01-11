@@ -23,10 +23,6 @@ Available integrations:
 - **Sanic** - Async Python web framework
 - **Starlette** - Lightweight ASGI framework
 
-**Data Tools:**
-
-- **aiosql** - SQL file loading integration
-
 Each extension provides:
 
 - Configuration integration
@@ -82,7 +78,7 @@ See :doc:`/extensions/adk/index` for comprehensive documentation including:
    )
 
    # Memory service (optional)
-   from sqlspec.adapters.asyncpg.adk.memory_store import AsyncpgADKMemoryStore
+   from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKMemoryStore
    from sqlspec.extensions.adk.memory import SQLSpecMemoryService
 
    memory_store = AsyncpgADKMemoryStore(config)
@@ -218,16 +214,6 @@ Starlette Integration
 .. currentmodule:: sqlspec.extensions.starlette
 
 .. automodule:: sqlspec.extensions.starlette
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-aiosql Integration
-==================
-
-.. currentmodule:: sqlspec.extensions.aiosql
-
-.. automodule:: sqlspec.extensions.aiosql
    :members:
    :undoc-members:
    :show-inheritance:

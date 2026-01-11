@@ -19,6 +19,8 @@ from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import supports_async_delete, supports_async_read_bytes, supports_async_write_bytes
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
     from sqlspec.protocols import ObjectStoreProtocol
     from sqlspec.typing import ArrowTable
 
@@ -220,6 +222,22 @@ def _encode_arrow_payload(table: "ArrowTable", format_choice: StorageFormat, *, 
     return result_bytes
 
 
+def _delete_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> None:
+    execute_sync_storage_operation(partial(backend.delete, path), backend=backend_name, operation="delete", path=path)
+
+
+def _write_backend_sync(backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str) -> None:
+    execute_sync_storage_operation(
+        partial(backend.write_bytes, path, payload), backend=backend_name, operation="write_bytes", path=path
+    )
+
+
+def _read_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> bytes:
+    return execute_sync_storage_operation(
+        partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
+    )
+
+
 def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "ArrowTable":
     pa = import_pyarrow()
     if format_choice == "parquet":
@@ -240,6 +258,47 @@ def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "Arro
     raise ValueError(msg)
 
 
+def _resolve_alias_destination(
+    registry: StorageRegistry, destination: str, backend_options: "dict[str, Any]"
+) -> "tuple[ObjectStoreProtocol, str] | None":
+    if not destination.startswith("alias://"):
+        return None
+    payload = destination.removeprefix("alias://")
+    alias_name, _, relative_path = payload.partition("/")
+    alias = alias_name.strip()
+    if not alias:
+        msg = "Alias destinations must include a registry alias before the path component"
+        raise ImproperConfigurationError(msg)
+    path_segment = relative_path.strip()
+    if not path_segment:
+        msg = "Alias destinations must include an object path after the alias name"
+        raise ImproperConfigurationError(msg)
+    backend = registry.get(alias, **backend_options)
+    return backend, path_segment.lstrip("/")
+
+
+def _normalize_path_for_backend(destination: str) -> str:
+    if destination.startswith("file://"):
+        return destination.removeprefix("file://")
+    if "://" in destination:
+        _, remainder = destination.split("://", 1)
+        return remainder.lstrip("/")
+    return destination
+
+
+def _resolve_storage_backend(
+    registry: StorageRegistry, destination: StorageDestination, backend_options: "dict[str, Any] | None"
+) -> "tuple[ObjectStoreProtocol, str]":
+    destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
+    options = backend_options or {}
+    alias_resolution = _resolve_alias_destination(registry, destination_str, options)
+    if alias_resolution is not None:
+        return alias_resolution
+    backend = registry.get(destination_str, **options)
+    normalized_path = _normalize_path_for_backend(destination_str)
+    return backend, normalized_path
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class SyncStoragePipeline:
     """Pipeline coordinating storage registry operations and telemetry."""
@@ -248,6 +307,12 @@ class SyncStoragePipeline:
 
     def __init__(self, *, registry: StorageRegistry | None = None) -> None:
         self.registry = registry or storage_registry
+
+    def _resolve_backend(
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
+    ) -> "tuple[ObjectStoreProtocol, str]":
+        """Resolve storage backend and normalized path for a destination."""
+        return _resolve_storage_backend(self.registry, destination, backend_options)
 
     def write_rows(
         self,
@@ -298,9 +363,7 @@ class SyncStoragePipeline:
 
         backend, path = self._resolve_backend(source, storage_options)
         backend_name = backend.backend_type
-        payload = execute_sync_storage_operation(
-            partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
-        )
+        payload = _read_backend_sync(backend, path, backend_name=backend_name)
         table = _decode_arrow_payload(payload, file_format)
         rows_processed = int(table.num_rows)
         telemetry: StorageTelemetry = {
@@ -311,6 +374,17 @@ class SyncStoragePipeline:
             "backend": backend_name,
         }
         return table, telemetry
+
+    def stream_read(
+        self,
+        source: StorageDestination,
+        *,
+        chunk_size: int | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "Iterator[bytes]":
+        """Stream bytes from an artifact."""
+        backend, path = self._resolve_backend(source, storage_options)
+        return backend.stream_read(path, chunk_size=chunk_size)
 
     def allocate_staging_artifacts(self, requests: "list[StorageLoadRequest]") -> "list[StagedArtifact]":
         """Allocate staging metadata for upcoming loads."""
@@ -339,9 +413,7 @@ class SyncStoragePipeline:
         for artifact in artifacts:
             backend, path = self._resolve_backend(artifact["uri"], None)
             try:
-                execute_sync_storage_operation(
-                    partial(backend.delete, path), backend=backend.backend_type, operation="delete", path=path
-                )
+                _delete_backend_sync(backend, path, backend_name=backend.backend_type)
             except Exception:
                 if not ignore_errors:
                     raise
@@ -358,9 +430,7 @@ class SyncStoragePipeline:
         backend, path = self._resolve_backend(destination, storage_options)
         backend_name = backend.backend_type
         start = perf_counter()
-        execute_sync_storage_operation(
-            partial(backend.write_bytes, path, payload), backend=backend_name, operation="write_bytes", path=path
-        )
+        _write_backend_sync(backend, path, payload, backend_name=backend_name)
         elapsed = perf_counter() - start
         bytes_written = len(payload)
         _METRICS.record_bytes(bytes_written)
@@ -373,44 +443,6 @@ class SyncStoragePipeline:
             "backend": backend_name,
         }
         return telemetry
-
-    def _resolve_backend(
-        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-    ) -> "tuple[ObjectStoreProtocol, str]":
-        destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-        options = backend_options or {}
-        alias_resolution = self._resolve_alias_destination(destination_str, options)
-        if alias_resolution is not None:
-            return alias_resolution
-        backend = self.registry.get(destination_str, **options)
-        normalized_path = self._normalize_path_for_backend(destination_str)
-        return backend, normalized_path
-
-    def _resolve_alias_destination(
-        self, destination: str, backend_options: "dict[str, Any]"
-    ) -> "tuple[ObjectStoreProtocol, str] | None":
-        if not destination.startswith("alias://"):
-            return None
-        payload = destination.removeprefix("alias://")
-        alias_name, _, relative_path = payload.partition("/")
-        alias = alias_name.strip()
-        if not alias:
-            msg = "Alias destinations must include a registry alias before the path component"
-            raise ImproperConfigurationError(msg)
-        path_segment = relative_path.strip()
-        if not path_segment:
-            msg = "Alias destinations must include an object path after the alias name"
-            raise ImproperConfigurationError(msg)
-        backend = self.registry.get(alias, **backend_options)
-        return backend, path_segment.lstrip("/")
-
-    def _normalize_path_for_backend(self, destination: str) -> str:
-        if destination.startswith("file://"):
-            return destination.removeprefix("file://")
-        if "://" in destination:
-            _, remainder = destination.split("://", 1)
-            return remainder.lstrip("/")
-        return destination
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -462,7 +494,7 @@ class AsyncStoragePipeline:
 
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
         for artifact in artifacts:
-            backend, path = self._resolve_backend(artifact["uri"], None)
+            backend, path = _resolve_storage_backend(self.registry, artifact["uri"], None)
             backend_name = backend.backend_type
             if supports_async_delete(backend):
                 try:
@@ -474,15 +506,8 @@ class AsyncStoragePipeline:
                         raise
                 continue
 
-            def _delete_sync(
-                backend: "ObjectStoreProtocol" = backend, path: str = path, backend_name: str = backend_name
-            ) -> None:
-                execute_sync_storage_operation(
-                    partial(backend.delete, path), backend=backend_name, operation="delete", path=path
-                )
-
             try:
-                await async_(_delete_sync)()
+                await async_(_delete_backend_sync)(backend=backend, path=path, backend_name=backend_name)
             except Exception:
                 if not ignore_errors:
                     raise
@@ -496,7 +521,7 @@ class AsyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = self._resolve_backend(destination, storage_options)
+        backend, path = _resolve_storage_backend(self.registry, destination, storage_options)
         backend_name = backend.backend_type
         start = perf_counter()
         if supports_async_write_bytes(backend):
@@ -507,21 +532,7 @@ class AsyncStoragePipeline:
                 path=path,
             )
         else:
-
-            def _write_sync(
-                backend: "ObjectStoreProtocol" = backend,
-                path: str = path,
-                payload: bytes = payload,
-                backend_name: str = backend_name,
-            ) -> None:
-                execute_sync_storage_operation(
-                    partial(backend.write_bytes, path, payload),
-                    backend=backend_name,
-                    operation="write_bytes",
-                    path=path,
-                )
-
-            await async_(_write_sync)()
+            await async_(_write_backend_sync)(backend=backend, path=path, payload=payload, backend_name=backend_name)
 
         elapsed = perf_counter() - start
         bytes_written = len(payload)
@@ -539,22 +550,14 @@ class AsyncStoragePipeline:
     async def read_arrow_async(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
-        backend, path = self._resolve_backend(source, storage_options)
+        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
         backend_name = backend.backend_type
         if supports_async_read_bytes(backend):
             payload = await execute_async_storage_operation(
                 partial(backend.read_bytes_async, path), backend=backend_name, operation="read_bytes", path=path
             )
         else:
-
-            def _read_sync(
-                backend: "ObjectStoreProtocol" = backend, path: str = path, backend_name: str = backend_name
-            ) -> bytes:
-                return execute_sync_storage_operation(
-                    partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
-                )
-
-            payload = await async_(_read_sync)()
+            payload = await async_(_read_backend_sync)(backend=backend, path=path, backend_name=backend_name)
 
         table = _decode_arrow_payload(payload, file_format)
         rows_processed = int(table.num_rows)
@@ -567,40 +570,13 @@ class AsyncStoragePipeline:
         }
         return table, telemetry
 
-    def _resolve_backend(
-        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-    ) -> "tuple[ObjectStoreProtocol, str]":
-        destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-        options = backend_options or {}
-        alias_resolution = self._resolve_alias_destination(destination_str, options)
-        if alias_resolution is not None:
-            return alias_resolution
-        backend = self.registry.get(destination_str, **options)
-        normalized_path = self._normalize_path_for_backend(destination_str)
-        return backend, normalized_path
-
-    def _resolve_alias_destination(
-        self, destination: str, backend_options: "dict[str, Any]"
-    ) -> "tuple[ObjectStoreProtocol, str] | None":
-        if not destination.startswith("alias://"):
-            return None
-        payload = destination.removeprefix("alias://")
-        alias_name, _, relative_path = payload.partition("/")
-        alias = alias_name.strip()
-        if not alias:
-            msg = "Alias destinations must include a registry alias before the path component"
-            raise ImproperConfigurationError(msg)
-        path_segment = relative_path.strip()
-        if not path_segment:
-            msg = "Alias destinations must include an object path after the alias name"
-            raise ImproperConfigurationError(msg)
-        backend = self.registry.get(alias, **backend_options)
-        return backend, path_segment.lstrip("/")
-
-    def _normalize_path_for_backend(self, destination: str) -> str:
-        if destination.startswith("file://"):
-            return destination.removeprefix("file://")
-        if "://" in destination:
-            _, remainder = destination.split("://", 1)
-            return remainder.lstrip("/")
-        return destination
+    async def stream_read_async(
+        self,
+        source: StorageDestination,
+        *,
+        chunk_size: int | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "AsyncIterator[bytes]":
+        """Stream bytes from an artifact asynchronously."""
+        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
+        return await backend.stream_read_async(path, chunk_size=chunk_size)

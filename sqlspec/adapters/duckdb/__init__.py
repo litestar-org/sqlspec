@@ -7,7 +7,8 @@ from sqlspec.adapters.duckdb.config import (
     DuckDBExtensionConfig,
     DuckDBSecretConfig,
 )
-from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, DuckDBExceptionHandler, duckdb_statement_config
+from sqlspec.adapters.duckdb.core import default_statement_config
+from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, DuckDBExceptionHandler
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 
 __all__ = (
@@ -20,5 +21,5 @@ __all__ = (
     "DuckDBExceptionHandler",
     "DuckDBExtensionConfig",
     "DuckDBSecretConfig",
-    "duckdb_statement_config",
+    "default_statement_config",
 )

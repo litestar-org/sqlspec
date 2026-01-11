@@ -24,7 +24,7 @@ from typing import Any, Final, TypeAlias, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.cache import CacheKey, UnifiedCache
+from sqlspec.core.cache import CacheKey, LRUCache
 from sqlspec.utils.logging import get_logger
 
 __all__ = (
@@ -68,6 +68,10 @@ SPLITTER_SLOTS: Final = (
     "_result_cache",
     "_pattern_cache",
 )
+
+
+def _special_terminator_true(_tokens: "list[Token]", _pos: int) -> bool:
+    return True
 
 
 class TokenType(Enum):
@@ -129,28 +133,28 @@ class DialectConfig(ABC):
 
     @property
     @abstractmethod
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         """Keywords that start a block (e.g., BEGIN, DECLARE)."""
 
     @property
     @abstractmethod
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         """Keywords that end a block (e.g., END)."""
 
     @property
     @abstractmethod
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         """Characters that terminate statements (e.g., ;)."""
 
     @property
-    def batch_separators(self) -> set[str]:
+    def batch_separators(self) -> "set[str]":
         """Keywords that separate batches (e.g., GO for T-SQL)."""
         if self._batch_separators is None:
             self._batch_separators = set()
         return self._batch_separators
 
     @property
-    def special_terminators(self) -> dict[str, Callable[[list[Token], int], bool]]:
+    def special_terminators(self) -> "dict[str, Callable[[list[Token], int], bool]]":
         """Special terminators that need custom handling."""
         if self._special_terminators is None:
             self._special_terminators = {}
@@ -163,7 +167,7 @@ class DialectConfig(ABC):
             self._max_nesting_depth = 256
         return self._max_nesting_depth
 
-    def get_all_token_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
+    def get_all_token_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get the complete ordered list of token patterns for this dialect.
 
         Returns:
@@ -191,7 +195,7 @@ class DialectConfig(ABC):
 
         return patterns
 
-    def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get dialect-specific token patterns.
 
         Returns:
@@ -200,7 +204,7 @@ class DialectConfig(ABC):
         return []
 
     @staticmethod
-    def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
+    def is_real_block_ender(tokens: "list[Token]", current_pos: int) -> bool:  # noqa: ARG004
         """Check if END keyword represents an actual block terminator.
 
         Args:
@@ -212,7 +216,7 @@ class DialectConfig(ABC):
         """
         return True
 
-    def should_delay_semicolon_termination(self, tokens: list[Token], current_pos: int) -> bool:
+    def should_delay_semicolon_termination(self, tokens: "list[Token]", current_pos: int) -> bool:
         """Check if semicolon termination should be delayed.
 
         Args:
@@ -235,30 +239,30 @@ class OracleDialectConfig(DialectConfig):
         return self._name
 
     @property
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         if self._block_starters is None:
             self._block_starters = {"BEGIN", "DECLARE", "CASE"}
         return self._block_starters
 
     @property
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         if self._block_enders is None:
             self._block_enders = {"END"}
         return self._block_enders
 
     @property
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
 
     @property
-    def special_terminators(self) -> dict[str, Callable[[list[Token], int], bool]]:
+    def special_terminators(self) -> "dict[str, Callable[[list[Token], int], bool]]":
         if self._special_terminators is None:
             self._special_terminators = {"/": self._handle_slash_terminator}
         return self._special_terminators
 
-    def should_delay_semicolon_termination(self, tokens: list[Token], current_pos: int) -> bool:
+    def should_delay_semicolon_termination(self, tokens: "list[Token]", current_pos: int) -> bool:
         """Check if semicolon termination should be delayed for Oracle slash terminators.
 
         Args:
@@ -280,7 +284,7 @@ class OracleDialectConfig(DialectConfig):
 
         return False
 
-    def _has_upcoming_slash(self, tokens: list[Token], current_pos: int) -> bool:
+    def _has_upcoming_slash(self, tokens: "list[Token]", current_pos: int) -> bool:
         """Check if there's a slash terminator on its own line ahead.
 
         Args:
@@ -310,7 +314,7 @@ class OracleDialectConfig(DialectConfig):
         return False
 
     @staticmethod
-    def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:
+    def is_real_block_ender(tokens: "list[Token]", current_pos: int) -> bool:
         """Check if END keyword represents a block terminator in Oracle PL/SQL.
 
         Args:
@@ -341,7 +345,7 @@ class OracleDialectConfig(DialectConfig):
         return True
 
     @staticmethod
-    def _handle_slash_terminator(tokens: list[Token], current_pos: int) -> bool:
+    def _handle_slash_terminator(tokens: "list[Token]", current_pos: int) -> bool:
         """Check if Oracle slash terminator is properly positioned.
 
         Oracle slash terminators must be on their own line with only
@@ -379,25 +383,25 @@ class TSQLDialectConfig(DialectConfig):
         return self._name
 
     @property
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         if self._block_starters is None:
             self._block_starters = {"BEGIN", "TRY"}
         return self._block_starters
 
     @property
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         if self._block_enders is None:
             self._block_enders = {"END", "CATCH"}
         return self._block_enders
 
     @property
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
 
     @property
-    def batch_separators(self) -> set[str]:
+    def batch_separators(self) -> "set[str]":
         if self._batch_separators is None:
             self._batch_separators = {"GO"}
         return self._batch_separators
@@ -413,24 +417,24 @@ class PostgreSQLDialectConfig(DialectConfig):
         return self._name
 
     @property
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         if self._block_starters is None:
             self._block_starters = {"DECLARE", "CASE", "DO"}
         return self._block_starters
 
     @property
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         if self._block_enders is None:
             self._block_enders = {"END"}
         return self._block_enders
 
     @property
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
 
-    def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get PostgreSQL-specific token patterns.
 
         Returns:
@@ -480,19 +484,19 @@ class GenericDialectConfig(DialectConfig):
         return self._name
 
     @property
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         if self._block_starters is None:
             self._block_starters = {"BEGIN", "DECLARE", "CASE"}
         return self._block_starters
 
     @property
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         if self._block_enders is None:
             self._block_enders = {"END"}
         return self._block_enders
 
     @property
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
@@ -508,27 +512,27 @@ class MySQLDialectConfig(DialectConfig):
         return self._name
 
     @property
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         if self._block_starters is None:
             self._block_starters = {"BEGIN", "DECLARE", "CASE"}
         return self._block_starters
 
     @property
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         if self._block_enders is None:
             self._block_enders = {"END"}
         return self._block_enders
 
     @property
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
 
     @property
-    def special_terminators(self) -> dict[str, Callable[[list[Token], int], bool]]:
+    def special_terminators(self) -> "dict[str, Callable[[list[Token], int], bool]]":
         if self._special_terminators is None:
-            self._special_terminators = {"\\g": lambda _tokens, _pos: True, "\\G": lambda _tokens, _pos: True}
+            self._special_terminators = {"\\g": _special_terminator_true, "\\G": _special_terminator_true}
         return self._special_terminators
 
 
@@ -542,19 +546,19 @@ class SQLiteDialectConfig(DialectConfig):
         return self._name
 
     @property
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         if self._block_starters is None:
             self._block_starters = {"BEGIN", "CASE"}
         return self._block_starters
 
     @property
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         if self._block_enders is None:
             self._block_enders = {"END"}
         return self._block_enders
 
     @property
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
@@ -570,19 +574,19 @@ class DuckDBDialectConfig(DialectConfig):
         return self._name
 
     @property
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         if self._block_starters is None:
             self._block_starters = {"BEGIN", "CASE"}
         return self._block_starters
 
     @property
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         if self._block_enders is None:
             self._block_enders = {"END"}
         return self._block_enders
 
     @property
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
@@ -598,30 +602,30 @@ class BigQueryDialectConfig(DialectConfig):
         return self._name
 
     @property
-    def block_starters(self) -> set[str]:
+    def block_starters(self) -> "set[str]":
         if self._block_starters is None:
             self._block_starters = {"BEGIN", "CASE"}
         return self._block_starters
 
     @property
-    def block_enders(self) -> set[str]:
+    def block_enders(self) -> "set[str]":
         if self._block_enders is None:
             self._block_enders = {"END"}
         return self._block_enders
 
     @property
-    def statement_terminators(self) -> set[str]:
+    def statement_terminators(self) -> "set[str]":
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
 
 
-_pattern_cache: UnifiedCache | None = None
-_result_cache: UnifiedCache | None = None
+_pattern_cache: LRUCache | None = None
+_result_cache: LRUCache | None = None
 _cache_lock = threading.Lock()
 
 
-def _get_pattern_cache() -> UnifiedCache:
+def _get_pattern_cache() -> LRUCache:
     """Get or create the global pattern compilation cache.
 
     Returns:
@@ -631,11 +635,11 @@ def _get_pattern_cache() -> UnifiedCache:
     if _pattern_cache is None:
         with _cache_lock:
             if _pattern_cache is None:
-                _pattern_cache = UnifiedCache(max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
+                _pattern_cache = LRUCache(max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
     return _pattern_cache
 
 
-def _get_result_cache() -> UnifiedCache:
+def _get_result_cache() -> LRUCache:
     """Get or create the global result cache.
 
     Returns:
@@ -645,7 +649,7 @@ def _get_result_cache() -> UnifiedCache:
     if _result_cache is None:
         with _cache_lock:
             if _result_cache is None:
-                _result_cache = UnifiedCache(max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
+                _result_cache = LRUCache(max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
     return _result_cache
 
 
@@ -673,7 +677,7 @@ class StatementSplitter:
 
         self._compiled_patterns = self._get_or_compile_patterns()
 
-    def _get_or_compile_patterns(self) -> list[tuple[TokenType, CompiledTokenPattern]]:
+    def _get_or_compile_patterns(self) -> "list[tuple[TokenType, CompiledTokenPattern]]":
         """Get compiled regex patterns from cache or compile and cache them.
 
         Returns:
@@ -765,7 +769,7 @@ class StatementSplitter:
                 first_unmatched_snippet,
             )
 
-    def split(self, sql: str) -> list[str]:
+    def split(self, sql: str) -> "list[str]":
         """Split SQL script into individual statements.
 
         Args:
@@ -786,7 +790,7 @@ class StatementSplitter:
         self._result_cache.put(cache_key, statements)
         return statements
 
-    def _do_split(self, sql: str) -> list[str]:
+    def _do_split(self, sql: str) -> "list[str]":
         """Perform the actual SQL script splitting logic.
 
         Args:
@@ -867,7 +871,7 @@ class StatementSplitter:
         return statements
 
     @staticmethod
-    def _is_plsql_block(tokens: list[Token]) -> bool:
+    def _is_plsql_block(tokens: "list[Token]") -> bool:
         """Check if the token list represents a PL/SQL block.
 
         Args:
@@ -899,7 +903,7 @@ class StatementSplitter:
         return False
 
 
-def split_sql_script(script: str, dialect: str | None = None, strip_trailing_terminator: bool = False) -> list[str]:
+def split_sql_script(script: str, dialect: str | None = None, strip_trailing_terminator: bool = False) -> "list[str]":
     """Split SQL script into individual statements.
 
     Args:
@@ -947,7 +951,7 @@ def clear_splitter_caches() -> None:
     result_cache.clear()
 
 
-def get_splitter_cache_stats() -> dict[str, Any]:
+def get_splitter_cache_stats() -> "dict[str, Any]":
     """Get statistics from splitter caches.
 
     Returns:

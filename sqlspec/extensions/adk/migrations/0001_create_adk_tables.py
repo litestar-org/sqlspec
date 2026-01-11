@@ -1,10 +1,11 @@
 """Create ADK session, events, and memory tables migration using store DDL definitions."""
 
 import inspect
+import logging
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk.store import BaseAsyncADKStore
     from sqlspec.migrations.context import MigrationContext
 
-logger = get_logger("migrations.adk.tables")
+logger = get_logger("sqlspec.migrations.adk.tables")
 
 __all__ = ("down", "up")
 
@@ -68,7 +69,7 @@ def _get_memory_store_class(
     Notes:
         Dynamically imports the memory store class from the config's module path.
         For example, AsyncpgConfig at 'sqlspec.adapters.asyncpg.config'
-        maps to AsyncpgADKMemoryStore at 'sqlspec.adapters.asyncpg.adk.memory_store.AsyncpgADKMemoryStore'.
+        maps to AsyncpgADKMemoryStore at 'sqlspec.adapters.asyncpg.adk.store.AsyncpgADKMemoryStore'.
     """
     if not context or not context.config:
         return None
@@ -83,12 +84,12 @@ def _get_memory_store_class(
     adapter_name = config_module.split(".")[2]
     store_class_name = config_name.replace("Config", "ADKMemoryStore")
 
-    store_path = f"sqlspec.adapters.{adapter_name}.adk.memory_store.{store_class_name}"
+    store_path = f"sqlspec.adapters.{adapter_name}.adk.store.{store_class_name}"
 
     try:
         store_class: type[BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore] = import_string(store_path)
     except ImportError:
-        logger.debug("Memory store class not found at %s", store_path)
+        log_with_context(logger, logging.DEBUG, "adk.migration.memory_store.missing", store_path=store_path)
         return None
     else:
         return store_class
@@ -199,7 +200,9 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
                 statements.extend(memory_sql)
             else:
                 statements.append(memory_sql)
-            logger.debug("Including memory table in migration")
+            log_with_context(
+                logger, logging.DEBUG, "adk.migration.memory.include", table_name=memory_store.memory_table
+            )
 
     return statements
 
@@ -232,7 +235,9 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
             memory_store = memory_store_class(config=context.config)
             memory_drop_stmts = memory_store._get_drop_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
             statements.extend(memory_drop_stmts)
-            logger.debug("Including memory table drop in migration")
+            log_with_context(
+                logger, logging.DEBUG, "adk.migration.memory.drop.include", table_name=memory_store.memory_table
+            )
 
     store_class = _get_store_class(context)
     store_instance = store_class(config=context.config)

@@ -8,7 +8,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker, create_migration_commands
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
@@ -58,7 +58,7 @@ ConnectionT = TypeVar("ConnectionT")
 PoolT = TypeVar("PoolT")
 DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBase")
 
-logger = get_logger("config")
+logger = get_logger("sqlspec.config")
 
 DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
     "on_connection_create": "connection",
@@ -68,6 +68,24 @@ DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
     "on_session_start": "session",
     "on_session_end": "session",
 }
+
+
+class _DriverFeatureHookWrapper:
+    __slots__ = ("_callback", "_context_key", "_expects_argument")
+
+    def __init__(self, callback: "Callable[..., Any]", context_key: "str | None", expects_argument: bool) -> None:
+        self._callback = callback
+        self._context_key = context_key
+        self._expects_argument = expects_argument
+
+    def __call__(self, context: "dict[str, Any]") -> None:
+        if not self._expects_argument:
+            self._callback()
+            return
+        if self._context_key is None:
+            self._callback(context)
+            return
+        self._callback(context.get(self._context_key))
 
 
 class LifecycleConfig(TypedDict):
@@ -865,16 +883,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         ]
         expects_argument = bool(positional_params)
 
-        def handler(context: dict[str, Any]) -> None:
-            if not expects_argument:
-                callback()
-                return
-            if context_key is None:
-                callback(context)
-                return
-            callback(context.get(context_key))
-
-        return handler
+        return _DriverFeatureHookWrapper(callback, context_key, expects_argument)
 
     def attach_observability(self, registry_config: "ObservabilityConfig | None") -> None:
         """Attach merged observability runtime composed from registry and adapter overrides."""

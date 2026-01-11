@@ -26,14 +26,36 @@ __all__ = (
     "suppress_erroneous_sqlglot_log_messages",
 )
 
-_BASE_RECORD_KEYS = set(
-    logging.LogRecord(
-        name="sqlspec", level=logging.INFO, pathname="(unknown file)", lineno=0, msg="", args=(), exc_info=None
-    ).__dict__.keys()
-)
-_BASE_RECORD_KEYS.update({"message", "asctime"})
+_BASE_RECORD_KEYS: "set[str] | None" = None
+
+
+def _get_base_record_keys() -> "set[str]":
+    """Get base LogRecord keys lazily to avoid mypyc module-level dict issues."""
+    global _BASE_RECORD_KEYS
+    if _BASE_RECORD_KEYS is None:
+        _BASE_RECORD_KEYS = set(
+            logging.LogRecord(
+                name="sqlspec", level=logging.INFO, pathname="(unknown file)", lineno=0, msg="", args=(), exc_info=None
+            ).__dict__.keys()
+        )
+        _BASE_RECORD_KEYS.update({"message", "asctime"})
+    return _BASE_RECORD_KEYS
+
 
 correlation_id_var: "ContextVar[str | None]" = _correlation_id_var
+
+
+def _get_trace_context() -> "tuple[str | None, str | None]":
+    """Resolve trace context lazily to avoid import cycles.
+
+    Returns:
+        Tuple of (trace_id, span_id) or (None, None) if unavailable.
+    """
+    try:
+        from sqlspec.observability import get_trace_context
+    except Exception:
+        return (None, None)
+    return get_trace_context()
 
 
 def set_correlation_id(correlation_id: "str | None") -> None:
@@ -80,6 +102,14 @@ class StructuredFormatter(logging.Formatter):
         correlation_id = cast("str | None", record_dict.get("correlation_id")) or get_correlation_id()
         if correlation_id:
             log_entry["correlation_id"] = correlation_id
+        trace_id = cast("str | None", record_dict.get("trace_id"))
+        span_id = cast("str | None", record_dict.get("span_id"))
+        if trace_id is None or span_id is None:
+            trace_id, span_id = _get_trace_context()
+        if trace_id:
+            log_entry["trace_id"] = trace_id
+        if span_id:
+            log_entry["span_id"] = span_id
 
         extra_fields = record_dict.get("extra_fields")
         if isinstance(extra_fields, dict):
@@ -88,7 +118,7 @@ class StructuredFormatter(logging.Formatter):
         extras = {
             key: value
             for key, value in record_dict.items()
-            if key not in _BASE_RECORD_KEYS and key not in {"extra_fields", "correlation_id"}
+            if key not in _get_base_record_keys() and key not in {"extra_fields", "correlation_id"}
         }
         if extras:
             log_entry.update(extras)

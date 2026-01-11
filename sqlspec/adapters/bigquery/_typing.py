@@ -6,18 +6,26 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-from google.cloud.bigquery import Client
-
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
+
+    from google.cloud.bigquery import ArrayQueryParameter, Client, ScalarQueryParameter
 
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
     from sqlspec.core import StatementConfig
 
     BigQueryConnection: TypeAlias = Client
+    BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter
 else:
-    BigQueryConnection = Client
+    try:
+        from google.cloud.bigquery import ArrayQueryParameter, Client, ScalarQueryParameter
+    except Exception:
+        BigQueryConnection = Any
+        BigQueryParam = Any
+    else:
+        BigQueryConnection = Client
+        BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
 
 
 class BigQuerySessionContext:
@@ -75,4 +83,4 @@ class BigQuerySessionContext:
         return None
 
 
-__all__ = ("BigQueryConnection", "BigQuerySessionContext")
+__all__ = ("BigQueryConnection", "BigQueryParam", "BigQuerySessionContext")

@@ -1,19 +1,21 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncpg
 
 from sqlspec.config import AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-logger = get_logger("adapters.asyncpg.adk.store")
+    from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+    from sqlspec.extensions.adk import MemoryRecord
 
-__all__ = ("AsyncpgADKStore",)
+
+__all__ = ("AsyncpgADKMemoryStore", "AsyncpgADKStore")
 
 POSTGRES_TABLE_NOT_FOUND_ERROR: Final = "42P01"
 
@@ -53,7 +55,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             }
         )
         store = AsyncpgADKStore(config)
-        await store.create_tables()
+        await store.ensure_tables()
 
     Notes:
         - PostgreSQL JSONB type used for state (more efficient than JSON)
@@ -184,7 +186,6 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         async with self.config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
-        logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -458,3 +459,290 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                 ]
         except asyncpg.exceptions.UndefinedTableError:
             return []
+
+
+class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
+    """PostgreSQL ADK memory store using asyncpg driver.
+
+    Implements memory entry storage for Google Agent Development Kit
+    using PostgreSQL via the asyncpg driver. Provides:
+    - Session memory storage with JSONB for content and metadata
+    - Full-text search using to_tsvector/to_tsquery (postgres_fts strategy)
+    - Simple ILIKE search fallback (simple strategy)
+    - TIMESTAMPTZ for precise timestamp storage
+    - Deduplication via event_id unique constraint
+    - Efficient upserts using ON CONFLICT DO NOTHING
+
+    Args:
+        config: AsyncpgConfig with extension_config["adk"] settings.
+
+    Example:
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
+        from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKMemoryStore
+
+        config = AsyncpgConfig(
+            connection_config={"dsn": "postgresql://..."},
+            extension_config={
+                "adk": {
+                    "memory_table": "adk_memory_entries",
+                    "memory_use_fts": True,
+                    "memory_max_results": 20,
+                }
+            }
+        )
+        store = AsyncpgADKMemoryStore(config)
+        await store.ensure_tables()
+
+    Notes:
+        - JSONB type for content_json and metadata_json
+        - TIMESTAMPTZ with microsecond precision
+        - GIN index on content_text tsvector for FTS queries
+        - Composite index on (app_name, user_id) for filtering
+        - event_id UNIQUE constraint for deduplication
+        - Configuration is read from config.extension_config["adk"]
+    """
+
+    __slots__ = ()
+
+    def __init__(self, config: "AsyncpgConfig") -> None:
+        """Initialize AsyncPG ADK memory store.
+
+        Args:
+            config: AsyncpgConfig instance.
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - memory_table: Memory table name (default: "adk_memory_entries")
+            - memory_use_fts: Enable full-text search when supported (default: False)
+            - memory_max_results: Max search results (default: 20)
+            - owner_id_column: Optional owner FK column DDL (default: None)
+            - enable_memory: Whether memory is enabled (default: True)
+        """
+        super().__init__(config)
+
+    async def _get_create_memory_table_sql(self) -> str:
+        """Get PostgreSQL CREATE TABLE SQL for memory entries.
+
+        Returns:
+            SQL statement to create memory table with indexes.
+
+        Notes:
+            - VARCHAR(128) for IDs and names
+            - JSONB for content and metadata storage
+            - TIMESTAMPTZ with microsecond precision
+            - UNIQUE constraint on event_id for deduplication
+            - Composite index on (app_name, user_id, timestamp DESC)
+            - GIN index on content_text tsvector for FTS
+            - Optional owner ID column for multi-tenancy
+        """
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
+            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMPTZ NOT NULL,
+            content_json JSONB NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSONB,
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_index}
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop the memory table.
+
+        Notes:
+            PostgreSQL automatically drops indexes when dropping tables.
+        """
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    async def create_tables(self) -> None:
+        """Create the memory table and indexes if they don't exist.
+
+        Skips table creation if memory store is disabled.
+        """
+        if not self._enabled:
+            return
+
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_memory_table_sql())
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication.
+
+        Uses UPSERT pattern (ON CONFLICT DO NOTHING) to skip duplicates
+        based on event_id unique constraint.
+
+        Args:
+            entries: List of memory records to insert.
+            owner_id: Optional owner ID value for owner_id_column (if configured).
+
+        Returns:
+            Number of entries actually inserted (excludes duplicates).
+
+        Raises:
+            RuntimeError: If memory store is disabled.
+        """
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not entries:
+            return 0
+
+        inserted_count = 0
+        async with self._config.provide_connection() as conn:
+            for entry in entries:
+                if self._owner_id_column_name:
+                    sql = f"""
+                    INSERT INTO {self._memory_table}
+                    (id, session_id, app_name, user_id, event_id, author,
+                     {self._owner_id_column_name}, timestamp, content_json,
+                     content_text, metadata_json, inserted_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    ON CONFLICT (event_id) DO NOTHING
+                    """
+                    result = await conn.execute(
+                        sql,
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry["event_id"],
+                        entry["author"],
+                        owner_id,
+                        entry["timestamp"],
+                        entry["content_json"],
+                        entry["content_text"],
+                        entry["metadata_json"],
+                        entry["inserted_at"],
+                    )
+                else:
+                    sql = f"""
+                    INSERT INTO {self._memory_table}
+                    (id, session_id, app_name, user_id, event_id, author,
+                     timestamp, content_json, content_text, metadata_json, inserted_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ON CONFLICT (event_id) DO NOTHING
+                    """
+                    result = await conn.execute(
+                        sql,
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry["event_id"],
+                        entry["author"],
+                        entry["timestamp"],
+                        entry["content_json"],
+                        entry["content_text"],
+                        entry["metadata_json"],
+                        entry["inserted_at"],
+                    )
+                try:
+                    inserted_count += int(result.split(" ")[1])
+                except (IndexError, ValueError):
+                    continue
+
+        return inserted_count
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query.
+
+        Uses the configured search strategy (simple ILIKE or FTS).
+
+        Args:
+            query: Text query to search for.
+            app_name: Application name to filter by.
+            user_id: User ID to filter by.
+            limit: Maximum number of results (defaults to max_results config).
+
+        Returns:
+            List of memory records.
+        """
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not query:
+            return []
+
+        limit_value = limit or self._max_results
+        if self._use_fts:
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE app_name = $1 AND user_id = $2
+              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $3)
+            ORDER BY timestamp DESC
+            LIMIT $4
+            """
+            params = (app_name, user_id, query, limit_value)
+        else:
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE app_name = $1 AND user_id = $2 AND content_text ILIKE $3
+            ORDER BY timestamp DESC
+            LIMIT $4
+            """
+            params = (app_name, user_id, f"%{query}%", limit_value)
+
+        async with self._config.provide_connection() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [cast("MemoryRecord", dict(row)) for row in rows]
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        sql = f"DELETE FROM {self._memory_table} WHERE session_id = $1"
+        async with self._config.provide_connection() as conn:
+            result = await conn.execute(sql, session_id)
+        try:
+            return int(result.split(" ")[1])
+        except (IndexError, ValueError):
+            return 0
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        sql = f"""
+        DELETE FROM {self._memory_table}
+        WHERE inserted_at < (CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 day'))
+        """
+        async with self._config.provide_connection() as conn:
+            result = await conn.execute(sql, days)
+        try:
+            return int(result.split(" ")[1])
+        except (IndexError, ValueError):
+            return 0

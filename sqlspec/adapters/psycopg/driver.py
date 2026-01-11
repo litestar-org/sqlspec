@@ -1,7 +1,7 @@
 """PostgreSQL psycopg driver implementation."""
 
 from contextlib import AsyncExitStack, ExitStack
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 
@@ -12,56 +12,51 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncSessionContext,
 )
 from sqlspec.adapters.psycopg.core import (
+    TRANSACTION_STATUS_IDLE,
+    PipelineCursorEntry,
+    PreparedStackOperation,
+    build_async_pipeline_execution_result,
     build_copy_from_command,
-    build_psycopg_profile,
+    build_pipeline_execution_result,
     build_truncate_command,
-    psycopg_pipeline_supported,
+    collect_rows,
+    default_statement_config,
+    driver_profile,
+    execute_with_optional_parameters,
+    execute_with_optional_parameters_async,
+    executemany_or_skip,
+    executemany_or_skip_async,
+    pipeline_supported,
+    raise_exception,
+    resolve_rowcount,
 )
-from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
+from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
 from sqlspec.core import (
     SQL,
-    ParameterStyleConfig,
     SQLResult,
-    StackOperation,
     StackResult,
     StatementConfig,
     StatementStack,
-    build_statement_config_from_profile,
     get_cache_config,
     is_copy_from_operation,
     is_copy_operation,
     is_copy_to_operation,
     register_driver_profile,
 )
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.driver._common import StackExecutionObserver, describe_stack_statement
-from sqlspec.exceptions import (
-    CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
-    ForeignKeyViolationError,
-    IntegrityError,
-    NotNullViolationError,
-    OperationalError,
-    SQLParsingError,
-    SQLSpecError,
-    StackExecutionError,
-    TransactionError,
-    UniqueViolationError,
+from sqlspec.driver import (
+    AsyncDriverAdapterBase,
+    StackExecutionObserver,
+    SyncDriverAdapterBase,
+    describe_stack_statement,
 )
+from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
-from sqlspec.utils.type_guards import has_sqlstate, is_readable
+from sqlspec.utils.type_guards import is_readable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
-    from sqlspec.driver._async import AsyncDataDictionaryBase
-    from sqlspec.driver._common import ExecutionResult
-    from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 
@@ -74,28 +69,9 @@ __all__ = (
     "PsycopgSyncDriver",
     "PsycopgSyncExceptionHandler",
     "PsycopgSyncSessionContext",
-    "build_psycopg_statement_config",
-    "psycopg_statement_config",
 )
 
-logger = get_logger("adapters.psycopg")
-
-
-class _PreparedStackOperation(NamedTuple):
-    """Precompiled stack operation metadata for psycopg pipeline execution."""
-
-    operation_index: int
-    operation: "StackOperation"
-    statement: "SQL"
-    sql: str
-    parameters: "tuple[Any, ...] | dict[str, Any] | None"
-
-
-class _PipelineCursorEntry(NamedTuple):
-    """Cursor pending result data for psycopg pipeline execution."""
-
-    prepared: "_PreparedStackOperation"
-    cursor: Any
+logger = get_logger("sqlspec.adapters.psycopg")
 
 
 class PsycopgPipelineMixin:
@@ -103,50 +79,37 @@ class PsycopgPipelineMixin:
 
     __slots__ = ()
 
-    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[_PreparedStackOperation] | None":
-        prepared: list[_PreparedStackOperation] = []
+    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[PreparedStackOperation] | None":
+        prepared: list[PreparedStackOperation] = []
         for index, operation in enumerate(stack.operations):
-            normalized = self._normalize_stack_operation_for_pipeline(index, operation)
-            if normalized is None:
+            if operation.method != "execute":
                 return None
-            prepared.append(normalized)
+
+            kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+            statement_config = kwargs.pop("statement_config", None)
+            driver = cast("PsycopgPipelineDriver", self)
+            config = statement_config or driver.statement_config
+
+            sql_statement = driver.prepare_statement(
+                operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
+            )
+
+            if sql_statement.is_script or sql_statement.is_many:
+                return None
+
+            sql_text, prepared_parameters = driver._get_compiled_sql(  # pyright: ignore[reportPrivateUsage]
+                sql_statement, config
+            )
+            prepared.append(
+                PreparedStackOperation(
+                    operation_index=index,
+                    operation=operation,
+                    statement=sql_statement,
+                    sql=sql_text,
+                    parameters=prepared_parameters,
+                )
+            )
         return prepared
-
-    def _normalize_stack_operation_for_pipeline(
-        self, index: int, operation: "StackOperation"
-    ) -> "_PreparedStackOperation | None":
-        if operation.method != "execute":
-            return None
-
-        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
-        statement_config = kwargs.pop("statement_config", None)
-        driver = cast("PsycopgPipelineDriver", self)
-        config = statement_config or driver.statement_config
-
-        sql_statement = driver.prepare_statement(
-            operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
-        )
-
-        if sql_statement.is_script or sql_statement.is_many:
-            return None
-
-        sql_text, prepared_parameters = driver._get_compiled_sql(  # pyright: ignore[reportPrivateUsage]
-            sql_statement, config
-        )
-        return _PreparedStackOperation(
-            operation_index=index,
-            operation=operation,
-            statement=sql_statement,
-            sql=sql_text,
-            parameters=prepared_parameters,
-        )
-
-
-TRANSACTION_STATUS_IDLE = 0
-TRANSACTION_STATUS_ACTIVE = 1
-TRANSACTION_STATUS_INTRANS = 2
-TRANSACTION_STATUS_INERROR = 3
-TRANSACTION_STATUS_UNKNOWN = 4
 
 
 class PsycopgSyncCursor:
@@ -191,93 +154,11 @@ class PsycopgSyncExceptionHandler:
             return False
         if issubclass(exc_type, psycopg.Error):
             try:
-                self._map_postgres_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
         return False
-
-    def _map_postgres_exception(self, e: Any) -> None:
-        """Map PostgreSQL exception to SQLSpec exception.
-
-        Args:
-            e: psycopg.Error instance
-
-        Raises:
-            Specific SQLSpec exception based on SQLSTATE code
-        """
-        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
-
-        if not error_code:
-            self._raise_generic_error(e, None)
-            return
-
-        if error_code == "23505":
-            self._raise_unique_violation(e, error_code)
-        elif error_code == "23503":
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == "23502":
-            self._raise_not_null_violation(e, error_code)
-        elif error_code == "23514":
-            self._raise_check_violation(e, error_code)
-        elif error_code.startswith("23"):
-            self._raise_integrity_error(e, error_code)
-        elif error_code.startswith("42"):
-            self._raise_parsing_error(e, error_code)
-        elif error_code.startswith("08"):
-            self._raise_connection_error(e, error_code)
-        elif error_code.startswith("40"):
-            self._raise_transaction_error(e, error_code)
-        elif error_code.startswith("22"):
-            self._raise_data_error(e, error_code)
-        elif error_code.startswith(("53", "54", "55", "57", "58")):
-            self._raise_operational_error(e, error_code)
-        else:
-            self._raise_generic_error(e, error_code)
-
-    def _raise_unique_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL unique constraint violation [{code}]: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL foreign key constraint violation [{code}]: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL not-null constraint violation [{code}]: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL check constraint violation [{code}]: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL integrity constraint violation [{code}]: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_parsing_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL SQL syntax error [{code}]: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL connection error [{code}]: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_transaction_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL transaction error [{code}]: {e}"
-        raise TransactionError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL data error [{code}]: {e}"
-        raise DataError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL operational error [{code}]: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_generic_error(self, e: Any, code: "str | None") -> None:
-        msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
@@ -300,62 +181,90 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            default_config = psycopg_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="postgres",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
-            statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: SyncDataDictionaryBase | None = None
+        self._data_dictionary: PsycopgSyncDataDictionary | None = None
 
-    def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
-        """Create context manager for PostgreSQL cursor."""
-        return PsycopgSyncCursor(connection)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
-    def begin(self) -> None:
-        """Begin a database transaction on the current connection."""
-        try:
-            if self.connection.autocommit:
-                self.connection.autocommit = False
-        except Exception as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute single SQL statement.
 
-    def rollback(self) -> None:
-        """Rollback the current transaction on the current connection."""
-        try:
-            self.connection.rollback()
-        except Exception as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
+        Args:
+            cursor: Database cursor
+            statement: SQL statement to execute
 
-    def commit(self) -> None:
-        """Commit the current transaction on the current connection."""
-        try:
-            self.connection.commit()
-        except Exception as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
+        Returns:
+            ExecutionResult with statement execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-    def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately."""
-        return PsycopgSyncExceptionHandler()
+        execute_with_optional_parameters(cursor, sql, prepared_parameters)
 
-    def _handle_transaction_error_cleanup(self) -> None:
-        """Handle transaction cleanup after database errors."""
-        try:
-            status = self.connection.info.transaction_status
-            if status == TRANSACTION_STATUS_INERROR:
-                logger.debug("Connection in aborted transaction state, performing rollback")
-                self.connection.rollback()
-        except Exception as cleanup_error:
-            logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
+        if statement.returns_rows():
+            fetched_data = cursor.fetchall()
+            fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
 
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+            return self.create_execution_result(
+                cursor,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+            )
+
+        affected_rows = resolve_rowcount(cursor)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets.
+
+        Args:
+            cursor: Database cursor
+            statement: SQL statement with parameter list
+
+        Returns:
+            ExecutionResult with batch execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        if not executemany_or_skip(cursor, sql, prepared_parameters):
+            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
+
+        affected_rows = resolve_rowcount(cursor)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script with multiple statements.
+
+        Args:
+            cursor: Database cursor
+            statement: SQL statement containing multiple commands
+
+        Returns:
+            ExecutionResult with script execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        last_cursor = cursor
+
+        for stmt in statements:
+            execute_with_optional_parameters(cursor, stmt, prepared_parameters)
+            successful_count += 1
+
+        return self.create_execution_result(
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for PostgreSQL-specific special operations.
 
         Args:
@@ -366,25 +275,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             SQLResult if special handling was applied, None otherwise
         """
 
-        statement.compile()
+        if not is_copy_operation(statement.operation_type):
+            return None
 
-        if is_copy_operation(statement.operation_type):
-            return self._handle_copy_operation(cursor, statement)
-
-        return None
-
-    def _handle_copy_operation(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        """Handle PostgreSQL COPY operations using copy_expert.
-
-        Args:
-            cursor: Psycopg cursor object
-            statement: SQL statement with COPY operation
-
-        Returns:
-            SQLResult with COPY operation results
-        """
-
-        sql = statement.sql
+        sql, _ = self._get_compiled_sql(statement, statement.statement_config)
         operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
@@ -431,32 +325,46 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FILE"}
         )
 
-    def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with multiple statements.
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
 
-        Args:
-            cursor: Database cursor
-            statement: SQL statement containing multiple commands
+    def begin(self) -> None:
+        """Begin a database transaction on the current connection."""
+        try:
+            if self.connection.autocommit:
+                self.connection.autocommit = False
+        except Exception as e:
+            msg = f"Failed to begin transaction: {e}"
+            raise SQLSpecError(msg) from e
 
-        Returns:
-            ExecutionResult with script execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+    def commit(self) -> None:
+        """Commit the current transaction on the current connection."""
+        try:
+            self.connection.commit()
+        except Exception as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
 
-        successful_count = 0
-        last_cursor = cursor
+    def rollback(self) -> None:
+        """Rollback the current transaction on the current connection."""
+        try:
+            self.connection.rollback()
+        except Exception as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
 
-        for stmt in statements:
-            if prepared_parameters:
-                cursor.execute(stmt, prepared_parameters)
-            else:
-                cursor.execute(stmt)
-            successful_count += 1
+    def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
+        """Create context manager for PostgreSQL cursor."""
+        return PsycopgSyncCursor(connection)
 
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+    def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return PsycopgSyncExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STACK EXECUTION METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack using psycopg pipeline mode when supported."""
@@ -465,7 +373,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             not isinstance(stack, StatementStack)
             or not stack
             or self.stack_native_disabled
-            or not psycopg_pipeline_supported()
+            or not pipeline_supported()
             or continue_on_error
         ):
             return super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -477,7 +385,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         return self._execute_stack_pipeline(stack, prepared_ops)
 
     def _execute_stack_pipeline(
-        self, stack: "StatementStack", prepared_ops: "list[_PreparedStackOperation]"
+        self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
     ) -> "tuple[StackResult, ...]":
         results: list[StackResult] = []
         started_transaction = False
@@ -490,7 +398,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
                 with ExitStack() as resource_stack:
                     pipeline = resource_stack.enter_context(self.connection.pipeline())
-                    pending: list[_PipelineCursorEntry] = []
+                    pending: list[PipelineCursorEntry] = []
 
                     for prepared in prepared_ops:
                         exception_ctx = self.handle_database_exceptions()
@@ -512,11 +420,16 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                             )
                             raise stack_error from exc
 
-                        pending.append(_PipelineCursorEntry(prepared=prepared, cursor=cursor))
+                        pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
 
                     pipeline.sync()
+                    for entry in pending:
+                        statement = entry.prepared.statement
+                        cursor = entry.cursor
 
-                    results.extend(self._build_pipeline_stack_result(entry) for entry in pending)
+                        execution_result = build_pipeline_execution_result(statement, cursor)
+                        sql_result = self.build_statement_result(statement, execution_result)
+                        results.append(StackResult.from_sql_result(sql_result))
 
                 if started_transaction:
                     self.commit()
@@ -530,79 +443,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         return tuple(results)
 
-    def _build_pipeline_stack_result(self, entry: "_PipelineCursorEntry") -> StackResult:
-        statement = entry.prepared.statement
-        cursor = entry.cursor
-
-        if statement.returns_rows():
-            fetched_data = cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
-            execution_result = self.create_execution_result(
-                cursor,
-                selected_data=fetched_data,
-                column_names=column_names,
-                data_row_count=len(fetched_data),
-                is_select_result=True,
-            )
-        else:
-            affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            execution_result = self.create_execution_result(cursor, rowcount_override=affected_rows)
-
-        sql_result = self.build_statement_result(statement, execution_result)
-        return StackResult.from_sql_result(sql_result)
-
-    def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets.
-
-        Args:
-            cursor: Database cursor
-            statement: SQL statement with parameter list
-
-        Returns:
-            ExecutionResult with batch execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if not prepared_parameters:
-            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
-
-        cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
-
-    def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement.
-
-        Args:
-            cursor: Database cursor
-            statement: SQL statement to execute
-
-        Returns:
-            ExecutionResult with statement execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if prepared_parameters:
-            cursor.execute(sql, prepared_parameters)
-        else:
-            cursor.execute(sql)
-
-        if statement.returns_rows():
-            fetched_data = cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
-
-            return self.create_execution_result(
-                cursor,
-                selected_data=fetched_data,
-                column_names=column_names,
-                data_row_count=len(fetched_data),
-                is_select_result=True,
-            )
-
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -641,7 +484,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            self._truncate_table_sync(table)
+            truncate_sql = build_truncate_command(table)
+            with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+                cursor.execute(truncate_sql)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             copy_sql = build_copy_from_command(table, columns)
@@ -670,21 +515,24 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
     @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase":
+    def data_dictionary(self) -> "PsycopgSyncDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = PostgresSyncDataDictionary()
+            self._data_dictionary = PsycopgSyncDataDictionary()
         return self._data_dictionary
 
-    def _truncate_table_sync(self, table: str) -> None:
-        truncate_sql = build_truncate_command(table)
-        with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
-            cursor.execute(truncate_sql)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE / INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
@@ -734,93 +582,11 @@ class PsycopgAsyncExceptionHandler:
             return False
         if issubclass(exc_type, psycopg.Error):
             try:
-                self._map_postgres_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
         return False
-
-    def _map_postgres_exception(self, e: Any) -> None:
-        """Map PostgreSQL exception to SQLSpec exception.
-
-        Args:
-            e: psycopg.Error instance
-
-        Raises:
-            Specific SQLSpec exception based on SQLSTATE code
-        """
-        error_code = e.sqlstate if has_sqlstate(e) and e.sqlstate is not None else None
-
-        if not error_code:
-            self._raise_generic_error(e, None)
-            return
-
-        if error_code == "23505":
-            self._raise_unique_violation(e, error_code)
-        elif error_code == "23503":
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == "23502":
-            self._raise_not_null_violation(e, error_code)
-        elif error_code == "23514":
-            self._raise_check_violation(e, error_code)
-        elif error_code.startswith("23"):
-            self._raise_integrity_error(e, error_code)
-        elif error_code.startswith("42"):
-            self._raise_parsing_error(e, error_code)
-        elif error_code.startswith("08"):
-            self._raise_connection_error(e, error_code)
-        elif error_code.startswith("40"):
-            self._raise_transaction_error(e, error_code)
-        elif error_code.startswith("22"):
-            self._raise_data_error(e, error_code)
-        elif error_code.startswith(("53", "54", "55", "57", "58")):
-            self._raise_operational_error(e, error_code)
-        else:
-            self._raise_generic_error(e, error_code)
-
-    def _raise_unique_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL unique constraint violation [{code}]: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL foreign key constraint violation [{code}]: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL not-null constraint violation [{code}]: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL check constraint violation [{code}]: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL integrity constraint violation [{code}]: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_parsing_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL SQL syntax error [{code}]: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL connection error [{code}]: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_transaction_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL transaction error [{code}]: {e}"
-        raise TransactionError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL data error [{code}]: {e}"
-        raise DataError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL operational error [{code}]: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_generic_error(self, e: Any, code: "str | None") -> None:
-        msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
@@ -844,67 +610,90 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            default_config = psycopg_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="postgres",
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
             )
-            statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
+        self._data_dictionary: PsycopgAsyncDataDictionary | None = None
 
-    def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
-        """Create async context manager for PostgreSQL cursor."""
-        return PsycopgAsyncCursor(connection)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
-    async def begin(self) -> None:
-        """Begin a database transaction on the current connection."""
-        try:
-            try:
-                autocommit_flag = self.connection.autocommit
-            except AttributeError:
-                autocommit_flag = None
-            if isinstance(autocommit_flag, bool) and not autocommit_flag:
-                return
-            await self.connection.set_autocommit(False)
-        except Exception as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
+    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute single SQL statement (async).
 
-    async def rollback(self) -> None:
-        """Rollback the current transaction on the current connection."""
-        try:
-            await self.connection.rollback()
-        except Exception as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
+        Args:
+            cursor: Database cursor
+            statement: SQL statement to execute
 
-    async def commit(self) -> None:
-        """Commit the current transaction on the current connection."""
-        try:
-            await self.connection.commit()
-        except Exception as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
+        Returns:
+            ExecutionResult with statement execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-    def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately."""
-        return PsycopgAsyncExceptionHandler()
+        await execute_with_optional_parameters_async(cursor, sql, prepared_parameters)
 
-    async def _handle_transaction_error_cleanup_async(self) -> None:
-        """Handle async transaction cleanup after database errors."""
-        try:
-            status = self.connection.info.transaction_status
-            if status == TRANSACTION_STATUS_INERROR:
-                logger.debug("Connection in aborted transaction state, performing async rollback")
-                await self.connection.rollback()
-        except Exception as cleanup_error:
-            logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
+        if statement.returns_rows():
+            fetched_data = await cursor.fetchall()
+            fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+            return self.create_execution_result(
+                cursor,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+            )
+
+        affected_rows = resolve_rowcount(cursor)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets (async).
+
+        Args:
+            cursor: Database cursor
+            statement: SQL statement with parameter list
+
+        Returns:
+            ExecutionResult with batch execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        if not await executemany_or_skip_async(cursor, sql, prepared_parameters):
+            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
+
+        affected_rows = resolve_rowcount(cursor)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script with multiple statements (async).
+
+        Args:
+            cursor: Database cursor
+            statement: SQL statement containing multiple commands
+
+        Returns:
+            ExecutionResult with script execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        last_cursor = cursor
+
+        for stmt in statements:
+            await execute_with_optional_parameters_async(cursor, stmt, prepared_parameters)
+            successful_count += 1
+
+        return self.create_execution_result(
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    async def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for PostgreSQL-specific special operations.
 
         Args:
@@ -915,25 +704,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             SQLResult if special handling was applied, None otherwise
         """
 
-        statement.compile()
+        if not is_copy_operation(statement.operation_type):
+            return None
 
-        if is_copy_operation(statement.operation_type):
-            return await self._handle_copy_operation_async(cursor, statement)
-
-        return None
-
-    async def _handle_copy_operation_async(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        """Handle PostgreSQL COPY operations (async).
-
-        Args:
-            cursor: Psycopg async cursor object
-            statement: SQL statement with COPY operation
-
-        Returns:
-            SQLResult with COPY operation results
-        """
-
-        sql = statement.sql
+        sql, _ = self._get_compiled_sql(statement, statement.statement_config)
         sql_upper = sql.upper()
         operation_type = statement.operation_type
         copy_data = statement.parameters
@@ -981,32 +755,51 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FILE"}
         )
 
-    async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with multiple statements (async).
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
 
-        Args:
-            cursor: Database cursor
-            statement: SQL statement containing multiple commands
+    async def begin(self) -> None:
+        """Begin a database transaction on the current connection."""
+        try:
+            try:
+                autocommit_flag = self.connection.autocommit
+            except AttributeError:
+                autocommit_flag = None
+            if isinstance(autocommit_flag, bool) and not autocommit_flag:
+                return
+            await self.connection.set_autocommit(False)
+        except Exception as e:
+            msg = f"Failed to begin transaction: {e}"
+            raise SQLSpecError(msg) from e
 
-        Returns:
-            ExecutionResult with script execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+    async def commit(self) -> None:
+        """Commit the current transaction on the current connection."""
+        try:
+            await self.connection.commit()
+        except Exception as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
 
-        successful_count = 0
-        last_cursor = cursor
+    async def rollback(self) -> None:
+        """Rollback the current transaction on the current connection."""
+        try:
+            await self.connection.rollback()
+        except Exception as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
 
-        for stmt in statements:
-            if prepared_parameters:
-                await cursor.execute(stmt, prepared_parameters)
-            else:
-                await cursor.execute(stmt)
-            successful_count += 1
+    def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
+        """Create async context manager for PostgreSQL cursor."""
+        return PsycopgAsyncCursor(connection)
 
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+    def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return PsycopgAsyncExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STACK EXECUTION METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def execute_stack(
         self, stack: "StatementStack", *, continue_on_error: bool = False
@@ -1017,7 +810,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             not isinstance(stack, StatementStack)
             or not stack
             or self.stack_native_disabled
-            or not psycopg_pipeline_supported()
+            or not pipeline_supported()
             or continue_on_error
         ):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -1029,7 +822,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         return await self._execute_stack_pipeline(stack, prepared_ops)
 
     async def _execute_stack_pipeline(
-        self, stack: "StatementStack", prepared_ops: "list[_PreparedStackOperation]"
+        self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
     ) -> "tuple[StackResult, ...]":
         results: list[StackResult] = []
         started_transaction = False
@@ -1042,7 +835,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
                 async with AsyncExitStack() as resource_stack:
                     pipeline = await resource_stack.enter_async_context(self.connection.pipeline())
-                    pending: list[_PipelineCursorEntry] = []
+                    pending: list[PipelineCursorEntry] = []
 
                     for prepared in prepared_ops:
                         exception_ctx = self.handle_database_exceptions()
@@ -1064,11 +857,16 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                             )
                             raise stack_error from exc
 
-                        pending.append(_PipelineCursorEntry(prepared=prepared, cursor=cursor))
+                        pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
 
                     await pipeline.sync()
+                    for entry in pending:
+                        statement = entry.prepared.statement
+                        cursor = entry.cursor
 
-                    results.extend([await self._build_pipeline_stack_result_async(entry) for entry in pending])
+                        execution_result = await build_async_pipeline_execution_result(statement, cursor)
+                        sql_result = self.build_statement_result(statement, execution_result)
+                        results.append(StackResult.from_sql_result(sql_result))
 
                 if started_transaction:
                     await self.commit()
@@ -1082,79 +880,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         return tuple(results)
 
-    async def _build_pipeline_stack_result_async(self, entry: "_PipelineCursorEntry") -> StackResult:
-        statement = entry.prepared.statement
-        cursor = entry.cursor
-
-        if statement.returns_rows():
-            fetched_data = await cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
-            execution_result = self.create_execution_result(
-                cursor,
-                selected_data=fetched_data,
-                column_names=column_names,
-                data_row_count=len(fetched_data),
-                is_select_result=True,
-            )
-        else:
-            affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            execution_result = self.create_execution_result(cursor, rowcount_override=affected_rows)
-
-        sql_result = self.build_statement_result(statement, execution_result)
-        return StackResult.from_sql_result(sql_result)
-
-    async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets (async).
-
-        Args:
-            cursor: Database cursor
-            statement: SQL statement with parameter list
-
-        Returns:
-            ExecutionResult with batch execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if not prepared_parameters:
-            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
-
-        await cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
-
-    async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement (async).
-
-        Args:
-            cursor: Database cursor
-            statement: SQL statement to execute
-
-        Returns:
-            ExecutionResult with statement execution details
-        """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if prepared_parameters:
-            await cursor.execute(sql, prepared_parameters)
-        else:
-            await cursor.execute(sql)
-
-        if statement.returns_rows():
-            fetched_data = await cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
-
-            return self.create_execution_result(
-                cursor,
-                selected_data=fetched_data,
-                column_names=column_names,
-                data_row_count=len(fetched_data),
-                is_select_result=True,
-            )
-
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -1193,7 +921,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            await self._truncate_table_async(table)
+            truncate_sql = build_truncate_command(table)
+            async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+                await cursor.execute(truncate_sql)
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             copy_sql = build_copy_from_command(table, columns)
@@ -1224,59 +954,28 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+    def data_dictionary(self) -> "PsycopgAsyncDataDictionary":
         """Get the data dictionary for this driver.
 
         Returns:
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            self._data_dictionary = PostgresAsyncDataDictionary()
+            self._data_dictionary = PsycopgAsyncDataDictionary()
         return self._data_dictionary
 
-    async def _truncate_table_async(self, table: str) -> None:
-        truncate_sql = build_truncate_command(table)
-        async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
-            await cursor.execute(truncate_sql)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE / INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
 
-_PSYCOPG_PROFILE = build_psycopg_profile()
-
-register_driver_profile("psycopg", _PSYCOPG_PROFILE)
-
-
-def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
-    """Construct parameter configuration with shared JSON serializer support."""
-
-    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
-
-    updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[list] = build_json_list_converter(serializer)
-    updated_type_map[tuple] = build_json_tuple_converter(serializer)
-
-    return base_config.replace(type_coercion_map=updated_type_map)
-
-
-def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> StatementConfig:
-    """Construct the psycopg statement configuration with optional JSON codecs."""
-
-    parameter_config = _create_psycopg_parameter_config(json_serializer)
-    return StatementConfig(
-        dialect="postgres",
-        pre_process_steps=None,
-        post_process_steps=None,
-        enable_parsing=True,
-        enable_transformations=True,
-        enable_validation=True,
-        enable_caching=True,
-        enable_parameter_type_wrapping=True,
-        parameter_config=parameter_config,
-    )
-
-
-psycopg_statement_config = build_psycopg_statement_config()
+register_driver_profile("psycopg", driver_profile)

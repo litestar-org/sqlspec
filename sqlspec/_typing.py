@@ -5,11 +5,11 @@ import enum
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, ClassVar, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
+from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
 from typing_extensions import TypeVar, dataclass_transform
 
-from sqlspec.utils.dependencies import dependency_flag, module_available
+from sqlspec.utils.module_loader import dependency_flag, module_available
 
 
 @runtime_checkable
@@ -234,7 +234,11 @@ def attrs_asdict_stub(*args: Any, **kwargs: Any) -> "dict[str, Any]":  # noqa: A
 
 def attrs_define_stub(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
     """Placeholder implementation"""
-    return lambda cls: cls  # pyright: ignore[reportUnknownVariableType,reportUnknownLambdaType]
+    return _attrs_define_identity
+
+
+def _attrs_define_identity(cls: Any) -> Any:
+    return cls
 
 
 def attrs_field_stub(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
@@ -594,92 +598,6 @@ except ImportError:
             return _MetricInstance()  # pragma: no cover
 
 
-try:
-    import aiosql  # pyright: ignore[reportMissingImports, reportAssignmentType]
-    from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
-        AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
-    )
-    from aiosql.types import (
-        ParamType as AiosqlParamType,  # pyright: ignore[reportMissingImports, reportAssignmentType, reportRedeclaration]
-    )
-    from aiosql.types import (
-        SQLOperationType as AiosqlSQLOperationType,  # pyright: ignore[reportMissingImports, reportAssignmentType]
-    )
-    from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
-        SyncDriverAdapterProtocol as AiosqlSyncProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
-    )
-except ImportError:
-    # Define shims for when aiosql is not installed
-
-    class _AiosqlShim:
-        """Placeholder aiosql module"""
-
-        @staticmethod
-        def from_path(sql_path: str, driver_adapter: Any, **kwargs: Any) -> Any:
-            """Placeholder from_path method"""
-            return None  # pragma: no cover
-
-        @staticmethod
-        def from_str(sql_str: str, driver_adapter: Any, **kwargs: Any) -> Any:
-            """Placeholder from_str method"""
-            return None  # pragma: no cover
-
-    aiosql = _AiosqlShim()  # type: ignore[assignment]
-
-    # Placeholder types for aiosql protocols
-    AiosqlParamType: TypeAlias = dict[str, Any] | list[Any] | None  # type: ignore[misc,no-redef]
-
-    class AiosqlSQLOperationType(Enum):  # type: ignore[no-redef]
-        """Enumeration of aiosql operation types."""
-
-        INSERT_RETURNING = 0
-        INSERT_UPDATE_DELETE = 1
-        INSERT_UPDATE_DELETE_MANY = 2
-        SCRIPT = 3
-        SELECT = 4
-        SELECT_ONE = 5
-        SELECT_VALUE = 6
-
-    @runtime_checkable
-    class AiosqlSyncProtocol(Protocol):  # type: ignore[no-redef]
-        """Placeholder for aiosql SyncDriverAdapterProtocol"""
-
-        is_aio_driver: "ClassVar[bool]"
-
-        def process_sql(self, query_name: str, op_type: Any, sql: str) -> str: ...
-        def select(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Any | None" = None
-        ) -> Any: ...
-        def select_one(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Any | None" = None
-        ) -> "Any | None": ...
-        def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
-        def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Any: ...
-        def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: Any) -> int: ...
-        def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: Any) -> int: ...
-        def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
-
-    @runtime_checkable
-    class AiosqlAsyncProtocol(Protocol):  # type: ignore[no-redef]
-        """Placeholder for aiosql AsyncDriverAdapterProtocol"""
-
-        is_aio_driver: "ClassVar[bool]"
-
-        def process_sql(self, query_name: str, op_type: Any, sql: str) -> str: ...
-        async def select(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Any | None" = None
-        ) -> Any: ...
-        async def select_one(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Any | None" = None
-        ) -> "Any | None": ...
-        async def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
-        async def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Any: ...
-        async def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
-        async def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
-        async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
-
-
-AIOSQL_INSTALLED = dependency_flag("aiosql")
 ATTRS_INSTALLED = dependency_flag("attrs")
 CATTRS_INSTALLED = dependency_flag("cattrs")
 CLOUD_SQL_CONNECTOR_INSTALLED = dependency_flag("google.cloud.sql.connector")
@@ -701,7 +619,6 @@ NANOID_INSTALLED = dependency_flag("fastnanoid")
 UUID_UTILS_INSTALLED = dependency_flag("uuid_utils")
 
 __all__ = (
-    "AIOSQL_INSTALLED",
     "ALLOYDB_CONNECTOR_INSTALLED",
     "ATTRS_INSTALLED",
     "CATTRS_INSTALLED",
@@ -723,10 +640,6 @@ __all__ = (
     "UNSET",
     "UNSET_STUB",
     "UUID_UTILS_INSTALLED",
-    "AiosqlAsyncProtocol",
-    "AiosqlParamType",
-    "AiosqlSQLOperationType",
-    "AiosqlSyncProtocol",
     "ArrowRecordBatch",
     "ArrowRecordBatchReader",
     "ArrowRecordBatchReaderProtocol",
@@ -768,7 +681,6 @@ __all__ = (
     "TypeAdapterStub",
     "UnsetType",
     "UnsetTypeStub",
-    "aiosql",
     "attrs_asdict",
     "attrs_asdict_stub",
     "attrs_define",

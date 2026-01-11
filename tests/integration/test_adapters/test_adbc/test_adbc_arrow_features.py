@@ -12,7 +12,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
+def adbc_postgresql_session(postgres_service: "PostgresService") -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session for Arrow testing."""
     config = AdbcConfig(
         connection_config={

@@ -202,17 +202,6 @@ For Flask integration:
 Additional Features
 -------------------
 
-SQL File Loading
-^^^^^^^^^^^^^^^^
-
-For loading SQL queries from files (aiosql-style):
-
-.. code-block:: bash
-
-    pip install sqlspec[aiosql]
-    # or
-    uv pip install sqlspec[aiosql]
-
 Observability
 ^^^^^^^^^^^^^
 

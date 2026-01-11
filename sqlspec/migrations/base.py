@@ -8,16 +8,15 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from rich.console import Console
 
-from sqlspec.builder import Delete, Insert, Select, Update, sql
-from sqlspec.builder._ddl import CreateTable
+from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateDescriptionHints, build_template_settings
+from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.sync_tools import await_
-from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -28,7 +27,7 @@ __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker
 DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
-logger = get_logger("migrations.base")
+logger = get_logger("sqlspec.migrations.base")
 
 
 class BaseMigrationTracker(ABC, Generic[DriverT]):
@@ -359,7 +358,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
                             prefixed_version = f"ext_{ext_name}_{version}"
                             migrations.append((prefixed_version, file_path))
 
-        return sorted(migrations, key=lambda m: parse_version(m[0]))
+        return sorted(migrations, key=_migration_sort_key)
 
     def _load_migration_metadata(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
         """Load migration metadata from file.
@@ -520,6 +519,10 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
     def load_all_migrations(self) -> Any:
         """Load all migrations into a single namespace for bulk operations."""
         ...
+
+
+def _migration_sort_key(item: "tuple[str, Path]") -> Any:
+    return parse_version(item[0])
 
 
 class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):

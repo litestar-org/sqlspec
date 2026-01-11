@@ -1,17 +1,17 @@
 """Psycopg configuration tests covering statement config builders."""
 
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
-from sqlspec.adapters.psycopg.driver import build_psycopg_statement_config, psycopg_statement_config
+from sqlspec.adapters.psycopg.core import build_statement_config, default_statement_config
 from sqlspec.core import SQL
 
 
-def test_build_psycopg_statement_config_custom_serializer() -> None:
+def test_build_default_statement_config_custom_serializer() -> None:
     """Custom serializer should propagate into the parameter configuration."""
 
     def serializer(_: object) -> str:
         return "serialized"
 
-    statement_config = build_psycopg_statement_config(json_serializer=serializer)
+    statement_config = build_statement_config(json_serializer=serializer)
 
     parameter_config = statement_config.parameter_config
     assert parameter_config.json_serializer is serializer
@@ -49,7 +49,7 @@ def test_psycopg_numeric_placeholders_convert_to_pyformat() -> None:
         "alpha",
         "beta",
         "gamma",
-        statement_config=psycopg_statement_config,
+        statement_config=default_statement_config,
     )
     compiled_sql, parameters = statement.compile()
 

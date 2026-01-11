@@ -1,189 +1,126 @@
 """PostgreSQL-specific data dictionary for metadata queries via psqlpy."""
 
-import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, ClassVar
 
-from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
-from sqlspec.utils.logging import get_logger
+from mypy_extensions import mypyc_attr
+
+from sqlspec.driver import AsyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 
-logger = get_logger("adapters.psqlpy.data_dictionary")
-
-# Compiled regex patterns
-POSTGRES_VERSION_PATTERN = re.compile(r"PostgreSQL (\d+)\.(\d+)(?:\.(\d+))?")
-
-__all__ = ("PsqlpyAsyncDataDictionary",)
+__all__ = ("PsqlpyDataDictionary",)
 
 
-class PsqlpyAsyncDataDictionary(AsyncDataDictionaryBase):
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class PsqlpyDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary via psqlpy."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
-        """Get PostgreSQL database version information.
+    dialect: ClassVar[str] = "postgres"
 
-        Uses caching to avoid repeated database queries within the same
-        driver session.
+    def __init__(self) -> None:
+        super().__init__()
 
-        Args:
-            driver: Async database driver instance.
-
-        Returns:
-            PostgreSQL version information or None if detection fails.
-        """
+    async def get_version(self, driver: "PsqlpyDriver") -> "VersionInfo | None":
+        """Get PostgreSQL database version information."""
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cached_version
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+        # Not cached, fetch from database
 
-        version_str = await cast("PsqlpyDriver", driver).select_value("SELECT version()")
-        if not version_str:
-            logger.warning("No PostgreSQL version information found")
+        version_value = await driver.select_value(self.get_query("version"))
+        if not version_value:
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
-        version_match = POSTGRES_VERSION_PATTERN.search(str(version_str))
-        if not version_match:
-            logger.warning("Could not parse PostgreSQL version: %s", version_str)
+        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
+        if version_info is None:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        major = int(version_match.group(1))
-        minor = int(version_match.group(2))
-        patch = int(version_match.group(3)) if version_match.group(3) else 0
-
-        version_info = VersionInfo(major, minor, patch)
-        logger.debug("Detected PostgreSQL version: %s", version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 
-    async def get_feature_flag(self, driver: AsyncDriverAdapterBase, feature: str) -> bool:
-        """Check if PostgreSQL database supports a specific feature.
-
-        Args:
-            driver: Async database driver instance
-            feature: Feature name to check
-
-        Returns:
-            True if feature is supported, False otherwise
-        """
+    async def get_feature_flag(self, driver: "PsqlpyDriver", feature: str) -> bool:
+        """Check if PostgreSQL database supports a specific feature."""
         version_info = await self.get_version(driver)
-        if not version_info:
-            return False
+        return self.resolve_feature_flag(feature, version_info)
 
-        feature_checks: dict[str, Callable[[VersionInfo], bool]] = {
-            "supports_json": lambda v: v >= VersionInfo(9, 2, 0),
-            "supports_jsonb": lambda v: v >= VersionInfo(9, 4, 0),
-            "supports_uuid": lambda _: True,  # UUID extension widely available
-            "supports_arrays": lambda _: True,  # PostgreSQL has excellent array support
-            "supports_returning": lambda v: v >= VersionInfo(8, 2, 0),
-            "supports_upsert": lambda v: v >= VersionInfo(9, 5, 0),  # ON CONFLICT
-            "supports_window_functions": lambda v: v >= VersionInfo(8, 4, 0),
-            "supports_cte": lambda v: v >= VersionInfo(8, 4, 0),
-            "supports_transactions": lambda _: True,
-            "supports_prepared_statements": lambda _: True,
-            "supports_schemas": lambda _: True,
-            "supports_partitioning": lambda v: v >= VersionInfo(10, 0, 0),
-        }
-
-        if feature in feature_checks:
-            return bool(feature_checks[feature](version_info))
-
-        return False
-
-    async def get_optimal_type(self, driver: AsyncDriverAdapterBase, type_category: str) -> str:
-        """Get optimal PostgreSQL type for a category.
-
-        Args:
-            driver: Async database driver instance
-            type_category: Type category
-
-        Returns:
-            PostgreSQL-specific type name
-        """
+    async def get_optimal_type(self, driver: "PsqlpyDriver", type_category: str) -> str:
+        """Get optimal PostgreSQL type for a category."""
+        config = self.get_dialect_config()
         version_info = await self.get_version(driver)
 
         if type_category == "json":
-            if version_info and version_info >= VersionInfo(9, 4, 0):
-                return "JSONB"  # Prefer JSONB over JSON
-            if version_info and version_info >= VersionInfo(9, 2, 0):
+            jsonb_version = config.get_feature_version("supports_jsonb")
+            json_version = config.get_feature_version("supports_json")
+            if version_info and jsonb_version and version_info >= jsonb_version:
+                return "JSONB"
+            if version_info and json_version and version_info >= json_version:
                 return "JSON"
             return "TEXT"
 
-        type_map = {
-            "uuid": "UUID",
-            "boolean": "BOOLEAN",
-            "timestamp": "TIMESTAMP WITH TIME ZONE",
-            "text": "TEXT",
-            "blob": "BYTEA",
-            "array": "ARRAY",
-        }
-        return type_map.get(type_category, "TEXT")
+        return config.get_optimal_type(type_category)
+
+    async def get_tables(self, driver: "PsqlpyDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables sorted by topological dependency order using Recursive CTE."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
+        return await driver.select(
+            self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+        )
 
     async def get_columns(
-        self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get column information for a table using pg_catalog.
+        self, driver: "PsqlpyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+            return await driver.select(
+                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+            )
 
-        Args:
-            driver: Psqlpy async driver instance
-            table: Table name to query columns for
-            schema: Schema name (None for default 'public')
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+        return await driver.select(
+            self.get_query("columns_by_table"), schema_name=schema_name, table_name=table, schema_type=ColumnMetadata
+        )
 
-        Returns:
-            List of column metadata dictionaries with keys:
-                - column_name: Name of the column
-                - data_type: PostgreSQL data type
-                - is_nullable: Whether column allows NULL (YES/NO)
-                - column_default: Default value if any
+    async def get_indexes(
+        self, driver: "PsqlpyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+            return await driver.select(
+                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+            )
 
-        Notes:
-            Uses pg_catalog instead of information_schema to avoid psqlpy's
-            inability to handle the PostgreSQL 'name' type returned by information_schema.
-        """
-        psqlpy_driver = cast("PsqlpyDriver", driver)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
+        return await driver.select(
+            self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
+        )
 
-        schema_name = schema or "public"
-        sql = """
-            SELECT
-                a.attname::text AS column_name,
-                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
-                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
-                pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
-            FROM pg_catalog.pg_attribute a
-            JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
-            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-            LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
-            WHERE c.relname = $1
-                AND n.nspname = $2
-                AND a.attnum > 0
-                AND NOT a.attisdropped
-            ORDER BY a.attnum
-        """
-
-        result = await psqlpy_driver.execute(sql, (table, schema_name))
-        return result.data or []
-
-    def list_available_features(self) -> "list[str]":
-        """List available PostgreSQL feature flags.
-
-        Returns:
-            List of supported feature names
-        """
-        return [
-            "supports_json",
-            "supports_jsonb",
-            "supports_uuid",
-            "supports_arrays",
-            "supports_returning",
-            "supports_upsert",
-            "supports_window_functions",
-            "supports_cte",
-            "supports_transactions",
-            "supports_prepared_statements",
-            "supports_schemas",
-            "supports_partitioning",
-        ]
+    async def get_foreign_keys(
+        self, driver: "PsqlpyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+            return await driver.select(
+                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+            )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+        return await driver.select(
+            self.get_query("foreign_keys_by_table"),
+            schema_name=schema_name,
+            table_name=table,
+            schema_type=ForeignKeyMetadata,
+        )

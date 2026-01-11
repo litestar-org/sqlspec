@@ -4,18 +4,27 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from asyncmy import Connection  # pyright: ignore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import TypeAlias
+    from typing import Protocol
 
     from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
     from sqlspec.core import StatementConfig
 
-    AsyncmyConnection: TypeAlias = Connection
+    class AsyncmyConnectionProtocol(Protocol):
+        def cursor(self) -> Any: ...
+
+        async def commit(self) -> Any: ...
+
+        async def rollback(self) -> Any: ...
+
+        async def close(self) -> Any: ...
+
+    AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
 else:
     AsyncmyConnection = Connection
 

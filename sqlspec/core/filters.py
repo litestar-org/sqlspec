@@ -89,7 +89,7 @@ class StatementFilter(ABC):
         """
         return [], {}
 
-    def _resolve_parameter_conflicts(self, statement: "SQL", proposed_names: list[str]) -> list[str]:
+    def _resolve_parameter_conflicts(self, statement: "SQL", proposed_names: "list[str]") -> "list[str]":
         """Resolve parameter name conflicts.
 
         Args:
@@ -115,7 +115,7 @@ class StatementFilter(ABC):
         return resolved_names
 
     @abstractmethod
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return a cache key for this filter's configuration.
 
         Returns:
@@ -148,7 +148,7 @@ class BeforeAfterFilter(StatementFilter):
     def after(self) -> datetime | None:
         return self._after
 
-    def get_param_names(self) -> list[str]:
+    def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         names = []
         if self.before:
@@ -157,7 +157,7 @@ class BeforeAfterFilter(StatementFilter):
             names.append(f"{self.field_name}_after")
         return names
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         param_names = self.get_param_names()
@@ -198,7 +198,7 @@ class BeforeAfterFilter(StatementFilter):
             final_condition = exp.And(this=final_condition, expression=cond)
         return result.where(final_condition)
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("BeforeAfterFilter", self.field_name, self.before, self.after)
 
@@ -230,7 +230,7 @@ class OnBeforeAfterFilter(StatementFilter):
     def on_or_after(self) -> datetime | None:
         return self._on_or_after
 
-    def get_param_names(self) -> list[str]:
+    def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         names = []
         if self.on_or_before:
@@ -239,7 +239,7 @@ class OnBeforeAfterFilter(StatementFilter):
             names.append(f"{self.field_name}_on_or_after")
         return names
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         param_names = self.get_param_names()
@@ -282,7 +282,7 @@ class OnBeforeAfterFilter(StatementFilter):
             final_condition = exp.And(this=final_condition, expression=cond)
         return result.where(final_condition)
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("OnBeforeAfterFilter", self.field_name, self.on_or_before, self.on_or_after)
 
@@ -316,13 +316,13 @@ class InCollectionFilter(InAnyFilter[T]):
     def values(self) -> abc.Collection[T] | None:
         return self._values
 
-    def get_param_names(self) -> list[str]:
+    def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         if not self.values:
             return []
         return [f"{self.field_name}_in_{i}" for i, _ in enumerate(self.values)]
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
@@ -350,7 +350,7 @@ class InCollectionFilter(InAnyFilter[T]):
             result = result.add_named_parameter(resolved_name, value)
         return result
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("InCollectionFilter", self.field_name, values_tuple)
@@ -376,14 +376,14 @@ class NotInCollectionFilter(InAnyFilter[T]):
     def values(self) -> abc.Collection[T] | None:
         return self._values
 
-    def get_param_names(self) -> list[str]:
+    def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         if not self.values:
             return []
         # Use object id to ensure uniqueness between instances
         return [f"{self.field_name}_notin_{i}_{id(self)}" for i, _ in enumerate(self.values)]
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
@@ -410,7 +410,7 @@ class NotInCollectionFilter(InAnyFilter[T]):
             result = result.add_named_parameter(resolved_name, value)
         return result
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("NotInCollectionFilter", self.field_name, values_tuple)
@@ -436,13 +436,13 @@ class AnyCollectionFilter(InAnyFilter[T]):
     def values(self) -> abc.Collection[T] | None:
         return self._values
 
-    def get_param_names(self) -> list[str]:
+    def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         if not self.values:
             return []
         return [f"{self.field_name}_any_{i}" for i, _ in enumerate(self.values)]
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
@@ -471,7 +471,7 @@ class AnyCollectionFilter(InAnyFilter[T]):
             result = result.add_named_parameter(resolved_name, value)
         return result
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("AnyCollectionFilter", self.field_name, values_tuple)
@@ -497,13 +497,13 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
     def values(self) -> abc.Collection[T] | None:
         return self._values
 
-    def get_param_names(self) -> list[str]:
+    def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         if not self.values:
             return []
         return [f"{self.field_name}_not_any_{i}" for i, _ in enumerate(self.values)]
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
@@ -530,7 +530,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
             result = result.add_named_parameter(resolved_name, value)
         return result
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("NotAnyCollectionFilter", self.field_name, values_tuple)
@@ -566,11 +566,11 @@ class LimitOffsetFilter(PaginationFilter):
     def offset(self) -> int:
         return self._offset
 
-    def get_param_names(self) -> list[str]:
+    def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         return ["limit", "offset"]
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         param_names = self.get_param_names()
         return [], {param_names[0]: self.limit, param_names[1]: self.offset}
@@ -583,7 +583,9 @@ class LimitOffsetFilter(PaginationFilter):
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
         if statement.statement_expression is not None:
-            current_statement = statement.statement_expression
+            current_statement = statement.statement_expression.copy()
+        elif not statement.statement_config.enable_parsing:
+            current_statement = exp.Select().from_(f"({statement.raw_sql})")
         else:
             try:
                 current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
@@ -599,7 +601,7 @@ class LimitOffsetFilter(PaginationFilter):
         result = result.add_named_parameter(limit_param_name, self.limit)
         return result.add_named_parameter(offset_param_name, self.offset)
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("LimitOffsetFilter", self.limit, self.offset)
 
@@ -624,7 +626,7 @@ class OrderByFilter(StatementFilter):
     def sort_order(self) -> Literal["asc", "desc"]:
         return self._sort_order  # pyright: ignore
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         return [], {}
 
@@ -637,7 +639,9 @@ class OrderByFilter(StatementFilter):
         order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
         if statement.statement_expression is not None:
-            current_statement = statement.statement_expression
+            current_statement = statement.statement_expression.copy()
+        elif not statement.statement_config.enable_parsing:
+            current_statement = exp.Select().from_(f"({statement.raw_sql})")
         else:
             try:
                 current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
@@ -651,7 +655,7 @@ class OrderByFilter(StatementFilter):
 
         return statement.copy(statement=new_statement)
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("OrderByFilter", self.field_name, self.sort_order)
 
@@ -670,7 +674,7 @@ class SearchFilter(StatementFilter):
         self._ignore_case = ignore_case
 
     @property
-    def field_name(self) -> str | set[str]:
+    def field_name(self) -> "str | set[str]":
         return self._field_name
 
     @property
@@ -689,7 +693,7 @@ class SearchFilter(StatementFilter):
             return f"{self.field_name}_search"
         return "search_value"
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         param_name = self.get_param_name()
@@ -728,7 +732,7 @@ class SearchFilter(StatementFilter):
         search_value_with_wildcards = f"%{self.value}%"
         return result.add_named_parameter(param_name, search_value_with_wildcards)
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
         return ("SearchFilter", field_names, self.value, self.ignore_case)
@@ -749,7 +753,7 @@ class NullFilter(StatementFilter):
     def field_name(self) -> str:
         return self._field_name
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters.
 
         Returns empty parameters since IS NULL requires no values.
@@ -762,7 +766,7 @@ class NullFilter(StatementFilter):
         is_null_condition = exp.Is(this=col_expr, expression=exp.Null())
         return statement.where(is_null_condition)
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("NullFilter", self.field_name)
 
@@ -782,7 +786,7 @@ class NotNullFilter(StatementFilter):
     def field_name(self) -> str:
         return self._field_name
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters.
 
         Returns empty parameters since IS NOT NULL requires no values.
@@ -796,7 +800,7 @@ class NotNullFilter(StatementFilter):
         is_not_null_condition = exp.Not(this=is_null_condition)
         return statement.where(is_not_null_condition)
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("NotNullFilter", self.field_name)
 
@@ -815,7 +819,7 @@ class NotInSearchFilter(SearchFilter):
             return f"{self.field_name}_not_search"
         return "not_search_value"
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         named_parameters = {}
         param_name = self.get_param_name()
@@ -854,7 +858,7 @@ class NotInSearchFilter(SearchFilter):
         search_value_with_wildcards = f"%{self.value}%"
         return result.add_named_parameter(param_name, search_value_with_wildcards)
 
-    def get_cache_key(self) -> tuple[Any, ...]:
+    def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
         return ("NotInSearchFilter", field_names, self.value, self.ignore_case)
@@ -914,7 +918,7 @@ FilterTypes: TypeAlias = (
 )
 
 
-def create_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter", ...]:
+def create_filters(filters: "list[StatementFilter]") -> "tuple[StatementFilter, ...]":
     """Convert mutable filters to immutable tuple.
 
     Since StatementFilter classes are now immutable (with read-only properties),
@@ -929,14 +933,14 @@ def create_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter",
     return tuple(filters)
 
 
-def _filter_sort_key(f: "StatementFilter") -> tuple[str, str]:
+def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str]":
     """Sort key for canonicalizing filters by type and field_name."""
     class_name = type(f).__name__
     field_name = str(f.field_name) if has_field_name(f) else ""
     return (class_name, field_name)
 
 
-def canonicalize_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter", ...]:
+def canonicalize_filters(filters: "list[StatementFilter]") -> "tuple[StatementFilter, ...]":
     """Sort filters by type and field_name for consistent hashing.
 
     Args:

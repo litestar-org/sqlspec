@@ -533,7 +533,7 @@ SELECT 'original' as source;
     try:
         symlink_file.symlink_to(original_file)
     except OSError:
-        pytest.skip("Symbolic links not supported on this system")
+        pytest.skip("Symbolic links unsupported")
 
     loader = SQLFileLoader()
     loader.load_sql(symlink_file)
@@ -583,7 +583,7 @@ SELECT 'Unicode filename support' as message;
             encoding="utf-8",
         )
     except OSError:
-        pytest.skip("Unicode filenames not supported on this system")
+        pytest.skip("Unicode filenames unsupported")
 
     loader = SQLFileLoader()
     loader.load_sql(base_path)
@@ -656,7 +656,7 @@ def test_multiple_fixture_batch_loading(fixtures_path: Path) -> None:
 
     existing_files = [f for f in fixture_files if f.exists()]
     if len(existing_files) < 2:
-        pytest.skip("Need at least 2 fixture files for batch loading test")
+        pytest.skip("Need 2+ fixtures for batch test")
 
     loader = SQLFileLoader()
 
@@ -707,7 +707,7 @@ def test_fixture_cache_performance(fixtures_path: Path) -> None:
 
     fixture_file = fixtures_path / "postgres" / "collection-database_details.sql"
     if not fixture_file.exists():
-        pytest.skip("Large fixture file not available")
+        pytest.skip("Large fixture missing")
 
     loader1 = SQLFileLoader()
     start_time = time.time()

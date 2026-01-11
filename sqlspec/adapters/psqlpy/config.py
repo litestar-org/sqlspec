@@ -1,29 +1,22 @@
 """Psqlpy database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from mypy_extensions import mypyc_attr
 from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
-from sqlspec.adapters.psqlpy.driver import (
-    PsqlpyCursor,
-    PsqlpyDriver,
-    PsqlpyExceptionHandler,
-    PsqlpySessionContext,
-    build_psqlpy_statement_config,
-    psqlpy_statement_config,
-)
+from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, PsqlpyExceptionHandler, PsqlpySessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
-from sqlspec.core import StatementConfig
-from sqlspec.extensions.events._hints import EventRuntimeHints
-from sqlspec.typing import PGVECTOR_INSTALLED
-from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
-from sqlspec.utils.serializers import to_json
+from sqlspec.extensions.events import EventRuntimeHints
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from sqlspec.core import StatementConfig
 
 
 class PsqlpyConnectionParams(TypedDict):
@@ -76,7 +69,7 @@ class PsqlpyPoolParams(PsqlpyConnectionParams):
     conn_recycling_method: NotRequired[str]
     max_db_pool_size: NotRequired[int]
     configure: NotRequired["Callable[..., Any]"]
-    extra: NotRequired[dict[str, Any]]
+    extra: NotRequired["dict[str, Any]"]
 
 
 class PsqlpyDriverFeatures(TypedDict):
@@ -103,6 +96,30 @@ class PsqlpyDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
+
+
+class _PsqlpySessionFactory:
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "PsqlpyConfig") -> None:
+        self._config = config
+        self._ctx: Any | None = None
+
+    async def acquire_connection(self) -> "PsqlpyConnection":
+        pool = self._config.connection_instance
+        if pool is None:
+            pool = await self._config.create_pool()
+            self._config.connection_instance = pool
+        ctx = pool.acquire()
+        self._ctx = ctx
+        return await ctx.__aenter__()
+
+    async def release_connection(self, _conn: "PsqlpyConnection") -> None:
+        if self._ctx is not None:
+            await self._ctx.__aexit__(None, None, None)
+            self._ctx = None
 
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
@@ -118,10 +135,12 @@ class PsqlpyConnectionContext:
         self._ctx: Any = None
 
     async def __aenter__(self) -> PsqlpyConnection:
-        if self._config.connection_instance is None:
-            self._config.connection_instance = await self._config._create_pool()  # pyright: ignore[reportPrivateUsage]
+        pool = self._config.connection_instance
+        if pool is None:
+            pool = await self._config.create_pool()
+            self._config.connection_instance = pool
 
-        self._ctx = self._config.connection_instance.acquire()
+        self._ctx = pool.acquire()
         return await self._ctx.__aenter__()  # type: ignore[no-any-return]
 
     async def __aexit__(
@@ -147,10 +166,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     def __init__(
         self,
         *,
-        connection_config: PsqlpyPoolParams | dict[str, Any] | None = None,
+        connection_config: "PsqlpyPoolParams | dict[str, Any] | None" = None,
         connection_instance: ConnectionPool | None = None,
-        migration_config: dict[str, Any] | None = None,
-        statement_config: StatementConfig | None = None,
+        migration_config: "dict[str, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
         extension_config: "ExtensionConfigs | None" = None,
@@ -166,43 +185,29 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             driver_features: Driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
-            **kwargs: Additional keyword arguments (handles deprecated pool_config/pool_instance).
+            **kwargs: Additional keyword arguments.
         """
-        connection_config, connection_instance = apply_pool_deprecations(
-            kwargs=kwargs, connection_config=connection_config, connection_instance=connection_instance
-        )
+        reject_pool_aliases(kwargs)
 
-        processed_connection_config = normalize_connection_config(connection_config)
+        connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        serializer = processed_driver_features.get("json_serializer")
-        serializer_callable = to_json if serializer is None else cast("Callable[[Any], str]", serializer)
-        processed_driver_features.setdefault("json_serializer", serializer_callable)
-        processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or build_psqlpy_statement_config(json_serializer=serializer_callable),
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
         )
 
-    def _get_pool_config_dict(self) -> dict[str, Any]:
-        """Get pool configuration as plain dict for external library.
-
-        Returns:
-            Dictionary with pool parameters, filtering out None values.
-        """
-        return {k: v for k, v in self.connection_config.items() if v is not None}
-
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        config = self._get_pool_config_dict()
-        return ConnectionPool(**config)
+        return ConnectionPool(**build_connection_config(self.connection_config))
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
@@ -210,6 +215,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             return
 
         self.connection_instance.close()
+        self.connection_instance = None
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
@@ -221,10 +227,12 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             A psqlpy Connection instance.
         """
-        if not self.connection_instance:
-            self.connection_instance = await self._create_pool()
+        pool = self.connection_instance
+        if pool is None:
+            pool = await self.create_pool()
+            self.connection_instance = pool
 
-        return await self.connection_instance.connection()
+        return await pool.connection()
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "PsqlpyConnectionContext":
         """Provide an async connection context manager.
@@ -251,24 +259,11 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             A PsqlpyDriver session context manager.
         """
-        acquire_ctx_holder: dict[str, Any] = {}
-
-        async def acquire_connection() -> PsqlpyConnection:
-            if self.connection_instance is None:
-                self.connection_instance = await self._create_pool()
-            ctx = self.connection_instance.acquire()
-            acquire_ctx_holder["ctx"] = ctx
-            return await ctx.__aenter__()
-
-        async def release_connection(_conn: PsqlpyConnection) -> None:
-            if "ctx" in acquire_ctx_holder:
-                await acquire_ctx_holder["ctx"].__aexit__(None, None, None)
-                acquire_ctx_holder.clear()
-
+        factory = _PsqlpySessionFactory(self)
         return PsqlpySessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
-            statement_config=statement_config or self.statement_config or psqlpy_statement_config,
+            acquire_connection=factory.acquire_connection,
+            release_connection=factory.release_connection,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

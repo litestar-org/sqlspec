@@ -12,7 +12,13 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
-__all__ = ("register_uuid_handlers", "uuid_converter_in", "uuid_converter_out")
+__all__ = (
+    "register_uuid_handlers",
+    "uuid_converter_in",
+    "uuid_converter_out",
+    "uuid_input_type_handler",
+    "uuid_output_type_handler",
+)
 
 
 logger = get_logger(__name__)
@@ -98,6 +104,16 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     return None
 
 
+def uuid_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
+    """Public input type handler for UUID values."""
+    return _input_type_handler(cursor, value, arraysize)
+
+
+def uuid_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+    """Public output type handler for RAW(16) UUID values."""
+    return _output_type_handler(cursor, metadata)
+
+
 def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
     """Register UUID type handlers with chaining support.
 
@@ -116,22 +132,35 @@ def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
     except AttributeError:
         existing_output = None
 
-    def combined_input_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
+    connection.inputtypehandler = _UuidInputHandler(existing_input)
+    connection.outputtypehandler = _UuidOutputHandler(existing_output)
+
+
+class _UuidInputHandler:
+    __slots__ = ("_fallback",)
+
+    def __init__(self, fallback: "Any | None") -> None:
+        self._fallback = fallback
+
+    def __call__(self, cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
         result = _input_type_handler(cursor, value, arraysize)
         if result is not None:
             return result
-        if existing_input is not None:
-            return existing_input(cursor, value, arraysize)
+        if self._fallback is not None:
+            return self._fallback(cursor, value, arraysize)
         return None
 
-    def combined_output_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+
+class _UuidOutputHandler:
+    __slots__ = ("_fallback",)
+
+    def __init__(self, fallback: "Any | None") -> None:
+        self._fallback = fallback
+
+    def __call__(self, cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
         result = _output_type_handler(cursor, metadata)
         if result is not None:
             return result
-        if existing_output is not None:
-            return existing_output(cursor, metadata)
+        if self._fallback is not None:
+            return self._fallback(cursor, metadata)
         return None
-
-    connection.inputtypehandler = combined_input_handler
-    connection.outputtypehandler = combined_output_handler
-    logger.debug("Registered UUID type handlers on Oracle connection with chaining support")

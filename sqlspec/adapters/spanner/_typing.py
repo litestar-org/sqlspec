@@ -17,7 +17,8 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     SpannerConnection = Snapshot | SnapshotCheckout | Transaction
-else:
+
+if not TYPE_CHECKING:
     SpannerConnection = Any
 
 

@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from sqlspec.extensions.starlette._state import SQLSpecConfigState
+from sqlspec.extensions.starlette import SQLSpecConfigState
 
 
 def test_config_state_creation() -> None:

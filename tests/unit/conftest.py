@@ -9,17 +9,17 @@ from collections import defaultdict
 from collections.abc import Callable
 from contextlib import asynccontextmanager, contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from sqlspec.core import (
     SQL,
+    LRUCache,
     ParameterStyle,
     ParameterStyleConfig,
     StatementConfig,
     TypedParameter,
-    UnifiedCache,
     get_default_cache,
 )
 from sqlspec.driver import (
@@ -28,9 +28,10 @@ from sqlspec.driver import (
     ExecutionResult,
     SyncDataDictionaryBase,
     SyncDriverAdapterBase,
-    VersionInfo,
 )
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
+from tests.conftest import is_compiled
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
@@ -100,12 +101,12 @@ __all__ = (
     "mock_async_connection",
     "mock_async_driver",
     "mock_bigquery_connection",
+    "mock_lru_cache",
     "mock_mysql_connection",
     "mock_postgres_connection",
     "mock_sqlite_connection",
     "mock_sync_connection",
     "mock_sync_driver",
-    "mock_unified_cache",
     "parameter_style_config_advanced",
     "parameter_style_config_basic",
     "performance_timer",
@@ -124,16 +125,6 @@ __all__ = (
     "statement_config_sqlite",
     "test_isolation",
 )
-
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
 
 
 @pytest.fixture
@@ -249,8 +240,8 @@ def cache_config_disabled() -> dict[str, Any]:
 
 
 @pytest.fixture
-def mock_unified_cache() -> UnifiedCache:
-    """Mock unified cache for testing cache behavior."""
+def mock_lru_cache() -> LRUCache:
+    """Mock LRU cache for testing cache behavior."""
 
     return get_default_cache()
 
@@ -617,17 +608,43 @@ class MockAsyncCursor:
 class MockSyncDataDictionary(SyncDataDictionaryBase):
     """Mock sync data dictionary for testing."""
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
+    def get_version(self, driver: "MockSyncDriver") -> "VersionInfo | None":
         """Return mock version info."""
         return VersionInfo(3, 42, 0)
 
-    def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
+    def get_feature_flag(self, driver: "MockSyncDriver", feature: str) -> bool:
         """Return mock feature flag."""
         return feature in {"supports_transactions", "supports_prepared_statements"}
 
-    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:
+    def get_optimal_type(self, driver: "MockSyncDriver", type_category: str) -> str:
         """Return mock optimal type."""
         return {"text": "TEXT", "boolean": "INTEGER"}.get(type_category, "TEXT")
+
+    def get_tables(self, driver: "MockSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Return mock table list."""
+        _ = (driver, schema)
+        return []
+
+    def get_columns(
+        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Return mock column metadata."""
+        _ = (driver, table, schema)
+        return []
+
+    def get_indexes(
+        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Return mock index metadata."""
+        _ = (driver, table, schema)
+        return []
+
+    def get_foreign_keys(
+        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Return mock foreign key metadata."""
+        _ = (driver, table, schema)
+        return []
 
     def list_available_features(self) -> "list[str]":
         """Return mock available features."""
@@ -637,17 +654,43 @@ class MockSyncDataDictionary(SyncDataDictionaryBase):
 class MockAsyncDataDictionary(AsyncDataDictionaryBase):
     """Mock async data dictionary for testing."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
+    async def get_version(self, driver: "MockAsyncDriver") -> "VersionInfo | None":
         """Return mock version info."""
         return VersionInfo(3, 42, 0)
 
-    async def get_feature_flag(self, driver: AsyncDriverAdapterBase, feature: str) -> bool:
+    async def get_feature_flag(self, driver: "MockAsyncDriver", feature: str) -> bool:
         """Return mock feature flag."""
         return feature in {"supports_transactions", "supports_prepared_statements"}
 
-    async def get_optimal_type(self, driver: AsyncDriverAdapterBase, type_category: str) -> str:
+    async def get_optimal_type(self, driver: "MockAsyncDriver", type_category: str) -> str:
         """Return mock optimal type."""
         return {"text": "TEXT", "boolean": "INTEGER"}.get(type_category, "TEXT")
+
+    async def get_tables(self, driver: "MockAsyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Return mock table list."""
+        _ = (driver, schema)
+        return []
+
+    async def get_columns(
+        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Return mock column metadata."""
+        _ = (driver, table, schema)
+        return []
+
+    async def get_indexes(
+        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Return mock index metadata."""
+        _ = (driver, table, schema)
+        return []
+
+    async def get_foreign_keys(
+        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Return mock foreign key metadata."""
+        _ = (driver, table, schema)
+        return []
 
     def list_available_features(self) -> "list[str]":
         """Return mock available features."""
@@ -700,11 +743,11 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Handle database exceptions."""
         return MockSyncExceptionHandler()
 
-    def _try_special_handling(self, cursor: MockSyncCursor, statement: SQL) -> Any | None:
+    def dispatch_special_handling(self, cursor: MockSyncCursor, statement: SQL) -> Any | None:
         """Mock special handling - always return None."""
         return None
 
-    def _execute_statement(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
+    def dispatch_execute(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
         """Mock execute statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters)
@@ -720,7 +763,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
 
-    def _execute_many(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
         """Mock execute many."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -728,10 +771,11 @@ class MockSyncDriver(SyncDriverAdapterBase):
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
-        cursor.executemany(sql, prepared_parameters)
+        parameter_sets = cast("list[Any]", prepared_parameters)
+        cursor.executemany(sql, parameter_sets)
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount, is_many_result=True)
 
-    def _execute_script(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
+    def dispatch_execute_script(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
         """Mock execute script."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
@@ -808,11 +852,11 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         """Handle database exceptions."""
         return MockAsyncExceptionHandler()
 
-    async def _try_special_handling(self, cursor: MockAsyncCursor, statement: SQL) -> Any | None:
+    async def dispatch_special_handling(self, cursor: MockAsyncCursor, statement: SQL) -> Any | None:
         """Mock async special handling - always return None."""
         return None
 
-    async def _execute_statement(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
+    async def dispatch_execute(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
         """Mock async execute statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters)
@@ -828,7 +872,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
 
-    async def _execute_many(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
+    async def dispatch_execute_many(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
         """Mock async execute many."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -836,10 +880,11 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
-        await cursor.executemany(sql, prepared_parameters)
+        parameter_sets = cast("list[Any]", prepared_parameters)
+        await cursor.executemany(sql, parameter_sets)
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount, is_many_result=True)
 
-    async def _execute_script(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
+    async def dispatch_execute_script(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
         """Mock async execute script."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
@@ -885,16 +930,16 @@ def mock_async_connection() -> MockAsyncConnection:
 @pytest.fixture
 def mock_sync_driver(mock_sync_connection: MockSyncConnection) -> MockSyncDriver:
     """Fixture for mock sync driver."""
-    if _is_compiled():
-        pytest.skip("Mock driver fixtures require interpreted driver base classes when compiled.")
+    if is_compiled():
+        pytest.skip("Requires interpreted driver base")
     return MockSyncDriver(mock_sync_connection)
 
 
 @pytest.fixture
 def mock_async_driver(mock_async_connection: MockAsyncConnection) -> MockAsyncDriver:
     """Fixture for mock async driver."""
-    if _is_compiled():
-        pytest.skip("Mock driver fixtures require interpreted driver base classes when compiled.")
+    if is_compiled():
+        pytest.skip("Requires interpreted driver base")
     return MockAsyncDriver(mock_async_connection)
 
 

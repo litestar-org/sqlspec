@@ -27,6 +27,34 @@ if TYPE_CHECKING:
 __all__ = ("LocalStore",)
 
 
+def _write_local_bytes(resolved: "Path", data: bytes) -> None:
+    """Write bytes to a local file, ensuring parent directories exist."""
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_bytes(data)
+
+
+def _delete_local_path(resolved: "Path") -> None:
+    """Delete a local file or directory."""
+    if resolved.is_dir():
+        shutil.rmtree(resolved)
+    elif resolved.exists():
+        resolved.unlink()
+
+
+def _copy_local_path(src: "Path", dst: "Path") -> None:
+    """Copy a local file or directory."""
+    if src.is_dir():
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dst)
+
+
+def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
+    """Write an Arrow table to a local path."""
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, str(resolved), **options)  # pyright: ignore
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class LocalStore:
     """Simple local file system storage backend.
@@ -45,28 +73,27 @@ class LocalStore:
         Args:
             uri: File URI or path (e.g., "file:///path" or "/path")
             **kwargs: Additional options (base_path for relative operations)
+
+        The URI may be a file:// path (Windows style like file:///C:/path is supported),
+        and an explicit base_path override will take precedence before we ensure the directory exists.
         """
         if uri.startswith("file://"):
             parsed = urlparse(uri)
             path = unquote(parsed.path)
-            # Handle Windows paths (file:///C:/path)
             if path and len(path) > 2 and path[2] == ":":  # noqa: PLR2004
-                path = path[1:]  # Remove leading slash for Windows
+                path = path[1:]
             self.base_path = Path(path).resolve()
         elif uri:
             self.base_path = Path(uri).resolve()
         else:
             self.base_path = Path.cwd()
 
-        # Allow override with explicit base_path
         if "base_path" in kwargs:
             self.base_path = Path(kwargs["base_path"]).resolve()
 
-        # Create base directory if it doesn't exist and it's actually a directory
         if not self.base_path.exists():
             self.base_path.mkdir(parents=True, exist_ok=True)
         elif self.base_path.is_file():
-            # If base_path points to a file, use its parent as the base directory
             self.base_path = self.base_path.parent
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -83,16 +110,14 @@ class LocalStore:
             Resolved Path object.
         """
         p = Path(path)
-        if p.is_absolute():
-            return p
-        return self.base_path / p
+        return p if p.is_absolute() else self.base_path / p
 
     def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file."""
         resolved = self._resolve_path(path)
         try:
             return execute_sync_storage_operation(
-                lambda: resolved.read_bytes(), backend=self.backend_type, operation="read_bytes", path=str(resolved)
+                resolved.read_bytes, backend=self.backend_type, operation="read_bytes", path=str(resolved)
             )
         except FileNotFoundInStorageError as error:
             raise FileNotFoundError(str(resolved)) from error
@@ -101,11 +126,12 @@ class LocalStore:
         """Write bytes to file."""
         resolved = self._resolve_path(path)
 
-        def _action() -> None:
-            resolved.parent.mkdir(parents=True, exist_ok=True)
-            resolved.write_bytes(data)
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_bytes", path=str(resolved))
+        execute_sync_storage_operation(
+            partial(_write_local_bytes, resolved, data),
+            backend=self.backend_type,
+            operation="write_bytes",
+            path=str(resolved),
+        )
 
     def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from file."""
@@ -117,9 +143,35 @@ class LocalStore:
         encoded = data.encode(encoding)
         self.write_bytes(path, encoded, **kwargs)
 
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
-        """List objects in directory."""
-        # If prefix looks like a directory path, treat as directory
+    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes from file."""
+        resolved = self._resolve_path(path)
+        chunk_size = chunk_size or 65536
+        try:
+            with resolved.open("rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+        except FileNotFoundError as error:
+            raise FileNotFoundError(str(resolved)) from error
+
+    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
+        """List objects in directory.
+
+        Args:
+            prefix: Optional prefix that may look like a directory or filename filter.
+            recursive: Whether to walk subdirectories.
+            **kwargs: Additional backend-specific options (currently unused).
+
+        Args:
+            prefix: Optional prefix that may look like a directory or filename filter.
+            recursive: Whether to walk subdirectories.
+
+        When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
+        Paths outside base_path are returned with their absolute names.
+        """
         if prefix and (prefix.endswith("/") or "/" in prefix):
             search_path = self._resolve_path(prefix)
             if not search_path.exists():
@@ -127,7 +179,6 @@ class LocalStore:
             if search_path.is_file():
                 return [str(search_path.relative_to(self.base_path))]
         else:
-            # Treat as filename prefix filter
             search_path = self.base_path
 
         pattern = "**/*" if recursive else "*"
@@ -137,11 +188,9 @@ class LocalStore:
                 try:
                     relative = path.relative_to(self.base_path)
                     relative_str = str(relative)
-                    # Apply prefix filter if provided
                     if not prefix or relative_str.startswith(prefix):
                         files.append(relative_str)
                 except ValueError:
-                    # Path is outside base_path, use absolute
                     path_str = str(path)
                     if not prefix or path_str.startswith(prefix):
                         files.append(path_str)
@@ -156,13 +205,9 @@ class LocalStore:
         """Delete file or directory."""
         resolved = self._resolve_path(path)
 
-        def _action() -> None:
-            if resolved.is_dir():
-                shutil.rmtree(resolved)
-            elif resolved.exists():
-                resolved.unlink()
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="delete", path=str(resolved))
+        execute_sync_storage_operation(
+            partial(_delete_local_path, resolved), backend=self.backend_type, operation="delete", path=str(resolved)
+        )
 
     def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy file or directory."""
@@ -170,13 +215,9 @@ class LocalStore:
         dst = self._resolve_path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
 
-        def _action() -> None:
-            if src.is_dir():
-                shutil.copytree(src, dst, dirs_exist_ok=True)
-            else:
-                shutil.copy2(src, dst)
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="copy", path=f"{src}->{dst}")
+        execute_sync_storage_operation(
+            partial(_copy_local_path, src, dst), backend=self.backend_type, operation="copy", path=f"{src}->{dst}"
+        )
 
     def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Move file or directory."""
@@ -184,12 +225,14 @@ class LocalStore:
         dst = self._resolve_path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
         execute_sync_storage_operation(
-            lambda: shutil.move(str(src), str(dst)), backend=self.backend_type, operation="move", path=f"{src}->{dst}"
+            partial(shutil.move, str(src), str(dst)), backend=self.backend_type, operation="move", path=f"{src}->{dst}"
         )
 
-    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
-        """Find files matching pattern."""
-        # Handle both relative and absolute patterns
+    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
+        """Find files matching pattern.
+
+        Supports both relative and absolute patterns by adjusting where the glob search begins.
+        """
         if Path(pattern).is_absolute():
             base_path = Path(pattern).parent
             pattern_name = Path(pattern).name
@@ -208,17 +251,17 @@ class LocalStore:
 
         return sorted(results)
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
         """Get file metadata."""
         resolved = self._resolve_path(path)
         return execute_sync_storage_operation(
-            lambda: self._collect_metadata(resolved),
+            partial(self._collect_metadata, resolved),
             backend=self.backend_type,
             operation="get_metadata",
             path=str(resolved),
         )
 
-    def _collect_metadata(self, resolved: "Path") -> dict[str, object]:
+    def _collect_metadata(self, resolved: "Path") -> "dict[str, object]":
         if not resolved.exists():
             return {}
 
@@ -247,7 +290,7 @@ class LocalStore:
         return cast(
             "ArrowTable",
             execute_sync_storage_operation(
-                lambda: pq.read_table(str(resolved), **kwargs),
+                partial(pq.read_table, str(resolved), **kwargs),
                 backend=self.backend_type,
                 operation="read_arrow",
                 path=str(resolved),
@@ -259,11 +302,12 @@ class LocalStore:
         pq = import_pyarrow_parquet()
         resolved = self._resolve_path(path)
 
-        def _action() -> None:
-            resolved.parent.mkdir(parents=True, exist_ok=True)
-            pq.write_table(table, str(resolved), **kwargs)  # pyright: ignore
-
-        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_arrow", path=str(resolved))
+        execute_sync_storage_operation(
+            partial(_write_local_arrow, resolved, table, pq, kwargs),
+            backend=self.backend_type,
+            operation="write_arrow",
+            path=str(resolved),
+        )
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from files matching pattern.
@@ -300,7 +344,7 @@ class LocalStore:
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
 
     @overload
-    def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+    def sign_sync(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
 
     def sign_sync(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
@@ -314,7 +358,6 @@ class LocalStore:
         msg = "URL signing is not applicable to local file storage. Use file:// URIs directly."
         raise NotImplementedError(msg)
 
-    # Async methods using sync_tools.async_
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file asynchronously."""
         return await async_(self.read_bytes)(path, **kwargs)
@@ -331,7 +374,15 @@ class LocalStore:
         """Write text to file asynchronously."""
         await async_(self.write_text)(path, data, encoding, **kwargs)
 
-    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    async def stream_read_async(
+        self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
+    ) -> AsyncIterator[bytes]:
+        """Stream bytes from file asynchronously."""
+        from sqlspec.storage.backends.base import AsyncBytesIterator
+
+        return AsyncBytesIterator(self.stream_read(path, chunk_size, **kwargs))
+
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects asynchronously."""
         return await async_(self.list_objects)(prefix, recursive, **kwargs)
 
@@ -351,7 +402,7 @@ class LocalStore:
         """Move file asynchronously."""
         await async_(self.move)(source, destination, **kwargs)
 
-    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
         """Get file metadata asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
@@ -381,14 +432,10 @@ class LocalStore:
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
 
     @overload
-    async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
+    async def sign_async(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
 
     async def sign_async(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
-        """Generate signed URL(s) asynchronously.
-
-        Raises:
-            NotImplementedError: Local file storage does not require URL signing.
-        """
+        """Generate signed URL(s) asynchronously."""
         return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]

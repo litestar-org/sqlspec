@@ -1,26 +1,24 @@
 """BigQuery database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection
+from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
 from sqlspec.adapters.bigquery.driver import (
     BigQueryCursor,
     BigQueryDriver,
     BigQueryExceptionHandler,
     BigQuerySessionContext,
-    bigquery_statement_config,
-    build_bigquery_statement_config,
 )
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
-from sqlspec.utils.config_normalization import normalize_connection_config
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -66,7 +64,7 @@ class BigQueryConnectionParams(TypedDict):
     dataframes_backend: NotRequired[str]
     enable_continuous_queries: NotRequired[bool]
     enable_vector_search: NotRequired[bool]
-    extra: NotRequired[dict[str, Any]]
+    extra: NotRequired["dict[str, Any]"]
 
 
 class BigQueryDriverFeatures(TypedDict):
@@ -100,6 +98,8 @@ class BigQueryDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[Any], None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 class BigQueryConnectionContext:
@@ -121,6 +121,32 @@ class BigQueryConnectionContext:
         return None
 
 
+class _BigQueryConnectionHook:
+    __slots__ = ("_hook",)
+
+    def __init__(self, hook: "Callable[[BigQueryConnection], None]") -> None:
+        self._hook = hook
+
+    def __call__(self, context: "dict[str, Any]") -> None:
+        connection = context.get("connection")
+        if connection is None:
+            return
+        self._hook(connection)
+
+
+class _BigQuerySessionConnectionHandler:
+    __slots__ = ("_config",)
+
+    def __init__(self, config: "BigQueryConfig") -> None:
+        self._config = config
+
+    def acquire_connection(self) -> "BigQueryConnection":
+        return self._config.create_connection()
+
+    def release_connection(self, _conn: "BigQueryConnection") -> None:
+        return None
+
+
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
 
 
@@ -137,14 +163,14 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     requires_staging_for_load: ClassVar[bool] = True
-    staging_protocols: ClassVar[tuple[str, ...]] = ("gs://",)
+    staging_protocols: "ClassVar[tuple[str, ...]]" = ("gs://",)
 
     def __init__(
         self,
         *,
         connection_config: "BigQueryConnectionParams | dict[str, Any] | None" = None,
         connection_instance: "Any" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -168,43 +194,38 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         self.connection_config = normalize_connection_config(connection_config)
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        user_connection_hook = processed_driver_features.pop("on_connection_create", None)
-        processed_driver_features.setdefault("enable_uuid_conversion", True)
-        serializer = processed_driver_features.setdefault("json_serializer", to_json)
+        (driver_features, serializer, user_connection_hook, features_connection_instance) = apply_driver_features(
+            driver_features
+        )
 
-        self._connection_instance: BigQueryConnection | None = processed_driver_features.get("connection_instance")
+        resolved_connection_instance = connection_instance or features_connection_instance
+        self._connection_instance = resolved_connection_instance
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
 
-        base_statement_config = statement_config or build_bigquery_statement_config(json_serializer=serializer)
+        statement_config = statement_config or build_statement_config(json_serializer=serializer)
 
         local_observability = observability_config
         if user_connection_hook is not None:
-
-            def _wrap_hook(context: dict[str, Any]) -> None:
-                connection = context.get("connection")
-                if connection is None:
-                    return
-                user_connection_hook(connection)
-
-            lifecycle_override = ObservabilityConfig(lifecycle={"on_connection_create": [_wrap_hook]})
+            lifecycle_override = ObservabilityConfig(
+                lifecycle={"on_connection_create": [_BigQueryConnectionHook(user_connection_hook)]}
+            )
             local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
 
         super().__init__(
             connection_config=self.connection_config,
-            connection_instance=connection_instance,
+            connection_instance=resolved_connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=local_observability,
             **kwargs,
         )
 
-        self.driver_features = processed_driver_features
+        self.driver_features = driver_features
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration."""
@@ -246,7 +267,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         if self._connection_instance is not None:
-            return self._connection_instance
+            return cast("BigQueryConnection", self._connection_instance)
 
         try:
             client_fields = {"project", "location", "credentials", "client_options", "client_info"}
@@ -297,17 +318,12 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Returns:
             A BigQuery driver session context manager.
         """
-
-        def acquire_connection() -> BigQueryConnection:
-            return self.create_connection()
-
-        def release_connection(_conn: BigQueryConnection) -> None:
-            pass
+        handler = _BigQuerySessionConnectionHandler(self)
 
         return BigQuerySessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
-            statement_config=statement_config or self.statement_config or bigquery_statement_config,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

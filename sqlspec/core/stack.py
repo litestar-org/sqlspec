@@ -12,7 +12,7 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = ("StackOperation", "StatementStack")
 
 
-ALLOWED_METHODS: tuple[str, ...] = ("execute", "execute_many", "execute_script", "execute_arrow")
+ALLOWED_METHODS: "tuple[str, ...]" = ("execute", "execute_many", "execute_script", "execute_arrow")
 
 
 class StackOperation:

@@ -12,7 +12,7 @@ if OBSTORE_INSTALLED:
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_init_with_file_uri(tmp_path: Path) -> None:
     """Test initialization with file:// URI."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -21,7 +21,7 @@ def test_init_with_file_uri(tmp_path: Path) -> None:
     assert store.base_path == ""
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_from_config(tmp_path: Path) -> None:
     """Test from_config class method."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -32,7 +32,7 @@ def test_from_config(tmp_path: Path) -> None:
     assert store.base_path == ""
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_write_and_read_bytes(tmp_path: Path) -> None:
     """Test write and read bytes operations."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -46,7 +46,7 @@ def test_write_and_read_bytes(tmp_path: Path) -> None:
     assert result == test_data
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_write_and_read_text(tmp_path: Path) -> None:
     """Test write and read text operations."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -60,7 +60,7 @@ def test_write_and_read_text(tmp_path: Path) -> None:
     assert result == test_text
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_exists(tmp_path: Path) -> None:
     """Test exists operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -73,7 +73,7 @@ def test_exists(tmp_path: Path) -> None:
     assert store.exists("existing.txt")
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_delete(tmp_path: Path) -> None:
     """Test delete operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -87,7 +87,7 @@ def test_delete(tmp_path: Path) -> None:
     assert not store.exists("to_delete.txt")
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_copy(tmp_path: Path) -> None:
     """Test copy operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -102,7 +102,7 @@ def test_copy(tmp_path: Path) -> None:
     assert store.read_text("copied.txt") == original_content
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_move(tmp_path: Path) -> None:
     """Test move operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -118,7 +118,7 @@ def test_move(tmp_path: Path) -> None:
     assert store.read_text("moved.txt") == original_content
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_list_objects(tmp_path: Path) -> None:
     """Test list_objects operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -137,7 +137,7 @@ def test_list_objects(tmp_path: Path) -> None:
     assert any("file3.txt" in obj for obj in all_objects)
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_glob(tmp_path: Path) -> None:
     """Test glob pattern matching."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -156,7 +156,7 @@ def test_glob(tmp_path: Path) -> None:
     assert not any("config.json" in obj for obj in sql_files)
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_get_metadata(tmp_path: Path) -> None:
     """Test get_metadata operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -171,7 +171,7 @@ def test_get_metadata(tmp_path: Path) -> None:
     assert metadata["exists"] is True
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_is_object_and_is_path(tmp_path: Path) -> None:
     """Test is_object and is_path operations."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -188,7 +188,7 @@ def test_is_object_and_is_path(tmp_path: Path) -> None:
     assert store.is_path("subdir")
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
 def test_write_and_read_arrow(tmp_path: Path) -> None:
     """Test write and read Arrow table operations."""
     import pyarrow as pa
@@ -207,7 +207,7 @@ def test_write_and_read_arrow(tmp_path: Path) -> None:
     assert result.equals(table)
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
 def test_stream_arrow(tmp_path: Path) -> None:
     """Test stream Arrow record batches."""
     import pyarrow as pa
@@ -231,7 +231,7 @@ def test_stream_arrow(tmp_path: Path) -> None:
     assert reconstructed.equals(table)
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_sign_raises_not_implemented_for_local_files(tmp_path: Path) -> None:
     """Test sign_sync raises NotImplementedError for local file protocol."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -259,7 +259,7 @@ def test_obstore_not_installed() -> None:
 # Async tests
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_write_and_read_bytes(tmp_path: Path) -> None:
     """Test async write and read bytes operations."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -273,7 +273,7 @@ async def test_async_write_and_read_bytes(tmp_path: Path) -> None:
     assert result == test_data
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_write_and_read_text(tmp_path: Path) -> None:
     """Test async write and read text operations."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -287,7 +287,7 @@ async def test_async_write_and_read_text(tmp_path: Path) -> None:
     assert result == test_text
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_exists(tmp_path: Path) -> None:
     """Test async exists operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -300,7 +300,7 @@ async def test_async_exists(tmp_path: Path) -> None:
     assert await store.exists_async("async_existing.txt")
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_delete(tmp_path: Path) -> None:
     """Test async delete operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -314,7 +314,7 @@ async def test_async_delete(tmp_path: Path) -> None:
     assert not await store.exists_async("async_to_delete.txt")
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_copy(tmp_path: Path) -> None:
     """Test async copy operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -329,7 +329,7 @@ async def test_async_copy(tmp_path: Path) -> None:
     assert await store.read_text_async("async_copied.txt") == original_content
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_move(tmp_path: Path) -> None:
     """Test async move operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -345,7 +345,7 @@ async def test_async_move(tmp_path: Path) -> None:
     assert await store.read_text_async("async_moved.txt") == original_content
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_list_objects(tmp_path: Path) -> None:
     """Test async list_objects operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -364,7 +364,7 @@ async def test_async_list_objects(tmp_path: Path) -> None:
     assert any("file3.txt" in obj for obj in all_objects)
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_get_metadata(tmp_path: Path) -> None:
     """Test async get_metadata operation."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -379,7 +379,7 @@ async def test_async_get_metadata(tmp_path: Path) -> None:
     assert metadata["exists"] is True
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
 async def test_async_write_and_read_arrow(tmp_path: Path) -> None:
     """Test async write and read Arrow table operations."""
     import pyarrow as pa
@@ -402,7 +402,7 @@ async def test_async_write_and_read_arrow(tmp_path: Path) -> None:
     assert result.equals(table)
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
 async def test_async_stream_arrow(tmp_path: Path) -> None:
     """Test async stream Arrow record batches."""
     import pyarrow as pa
@@ -427,7 +427,7 @@ async def test_async_stream_arrow(tmp_path: Path) -> None:
     assert reconstructed.equals(table)
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_async_sign_raises_not_implemented_for_local_files(tmp_path: Path) -> None:
     """Test sign_async raises NotImplementedError for local file protocol."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -450,7 +450,7 @@ def test_obstore_operations_without_obstore() -> None:
         ObStoreBackend("file:///tmp")  # type: ignore
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_arrow_operations_without_pyarrow(tmp_path: Path) -> None:
     """Test Arrow operations raise proper error without PyArrow."""
     from sqlspec.storage.backends.obstore import ObStoreBackend

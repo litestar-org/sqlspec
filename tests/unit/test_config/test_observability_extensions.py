@@ -1,13 +1,18 @@
 """Tests for extension_config-driven observability hooks."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.utils import module_loader
 
+if TYPE_CHECKING:
+    _NoPoolSyncConfigBase = NoPoolSyncConfig[Any, AsyncpgDriver]
+else:
+    _NoPoolSyncConfigBase = NoPoolSyncConfig
 
-class _DummySyncConfig(NoPoolSyncConfig[Any, AsyncpgDriver]):
+
+class _DummySyncConfig(_NoPoolSyncConfigBase):
     driver_type = AsyncpgDriver
     connection_type = object
 

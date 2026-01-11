@@ -21,7 +21,6 @@ from sqlspec.typing import (
     convert,
     get_type_adapter,
 )
-from sqlspec.utils.data_transformation import transform_dict_keys
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
@@ -43,6 +42,7 @@ __all__ = (
     "_default_msgspec_deserializer",
     "_is_list_type_target",
     "to_schema",
+    "transform_dict_keys",
 )
 
 DataT = TypeVar("DataT", default=dict[str, Any])
@@ -53,7 +53,120 @@ _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.
 _DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
 
 
-def _is_list_type_target(target_type: Any) -> TypeGuard[list[object]]:
+# =============================================================================
+# Dict Key Transformation
+# =============================================================================
+
+
+def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
+    """Safely convert a key using the converter function.
+
+    Args:
+        key: Key to convert (may not be a string).
+        converter: Function to convert string keys.
+
+    Returns:
+        Converted key if conversion succeeds, original key otherwise.
+    """
+    if not isinstance(key, str):
+        return key
+
+    try:
+        return converter(key)
+    except (TypeError, ValueError, AttributeError):
+        return key
+
+
+def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]) -> dict | list | Any:
+    """Transform dictionary keys using the provided converter function.
+
+    Recursively transforms all dictionary keys in a data structure using
+    the provided converter function. Handles nested dictionaries, lists
+    of dictionaries, and preserves non-dict values unchanged.
+
+    Args:
+        data: The data structure to transform. Can be a dict, list, or any other type.
+        converter: Function to convert string keys (e.g., camelize, kebabize).
+
+    Returns:
+        The transformed data structure with converted keys. Non-dict values
+        are returned unchanged.
+
+    Examples:
+        Transform snake_case keys to camelCase:
+
+        >>> from sqlspec.utils.text import camelize
+        >>> data = {"user_id": 123, "created_at": "2024-01-01"}
+        >>> transform_dict_keys(data, camelize)
+        {"userId": 123, "createdAt": "2024-01-01"}
+
+        Transform nested structures:
+
+        >>> nested = {
+        ...     "user_data": {"first_name": "John", "last_name": "Doe"},
+        ...     "order_items": [
+        ...         {"item_id": 1, "item_name": "Product A"},
+        ...         {"item_id": 2, "item_name": "Product B"},
+        ...     ],
+        ... }
+        >>> transform_dict_keys(nested, camelize)
+        {
+            "userData": {
+                "firstName": "John",
+                "lastName": "Doe"
+            },
+            "orderItems": [
+                {"itemId": 1, "itemName": "Product A"},
+                {"itemId": 2, "itemName": "Product B"}
+            ]
+        }
+    """
+    if isinstance(data, dict):
+        return _transform_dict(data, converter)
+    if isinstance(data, list):
+        return _transform_list(data, converter)
+    return data
+
+
+def _transform_dict(data: dict, converter: Callable[[str], str]) -> dict:
+    """Transform a dictionary's keys recursively.
+
+    Args:
+        data: Dictionary to transform.
+        converter: Function to convert string keys.
+
+    Returns:
+        Dictionary with transformed keys and recursively transformed values.
+    """
+    transformed = {}
+
+    for key, value in data.items():
+        converted_key = _safe_convert_key(key, converter)
+        transformed_value = transform_dict_keys(value, converter)
+        transformed[converted_key] = transformed_value
+
+    return transformed
+
+
+def _transform_list(data: list, converter: Callable[[str], str]) -> list:
+    """Transform a list's elements recursively.
+
+    Args:
+        data: List to transform.
+        converter: Function to convert string keys in nested structures.
+
+    Returns:
+        List with recursively transformed elements.
+    """
+    return [transform_dict_keys(item, converter) for item in data]
+
+
+# =============================================================================
+# Schema Type Detection
+# =============================================================================
+
+
+def _is_list_type_target(target_type: Any) -> "TypeGuard[list[object]]":
     """Check if target type is a list type (e.g., list[float])."""
     try:
         origin = target_type.__origin__
@@ -98,6 +211,36 @@ def _detect_schema_type(schema_type: type) -> "str | None":
         if is_attrs_schema(schema_type)
         else None
     )
+
+
+def _is_foreign_key_metadata_type(schema_type: type) -> bool:
+    if schema_type.__name__ != "ForeignKeyMetadata":
+        return False
+
+    # Check module for stronger guarantee without importing
+    module = getattr(schema_type, "__module__", "")
+    if "sqlspec" in module and ("driver" in module or "data_dictionary" in module):
+        return True
+
+    slots = getattr(schema_type, "__slots__", None)
+    if not slots:
+        return False
+    return {"table_name", "column_name", "referenced_table", "referenced_column"}.issubset(set(slots))
+
+
+def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
+    if not is_dict(data):
+        return data
+    payload = {
+        "table_name": data.get("table_name") or data.get("table"),
+        "column_name": data.get("column_name") or data.get("column"),
+        "referenced_table": data.get("referenced_table") or data.get("referenced_table_name"),
+        "referenced_column": data.get("referenced_column") or data.get("referenced_column_name"),
+        "constraint_name": data.get("constraint_name"),
+        "schema": data.get("schema") or data.get("table_schema"),
+        "referenced_schema": data.get("referenced_schema") or data.get("referenced_table_schema"),
+    }
+    return schema_type(**payload)
 
 
 def _convert_typed_dict(data: Any, schema_type: Any) -> Any:
@@ -151,7 +294,7 @@ class _EnumDecoder:
         return t(v.value)
 
 
-_DEFAULT_TYPE_DECODERS: Final["list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]"] = [
+_DEFAULT_TYPE_DECODERS: Final[list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]] = [
     (_IsTypePredicate(UUID), _UUIDDecoder()),
     (_IsTypePredicate(datetime.datetime), _ISOFormatDecoder()),
     (_IsTypePredicate(datetime.date), _ISOFormatDecoder()),
@@ -332,6 +475,10 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
 
     schema_type_key = _detect_schema_type(schema_type)
     if schema_type_key is None:
+        if _is_foreign_key_metadata_type(schema_type):
+            if isinstance(data, list):
+                return [_convert_foreign_key_metadata(item, schema_type) for item in data]
+            return _convert_foreign_key_metadata(data, schema_type)
         msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
         raise SQLSpecError(msg)
 

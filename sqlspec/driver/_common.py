@@ -6,22 +6,9 @@ import logging
 import re
 from contextlib import suppress
 from time import perf_counter
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Final,
-    Literal,
-    NamedTuple,
-    NoReturn,
-    Optional,
-    Protocol,
-    TypeVar,
-    cast,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
-from mypy_extensions import mypyc_attr, trait
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
@@ -38,10 +25,14 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
+from sqlspec.core.parameters import fingerprint_parameters
+from sqlspec.data_dictionary._loader import get_data_dictionary_loader
+from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, StorageCapabilityError
-from sqlspec.observability import ObservabilityRuntime
-from sqlspec.protocols import StatementProtocol
+from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
+from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
+from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
+from sqlspec.typing import VersionInfo
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.type_guards import (
@@ -55,12 +46,13 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.core.stack import StatementStack
+    from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.storage import AsyncStoragePipeline, StorageCapabilities, SyncStoragePipeline
-    from sqlspec.typing import SchemaT, StatementParameters
+    from sqlspec.typing import ForeignKeyMetadata, SchemaT, StatementParameters
 
 
 __all__ = (
@@ -68,22 +60,48 @@ __all__ = (
     "EXEC_CURSOR_RESULT",
     "EXEC_ROWCOUNT_OVERRIDE",
     "EXEC_SPECIAL_DATA",
+    "VERSION_GROUPS_MIN_FOR_MINOR",
+    "VERSION_GROUPS_MIN_FOR_PATCH",
     "AsyncExceptionHandler",
-    "ColumnMetadata",
     "CommonDriverAttributesMixin",
+    "DataDictionaryDialectMixin",
     "DataDictionaryMixin",
     "ExecutionResult",
-    "ForeignKeyMetadata",
-    "IndexMetadata",
     "ScriptExecutionResult",
     "StackExecutionObserver",
     "SyncExceptionHandler",
-    "VersionInfo",
     "describe_stack_statement",
     "handle_single_row_error",
     "hash_stack_operations",
     "make_cache_key_hashable",
+    "resolve_db_system",
 )
+
+
+def _parameter_sort_key(item: "tuple[str, object]") -> float:
+    key = item[0]
+    if key.isdigit():
+        return float(int(key))
+    if key.startswith("param_"):
+        suffix = key[6:]
+        if suffix.isdigit():
+            return float(int(suffix))
+    return float("inf")
+
+
+def _select_dominant_style(
+    style_counts: "dict[ParameterStyle, int]", precedence: "dict[ParameterStyle, int]"
+) -> "ParameterStyle":
+    best_style: ParameterStyle | None = None
+    best_count = -1
+    best_precedence = 100
+    for style, count in style_counts.items():
+        current_precedence = precedence.get(style, 99)
+        if count > best_count or (count == best_count and current_precedence < best_precedence):
+            best_style = style
+            best_count = count
+            best_precedence = current_precedence
+    return cast("ParameterStyle", best_style)
 
 
 class SyncExceptionHandler(Protocol):
@@ -116,169 +134,10 @@ class AsyncExceptionHandler(Protocol):
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
 
 
-logger = get_logger("driver")
+logger = get_logger("sqlspec.driver")
 
-DriverT = TypeVar("DriverT")
 VERSION_GROUPS_MIN_FOR_MINOR = 1
 VERSION_GROUPS_MIN_FOR_PATCH = 2
-
-
-class ForeignKeyMetadata:
-    """Metadata for a foreign key constraint."""
-
-    __slots__ = (
-        "column_name",
-        "constraint_name",
-        "referenced_column",
-        "referenced_schema",
-        "referenced_table",
-        "schema",
-        "table_name",
-    )
-
-    def __init__(
-        self,
-        table_name: str,
-        column_name: str,
-        referenced_table: str,
-        referenced_column: str,
-        constraint_name: str | None = None,
-        schema: str | None = None,
-        referenced_schema: str | None = None,
-    ) -> None:
-        self.table_name = table_name
-        self.column_name = column_name
-        self.referenced_table = referenced_table
-        self.referenced_column = referenced_column
-        self.constraint_name = constraint_name
-        self.schema = schema
-        self.referenced_schema = referenced_schema
-
-    def __repr__(self) -> str:
-        return (
-            f"ForeignKeyMetadata(table_name={self.table_name!r}, column_name={self.column_name!r}, "
-            f"referenced_table={self.referenced_table!r}, referenced_column={self.referenced_column!r}, "
-            f"constraint_name={self.constraint_name!r}, schema={self.schema!r}, "
-            f"referenced_schema={self.referenced_schema!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ForeignKeyMetadata):
-            return NotImplemented
-        return (
-            self.table_name == other.table_name
-            and self.column_name == other.column_name
-            and self.referenced_table == other.referenced_table
-            and self.referenced_column == other.referenced_column
-            and self.constraint_name == other.constraint_name
-            and self.schema == other.schema
-            and self.referenced_schema == other.referenced_schema
-        )
-
-    def __hash__(self) -> int:
-        return hash((
-            self.table_name,
-            self.column_name,
-            self.referenced_table,
-            self.referenced_column,
-            self.constraint_name,
-            self.schema,
-            self.referenced_schema,
-        ))
-
-
-class ColumnMetadata:
-    """Metadata for a database column."""
-
-    __slots__ = ("data_type", "default_value", "max_length", "name", "nullable", "precision", "primary_key", "scale")
-
-    def __init__(
-        self,
-        name: str,
-        data_type: str,
-        nullable: bool,
-        default_value: str | None = None,
-        primary_key: bool = False,
-        max_length: int | None = None,
-        precision: int | None = None,
-        scale: int | None = None,
-    ) -> None:
-        self.name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.default_value = default_value
-        self.primary_key = primary_key
-        self.max_length = max_length
-        self.precision = precision
-        self.scale = scale
-
-    def __repr__(self) -> str:
-        return (
-            f"ColumnMetadata(name={self.name!r}, data_type={self.data_type!r}, nullable={self.nullable!r}, "
-            f"default_value={self.default_value!r}, primary_key={self.primary_key!r}, max_length={self.max_length!r}, "
-            f"precision={self.precision!r}, scale={self.scale!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ColumnMetadata):
-            return NotImplemented
-        return (
-            self.name == other.name
-            and self.data_type == other.data_type
-            and self.nullable == other.nullable
-            and self.default_value == other.default_value
-            and self.primary_key == other.primary_key
-            and self.max_length == other.max_length
-            and self.precision == other.precision
-            and self.scale == other.scale
-        )
-
-    def __hash__(self) -> int:
-        return hash((
-            self.name,
-            self.data_type,
-            self.nullable,
-            self.default_value,
-            self.primary_key,
-            self.max_length,
-            self.precision,
-            self.scale,
-        ))
-
-
-class IndexMetadata:
-    """Metadata for a database index."""
-
-    __slots__ = ("columns", "name", "primary", "table_name", "unique")
-
-    def __init__(
-        self, name: str, table_name: str, columns: list[str], unique: bool = False, primary: bool = False
-    ) -> None:
-        self.name = name
-        self.table_name = table_name
-        self.columns = columns
-        self.unique = unique
-        self.primary = primary
-
-    def __repr__(self) -> str:
-        return (
-            f"IndexMetadata(name={self.name!r}, table_name={self.table_name!r}, columns={self.columns!r}, "
-            f"unique={self.unique!r}, primary={self.primary!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, IndexMetadata):
-            return NotImplemented
-        return (
-            self.name == other.name
-            and self.table_name == other.table_name
-            and self.columns == other.columns
-            and self.unique == other.unique
-            and self.primary == other.primary
-        )
-
-    def __hash__(self) -> int:
-        return hash((self.name, self.table_name, tuple(self.columns), self.unique, self.primary))
 
 
 _CONVERT_TO_TUPLE = object()
@@ -294,6 +153,11 @@ def make_cache_key_hashable(obj: Any) -> Any:
     For array-like objects (NumPy arrays, Python arrays, etc.), we use structural
     info (dtype + shape or typecode + length) rather than content for cache keys.
 
+    Collections are processed with stack entries that track (object, parent_list, index)
+    so we can convert substructures in-place and then replace placeholders with tuples or frozensets
+    only after their children are evaluated. Dictionaries are iterated in sorted order for determinism
+    while sets fall back to a best-effort ordering if necessary.
+
     Args:
         obj: Object to make hashable.
 
@@ -301,20 +165,15 @@ def make_cache_key_hashable(obj: Any) -> Any:
         A hashable representation of the object. Collections become tuples,
         arrays become structural tuples like ("ndarray", dtype, shape).
     """
-    # Fast path for common immutable scalar types
     if isinstance(obj, (int, str, bytes, bool, float, type(None))):
         return obj
 
-    # Stack contains tuples of (object, parent_list, index_in_parent)
-    # We build the result in-place in temporary lists, then convert to tuples/sets
-    # A placeholder list is used as the root "parent"
     root: list[Any] = [obj]
     stack = [(obj, root, 0)]
 
     while stack:
         current_obj, parent, idx = stack.pop()
 
-        # Post-processing markers
         if current_obj is _CONVERT_TO_TUPLE:
             parent[idx] = tuple(parent[idx])
             continue
@@ -323,7 +182,6 @@ def make_cache_key_hashable(obj: Any) -> Any:
             parent[idx] = frozenset(parent[idx])
             continue
 
-        # Handle structural types (arrays) - these are terminal nodes
         if has_typecode_and_len(current_obj):
             parent[idx] = ("array", current_obj.typecode, len(current_obj))
             continue
@@ -343,21 +201,16 @@ def make_cache_key_hashable(obj: Any) -> Any:
                     parent[idx] = ("array_like", type(current_obj).__name__)
             continue
 
-        # Handle collections
         if isinstance(current_obj, (list, tuple)):
-            # Create a new list for transformed items
             new_list = [None] * len(current_obj)
-            parent[idx] = new_list  # Placeholder, will be converted to tuple later
+            parent[idx] = new_list
 
-            # Push marker first so it is processed LAST (LIFO)
             stack.append((_CONVERT_TO_TUPLE, parent, idx))
 
-            # Push items in reverse order
             stack.extend((current_obj[i], new_list, i) for i in range(len(current_obj) - 1, -1, -1))
             continue
 
         if isinstance(current_obj, dict):
-            # Sort items by key for deterministic caching
             try:
                 sorted_items = sorted(current_obj.items())
             except TypeError:
@@ -365,24 +218,18 @@ def make_cache_key_hashable(obj: Any) -> Any:
 
             items_list = []
             for k, v in sorted_items:
-                items_list.append([k, v])  # Temporary list [k, v]
+                items_list.append([k, v])
 
-            parent[idx] = items_list  # Will become tuple(tuple(k, v')...)
+            parent[idx] = items_list
 
-            # Push marker first
-            stack.append((_CONVERT_TO_TUPLE, parent, idx))  # Convert items_list to tuple of tuples
+            stack.append((_CONVERT_TO_TUPLE, parent, idx))
 
-            # Push children
             for i in range(len(items_list) - 1, -1, -1):
-                # items_list[i] is [k, v]. We want to transform items_list[i][1].
-                # items_list[i] needs to become (k, v').
-                stack.append((_CONVERT_TO_TUPLE, items_list, i))  # Convert [k, v'] to (k, v')
-                stack.append((items_list[i][1], items_list[i], 1))  # Transform v
+                stack.extend(((_CONVERT_TO_TUPLE, items_list, i), (items_list[i][1], items_list[i], 1)))
 
             continue
 
         if isinstance(current_obj, set):
-            # Convert to list, sort if possible
             try:
                 sorted_list = sorted(current_obj)
             except TypeError:
@@ -391,16 +238,30 @@ def make_cache_key_hashable(obj: Any) -> Any:
             new_list = [None] * len(sorted_list)
             parent[idx] = new_list
 
-            # Push marker first
             stack.append((_CONVERT_TO_FROZENSET, parent, idx))
 
             stack.extend((sorted_list[i], new_list, i) for i in range(len(sorted_list) - 1, -1, -1))
             continue
 
-        # Base case: Object is likely hashable or unknown
         parent[idx] = current_obj
 
     return root[0]
+
+
+def _callable_cache_key(func: Any) -> Any:
+    """Return a stable cache key component for callables.
+
+    Args:
+        func: Callable or None.
+
+    Returns:
+        Tuple identifying the callable, or None for missing callables.
+    """
+    if func is None:
+        return None
+    module = getattr(func, "__module__", None)
+    qualname = getattr(func, "__qualname__", type(func).__name__)
+    return (module, qualname, id(func))
 
 
 def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
@@ -455,6 +316,7 @@ class StackExecutionObserver:
 
     def __enter__(self) -> "StackExecutionObserver":
         self.started = perf_counter()
+        trace_id, span_id = get_trace_context()
         attributes = {
             "sqlspec.stack.statement_count": len(self.stack.operations),
             "sqlspec.stack.continue_on_error": self.continue_on_error,
@@ -467,11 +329,14 @@ class StackExecutionObserver:
             logging.DEBUG,
             "stack.execute.start",
             driver=type(self.driver).__name__,
+            db_system=resolve_db_system(type(self.driver).__name__),
             stack_size=len(self.stack.operations),
             continue_on_error=self.continue_on_error,
             native_pipeline=self.native_pipeline,
             forced_disable=self.driver.stack_native_disabled,
             hashed_operations=self.hashed_operations,
+            trace_id=trace_id,
+            span_id=span_id,
         )
         return self
 
@@ -483,18 +348,22 @@ class StackExecutionObserver:
         self.runtime.span_manager.end_span(self.span, error=exc if exc is not None else None)
         self.metrics.emit(self.runtime)
         level = logging.ERROR if exc is not None else logging.DEBUG
+        trace_id, span_id = get_trace_context()
         log_with_context(
             logger,
             level,
             "stack.execute.failed" if exc is not None else "stack.execute.complete",
             driver=type(self.driver).__name__,
+            db_system=resolve_db_system(type(self.driver).__name__),
             stack_size=len(self.stack.operations),
             continue_on_error=self.continue_on_error,
             native_pipeline=self.native_pipeline,
             forced_disable=self.driver.stack_native_disabled,
             hashed_operations=self.hashed_operations,
-            duration_s=duration,
+            duration_ms=duration * 1000,
             error_type=type(exc).__name__ if exc is not None else None,
+            trace_id=trace_id,
+            span_id=span_id,
         )
         return False
 
@@ -507,7 +376,7 @@ def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     """Return a readable representation of a stack statement for diagnostics."""
     if isinstance(statement, str):
         return statement
-    if isinstance(statement, StatementProtocol):
+    if isinstance(statement, StatementProtocol):  # pyright: ignore[reportUnnecessaryIsInstance]
         return statement.raw_sql or statement.sql
     return repr(statement)
 
@@ -521,65 +390,61 @@ def handle_single_row_error(error: ValueError) -> "NoReturn":
     raise error
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
-class VersionInfo:
-    """Database version information."""
+@mypyc_attr(native_class=False, allow_interpreted_subclasses=True)
+class DataDictionaryDialectMixin:
+    """Mixin providing dialect SQL helpers for data dictionaries."""
 
-    def __init__(self, major: int, minor: int = 0, patch: int = 0) -> None:
-        """Initialize version info.
+    __slots__ = ()
 
-        Args:
-            major: Major version number
-            minor: Minor version number
-            patch: Patch version number
+    dialect: str
 
-        """
-        self.major = major
-        self.minor = minor
-        self.patch = patch
+    def get_dialect_config(self) -> "DialectConfig":
+        """Return the dialect configuration for this data dictionary."""
+        return get_dialect_config(self.dialect)
 
-    @property
-    def version_tuple(self) -> "tuple[int, int, int]":
-        """Get version as tuple for comparison."""
-        return (self.major, self.minor, self.patch)
+    def get_query(self, name: str) -> "SQL":
+        """Return a named SQL query for this dialect."""
+        loader = get_data_dictionary_loader()
+        return loader.get_query(self.dialect, name)
 
-    def __str__(self) -> str:
-        """String representation of version info."""
-        return f"{self.major}.{self.minor}.{self.patch}"
+    def get_query_text(self, name: str) -> str:
+        """Return raw SQL text for a named query for this dialect."""
+        loader = get_data_dictionary_loader()
+        return loader.get_query_text(self.dialect, name)
 
-    def __repr__(self) -> str:
-        """Detailed string representation."""
-        return f"VersionInfo({self.major}, {self.minor}, {self.patch})"
+    def get_query_text_or_none(self, name: str) -> "str | None":
+        """Return raw SQL text for a named query or None if missing."""
+        try:
+            return self.get_query_text(name)
+        except SQLFileNotFoundError:
+            return None
 
-    def __eq__(self, other: object) -> bool:
-        """Check version equality."""
-        if not isinstance(other, VersionInfo):
-            return NotImplemented
-        return self.version_tuple == other.version_tuple
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        if schema is not None:
+            return schema
+        config = self.get_dialect_config()
+        return config.default_schema
 
-    def __lt__(self, other: "VersionInfo") -> bool:
-        """Check if this version is less than another."""
-        return self.version_tuple < other.version_tuple
+    def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
+        """Resolve a feature flag using dialect config and version info."""
+        config = self.get_dialect_config()
+        flag = config.get_feature_flag(feature)
+        if flag is not None:
+            return flag
+        required_version = config.get_feature_version(feature)
+        if required_version is None or version is None:
+            return False
+        return bool(version >= required_version)
 
-    def __le__(self, other: "VersionInfo") -> bool:
-        """Check if this version is less than or equal to another."""
-        return self.version_tuple <= other.version_tuple
-
-    def __gt__(self, other: "VersionInfo") -> bool:
-        """Check if this version is greater than another."""
-        return self.version_tuple > other.version_tuple
-
-    def __ge__(self, other: "VersionInfo") -> bool:
-        """Check if this version is greater than or equal to another."""
-        return self.version_tuple >= other.version_tuple
-
-    def __hash__(self) -> int:
-        """Make VersionInfo hashable based on version tuple."""
-        return hash(self.version_tuple)
+    def list_available_features(self) -> "list[str]":
+        """List available feature flags for this dialect."""
+        config = self.get_dialect_config()
+        features = set(config.feature_flags.keys()) | set(config.feature_versions.keys())
+        return sorted(features)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-@trait
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality.
 
@@ -596,7 +461,7 @@ class DataDictionaryMixin:
         self._version_cache = {}
         self._version_fetch_attempted = set()
 
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+    def get_cached_version(self, driver_id: int) -> object:
         """Get cached version info for a driver.
 
         Args:
@@ -623,6 +488,28 @@ class DataDictionaryMixin:
         if version is not None:
             self._version_cache[driver_id] = version
 
+    def get_cached_version_for_driver(self, driver: Any) -> object:
+        """Get cached version info for a driver instance.
+
+        Args:
+            driver: Database driver instance.
+
+        Returns:
+            Tuple of (was_cached, version_info).
+
+        """
+        return self.get_cached_version(id(driver))
+
+    def cache_version_for_driver(self, driver: Any, version: "VersionInfo | None") -> None:
+        """Cache version info for a driver instance.
+
+        Args:
+            driver: Database driver instance.
+            version: Parsed version info or None.
+
+        """
+        self.cache_version(id(driver), version)
+
     def parse_version_string(self, version_str: str) -> "VersionInfo | None":
         """Parse version string into VersionInfo.
 
@@ -647,11 +534,79 @@ class DataDictionaryMixin:
 
         return None
 
-    def detect_version_with_queries(self, driver: Any, queries: "list[str]") -> "VersionInfo | None":
+    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
+        """Parse version string using a specific regex pattern.
+
+        Args:
+            pattern: Compiled regex pattern for the version format
+            version_str: Raw version string from database
+
+        Returns:
+            VersionInfo instance or None if parsing fails
+
+        """
+        match = pattern.search(version_str)
+        if not match:
+            return None
+
+        groups = match.groups()
+        if not groups:
+            return None
+
+        major = int(groups[0])
+        minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR and groups[1] else 0
+        patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2] else 0
+        return VersionInfo(major, minor, patch)
+
+    def _resolve_log_adapter(self) -> str:
+        """Resolve adapter identifier for logging."""
+        if hasattr(self, "dialect"):
+            return str(self.dialect)  # pyright: ignore[reportAttributeAccessIssue]
+        return type(self).__name__
+
+    def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
+        """Log detected database version with db.system context."""
+
+        logger.debug(
+            "Detected database version", extra={"db.system": resolve_db_system(adapter), "db.version": str(version)}
+        )
+
+    def _log_version_unavailable(self, adapter: str, reason: str) -> None:
+        """Log that database version could not be determined."""
+
+        logger.debug("Database version unavailable", extra={"db.system": resolve_db_system(adapter), "reason": reason})
+
+    def _log_schema_introspect(
+        self, driver: Any, *, schema_name: "str | None", table_name: "str | None", operation: str
+    ) -> None:
+        """Log schema-level introspection activity."""
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "schema.introspect",
+            db_system=resolve_db_system(type(driver).__name__),
+            schema_name=schema_name,
+            table_name=table_name,
+            operation=operation,
+        )
+
+    def _log_table_describe(self, driver: Any, *, schema_name: "str | None", table_name: str, operation: str) -> None:
+        """Log table-level introspection activity."""
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "table.describe",
+            db_system=resolve_db_system(type(driver).__name__),
+            schema_name=schema_name,
+            table_name=table_name,
+            operation=operation,
+        )
+
+    def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version.
 
         Args:
-            driver: Database driver instance
+            driver: Database driver with execute support
             queries: List of SQL queries to try
 
         Returns:
@@ -660,20 +615,22 @@ class DataDictionaryMixin:
         """
         for query in queries:
             with suppress(Exception):
-                result = driver.execute(query)
-                if result.data:
-                    version_str = str(result.data[0])
-                    if isinstance(result.data[0], dict):
-                        version_str = str(next(iter(result.data[0].values())))
-                    elif isinstance(result.data[0], (list, tuple)):
-                        version_str = str(result.data[0][0])
+                result: HasDataProtocol = driver.execute(query)
+                result_data = result.data
+                if result_data:
+                    first_row = result_data[0]
+                    version_str = str(first_row)
+                    if isinstance(first_row, dict):
+                        version_str = str(next(iter(first_row.values())))
+                    elif isinstance(first_row, (list, tuple)):
+                        version_str = str(first_row[0])
 
                     parsed_version = self.parse_version_string(version_str)
                     if parsed_version:
-                        logger.debug("Detected database version: %s", parsed_version)
+                        self._log_version_detected(self._resolve_log_adapter(), parsed_version)
                         return parsed_version
 
-        logger.warning("Could not detect database version")
+        self._log_version_unavailable(self._resolve_log_adapter(), "queries_exhausted")
         return None
 
     def get_default_type_mapping(self) -> "dict[str, str]":
@@ -711,8 +668,8 @@ class DataDictionaryMixin:
         Returns:
             List of table names in topological order (dependencies first).
 
-        Raises:
-            CycleError: If a dependency cycle is detected.
+        Notes:
+            Self-referencing foreign keys are ignored to avoid simple cycles, and every dependency is added with the referencing table depending on its referenced table.
 
         """
         sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
@@ -720,10 +677,8 @@ class DataDictionaryMixin:
             sorter.add(table)
 
         for fk in foreign_keys:
-            # If self-referencing, ignore for sorting purposes to avoid simple cycles
             if fk.table_name == fk.referenced_table:
                 continue
-            # table_name depends on referenced_table
             sorter.add(fk.table_name, fk.referenced_table)
 
         return list(sorter.static_order())
@@ -745,8 +700,8 @@ class ExecutionResult(NamedTuple):
     cursor_result: Any
     rowcount_override: int | None
     special_data: Any
-    selected_data: Optional["list[dict[str, Any]]"]
-    column_names: Optional["list[str]"]
+    selected_data: "list[dict[str, Any]] | None"
+    column_names: "list[str] | None"
     data_row_count: int | None
     statement_count: int | None
     successful_statements: int | None
@@ -759,10 +714,9 @@ class ExecutionResult(NamedTuple):
 EXEC_CURSOR_RESULT: Final[int] = 0
 EXEC_ROWCOUNT_OVERRIDE: Final[int] = 1
 EXEC_SPECIAL_DATA: Final[int] = 2
-DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None)
+DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
 
 
-@trait
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
@@ -916,8 +870,8 @@ class CommonDriverAttributesMixin:
         *,
         rowcount_override: int | None = None,
         special_data: Any = None,
-        selected_data: Optional["list[dict[str, Any]]"] = None,
-        column_names: Optional["list[str]"] = None,
+        selected_data: "list[dict[str, Any]] | None" = None,
+        column_names: "list[str] | None" = None,
         data_row_count: int | None = None,
         statement_count: int | None = None,
         successful_statements: int | None = None,
@@ -1002,7 +956,7 @@ class CommonDriverAttributesMixin:
             metadata=execution_result.special_data or {"status_message": "OK"},
         )
 
-    def _should_force_select(self, statement: "SQL", cursor: Any) -> bool:
+    def _should_force_select(self, statement: "SQL", cursor: object) -> bool:
         """Determine if a statement with unknown type should be treated as SELECT.
 
         Uses driver metadata (statement_type, description/schema) as a safety net when
@@ -1094,7 +1048,8 @@ class CommonDriverAttributesMixin:
                 if data_parameters
                 else sql_statement.positional_parameters
             )
-            return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
+            return SQL(statement_seed, *merged_parameters, statement_config=statement_config, **kwargs)
         return sql_statement
 
     def _prepare_from_sql(
@@ -1110,7 +1065,8 @@ class CommonDriverAttributesMixin:
                 if data_parameters
                 else sql_statement.positional_parameters
             )
-            return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
+            return SQL(statement_seed, *merged_parameters, statement_config=statement_config, **kwargs)
 
         needs_rebuild = False
         if statement_config.dialect and (
@@ -1126,12 +1082,12 @@ class CommonDriverAttributesMixin:
             needs_rebuild = True
 
         if needs_rebuild:
-            sql_text = sql_statement.raw_sql or sql_statement.sql
+            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql or sql_statement.sql
             if sql_statement.is_many and sql_statement.parameters:
-                return SQL(sql_text, sql_statement.parameters, statement_config=statement_config, is_many=True)
+                return SQL(statement_seed, sql_statement.parameters, statement_config=statement_config, is_many=True)
             if sql_statement.named_parameters:
-                return SQL(sql_text, statement_config=statement_config, **sql_statement.named_parameters)
-            return SQL(sql_text, *sql_statement.positional_parameters, statement_config=statement_config)
+                return SQL(statement_seed, statement_config=statement_config, **sql_statement.named_parameters)
+            return SQL(statement_seed, *sql_statement.positional_parameters, statement_config=statement_config)
         return sql_statement
 
     def _prepare_from_string(
@@ -1150,7 +1106,7 @@ class CommonDriverAttributesMixin:
 
     def split_script_statements(
         self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
-    ) -> list[str]:
+    ) -> "list[str]":
         """Split a SQL script into individual statements.
 
         Uses a lexer-driven state machine to handle multi-statement scripts,
@@ -1175,11 +1131,11 @@ class CommonDriverAttributesMixin:
 
     def prepare_driver_parameters(
         self,
-        parameters: Any,
+        parameters: "StatementParameters | list[StatementParameters] | tuple[StatementParameters, ...]",
         statement_config: "StatementConfig",
         is_many: bool = False,
         prepared_statement: Any | None = None,  # pyright: ignore[reportUnusedParameter]
-    ) -> Any:
+    ) -> object:
         """Prepare parameters for database driver consumption.
 
         Normalizes parameter structure and unwraps TypedParameter objects
@@ -1207,25 +1163,27 @@ class CommonDriverAttributesMixin:
             return [self._format_parameter_set_for_many(parameters, statement_config)]
         return self._format_parameter_set(parameters, statement_config)
 
-    def _apply_coercion(self, value: Any, statement_config: "StatementConfig") -> Any:
+    def _apply_coercion(self, value: object, type_coercion_map: "dict[type, Callable[[Any], Any]] | None") -> object:
         """Apply type coercion to a single value.
 
         Args:
             value: Value to coerce (may be TypedParameter or raw value)
-            statement_config: Statement configuration for type coercion map
+            type_coercion_map: Optional type coercion map
 
         Returns:
             Coerced value with TypedParameter unwrapped
 
         """
         unwrapped_value = value.value if isinstance(value, TypedParameter) else value
-        if statement_config.parameter_config.type_coercion_map:
-            for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
+        if type_coercion_map:
+            for type_check, converter in type_coercion_map.items():
                 if isinstance(unwrapped_value, type_check):
                     return converter(unwrapped_value)
         return unwrapped_value
 
-    def _format_parameter_set_for_many(self, parameters: Any, statement_config: "StatementConfig") -> Any:
+    def _format_parameter_set_for_many(
+        self, parameters: "StatementParameters", statement_config: "StatementConfig"
+    ) -> object:
         """Prepare a single parameter set for execute_many operations.
 
         Handles parameter sets without converting the structure to array format,
@@ -1242,16 +1200,19 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
 
+        type_coercion_map = statement_config.parameter_config.type_coercion_map
+        coerce_value = self._apply_coercion
+
         if not isinstance(parameters, (dict, list, tuple)):
-            return self._apply_coercion(parameters, statement_config)
+            return coerce_value(parameters, type_coercion_map)
 
         if isinstance(parameters, dict):
-            return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
+            return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
 
-        coerced_params = [self._apply_coercion(p, statement_config) for p in parameters]
+        coerced_params = [coerce_value(p, type_coercion_map) for p in parameters]
         return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
 
-    def _format_parameter_set(self, parameters: Any, statement_config: "StatementConfig") -> Any:
+    def _format_parameter_set(self, parameters: "StatementParameters", statement_config: "StatementConfig") -> object:
         """Prepare a single parameter set for database driver consumption.
 
         Args:
@@ -1265,42 +1226,36 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
 
+        type_coercion_map = statement_config.parameter_config.type_coercion_map
+        coerce_value = self._apply_coercion
+
         if not isinstance(parameters, (dict, list, tuple)):
-            return [self._apply_coercion(parameters, statement_config)]
+            return [coerce_value(parameters, type_coercion_map)]
 
         if isinstance(parameters, dict):
             if statement_config.parameter_config.supported_execution_parameter_styles and (
                 ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
                 or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
             ):
-                return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
+                return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
             if statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
             }:
-                sorted_items = sorted(
-                    parameters.items(),
-                    key=lambda item: (
-                        int(item[0])
-                        if item[0].isdigit()
-                        else (
-                            int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")
-                        )
-                    ),
-                )
-                return [self._apply_coercion(value, statement_config) for _, value in sorted_items]
+                sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
+                return [coerce_value(value, type_coercion_map) for _, value in sorted_items]
 
-            return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
+            return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
 
-        coerced_params = [self._apply_coercion(p, statement_config) for p in parameters]
+        coerced_params = [coerce_value(p, type_coercion_map) for p in parameters]
         if statement_config.parameter_config.preserve_parameter_format and isinstance(parameters, tuple):
             return tuple(coerced_params)
         return coerced_params
 
     def _get_compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
-    ) -> tuple[str, Any]:
+    ) -> "tuple[str, object]":
         """Get compiled SQL with parameter style conversion and caching.
 
         Compiles the SQL statement and applies parameter style conversion.
@@ -1315,14 +1270,25 @@ class CommonDriverAttributesMixin:
             Tuple of (compiled_sql, parameters)
 
         """
+        compiled_statement, prepared_parameters = self._get_compiled_statement(
+            statement, statement_config, flatten_single_parameters=flatten_single_parameters
+        )
+        return compiled_statement.compiled_sql, prepared_parameters
+
+    def _get_compiled_statement(
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
+    ) -> "tuple[CachedStatement, object]":
+        """Compile SQL and return cached statement metadata plus prepared parameters."""
         cache_config = get_cache_config()
+        dialect_key = str(statement.dialect) if statement.dialect else None
         cache_key = None
+        cache = None
         if cache_config.compiled_cache_enabled and statement_config.enable_caching:
             cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
-            cached_result = cache.get("statement", cache_key, str(statement.dialect) if statement.dialect else None)
+            cached_result = cache.get_statement(cache_key, dialect_key)
             if cached_result is not None and isinstance(cached_result, CachedStatement):
-                return cached_result.compiled_sql, cached_result.parameters
+                return cached_result, cached_result.parameters
 
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
@@ -1334,31 +1300,17 @@ class CommonDriverAttributesMixin:
             prepared_statement=prepared_statement,
         )
 
-        if statement_config.parameter_config.output_transformer:
-            compiled_sql, prepared_parameters = statement_config.parameter_config.output_transformer(
-                compiled_sql, prepared_parameters
-            )
+        cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
+        cached_statement = CachedStatement(
+            compiled_sql=compiled_sql,
+            parameters=cast("tuple[Any, ...] | dict[str, Any] | None", cached_parameters),
+            expression=prepared_statement.expression,
+        )
 
-        if cache_key is not None:
-            cache = get_cache()
-            cached_statement = CachedStatement(
-                compiled_sql=compiled_sql,
-                parameters=tuple(prepared_parameters)
-                if isinstance(prepared_parameters, list)
-                else (
-                    prepared_parameters
-                    if prepared_parameters is None or isinstance(prepared_parameters, dict)
-                    else (
-                        tuple(prepared_parameters)
-                        if not isinstance(prepared_parameters, tuple)
-                        else prepared_parameters
-                    )
-                ),
-                expression=prepared_statement.expression,
-            )
-            cache.put("statement", cache_key, cached_statement, str(statement.dialect) if statement.dialect else None)
+        if cache_key is not None and cache is not None:
+            cache.put_statement(cache_key, cached_statement, dialect_key)
 
-        return compiled_sql, prepared_parameters
+        return cached_statement, prepared_parameters
 
     def _generate_compilation_cache_key(
         self, statement: "SQL", config: "StatementConfig", flatten_single_parameters: bool
@@ -1368,14 +1320,21 @@ class CommonDriverAttributesMixin:
         Creates a deterministic cache key that includes all factors that affect SQL compilation,
         preventing cache contamination between different compilation contexts.
         """
+        statement_transformers = (
+            tuple(_callable_cache_key(transformer) for transformer in config.statement_transformers)
+            if config.statement_transformers
+            else ()
+        )
         context_hash = hash((
             config.parameter_config.hash(),
             config.dialect,
             statement.is_script,
             statement.is_many,
             flatten_single_parameters,
-            bool(config.parameter_config.output_transformer),
-            bool(config.parameter_config.ast_transformer),
+            _callable_cache_key(config.output_transformer),
+            statement_transformers,
+            _callable_cache_key(config.parameter_config.output_transformer),
+            _callable_cache_key(config.parameter_config.ast_transformer),
             bool(config.parameter_config.needs_static_script_compilation),
         ))
 
@@ -1392,22 +1351,8 @@ class CommonDriverAttributesMixin:
             except TypeError:
                 pass
 
-        try:
-            if isinstance(params, dict):
-                params_key = make_cache_key_hashable(params)
-            elif isinstance(params, (list, tuple)) and params:
-                if isinstance(params[0], dict):
-                    params_key = tuple(make_cache_key_hashable(d) for d in params)
-                else:
-                    params_key = make_cache_key_hashable(params)
-            elif isinstance(params, (list, tuple)):
-                params_key = ()
-            else:
-                params_key = params
-        except (TypeError, AttributeError):
-            params_key = str(params)
-
-        base_hash = hash((statement.sql, params_key, statement.is_many, statement.is_script))
+        params_fingerprint = fingerprint_parameters(params)
+        base_hash = hash((statement.sql, params_fingerprint, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 
     def _get_dominant_parameter_style(self, parameters: "list[Any]") -> "ParameterStyle | None":
@@ -1438,7 +1383,7 @@ class CommonDriverAttributesMixin:
             ParameterStyle.NAMED_PYFORMAT: 8,
         }
 
-        return max(style_counts.keys(), key=lambda style: (style_counts[style], -precedence.get(style, 99)))
+        return _select_dominant_style(style_counts, precedence)
 
     @staticmethod
     def find_filter(
@@ -1465,6 +1410,8 @@ class CommonDriverAttributesMixin:
 
         Transforms the original SELECT statement to count total rows while preserving
         WHERE, HAVING, and GROUP BY clauses but removing ORDER BY, LIMIT, and OFFSET.
+        Copies any existing ``WITH`` clause (sqlglot stores it under ``with_``) and falls back to inferred tables if the FROM clause is missing.
+        When GROUP BY, JOINs, or a WITH clause exist we wrap the payload in a subquery before counting.
         """
         if not original_sql.expression:
             original_sql.compile()
@@ -1474,11 +1421,16 @@ class CommonDriverAttributesMixin:
             raise ImproperConfigurationError(msg)
 
         expr = original_sql.expression
+        cte: exp.Expression | None = None
+        if isinstance(expr, exp.Expression):  # pyright: ignore
+            cte = expr.args.get("with_")
+            if cte is not None:
+                expr = expr.copy()
+                expr.set("with_", None)
 
         if isinstance(expr, exp.Select):
             from_clause = expr.args.get("from")
             if from_clause is None:
-                # Fallback: try alternate keys or inferred tables
                 from_clause = expr.args.get("froms")
             if from_clause is None:
                 tables = list(expr.find_all(exp.Table))
@@ -1492,8 +1444,15 @@ class CommonDriverAttributesMixin:
                 )
                 raise ImproperConfigurationError(msg)
 
-            if expr.args.get("group"):
-                subquery = expr.subquery(alias="grouped_data")
+            has_group = expr.args.get("group")
+            has_joins = expr.args.get("joins")
+            needs_subquery = has_group or has_joins or cte is not None
+            if needs_subquery:
+                subquery_expr = expr.copy()
+                subquery_expr.set("order", None)
+                subquery_expr.set("limit", None)
+                subquery_expr.set("offset", None)
+                subquery = subquery_expr.subquery(alias="grouped_data")
                 count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
             else:
                 source_from = cast("exp.Expression", from_clause)
@@ -1507,8 +1466,12 @@ class CommonDriverAttributesMixin:
             count_expr.set("limit", None)
             count_expr.set("offset", None)
 
+            if cte is not None:
+                count_expr.set("with_", cte.copy())
             return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)
 
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
+        if cte is not None:
+            count_expr.set("with_", cte.copy())
         return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)

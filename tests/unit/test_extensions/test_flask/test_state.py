@@ -1,6 +1,6 @@
 """Tests for Flask configuration state."""
 
-from sqlspec.extensions.flask._state import FlaskConfigState
+from sqlspec.extensions.flask import FlaskConfigState
 
 
 def test_should_commit_manual_mode() -> None:

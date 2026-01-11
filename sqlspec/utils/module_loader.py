@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.utils.dependencies import module_available
 
 if TYPE_CHECKING:
     from types import ModuleType
 
 __all__ = (
-    "ensure_aiosql",
+    "OptionalDependencyFlag",
+    "dependency_flag",
     "ensure_attrs",
     "ensure_cattrs",
     "ensure_fsspec",
@@ -33,9 +33,95 @@ __all__ = (
     "ensure_prometheus",
     "ensure_pyarrow",
     "ensure_pydantic",
+    "ensure_uvloop",
     "import_string",
+    "module_available",
     "module_to_os_path",
+    "reset_dependency_cache",
 )
+
+
+# =============================================================================
+# Dependency Availability Checking
+# =============================================================================
+
+_dependency_cache: "dict[str, bool]" = {}
+
+
+def module_available(module_name: str) -> bool:
+    """Return True if the given module can be resolved.
+
+    The result is cached per interpreter session. Call
+    :func:`reset_dependency_cache` to invalidate cached entries when
+    tests manipulate ``sys.path``.
+
+    Args:
+        module_name: Dotted module path to check.
+
+    Returns:
+        True if :mod:`importlib` can find the module, False otherwise.
+    """
+
+    cached = _dependency_cache.get(module_name)
+    if cached is not None:
+        return cached
+
+    try:
+        is_available = find_spec(module_name) is not None
+    except ModuleNotFoundError:
+        is_available = False
+
+    _dependency_cache[module_name] = is_available
+    return is_available
+
+
+def reset_dependency_cache(module_name: str | None = None) -> None:
+    """Clear cached availability for one module or the entire cache.
+
+    Args:
+        module_name: Specific dotted module path to drop from the cache.
+            Clears the full cache when ``None``.
+    """
+
+    if module_name is None:
+        _dependency_cache.clear()
+        return
+
+    _dependency_cache.pop(module_name, None)
+
+
+class OptionalDependencyFlag:
+    """Boolean-like wrapper that evaluates module availability lazily."""
+
+    __slots__ = ("module_name",)
+
+    def __init__(self, module_name: str) -> None:
+        self.module_name = module_name
+
+    def __bool__(self) -> bool:
+        return module_available(self.module_name)
+
+    def __repr__(self) -> str:
+        status = "available" if module_available(self.module_name) else "missing"
+        return f"OptionalDependencyFlag(module='{self.module_name}', status='{status}')"
+
+
+def dependency_flag(module_name: str) -> "OptionalDependencyFlag":
+    """Return a lazily evaluated flag for the supplied module name.
+
+    Args:
+        module_name: Dotted module path to guard.
+
+    Returns:
+        :class:`OptionalDependencyFlag` tracking the module.
+    """
+
+    return OptionalDependencyFlag(module_name)
+
+
+# =============================================================================
+# Module Loading and Import Utilities
+# =============================================================================
 
 
 def _require_dependency(
@@ -140,145 +226,81 @@ def import_string(dotted_path: str) -> "Any":
     return obj
 
 
-def ensure_aiosql() -> None:
-    """Ensure aiosql is available.
-
-    Raises:
-        MissingDependencyError: If aiosql is not installed.
-    """
-    _require_dependency("aiosql")
-
-
 def ensure_attrs() -> None:
-    """Ensure attrs is available.
-
-    Raises:
-        MissingDependencyError: If attrs is not installed.
-    """
+    """Ensure attrs is available."""
     _require_dependency("attrs")
 
 
 def ensure_cattrs() -> None:
-    """Ensure cattrs is available.
-
-    Raises:
-        MissingDependencyError: If cattrs is not installed.
-    """
+    """Ensure cattrs is available."""
     _require_dependency("cattrs")
 
 
 def ensure_fsspec() -> None:
-    """Ensure fsspec is available for filesystem operations.
-
-    Raises:
-        MissingDependencyError: If fsspec is not installed.
-    """
+    """Ensure fsspec is available for filesystem operations."""
     _require_dependency("fsspec")
 
 
 def ensure_litestar() -> None:
-    """Ensure Litestar is available.
-
-    Raises:
-        MissingDependencyError: If litestar is not installed.
-    """
+    """Ensure Litestar is available."""
     _require_dependency("litestar")
 
 
 def ensure_msgspec() -> None:
-    """Ensure msgspec is available for serialization.
-
-    Raises:
-        MissingDependencyError: If msgspec is not installed.
-    """
+    """Ensure msgspec is available for serialization."""
     _require_dependency("msgspec")
 
 
 def ensure_numpy() -> None:
-    """Ensure NumPy is available for array operations.
-
-    Raises:
-        MissingDependencyError: If numpy is not installed.
-    """
+    """Ensure NumPy is available for array operations."""
     _require_dependency("numpy")
 
 
 def ensure_obstore() -> None:
-    """Ensure obstore is available for object storage operations.
-
-    Raises:
-        MissingDependencyError: If obstore is not installed.
-    """
+    """Ensure obstore is available for object storage operations."""
     _require_dependency("obstore")
 
 
 def ensure_opentelemetry() -> None:
-    """Ensure OpenTelemetry is available for tracing.
-
-    Raises:
-        MissingDependencyError: If opentelemetry-api is not installed.
-    """
+    """Ensure OpenTelemetry is available for tracing."""
     _require_dependency("opentelemetry", package_name="opentelemetry-api", install_package="opentelemetry")
 
 
 def ensure_orjson() -> None:
-    """Ensure orjson is available for fast JSON operations.
-
-    Raises:
-        MissingDependencyError: If orjson is not installed.
-    """
+    """Ensure orjson is available for fast JSON operations."""
     _require_dependency("orjson")
 
 
 def ensure_pandas() -> None:
-    """Ensure pandas is available for DataFrame operations.
-
-    Raises:
-        MissingDependencyError: If pandas is not installed.
-    """
+    """Ensure pandas is available for DataFrame operations."""
     _require_dependency("pandas")
 
 
 def ensure_pgvector() -> None:
-    """Ensure pgvector is available for vector operations.
-
-    Raises:
-        MissingDependencyError: If pgvector is not installed.
-    """
+    """Ensure pgvector is available for vector operations."""
     _require_dependency("pgvector")
 
 
 def ensure_polars() -> None:
-    """Ensure Polars is available for DataFrame operations.
-
-    Raises:
-        MissingDependencyError: If polars is not installed.
-    """
+    """Ensure Polars is available for DataFrame operations."""
     _require_dependency("polars")
 
 
 def ensure_prometheus() -> None:
-    """Ensure Prometheus client is available for metrics.
-
-    Raises:
-        MissingDependencyError: If prometheus-client is not installed.
-    """
+    """Ensure Prometheus client is available for metrics."""
     _require_dependency("prometheus_client", package_name="prometheus-client", install_package="prometheus")
 
 
 def ensure_pyarrow() -> None:
-    """Ensure PyArrow is available for Arrow operations.
-
-    Raises:
-        MissingDependencyError: If pyarrow is not installed.
-    """
+    """Ensure PyArrow is available for Arrow operations."""
     _require_dependency("pyarrow")
 
 
 def ensure_pydantic() -> None:
-    """Ensure Pydantic is available for data validation.
-
-    Raises:
-        MissingDependencyError: If pydantic is not installed.
-    """
+    """Ensure Pydantic is available for data validation."""
     _require_dependency("pydantic")
+
+
+def ensure_uvloop() -> None:
+    """Ensure uvloop is available for fast event loops."""
+    _require_dependency("uvloop")

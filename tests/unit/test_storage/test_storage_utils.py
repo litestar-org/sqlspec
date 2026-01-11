@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.storage._utils import resolve_storage_path
+from sqlspec.storage import resolve_storage_path
 from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.module_loader import ensure_pyarrow
 

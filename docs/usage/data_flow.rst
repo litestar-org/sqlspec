@@ -9,7 +9,7 @@ This guide provides a comprehensive overview of the execution flow, from the mom
 Execution Pipeline Overview
 ----------------------------
 
-SQLSpec's execution flow can be visualized as a series of well-defined stages that transform user input into database results. The architecture is designed around **single-pass processing** with **multi-tier caching** for optimal performance.
+SQLSpec's execution flow can be visualized as a series of well-defined stages that transform user input into database results. The architecture is designed around **single-pass processing** with **namespaced caching** for optimal performance.
 
 High-Level Flow Diagram
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -128,6 +128,10 @@ Instead of treating SQL as plain text, SQLSpec uses the AST to:
 - Detect performance issues (missing JOINs, unbounded queries)
 - Transform queries safely (add filters, parameterize literals)
 
+If you need custom AST rewrites (for example, soft delete transforms), supply
+``statement_transformers`` on ``StatementConfig``. These run after parsing and
+before SQL compilation.
+
 **Step 3: Compilation**
 
 The AST is compiled into the target SQL dialect:
@@ -183,9 +187,9 @@ SQLSpec drivers use the Template Method pattern for consistent execution:
 1. **Special Handling Check**: Try database-specific optimizations (PostgreSQL COPY, bulk operations)
 2. **Execution Routing**: Route to appropriate method based on query type:
 
-   - ``_execute_statement``: Single statement execution
-   - ``_execute_many``: Batch execution (executemany)
-   - ``_execute_script``: Multi-statement scripts
+   - ``dispatch_execute``: Single statement execution
+   - ``dispatch_execute_many``: Batch execution (executemany)
+   - ``dispatch_execute_script``: Multi-statement scripts (where supported)
 
 3. **Database Interaction**: Execute via DBAPI connection
 4. **Result Building**: Package raw results into SQLResult
@@ -304,7 +308,7 @@ By understanding this execution flow, you can:
 
 **Extend SQLSpec**
 
-- Write custom transformers
+- Provide statement_transformers for AST rewrites
 - Create new validators
 - Implement custom drivers
 

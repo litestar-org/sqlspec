@@ -19,7 +19,7 @@ _T = TypeVar("_T")
 class SingletonMeta(type):
     """Metaclass for singleton pattern."""
 
-    _instances: dict[type, object] = {}
+    _instances: "dict[type, object]" = {}
     _lock = threading.Lock()
 
     def __call__(cls: type[_T], *args: Any, **kwargs: Any) -> _T:

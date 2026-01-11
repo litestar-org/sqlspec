@@ -12,7 +12,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 
 
 @pytest.fixture
-def postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
+def postgresql_session(postgres_service: "PostgresService") -> Generator[AdbcDriver, None, None]:
     """PostgreSQL ADBC session fixture."""
     config = AdbcConfig(
         connection_config={
@@ -49,7 +49,7 @@ def duckdb_session() -> Generator[AdbcDriver, None, None]:
             or "Failed to import connect function" in str(e)
             or "Could not configure connection" in str(e)
         ):
-            pytest.skip(f"DuckDB ADBC driver not available: {e}")
+            pytest.skip(f"DuckDB ADBC missing: {e}")
         raise
 
 

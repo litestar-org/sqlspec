@@ -1,270 +1,208 @@
 """SQLite-specific data dictionary for metadata queries via aiosqlite."""
 
-import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, ClassVar
 
-from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, ForeignKeyMetadata, VersionInfo
-from sqlspec.utils.logging import get_logger
+from mypy_extensions import mypyc_attr
+
+from sqlspec.adapters.aiosqlite.core import format_identifier
+from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.driver import AsyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
+    from sqlspec.data_dictionary._types import DialectConfig
 
-logger = get_logger("adapters.aiosqlite.data_dictionary")
-
-# Compiled regex patterns
-SQLITE_VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-
-__all__ = ("AiosqliteAsyncDataDictionary",)
+__all__ = ("AiosqliteDataDictionary",)
 
 
-class AiosqliteAsyncDataDictionary(AsyncDataDictionaryBase):
-    """SQLite-specific async data dictionary via aiosqlite."""
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class AiosqliteDataDictionary(AsyncDataDictionaryBase):
+    """SQLite-specific async data dictionary."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
+    dialect: ClassVar[str] = "sqlite"
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_dialect_config(self) -> "DialectConfig":
+        """Return the dialect configuration for this data dictionary."""
+        return get_dialect_config(type(self).dialect)
+
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        if schema is not None:
+            return schema
+        return self.get_dialect_config().default_schema
+
+    def list_available_features(self) -> "list[str]":
+        """List available feature flags for this dialect."""
+        config = self.get_dialect_config()
+        features = {"supports_transactions", "supports_prepared_statements"}
+        features.update(config.feature_flags.keys())
+        features.update(config.feature_versions.keys())
+        return sorted(features)
+
+    async def get_version(self, driver: "AiosqliteDriver") -> "VersionInfo | None":
         """Get SQLite database version information.
-
-        Uses caching to avoid repeated database queries within the same
-        driver session.
 
         Args:
             driver: Async database driver instance.
 
         Returns:
             SQLite version information or None if detection fails.
+
         """
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cached_version
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+        # Not cached, fetch from database
 
-        version_str = await cast("AiosqliteDriver", driver).select_value("SELECT sqlite_version()")
-        if not version_str:
-            logger.warning("No SQLite version information found")
+        version_value = await driver.select_value_or_none(self.get_query("version"))
+        if not version_value:
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
-        version_match = SQLITE_VERSION_PATTERN.match(str(version_str))
-        if not version_match:
-            logger.warning("Could not parse SQLite version: %s", version_str)
+        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
+        if version_info is None:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        major, minor, patch = map(int, version_match.groups())
-        version_info = VersionInfo(major, minor, patch)
-        logger.debug("Detected SQLite version: %s", version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 
-    async def get_feature_flag(self, driver: AsyncDriverAdapterBase, feature: str) -> bool:
+    async def get_feature_flag(self, driver: "AiosqliteDriver", feature: str) -> bool:
         """Check if SQLite database supports a specific feature.
 
         Args:
-            driver: AIOSQLite driver instance
-            feature: Feature name to check
+            driver: Async database driver instance.
+            feature: Feature name to check.
 
         Returns:
-            True if feature is supported, False otherwise
+            True if feature is supported, False otherwise.
+
         """
         version_info = await self.get_version(driver)
-        if not version_info:
-            return False
+        return self.resolve_feature_flag(feature, version_info)
 
-        feature_checks: dict[str, Callable[..., bool]] = {
-            "supports_json": lambda v: v >= VersionInfo(3, 38, 0),
-            "supports_returning": lambda v: v >= VersionInfo(3, 35, 0),
-            "supports_upsert": lambda v: v >= VersionInfo(3, 24, 0),
-            "supports_window_functions": lambda v: v >= VersionInfo(3, 25, 0),
-            "supports_cte": lambda v: v >= VersionInfo(3, 8, 3),
-            "supports_transactions": lambda _: True,
-            "supports_prepared_statements": lambda _: True,
-            "supports_schemas": lambda _: False,  # SQLite has ATTACH but not schemas
-            "supports_arrays": lambda _: False,
-            "supports_uuid": lambda _: False,
-        }
-
-        if feature in feature_checks:
-            return bool(feature_checks[feature](version_info))
-
-        return False
-
-    async def get_optimal_type(self, driver: AsyncDriverAdapterBase, type_category: str) -> str:
+    async def get_optimal_type(self, driver: "AiosqliteDriver", type_category: str) -> str:
         """Get optimal SQLite type for a category.
 
         Args:
-            driver: AIOSQLite driver instance
-            type_category: Type category
+            driver: Async database driver instance.
+            type_category: Type category.
 
         Returns:
-            SQLite-specific type name
+            SQLite-specific type name.
+
         """
+        config = self.get_dialect_config()
         version_info = await self.get_version(driver)
 
         if type_category == "json":
-            if version_info and version_info >= VersionInfo(3, 38, 0):
+            json_version = config.get_feature_version("supports_json")
+            if version_info and json_version and version_info >= json_version:
                 return "JSON"
             return "TEXT"
 
-        type_map = {"uuid": "TEXT", "boolean": "INTEGER", "timestamp": "TIMESTAMP", "text": "TEXT", "blob": "BLOB"}
-        return type_map.get(type_category, "TEXT")
+        return config.get_optimal_type(type_category)
+
+    async def get_tables(self, driver: "AiosqliteDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables sorted by topological dependency order using SQLite catalog."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
+        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+        query_text = self.get_query_text("tables_by_schema").format(schema_prefix=schema_prefix)
+        return await driver.select(query_text, schema_type=TableMetadata)
 
     async def get_columns(
-        self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get column information for a table using SQLite PRAGMA.
+        self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+            query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
+            return await driver.select(query_text, schema_type=ColumnMetadata)
 
-        Args:
-            driver: AioSQLite driver instance
-            table: Table name to query columns for
-            schema: Schema name (unused in SQLite)
-
-        Returns:
-            List of column metadata dictionaries with keys:
-                - column_name: Name of the column
-                - data_type: SQLite data type
-                - nullable: Whether column allows NULL
-                - default_value: Default value if any
-        """
-        aiosqlite_driver = cast("AiosqliteDriver", driver)
-        result = await aiosqlite_driver.execute(f"PRAGMA table_info({table})")
-
-        return [
-            {
-                "column_name": row["name"] if isinstance(row, dict) else row[1],
-                "data_type": row["type"] if isinstance(row, dict) else row[2],
-                "nullable": not (row["notnull"] if isinstance(row, dict) else row[3]),
-                "default_value": row["dflt_value"] if isinstance(row, dict) else row[4],
-            }
-            for row in result.data or []
-        ]
-
-    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
-        """Get tables sorted by topological dependency order using SQLite catalog."""
-        aiosqlite_driver = cast("AiosqliteDriver", driver)
-
-        sql = """
-        WITH RECURSIVE dependency_tree AS (
-            SELECT
-                m.name as table_name,
-                0 as level,
-                '/' || m.name || '/' as path
-            FROM sqlite_schema m
-            WHERE m.type = 'table'
-              AND m.name NOT LIKE 'sqlite_%'
-              AND NOT EXISTS (
-                  SELECT 1 FROM pragma_foreign_key_list(m.name)
-              )
-
-            UNION ALL
-
-            SELECT
-                m.name as table_name,
-                dt.level + 1,
-                dt.path || m.name || '/'
-            FROM sqlite_schema m
-            JOIN pragma_foreign_key_list(m.name) fk
-            JOIN dependency_tree dt ON fk."table" = dt.table_name
-            WHERE m.type = 'table'
-              AND m.name NOT LIKE 'sqlite_%'
-              AND instr(dt.path, '/' || m.name || '/') = 0
-        )
-        SELECT DISTINCT table_name FROM dependency_tree ORDER BY level, table_name;
-        """
-        result = await aiosqlite_driver.execute(sql)
-        return [row["table_name"] for row in result.get_data()]
-
-    async def get_foreign_keys(
-        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[ForeignKeyMetadata]":
-        """Get foreign key metadata."""
-        aiosqlite_driver = cast("AiosqliteDriver", driver)
-
-        if table:
-            # Single table optimization
-            sql = f"SELECT '{table}' as table_name, fk.* FROM pragma_foreign_key_list('{table}') fk"
-            result = await aiosqlite_driver.execute(sql)
-        else:
-            # All tables
-            sql = """
-                SELECT m.name as table_name, fk.*
-                FROM sqlite_schema m, pragma_foreign_key_list(m.name) fk
-                WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'
-            """
-            result = await aiosqlite_driver.execute(sql)
-
-        fks = []
-        for row in result.data:
-            if isinstance(row, (list, tuple)):
-                table_name = row[0]
-                ref_table = row[3]
-                col = row[4]
-                ref_col = row[5]
-            else:
-                table_name = row["table_name"]
-                ref_table = row["table"]
-                col = row["from"]
-                ref_col = row["to"]
-
-            fks.append(
-                ForeignKeyMetadata(
-                    table_name=table_name,
-                    column_name=col,
-                    referenced_table=ref_table,
-                    referenced_column=ref_col,
-                    constraint_name=None,
-                    schema=None,
-                    referenced_schema=None,
-                )
-            )
-        return fks
+        assert table is not None
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+        table_name = table
+        table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
+        query_text = self.get_query_text("columns_by_table").format(table_name=format_identifier(table_identifier))
+        return await driver.select(query_text, schema_type=ColumnMetadata)
 
     async def get_indexes(
-        self, driver: "AsyncDriverAdapterBase", table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get index information for a table."""
-        aiosqlite_driver = cast("AiosqliteDriver", driver)
+        self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        indexes: list[IndexMetadata] = []
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+            for table_info in await self.get_tables(driver, schema=schema_name):
+                table_name = table_info.get("table_name")
+                if not table_name:
+                    continue
+                indexes.extend(await self.get_indexes(driver, table=table_name, schema=schema_name))
+            return indexes
 
-        # 1. Get indexes for table
-        index_list_res = await aiosqlite_driver.execute(f"PRAGMA index_list('{table}')")
-        indexes = []
-
-        for idx_row in index_list_res.data:
-            if isinstance(idx_row, (list, tuple)):
-                idx_name = idx_row[1]
-                unique = bool(idx_row[2])
-            else:
-                idx_name = idx_row["name"]
-                unique = bool(idx_row["unique"])
-
-            # 2. Get columns for index
-            info_res = await aiosqlite_driver.execute(f"PRAGMA index_info('{idx_name}')")
-            cols = []
-            for col_row in info_res.data:
-                if isinstance(col_row, (list, tuple)):
-                    cols.append(col_row[2])
-                else:
-                    cols.append(col_row["name"])
-
-            indexes.append({"name": idx_name, "columns": cols, "unique": unique, "primary": False, "table_name": table})
-
+        assert table is not None
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
+        table_name = table
+        table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
+        index_list_sql = self.get_query_text("indexes_by_table").format(table_name=format_identifier(table_identifier))
+        index_rows = await driver.select(index_list_sql)
+        for row in index_rows:
+            index_name = row.get("name")
+            if not index_name:
+                continue
+            index_identifier = f"{schema_name}.{index_name}" if schema_name else index_name
+            columns_sql = self.get_query_text("index_columns_by_index").format(
+                index_name=format_identifier(index_identifier)
+            )
+            columns_rows = await driver.select(columns_sql)
+            columns: list[str] = []
+            for col in columns_rows:
+                column_name = col.get("name")
+                if column_name is None:
+                    continue
+                columns.append(str(column_name))
+            is_primary = row.get("origin") == "pk"
+            index_metadata: IndexMetadata = {
+                "index_name": index_name,
+                "table_name": table_name,
+                "columns": columns,
+                "is_primary": is_primary,
+            }
+            if schema_name is not None:
+                index_metadata["schema_name"] = schema_name
+            unique_value = row.get("unique")
+            if unique_value is not None:
+                index_metadata["is_unique"] = unique_value
+            indexes.append(index_metadata)
         return indexes
 
-    def list_available_features(self) -> "list[str]":
-        """List available SQLite feature flags.
+    async def get_foreign_keys(
+        self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        schema_name = self.resolve_schema(schema)
+        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+            query_text = self.get_query_text("foreign_keys_by_schema").format(schema_prefix=schema_prefix)
+            return await driver.select(query_text, schema_type=ForeignKeyMetadata)
 
-        Returns:
-            List of supported feature names
-        """
-        return [
-            "supports_json",
-            "supports_returning",
-            "supports_upsert",
-            "supports_window_functions",
-            "supports_cte",
-            "supports_transactions",
-            "supports_prepared_statements",
-            "supports_schemas",
-            "supports_arrays",
-            "supports_uuid",
-        ]
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+        table_label = table.replace("'", "''")
+        table_identifier = f"{schema_name}.{table}" if schema_name else table
+        query_text = self.get_query_text("foreign_keys_by_table").format(
+            table_name=format_identifier(table_identifier), table_label=table_label
+        )
+        return await driver.select(query_text, schema_type=ForeignKeyMetadata)

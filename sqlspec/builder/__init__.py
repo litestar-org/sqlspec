@@ -4,7 +4,7 @@ Provides fluent interfaces for building SQL queries with
 parameter binding and validation.
 """
 
-from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._base import BuiltQuery, ExpressionBuilder, QueryBuilder
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._ddl import (
     AlterTable,
@@ -33,7 +33,19 @@ from sqlspec.builder._dml import (
     UpdateSetClauseMixin,
     UpdateTableClauseMixin,
 )
-from sqlspec.builder._explain import Explain, ExplainMixin
+from sqlspec.builder._explain import (
+    Explain,
+    ExplainMixin,
+    build_bigquery_explain,
+    build_duckdb_explain,
+    build_explain_sql,
+    build_generic_explain,
+    build_mysql_explain,
+    build_oracle_explain,
+    build_postgres_explain,
+    build_sqlite_explain,
+    normalize_dialect_name,
+)
 from sqlspec.builder._expression_wrappers import (
     AggregateExpression,
     ConversionExpression,
@@ -76,12 +88,18 @@ from sqlspec.builder._select import (
     WhereClauseMixin,
     WindowFunctionBuilder,
 )
+from sqlspec.builder._temporal import create_temporal_table, register_version_generators
 from sqlspec.builder._update import Update
+from sqlspec.builder._vector_expressions import VectorDistance
 from sqlspec.exceptions import SQLBuilderError
+
+# Register temporal query SQL generators on module import
+register_version_generators()
 
 __all__ = (
     "AggregateExpression",
     "AlterTable",
+    "BuiltQuery",
     "Case",
     "CaseBuilder",
     "Column",
@@ -104,6 +122,7 @@ __all__ = (
     "DropView",
     "Explain",
     "ExplainMixin",
+    "ExpressionBuilder",
     "FunctionColumn",
     "FunctionExpression",
     "HavingClauseMixin",
@@ -122,7 +141,6 @@ __all__ = (
     "ReturningClauseMixin",
     "SQLBuilderError",
     "SQLFactory",
-    "SafeQuery",
     "Select",
     "SelectClauseMixin",
     "SetOperationMixin",
@@ -134,16 +152,28 @@ __all__ = (
     "UpdateFromClauseMixin",
     "UpdateSetClauseMixin",
     "UpdateTableClauseMixin",
+    "VectorDistance",
     "WhereClauseMixin",
     "WindowFunctionBuilder",
+    "build_bigquery_explain",
     "build_copy_from_statement",
     "build_copy_statement",
     "build_copy_to_statement",
+    "build_duckdb_explain",
+    "build_explain_sql",
+    "build_generic_explain",
+    "build_mysql_explain",
+    "build_oracle_explain",
+    "build_postgres_explain",
+    "build_sqlite_explain",
+    "create_temporal_table",
     "extract_expression",
+    "normalize_dialect_name",
     "parse_column_expression",
     "parse_condition_expression",
     "parse_order_expression",
     "parse_table_expression",
+    "register_version_generators",
     "sql",
     "to_expression",
 )

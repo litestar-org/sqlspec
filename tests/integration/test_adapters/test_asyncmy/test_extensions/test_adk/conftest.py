@@ -37,15 +37,22 @@ async def asyncmy_adk_store(mysql_service: MySQLService) -> "AsyncGenerator[Asyn
         extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
     )
 
-    store = AsyncmyADKStore(config)
-    await store.create_tables()
+    try:
+        store = AsyncmyADKStore(config)
+        await store.create_tables()
 
-    yield store
+        yield store
 
-    async with config.provide_connection() as conn, conn.cursor() as cursor:
-        await cursor.execute("DROP TABLE IF EXISTS test_events")
-        await cursor.execute("DROP TABLE IF EXISTS test_sessions")
-        await conn.commit()
+        async with config.provide_connection() as conn, conn.cursor() as cursor:
+            await cursor.execute("DROP TABLE IF EXISTS test_events")
+            await cursor.execute("DROP TABLE IF EXISTS test_sessions")
+            await conn.commit()
+    finally:
+        pool = config.connection_instance
+        if pool is not None:
+            pool.close()
+            await pool.wait_closed()
+        config.connection_instance = None
 
 
 @pytest.fixture
@@ -82,23 +89,30 @@ async def asyncmy_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGenera
         },
     )
 
-    async with config.provide_connection() as conn, conn.cursor() as cursor:
-        await cursor.execute("""
-            CREATE TABLE IF NOT EXISTS test_tenants (
-                id BIGINT PRIMARY KEY AUTO_INCREMENT,
-                name VARCHAR(128) NOT NULL UNIQUE
-            ) ENGINE=InnoDB
-        """)
-        await cursor.execute("INSERT INTO test_tenants (name) VALUES ('tenant1'), ('tenant2')")
-        await conn.commit()
+    try:
+        async with config.provide_connection() as conn, conn.cursor() as cursor:
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS test_tenants (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    name VARCHAR(128) NOT NULL UNIQUE
+                ) ENGINE=InnoDB
+            """)
+            await cursor.execute("INSERT INTO test_tenants (name) VALUES ('tenant1'), ('tenant2')")
+            await conn.commit()
 
-    store = AsyncmyADKStore(config)
-    await store.create_tables()
+        store = AsyncmyADKStore(config)
+        await store.create_tables()
 
-    yield store
+        yield store
 
-    async with config.provide_connection() as conn, conn.cursor() as cursor:
-        await cursor.execute("DROP TABLE IF EXISTS test_fk_events")
-        await cursor.execute("DROP TABLE IF EXISTS test_fk_sessions")
-        await cursor.execute("DROP TABLE IF EXISTS test_tenants")
-        await conn.commit()
+        async with config.provide_connection() as conn, conn.cursor() as cursor:
+            await cursor.execute("DROP TABLE IF EXISTS test_fk_events")
+            await cursor.execute("DROP TABLE IF EXISTS test_fk_sessions")
+            await cursor.execute("DROP TABLE IF EXISTS test_tenants")
+            await conn.commit()
+    finally:
+        pool = config.connection_instance
+        if pool is not None:
+            pool.close()
+            await pool.wait_closed()
+        config.connection_instance = None

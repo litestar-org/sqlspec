@@ -4,14 +4,12 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
-logger = get_logger("adapters.oracledb.litestar.store")
 
 ORACLE_SMALL_BLOB_LIMIT = 32000
 
@@ -183,7 +181,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
 
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -316,7 +314,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             cursor = conn.cursor()
             await cursor.execute(sql)
             await conn.commit()
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+        self._log_delete_all()
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -398,7 +396,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             count = cursor.rowcount if cursor.rowcount is not None else 0
             await conn.commit()
             if count > 0:
-                logger.debug("Cleaned up %d expired sessions", count)
+                self._log_delete_expired(count)
             return count
 
 
@@ -547,7 +545,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
 
-        logger.debug("Created session table: %s", self._table_name)
+        self._log_table_created()
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -691,7 +689,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             cursor = conn.cursor()
             cursor.execute(sql)
             conn.commit()
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+        self._log_delete_all()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
@@ -771,7 +769,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             count = cursor.rowcount if cursor.rowcount is not None else 0
             conn.commit()
             if count > 0:
-                logger.debug("Cleaned up %d expired sessions", count)
+                self._log_delete_expired(count)
             return count
 
     async def delete_expired(self) -> int:

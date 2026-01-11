@@ -1,6 +1,7 @@
 """Flask extension for SQLSpec database integration."""
 
 import atexit
+import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 from sqlspec.base import SQLSpec
@@ -14,7 +15,7 @@ from sqlspec.extensions.flask._utils import (
     pop_context_value,
     set_context_value,
 )
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 __all__ = ("SQLSpecPlugin",)
 
-logger = get_logger("extensions.flask")
+logger = get_logger("sqlspec.extensions.flask")
 
 DEFAULT_COMMIT_MODE: Literal["manual"] = "manual"
 DEFAULT_SESSION_KEY = "db_session"
@@ -138,7 +139,7 @@ class SQLSpecPlugin:
         if self._has_async_configs:
             self._portal = PortalProvider()
             self._portal.start()
-            logger.debug("Portal provider started for async adapters")
+            log_with_context(logger, logging.DEBUG, "extension.init", framework="flask", stage="portal_started")
 
         pools: dict[str, Any] = {}
         for config_state in self._config_states:
@@ -148,6 +149,9 @@ class SQLSpecPlugin:
                 else:
                     pool = config_state.config.create_pool()
                 pools[config_state.session_key] = pool
+                log_with_context(
+                    logger, logging.DEBUG, "session.create", framework="flask", session_key=config_state.session_key
+                )
 
         app.extensions["sqlspec"] = {"plugin": self, "pools": pools}
 
@@ -158,7 +162,15 @@ class SQLSpecPlugin:
 
         self._register_shutdown_hook()
 
-        logger.debug("SQLSpec Flask extension initialized")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "extension.init",
+            framework="flask",
+            stage="configured",
+            config_count=len(self._config_states),
+            async_enabled=self._has_async_configs,
+        )
 
     def _validate_unique_keys(self) -> None:
         """Validate that all state keys are unique across configs.
@@ -276,8 +288,17 @@ class SQLSpecPlugin:
                         self._portal.portal.call(connection.close)  # type: ignore[union-attr]
                     else:
                         connection.close()
-                except Exception:
-                    logger.exception("Error closing connection")
+                except Exception as exc:
+                    log_with_context(
+                        logger,
+                        logging.ERROR,
+                        "session.close",
+                        framework="flask",
+                        session_key=config_state.session_key,
+                        operation="connection",
+                        status="failed",
+                        error_type=type(exc).__name__,
+                    )
 
                 if has_context_value(g, config_state.connection_key):
                     pop_context_value(g, config_state.connection_key)
@@ -352,8 +373,16 @@ class SQLSpecPlugin:
         if self._portal is not None:
             try:
                 self._portal.stop()
-            except Exception:
-                logger.exception("Error stopping portal during shutdown")
+            except Exception as exc:
+                log_with_context(
+                    logger,
+                    logging.ERROR,
+                    "extension.init",
+                    framework="flask",
+                    stage="shutdown",
+                    status="failed",
+                    error_type=type(exc).__name__,
+                )
             finally:
                 self._portal = None
 
@@ -363,15 +392,40 @@ class SQLSpecPlugin:
         try:
             if config_state.is_async:
                 if self._portal is None:
-                    logger.debug(
-                        "Portal not initialized - skipping async pool shutdown for %s", config_state.session_key
+                    log_with_context(
+                        logger,
+                        logging.DEBUG,
+                        "session.close",
+                        framework="flask",
+                        session_key=config_state.session_key,
+                        operation="pool",
+                        status="skipped",
+                        reason="portal_not_initialized",
                     )
                     return
                 _ = self._portal.portal.call(config_state.config.close_pool)  # type: ignore[arg-type]
             else:
                 config_state.config.close_pool()
-        except Exception:
-            logger.exception("Error closing pool during shutdown for key %s", config_state.session_key)
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "session.close",
+                framework="flask",
+                session_key=config_state.session_key,
+                operation="pool",
+                status="complete",
+            )
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.ERROR,
+                "session.close",
+                framework="flask",
+                session_key=config_state.session_key,
+                operation="pool",
+                status="failed",
+                error_type=type(exc).__name__,
+            )
 
     def _execute_commit(self, session: Any, config_state: FlaskConfigState) -> None:
         """Execute commit on session.
@@ -387,8 +441,17 @@ class SQLSpecPlugin:
             else:
                 connection = self.get_connection(config_state.session_key)
                 connection.commit()
-        except Exception:
-            logger.exception("Error committing transaction")
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.ERROR,
+                "session.close",
+                framework="flask",
+                session_key=config_state.session_key,
+                operation="commit",
+                status="failed",
+                error_type=type(exc).__name__,
+            )
 
     def _execute_rollback(self, session: Any, config_state: FlaskConfigState) -> None:
         """Execute rollback on session.
@@ -405,4 +468,13 @@ class SQLSpecPlugin:
                 connection = self.get_connection(config_state.session_key)
                 connection.rollback()
         except Exception as exc:
-            logger.debug("Rollback failed (may be no active transaction): %s", exc)
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "session.close",
+                framework="flask",
+                session_key=config_state.session_key,
+                operation="rollback",
+                status="failed",
+                error_type=type(exc).__name__,
+            )

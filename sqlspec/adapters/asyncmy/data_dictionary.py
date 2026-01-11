@@ -1,252 +1,124 @@
 """MySQL-specific data dictionary for metadata queries via asyncmy."""
 
-import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, ClassVar
 
-from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, ForeignKeyMetadata, VersionInfo
-from sqlspec.utils.logging import get_logger
+from mypy_extensions import mypyc_attr
+
+from sqlspec.driver import AsyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
 
-logger = get_logger("adapters.asyncmy.data_dictionary")
-
-# Compiled regex patterns
-VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-
-__all__ = ("MySQLAsyncDataDictionary",)
+__all__ = ("AsyncmyDataDictionary",)
 
 
-class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class AsyncmyDataDictionary(AsyncDataDictionaryBase):
     """MySQL-specific async data dictionary."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
-        """Get MySQL database version information.
+    dialect: ClassVar[str] = "mysql"
 
-        Uses caching to avoid repeated database queries within the same
-        driver session.
+    def __init__(self) -> None:
+        super().__init__()
 
-        Args:
-            driver: Async database driver instance.
-
-        Returns:
-            MySQL version information or None if detection fails.
-        """
+    async def get_version(self, driver: "AsyncmyDriver") -> "VersionInfo | None":
+        """Get MySQL database version information."""
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cached_version
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+        # Not cached, fetch from database
 
-        result = await cast("AsyncmyDriver", driver).select_value_or_none("SELECT VERSION() as version")
-        if not result:
-            logger.warning("No MySQL version information found")
+        version_value = await driver.select_value_or_none(self.get_query("version"))
+        if not version_value:
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
-        version_match = VERSION_PATTERN.search(str(result))
-        if not version_match:
-            logger.warning("Could not parse MySQL version: %s", result)
+        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
+        if version_info is None:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        major, minor, patch = map(int, version_match.groups())
-        version_info = VersionInfo(major, minor, patch)
-        logger.debug("Detected MySQL version: %s", version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 
-    async def get_feature_flag(self, driver: AsyncDriverAdapterBase, feature: str) -> bool:
-        """Check if MySQL database supports a specific feature.
-
-        Args:
-            driver: MySQL async driver instance
-            feature: Feature name to check
-
-        Returns:
-            True if feature is supported, False otherwise
-        """
+    async def get_feature_flag(self, driver: "AsyncmyDriver", feature: str) -> bool:
+        """Check if MySQL database supports a specific feature."""
         version_info = await self.get_version(driver)
-        if not version_info:
-            return False
+        return self.resolve_feature_flag(feature, version_info)
 
-        feature_checks: dict[str, Callable[..., bool]] = {
-            "supports_json": lambda v: v >= VersionInfo(5, 7, 8),
-            "supports_cte": lambda v: v >= VersionInfo(8, 0, 1),
-            "supports_window_functions": lambda v: v >= VersionInfo(8, 0, 2),
-            "supports_returning": lambda _: False,  # MySQL doesn't have RETURNING
-            "supports_upsert": lambda _: True,  # ON DUPLICATE KEY UPDATE available
-            "supports_transactions": lambda _: True,
-            "supports_prepared_statements": lambda _: True,
-            "supports_schemas": lambda _: True,  # MySQL calls them databases
-            "supports_arrays": lambda _: False,  # No array types
-            "supports_uuid": lambda _: False,  # No native UUID, use VARCHAR(36)
-        }
-
-        if feature in feature_checks:
-            return bool(feature_checks[feature](version_info))
-
-        return False
-
-    async def get_optimal_type(self, driver: AsyncDriverAdapterBase, type_category: str) -> str:
-        """Get optimal MySQL type for a category.
-
-        Args:
-            driver: MySQL async driver instance
-            type_category: Type category
-
-        Returns:
-            MySQL-specific type name
-        """
+    async def get_optimal_type(self, driver: "AsyncmyDriver", type_category: str) -> str:
+        """Get optimal MySQL type for a category."""
+        config = self.get_dialect_config()
         version_info = await self.get_version(driver)
 
         if type_category == "json":
-            if version_info and version_info >= VersionInfo(5, 7, 8):
+            json_version = config.get_feature_version("supports_json")
+            if version_info and json_version and version_info >= json_version:
                 return "JSON"
             return "TEXT"
 
-        type_map = {
-            "uuid": "VARCHAR(36)",
-            "boolean": "TINYINT(1)",
-            "timestamp": "TIMESTAMP",
-            "text": "TEXT",
-            "blob": "BLOB",
-        }
-        return type_map.get(type_category, "VARCHAR(255)")
+        return config.get_optimal_type(type_category)
 
-    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
-        """Get tables sorted by topological dependency order using MySQL catalog.
-
-        Requires MySQL 8.0.1+ for recursive CTE support.
-        """
-        version = await self.get_version(driver)
-        asyncmy_driver = cast("AsyncmyDriver", driver)
-
-        if not version or version < VersionInfo(8, 0, 1):
-            msg = "get_tables requires MySQL 8.0.1+ for dependency ordering"
-            raise RuntimeError(msg)
-
-        schema_clause = f"'{schema}'" if schema else "DATABASE()"
-
-        sql = f"""
-        WITH RECURSIVE dependency_tree AS (
-            SELECT
-                table_name,
-                0 AS level,
-                CAST(table_name AS CHAR(4000)) AS path
-            FROM information_schema.tables t
-            WHERE t.table_type = 'BASE TABLE'
-              AND t.table_schema = {schema_clause}
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM information_schema.key_column_usage kcu
-                  WHERE kcu.table_name = t.table_name
-                    AND kcu.table_schema = t.table_schema
-                    AND kcu.referenced_table_name IS NOT NULL
-              )
-
-            UNION ALL
-
-            SELECT
-                kcu.table_name,
-                dt.level + 1,
-                CONCAT(dt.path, ',', kcu.table_name)
-            FROM information_schema.key_column_usage kcu
-            JOIN dependency_tree dt ON kcu.referenced_table_name = dt.table_name
-            WHERE kcu.table_schema = {schema_clause}
-              AND kcu.referenced_table_name IS NOT NULL
-              AND NOT FIND_IN_SET(kcu.table_name, dt.path)
+    async def get_tables(self, driver: "AsyncmyDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables sorted by topological dependency order using the MySQL catalog."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
+        return await driver.select(
+            self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
         )
-        SELECT DISTINCT table_name
-        FROM dependency_tree
-        ORDER BY level, table_name
-        """
-        result = await asyncmy_driver.execute(sql)
-        return [row["table_name"] for row in result.get_data()]
 
-    async def get_foreign_keys(
-        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[ForeignKeyMetadata]":
-        """Get foreign key metadata."""
-        asyncmy_driver = cast("AsyncmyDriver", driver)
-
-        where_clauses = ["referenced_table_name IS NOT NULL"]
-        if table:
-            where_clauses.append(f"table_name = '{table}'")
-        if schema:
-            where_clauses.append(f"table_schema = '{schema}'")
-        else:
-            where_clauses.append("table_schema = DATABASE()")
-
-        where_str = " AND ".join(where_clauses)
-
-        sql = f"""
-            SELECT
-                table_name,
-                column_name,
-                referenced_table_name,
-                referenced_column_name,
-                constraint_name,
-                table_schema,
-                referenced_table_schema
-            FROM information_schema.key_column_usage
-            WHERE {where_str}
-        """
-        result = await asyncmy_driver.execute(sql)
-
-        return [
-            ForeignKeyMetadata(
-                table_name=row["table_name"],
-                column_name=row["column_name"],
-                referenced_table=row["referenced_table_name"],
-                referenced_column=row["referenced_column_name"],
-                constraint_name=row["constraint_name"],
-                schema=row["table_schema"],
-                referenced_schema=row.get("referenced_table_schema"),
+    async def get_columns(
+        self, driver: "AsyncmyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+            return await driver.select(
+                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
-            for row in result.data
-        ]
+
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+        return await driver.select(
+            self.get_query("columns_by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
+        )
 
     async def get_indexes(
-        self, driver: "AsyncDriverAdapterBase", table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get index information for a table."""
-        asyncmy_driver = cast("AsyncmyDriver", driver)
-        sql = f"SHOW INDEX FROM {table}" if schema is None else f"SHOW INDEX FROM {table} FROM {schema}"
+        self, driver: "AsyncmyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+            return await driver.select(
+                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+            )
 
-        result = await asyncmy_driver.execute(sql)
-        # Parse SHOW INDEX output
-        indexes: dict[str, dict[str, Any]] = {}
-        for row in result.data:
-            idx_name = row["Key_name"]
-            if idx_name not in indexes:
-                indexes[idx_name] = {
-                    "name": idx_name,
-                    "columns": [],
-                    "unique": row["Non_unique"] == 0,
-                    "primary": idx_name == "PRIMARY",
-                    "table_name": table,
-                }
-            indexes[idx_name]["columns"].append(row["Column_name"])
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
+        return await driver.select(
+            self.get_query("indexes_by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
+        )
 
-        return list(indexes.values())
+    async def get_foreign_keys(
+        self, driver: "AsyncmyDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+            return await driver.select(
+                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+            )
 
-    def list_available_features(self) -> "list[str]":
-        """List available MySQL feature flags.
-
-        Returns:
-            List of supported feature names
-        """
-        return [
-            "supports_json",
-            "supports_cte",
-            "supports_window_functions",
-            "supports_returning",
-            "supports_upsert",
-            "supports_transactions",
-            "supports_prepared_statements",
-            "supports_schemas",
-            "supports_arrays",
-            "supports_uuid",
-        ]
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+        return await driver.select(
+            self.get_query("foreign_keys_by_table"),
+            table_name=table,
+            schema_name=schema_name,
+            schema_type=ForeignKeyMetadata,
+        )

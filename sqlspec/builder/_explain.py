@@ -4,8 +4,9 @@ Provides a fluent interface for building EXPLAIN statements with
 dialect-aware SQL generation.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
+from mypy_extensions import trait
 from typing_extensions import Self
 
 from sqlspec.core import SQL
@@ -20,7 +21,19 @@ if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
 
 
-__all__ = ("Explain", "ExplainMixin")
+__all__ = (
+    "Explain",
+    "ExplainMixin",
+    "build_bigquery_explain",
+    "build_duckdb_explain",
+    "build_explain_sql",
+    "build_generic_explain",
+    "build_mysql_explain",
+    "build_oracle_explain",
+    "build_postgres_explain",
+    "build_sqlite_explain",
+    "normalize_dialect_name",
+)
 
 
 POSTGRES_DIALECTS = frozenset({"postgres", "postgresql", "redshift"})
@@ -32,7 +45,7 @@ BIGQUERY_DIALECTS = frozenset({"bigquery"})
 SPANNER_DIALECTS = frozenset({"spanner"})
 
 
-def _normalize_dialect_name(dialect: "DialectType | None") -> str | None:
+def normalize_dialect_name(dialect: "DialectType | None") -> str | None:
     """Normalize dialect to lowercase string.
 
     Args:
@@ -48,7 +61,7 @@ def _normalize_dialect_name(dialect: "DialectType | None") -> str | None:
     return dialect.__class__.__name__.lower()
 
 
-def _build_postgres_explain(statement_sql: str, options: "ExplainOptions") -> str:
+def build_postgres_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build PostgreSQL EXPLAIN statement.
 
     PostgreSQL uses the syntax: EXPLAIN (OPTIONS) statement
@@ -91,7 +104,7 @@ def _build_postgres_explain(statement_sql: str, options: "ExplainOptions") -> st
     return f"EXPLAIN {statement_sql}"
 
 
-def _build_mysql_explain(statement_sql: str, options: "ExplainOptions") -> str:
+def build_mysql_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build MySQL EXPLAIN statement.
 
     MySQL uses:
@@ -121,7 +134,7 @@ def _build_mysql_explain(statement_sql: str, options: "ExplainOptions") -> str:
     return f"EXPLAIN {statement_sql}"
 
 
-def _build_sqlite_explain(statement_sql: str, options: "ExplainOptions") -> str:
+def build_sqlite_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build SQLite EXPLAIN statement.
 
     SQLite only supports EXPLAIN QUERY PLAN (no additional options).
@@ -137,7 +150,7 @@ def _build_sqlite_explain(statement_sql: str, options: "ExplainOptions") -> str:
     return f"EXPLAIN QUERY PLAN {statement_sql}"
 
 
-def _build_duckdb_explain(statement_sql: str, options: "ExplainOptions") -> str:
+def build_duckdb_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build DuckDB EXPLAIN statement.
 
     DuckDB supports:
@@ -161,7 +174,7 @@ def _build_duckdb_explain(statement_sql: str, options: "ExplainOptions") -> str:
     return f"EXPLAIN {statement_sql}"
 
 
-def _build_oracle_explain(statement_sql: str, options: "ExplainOptions") -> str:
+def build_oracle_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build Oracle EXPLAIN statement.
 
     Oracle requires a two-step process:
@@ -181,7 +194,7 @@ def _build_oracle_explain(statement_sql: str, options: "ExplainOptions") -> str:
     return f"EXPLAIN PLAN FOR {statement_sql}"
 
 
-def _build_bigquery_explain(statement_sql: str, options: "ExplainOptions") -> str:
+def build_bigquery_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build BigQuery EXPLAIN statement.
 
     BigQuery supports:
@@ -200,7 +213,7 @@ def _build_bigquery_explain(statement_sql: str, options: "ExplainOptions") -> st
     return f"EXPLAIN {statement_sql}"
 
 
-def _build_generic_explain(statement_sql: str, options: "ExplainOptions") -> str:
+def build_generic_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build generic EXPLAIN statement for unknown dialects.
 
     Args:
@@ -226,22 +239,22 @@ def build_explain_sql(statement_sql: str, options: "ExplainOptions", dialect: "D
     Returns:
         Complete EXPLAIN SQL string for the target dialect
     """
-    dialect_name = _normalize_dialect_name(dialect)
+    dialect_name = normalize_dialect_name(dialect)
 
     if dialect_name in POSTGRES_DIALECTS:
-        return _build_postgres_explain(statement_sql, options)
+        return build_postgres_explain(statement_sql, options)
     if dialect_name in MYSQL_DIALECTS:
-        return _build_mysql_explain(statement_sql, options)
+        return build_mysql_explain(statement_sql, options)
     if dialect_name in SQLITE_DIALECTS:
-        return _build_sqlite_explain(statement_sql, options)
+        return build_sqlite_explain(statement_sql, options)
     if dialect_name in DUCKDB_DIALECTS:
-        return _build_duckdb_explain(statement_sql, options)
+        return build_duckdb_explain(statement_sql, options)
     if dialect_name in ORACLE_DIALECTS:
-        return _build_oracle_explain(statement_sql, options)
+        return build_oracle_explain(statement_sql, options)
     if dialect_name in BIGQUERY_DIALECTS:
-        return _build_bigquery_explain(statement_sql, options)
+        return build_bigquery_explain(statement_sql, options)
 
-    return _build_generic_explain(statement_sql, options)
+    return build_generic_explain(statement_sql, options)
 
 
 class Explain:
@@ -272,7 +285,7 @@ class Explain:
             )
     """
 
-    __slots__ = ("_dialect", "_options", "_parameters", "_statement", "_statement_sql")
+    __slots__: ClassVar[tuple[str, ...]] = ("_dialect", "_options", "_parameters", "_statement", "_statement_sql")
 
     def __init__(
         self,
@@ -311,7 +324,7 @@ class Explain:
             return statement.raw_sql
 
         if is_expression(statement):
-            dialect_str = _normalize_dialect_name(self._dialect)
+            dialect_str = normalize_dialect_name(self._dialect)
             return statement.sql(dialect=dialect_str)
 
         if has_parameter_builder(statement):
@@ -520,6 +533,7 @@ class Explain:
         return f"Explain({self._statement_sql!r}, dialect={self._dialect!r}, options={self._options!r})"
 
 
+@trait
 class ExplainMixin:
     """Mixin to add .explain() method to QueryBuilder subclasses.
 

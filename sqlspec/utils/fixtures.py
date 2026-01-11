@@ -21,6 +21,14 @@ if TYPE_CHECKING:
 __all__ = ("open_fixture", "open_fixture_async", "write_fixture", "write_fixture_async")
 
 
+def _read_text_sync(path: "Path") -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _compress_text(content: str) -> bytes:
+    return gzip.compress(content.encode("utf-8"))
+
+
 def _read_compressed_file(file_path: Path) -> str:
     """Read and decompress a file based on its extension.
 
@@ -129,7 +137,7 @@ async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
         read_func = async_(_read_compressed_file)
         f_data = await read_func(fixture_path)
     else:
-        async_read = async_(lambda p: p.read_text(encoding="utf-8"))
+        async_read = async_(_read_text_sync)
         f_data = await async_read(fixture_path)
 
     return decode_json(f_data)
@@ -242,7 +250,7 @@ async def write_fixture_async(
 
     if compress:
         file_path = f"{table_name}.json.gz"
-        compress_func = async_(lambda content: gzip.compress(content.encode("utf-8")))
+        compress_func = async_(_compress_text)
         content = await compress_func(json_content)
         await storage.write_bytes_async(file_path, content)
     else:

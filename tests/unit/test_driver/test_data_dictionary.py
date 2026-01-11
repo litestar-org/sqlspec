@@ -2,24 +2,13 @@
 
 from unittest.mock import Mock
 
-import pytest
-
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
-from sqlspec.driver import SyncDriverAdapterBase, VersionInfo
+from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
+from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.typing import VersionInfo
+from tests.conftest import requires_interpreted
 
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-pytestmark = pytest.mark.skipif(_is_compiled(), reason="Test requires mock specs of compiled driver base classes.")
+pytestmark = requires_interpreted
 
 
 class TestVersionInfo:
@@ -69,9 +58,9 @@ class TestSqliteDataDictionary:
     def test_get_version_success(self) -> None:
         """Test successful version detection for SQLite."""
         mock_driver = Mock(spec=SyncDriverAdapterBase)
-        mock_driver.select_value.return_value = "3.42.0"
+        mock_driver.select_value_or_none.return_value = "3.42.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
         version = data_dict.get_version(mock_driver)
 
         assert version is not None
@@ -82,9 +71,9 @@ class TestSqliteDataDictionary:
     def test_get_version_failure(self) -> None:
         """Test version detection failure for SQLite."""
         mock_driver = Mock(spec=SyncDriverAdapterBase)
-        mock_driver.select_value.return_value = None
+        mock_driver.select_value_or_none.return_value = None
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
         version = data_dict.get_version(mock_driver)
 
         assert version is None
@@ -92,9 +81,9 @@ class TestSqliteDataDictionary:
     def test_get_version_parse_error(self) -> None:
         """Test version parsing error for SQLite."""
         mock_driver = Mock(spec=SyncDriverAdapterBase)
-        mock_driver.select_value.return_value = "invalid-version"
+        mock_driver.select_value_or_none.return_value = "invalid-version"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
         version = data_dict.get_version(mock_driver)
 
         assert version is None
@@ -102,9 +91,9 @@ class TestSqliteDataDictionary:
     def test_feature_flags_with_version(self) -> None:
         """Test feature flags based on version for SQLite."""
         mock_driver = Mock(spec=SyncDriverAdapterBase)
-        mock_driver.select_value.return_value = "3.42.0"
+        mock_driver.select_value_or_none.return_value = "3.42.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         # Test features supported in 3.42.0
         assert data_dict.get_feature_flag(mock_driver, "supports_json") is True
@@ -121,9 +110,9 @@ class TestSqliteDataDictionary:
     def test_feature_flags_old_version(self) -> None:
         """Test feature flags for older SQLite version."""
         mock_driver = Mock(spec=SyncDriverAdapterBase)
-        mock_driver.select_value.return_value = "3.20.0"
+        mock_driver.select_value_or_none.return_value = "3.20.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         # Test features not supported in 3.20.0
         assert data_dict.get_feature_flag(mock_driver, "supports_json") is False
@@ -137,9 +126,9 @@ class TestSqliteDataDictionary:
     def test_feature_flags_no_version(self) -> None:
         """Test feature flags when version detection fails."""
         mock_driver = Mock(spec=SyncDriverAdapterBase)
-        mock_driver.select_value.return_value = None
+        mock_driver.select_value_or_none.return_value = None
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         # Should return False for all features when version is unknown
         assert data_dict.get_feature_flag(mock_driver, "supports_json") is False
@@ -148,9 +137,9 @@ class TestSqliteDataDictionary:
     def test_get_optimal_type_with_json_support(self) -> None:
         """Test optimal type selection with JSON support."""
         mock_driver = Mock(spec=SyncDriverAdapterBase)
-        mock_driver.select_value.return_value = "3.42.0"
+        mock_driver.select_value_or_none.return_value = "3.42.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         assert data_dict.get_optimal_type(mock_driver, "json") == "JSON"
         assert data_dict.get_optimal_type(mock_driver, "uuid") == "TEXT"
@@ -161,15 +150,15 @@ class TestSqliteDataDictionary:
     def test_get_optimal_type_without_json_support(self) -> None:
         """Test optimal type selection without JSON support."""
         mock_driver = Mock(spec=SyncDriverAdapterBase)
-        mock_driver.select_value.return_value = "3.20.0"
+        mock_driver.select_value_or_none.return_value = "3.20.0"
 
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
 
         assert data_dict.get_optimal_type(mock_driver, "json") == "TEXT"
 
     def test_list_available_features(self) -> None:
         """Test listing available features."""
-        data_dict = SqliteSyncDataDictionary()
+        data_dict = SqliteDataDictionary()
         features = data_dict.list_available_features()
 
         expected_features = [
@@ -205,7 +194,7 @@ class TestAdbcDataDictionary:
         """Test version detection for PostgreSQL via ADBC."""
         mock_driver = Mock()
         mock_driver.dialect = "postgres"
-        mock_driver.select_value.return_value = "PostgreSQL 15.3 on x86_64-pc-linux-gnu"
+        mock_driver.select_value_or_none.return_value = "PostgreSQL 15.3 on x86_64-pc-linux-gnu"
 
         data_dict = AdbcDataDictionary()
         version = data_dict.get_version(mock_driver)
@@ -215,11 +204,25 @@ class TestAdbcDataDictionary:
         assert version.minor == 3
         assert version.patch == 0
 
+    def test_get_version_postgresql_alias(self) -> None:
+        """Test version detection for PostgreSQL alias via ADBC."""
+        mock_driver = Mock()
+        mock_driver.dialect = "postgresql"
+        mock_driver.select_value_or_none.return_value = "PostgreSQL 16.1 on x86_64-pc-linux-gnu"
+
+        data_dict = AdbcDataDictionary()
+        version = data_dict.get_version(mock_driver)
+
+        assert version is not None
+        assert version.major == 16
+        assert version.minor == 1
+        assert version.patch == 0
+
     def test_get_version_sqlite(self) -> None:
         """Test version detection for SQLite via ADBC."""
         mock_driver = Mock()
         mock_driver.dialect = "sqlite"
-        mock_driver.select_value.return_value = "3.42.0"
+        mock_driver.select_value_or_none.return_value = "3.42.0"
 
         data_dict = AdbcDataDictionary()
         version = data_dict.get_version(mock_driver)
@@ -229,11 +232,25 @@ class TestAdbcDataDictionary:
         assert version.minor == 42
         assert version.patch == 0
 
+    def test_get_version_mariadb_alias(self) -> None:
+        """Test version detection for MariaDB alias via ADBC."""
+        mock_driver = Mock()
+        mock_driver.dialect = "mariadb"
+        mock_driver.select_value_or_none.return_value = "10.6.2-MariaDB"
+
+        data_dict = AdbcDataDictionary()
+        version = data_dict.get_version(mock_driver)
+
+        assert version is not None
+        assert version.major == 10
+        assert version.minor == 6
+        assert version.patch == 2
+
     def test_get_version_duckdb(self) -> None:
         """Test version detection for DuckDB via ADBC."""
         mock_driver = Mock()
         mock_driver.dialect = "duckdb"
-        mock_driver.select_value.return_value = "v0.9.2"
+        mock_driver.select_value_or_none.return_value = "v0.9.2"
 
         data_dict = AdbcDataDictionary()
         version = data_dict.get_version(mock_driver)
@@ -251,16 +268,13 @@ class TestAdbcDataDictionary:
         data_dict = AdbcDataDictionary()
         version = data_dict.get_version(mock_driver)
 
-        assert version is not None
-        assert version.major == 1
-        assert version.minor == 0
-        assert version.patch == 0
+        assert version is None
 
     def test_get_version_exception_handling(self) -> None:
         """Test exception handling in version detection."""
         mock_driver = Mock()
         mock_driver.dialect = "postgres"
-        mock_driver.select_value.side_effect = Exception("Database error")
+        mock_driver.select_value_or_none.side_effect = Exception("Database error")
 
         data_dict = AdbcDataDictionary()
         version = data_dict.get_version(mock_driver)
@@ -271,7 +285,7 @@ class TestAdbcDataDictionary:
         """Test PostgreSQL feature flags via ADBC."""
         mock_driver = Mock()
         mock_driver.dialect = "postgres"
-        mock_driver.select_value.return_value = "PostgreSQL 15.3 on x86_64-pc-linux-gnu"
+        mock_driver.select_value_or_none.return_value = "PostgreSQL 15.3 on x86_64-pc-linux-gnu"
 
         data_dict = AdbcDataDictionary()
 
@@ -286,7 +300,7 @@ class TestAdbcDataDictionary:
         """Test PostgreSQL optimal type selection via ADBC."""
         mock_driver = Mock()
         mock_driver.dialect = "postgres"
-        mock_driver.select_value.return_value = "PostgreSQL 15.3 on x86_64-pc-linux-gnu"
+        mock_driver.select_value_or_none.return_value = "PostgreSQL 15.3 on x86_64-pc-linux-gnu"
 
         data_dict = AdbcDataDictionary()
 
@@ -308,13 +322,13 @@ class TestAdbcDataDictionary:
         assert data_dict.get_feature_flag(mock_driver, "supports_arrays") is True
         assert data_dict.get_feature_flag(mock_driver, "supports_structs") is True
         assert data_dict.get_feature_flag(mock_driver, "supports_returning") is False
-        assert data_dict.get_feature_flag(mock_driver, "supports_transactions") is False
+        assert data_dict.get_feature_flag(mock_driver, "supports_transactions") is True
 
     def test_unknown_feature_flag(self) -> None:
         """Test unknown feature flag."""
         mock_driver = Mock()
         mock_driver.dialect = "postgres"
-        mock_driver.select_value.return_value = "PostgreSQL 15.3 on x86_64-pc-linux-gnu"
+        mock_driver.select_value_or_none.return_value = "PostgreSQL 15.3 on x86_64-pc-linux-gnu"
 
         data_dict = AdbcDataDictionary()
 

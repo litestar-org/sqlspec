@@ -12,6 +12,10 @@ from sqlspec.storage.pipeline import (
 DiagnosticsPayload = dict[str, float | list[StorageTelemetry]]
 
 
+def _increment_metric(payload: "dict[str, float]", metric: str, amount: float) -> None:
+    payload[metric] = payload.get(metric, 0.0) + amount
+
+
 class TelemetryDiagnostics:
     """Aggregates lifecycle counters, custom metrics, and storage telemetry."""
 
@@ -43,16 +47,13 @@ class TelemetryDiagnostics:
 
         numeric_payload: dict[str, float] = {}
 
-        def _increment(metric: str, amount: float) -> None:
-            numeric_payload[metric] = numeric_payload.get(metric, 0.0) + amount
-
         for key, value in get_storage_bridge_diagnostics().items():
-            _increment(key, float(value))
+            _increment_metric(numeric_payload, key, float(value))
         for _prefix, counters in self._lifecycle_sections:
             for metric, value in counters.items():
-                _increment(metric, value)
+                _increment_metric(numeric_payload, metric, value)
         for metric, value in self._metrics.items():
-            _increment(metric, float(value))
+            _increment_metric(numeric_payload, metric, float(value))
 
         payload: DiagnosticsPayload = dict(numeric_payload)
         recent_jobs = get_recent_storage_events()

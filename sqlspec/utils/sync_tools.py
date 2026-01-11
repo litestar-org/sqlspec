@@ -16,15 +16,16 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from typing_extensions import ParamSpec
 
+from sqlspec.utils.module_loader import module_available
 from sqlspec.utils.portal import get_global_portal
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
     from types import TracebackType
 
-try:
+if module_available("uvloop"):
     import uvloop  # pyright: ignore[reportMissingImports]
-except ImportError:
+else:
     uvloop = None  # type: ignore[assignment,unused-ignore]
 
 
@@ -100,19 +101,19 @@ class CapacityLimiter:
 _default_limiter = CapacityLimiter(1000)
 
 
-def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> "Callable[ParamSpecT, ReturnT]":
-    """Convert an async function to a blocking function using asyncio.run().
+def _return_value(value: Any) -> Any:
+    return value
 
-    Args:
-        async_function: The async function to convert.
 
-    Returns:
-        A blocking function that runs the async function.
-    """
+class _RunWrapper(Generic[ParamSpecT, ReturnT]):
+    __slots__ = ("__dict__", "_function")
 
-    @functools.wraps(async_function)
-    def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
-        partial_f = functools.partial(async_function, *args, **kwargs)
+    def __init__(self, async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> None:
+        self._function = async_function
+        functools.update_wrapper(self, async_function)
+
+    def __call__(self, *args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
+        partial_f = functools.partial(self._function, *args, **kwargs)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -123,13 +124,23 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(asyncio.run, partial_f())
                     return future.result()
-            else:
-                return asyncio.run(partial_f())
+            return asyncio.run(partial_f())
         if uvloop and sys.platform != "win32":
             uvloop.install()  # pyright: ignore[reportUnknownMemberType]
         return asyncio.run(partial_f())
 
-    return wrapper
+
+def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> "Callable[ParamSpecT, ReturnT]":
+    """Convert an async function to a blocking function using asyncio.run().
+
+    Args:
+        async_function: The async function to convert.
+
+    Returns:
+        A blocking function that runs the async function.
+    """
+
+    return _RunWrapper(async_function)
 
 
 def await_(
@@ -150,38 +161,7 @@ def await_(
         A blocking function that runs the async function.
     """
 
-    @functools.wraps(async_function)
-    def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
-        partial_f = functools.partial(async_function, *args, **kwargs)
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            if raise_sync_error:
-                msg = "Cannot run async function"
-                raise RuntimeError(msg) from None
-            portal = get_global_portal()
-            typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
-            return portal.call(typed_partial)
-        else:
-            if loop.is_running():
-                try:
-                    current_task = asyncio.current_task(loop=loop)
-                except RuntimeError:
-                    current_task = None
-
-                if current_task is not None:
-                    msg = "await_ cannot be called from within an async task running on the same event loop. Use 'await' instead."
-                    raise RuntimeError(msg)
-                future = asyncio.run_coroutine_threadsafe(partial_f(), loop)
-                return future.result()
-            if raise_sync_error:
-                msg = "Cannot run async function"
-                raise RuntimeError(msg)
-            portal = get_global_portal()
-            typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
-            return portal.call(typed_partial)
-
-    return wrapper
+    return _AwaitWrapper(async_function, raise_sync_error)
 
 
 def async_(
@@ -197,14 +177,7 @@ def async_(
         An async function that runs the original function in a thread.
     """
 
-    @functools.wraps(function)
-    async def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
-        partial_f = functools.partial(function, *args, **kwargs)
-        used_limiter = limiter or _default_limiter
-        async with used_limiter:
-            return await asyncio.to_thread(partial_f)
-
-    return wrapper
+    return _AsyncWrapper(function, limiter)
 
 
 def ensure_async_(
@@ -221,14 +194,76 @@ def ensure_async_(
     if inspect.iscoroutinefunction(function):
         return function
 
-    @functools.wraps(function)
-    async def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
-        result = function(*args, **kwargs)
-        if inspect.isawaitable(result):
-            return await result
-        return await async_(lambda: result)()
+    return _EnsureAsyncWrapper(function)
 
-    return wrapper
+
+class _AwaitWrapper(Generic[ParamSpecT, ReturnT]):
+    __slots__ = ("__dict__", "_function", "_raise_sync_error")
+
+    def __init__(
+        self, async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]", raise_sync_error: bool
+    ) -> None:
+        self._function = async_function
+        self._raise_sync_error = raise_sync_error
+        functools.update_wrapper(self, async_function)
+
+    def __call__(self, *args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
+        partial_f = functools.partial(self._function, *args, **kwargs)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            if self._raise_sync_error:
+                msg = "Cannot run async function"
+                raise RuntimeError(msg) from None
+            portal = get_global_portal()
+            typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
+            return portal.call(typed_partial)
+        if loop.is_running():
+            try:
+                current_task = asyncio.current_task(loop=loop)
+            except RuntimeError:
+                current_task = None
+
+            if current_task is not None:
+                msg = "await_ cannot be called from within an async task running on the same event loop. Use 'await' instead."
+                raise RuntimeError(msg)
+            future = asyncio.run_coroutine_threadsafe(partial_f(), loop)
+            return future.result()
+        if self._raise_sync_error:
+            msg = "Cannot run async function"
+            raise RuntimeError(msg)
+        portal = get_global_portal()
+        typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
+        return portal.call(typed_partial)
+
+
+class _AsyncWrapper(Generic[ParamSpecT, ReturnT]):
+    __slots__ = ("__dict__", "_function", "_limiter")
+
+    def __init__(self, function: "Callable[ParamSpecT, ReturnT]", limiter: "CapacityLimiter | None") -> None:
+        self._function = function
+        self._limiter = limiter
+        functools.update_wrapper(self, function)
+
+    async def __call__(self, *args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
+        partial_f = functools.partial(self._function, *args, **kwargs)
+        used_limiter = self._limiter or _default_limiter
+        async with used_limiter:
+            return await asyncio.to_thread(partial_f)
+
+
+class _EnsureAsyncWrapper(Generic[ParamSpecT, ReturnT]):
+    __slots__ = ("__dict__", "_function")
+
+    def __init__(self, function: "Callable[ParamSpecT, Awaitable[ReturnT] | ReturnT]") -> None:
+        self._function = function
+        functools.update_wrapper(self, function)
+
+    async def __call__(self, *args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
+        result = self._function(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await cast("Awaitable[ReturnT]", result)
+        return result
 
 
 class _ContextManagerWrapper(Generic[T]):

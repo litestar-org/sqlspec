@@ -6,19 +6,18 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
-from sqlspec.adapters.duckdb.driver import (
-    DuckDBCursor,
-    DuckDBDriver,
-    DuckDBExceptionHandler,
-    DuckDBSessionContext,
-    build_duckdb_statement_config,
-    duckdb_statement_config,
+from sqlspec.adapters.duckdb.core import (
+    apply_driver_features,
+    build_connection_config,
+    build_statement_config,
+    default_statement_config,
 )
+from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, DuckDBExceptionHandler, DuckDBSessionContext
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.extensions.events._hints import EventRuntimeHints
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.observability import ObservabilityConfig
-from sqlspec.utils.config_normalization import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -51,7 +50,7 @@ class DuckDBConnectionParams(TypedDict):
 
     database: NotRequired[str]
     read_only: NotRequired[bool]
-    config: NotRequired[dict[str, Any]]
+    config: NotRequired["dict[str, Any]"]
     memory_limit: NotRequired[str]
     threads: NotRequired[int]
     temp_directory: NotRequired[str]
@@ -82,7 +81,7 @@ class DuckDBConnectionParams(TypedDict):
     binary_as_string: NotRequired[bool]
     arrow_large_buffer_size: NotRequired[bool]
     errors_as_json: NotRequired[bool]
-    extra: NotRequired[dict[str, Any]]
+    extra: NotRequired["dict[str, Any]"]
 
 
 class DuckDBPoolParams(DuckDBConnectionParams):
@@ -124,7 +123,7 @@ class DuckDBSecretConfig(TypedDict):
     name: str
     """Name of the secret."""
 
-    value: dict[str, Any]
+    value: "dict[str, Any]"
     """Secret configuration values."""
 
     scope: NotRequired[str]
@@ -160,7 +159,9 @@ class DuckDBDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
-    extension_flags: NotRequired[dict[str, Any]]
+    extension_flags: NotRequired["dict[str, Any]"]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 class DuckDBConnectionContext:
@@ -175,14 +176,46 @@ class DuckDBConnectionContext:
     def __enter__(self) -> DuckDBConnection:
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
-        return self._ctx.__enter__()  # type: ignore[no-any-return]
+        return cast("DuckDBConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> bool | None:
         if self._ctx:
-            return self._ctx.__exit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
         return None
+
+
+class _DuckDBConnectionHook:
+    __slots__ = ("_hook",)
+
+    def __init__(self, hook: "Callable[[Any], None]") -> None:
+        self._hook = hook
+
+    def __call__(self, context: "dict[str, Any]") -> None:
+        connection = context.get("connection")
+        if connection is None:
+            return
+        self._hook(connection)
+
+
+class _DuckDBSessionConnectionHandler:
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "DuckDBConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    def acquire_connection(self) -> "DuckDBConnection":
+        pool = self._config.provide_pool()
+        self._ctx = pool.get_connection()
+        return cast("DuckDBConnection", self._ctx.__enter__())
+
+    def release_connection(self, _conn: "DuckDBConnection") -> None:
+        if self._ctx is None:
+            return
+        self._ctx.__exit__(None, None, None)
+        self._ctx = None
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
@@ -243,7 +276,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         *,
         connection_config: "DuckDBPoolParams | dict[str, Any] | None" = None,
         connection_instance: "DuckDBConnectionPool | None" = None,
-        migration_config: dict[str, Any] | None = None,
+        migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "DuckDBDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
@@ -265,72 +298,54 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
-        processed_connection_config = normalize_connection_config(connection_config)
-        processed_connection_config.setdefault("database", ":memory:shared_db")
+        connection_config = normalize_connection_config(connection_config)
+        connection_config.setdefault("database", ":memory:shared_db")
 
-        if processed_connection_config.get("database") in {":memory:", ""}:
-            processed_connection_config["database"] = ":memory:shared_db"
+        if connection_config.get("database") in {":memory:", ""}:
+            connection_config["database"] = ":memory:shared_db"
 
         extension_flags: dict[str, Any] = {}
-        for key in tuple(processed_connection_config.keys()):
+        for key in tuple(connection_config.keys()):
             if key in EXTENSION_FLAG_KEYS:
-                extension_flags[key] = processed_connection_config.pop(key)
+                extension_flags[key] = connection_config.pop(key)
 
-        processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        user_connection_hook = cast(
-            "Callable[[Any], None] | None", processed_features.pop("on_connection_create", None)
-        )
-        processed_features.setdefault("enable_uuid_conversion", True)
-        serializer = processed_features.setdefault("json_serializer", to_json)
+        features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        user_connection_hook = cast("Callable[[Any], None] | None", features.pop("on_connection_create", None))
+        features.setdefault("enable_uuid_conversion", True)
+        serializer = features.setdefault("json_serializer", to_json)
 
         if extension_flags:
-            existing_flags = cast("dict[str, Any]", processed_features.get("extension_flags", {}))
+            existing_flags = cast("dict[str, Any]", features.get("extension_flags", {}))
             merged_flags = {**existing_flags, **extension_flags}
-            processed_features["extension_flags"] = merged_flags
+            features["extension_flags"] = merged_flags
 
         local_observability = observability_config
         if user_connection_hook is not None:
-
-            def _wrap_lifecycle_hook(context: dict[str, Any]) -> None:
-                connection = context.get("connection")
-                if connection is None:
-                    return
-                user_connection_hook(connection)
-
-            lifecycle_override = ObservabilityConfig(lifecycle={"on_connection_create": [_wrap_lifecycle_hook]})
+            lifecycle_override = ObservabilityConfig(
+                lifecycle={"on_connection_create": [_DuckDBConnectionHook(user_connection_hook)]}
+            )
             local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
 
-        base_statement_config = statement_config or build_duckdb_statement_config(
+        statement_config = statement_config or build_statement_config(
             json_serializer=cast("Callable[[Any], str]", serializer)
         )
+        statement_config = apply_driver_features(statement_config, features)
 
         super().__init__(
             bind_key=bind_key,
-            connection_config=processed_connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_features,
+            statement_config=statement_config,
+            driver_features=features,
             extension_config=extension_config,
             observability_config=local_observability,
             **kwargs,
         )
 
-    def _get_connection_config_dict(self) -> "dict[str, Any]":
-        """Get connection configuration as plain dict for pool creation."""
-        excluded_keys = {
-            "pool_min_size",
-            "pool_max_size",
-            "pool_timeout",
-            "pool_recycle_seconds",
-            "health_check_interval",
-            "extra",
-        }
-        return {k: v for k, v in self.connection_config.items() if v is not None and k not in excluded_keys}
-
     def _create_pool(self) -> DuckDBConnectionPool:
         """Create connection pool from configuration."""
-        connection_config = self._get_connection_config_dict()
+        connection_config = build_connection_config(self.connection_config)
 
         extensions = self.driver_features.get("extensions", None)
         secrets = self.driver_features.get("secrets", None)
@@ -405,23 +420,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         Returns:
             A DuckDB driver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
-
-        def acquire_connection() -> DuckDBConnection:
-            pool = self.provide_pool()
-            ctx = pool.get_connection()
-            conn_ctx_holder["ctx"] = ctx
-            return ctx.__enter__()
-
-        def release_connection(_conn: DuckDBConnection) -> None:
-            if "ctx" in conn_ctx_holder:
-                conn_ctx_holder["ctx"].__exit__(None, None, None)
-                conn_ctx_holder.clear()
+        handler = _DuckDBSessionConnectionHandler(self)
 
         return DuckDBSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
-            statement_config=statement_config or self.statement_config or duckdb_statement_config,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

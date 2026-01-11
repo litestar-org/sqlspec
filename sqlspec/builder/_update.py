@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._dml import UpdateFromClauseMixin, UpdateSetClauseMixin, UpdateTableClauseMixin
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import build_join_clause
@@ -80,7 +80,17 @@ class Update(
             table: Target table name
             **kwargs: Additional QueryBuilder arguments
         """
-        super().__init__(**kwargs)
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_query_builder_kwargs(kwargs)
+        )
+        super().__init__(
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
         self._initialize_expression()
 
         if table:
@@ -132,14 +142,14 @@ class Update(
 
         return self
 
-    def build(self, dialect: "DialectType" = None) -> "SafeQuery":
+    def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
         """Build the UPDATE query with validation.
 
         Args:
             dialect: Optional dialect override for SQL generation.
 
         Returns:
-            SafeQuery: The built query with SQL and parameters.
+            BuiltQuery: The built query with SQL and parameters.
 
         Raises:
             SQLBuilderError: If no table is set or expression is not an UPDATE.

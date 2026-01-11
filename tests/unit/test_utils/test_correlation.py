@@ -4,8 +4,6 @@ Tests correlation ID tracking for distributed tracing across database operations
 Covers context management, thread safety, and logging integration.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading

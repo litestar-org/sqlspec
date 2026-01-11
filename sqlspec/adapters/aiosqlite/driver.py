@@ -9,45 +9,30 @@ from typing import TYPE_CHECKING, Any, cast
 import aiosqlite
 
 from sqlspec.adapters.aiosqlite.core import (
-    build_aiosqlite_profile,
-    build_sqlite_insert_statement,
-    format_sqlite_identifier,
-    process_sqlite_result,
+    build_insert_statement,
+    collect_rows,
+    default_statement_config,
+    driver_profile,
+    format_identifier,
+    normalize_execute_many_parameters,
+    normalize_execute_parameters,
+    raise_exception,
+    resolve_rowcount,
 )
-from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteAsyncDataDictionary
-from sqlspec.core import ArrowResult, build_statement_config_from_profile, get_cache_config, register_driver_profile
+from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
+from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.exceptions import (
-    CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
-    ForeignKeyViolationError,
-    IntegrityError,
-    NotNullViolationError,
-    OperationalError,
-    SQLParsingError,
-    SQLSpecError,
-    UniqueViolationError,
-)
-from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_sqlite_error
+from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteSessionContext
 
-__all__ = (
-    "AiosqliteCursor",
-    "AiosqliteDriver",
-    "AiosqliteExceptionHandler",
-    "AiosqliteSessionContext",
-    "aiosqlite_statement_config",
-)
+__all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "AiosqliteSessionContext")
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
@@ -104,111 +89,12 @@ class AiosqliteExceptionHandler:
             return False
         if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):
             try:
-                self._map_sqlite_exception(exc_val)
+                raise_exception(exc_val)
             except Exception as mapped:
                 self.pending_exception = mapped
                 return True
             return False
         return False
-
-    def _map_sqlite_exception(self, e: BaseException) -> None:
-        """Map SQLite exception to SQLSpec exception.
-
-        Args:
-            e: aiosqlite.Error instance
-
-        Raises:
-            Specific SQLSpec exception based on error code
-        """
-        exc: BaseException = e
-        if has_sqlite_error(e):
-            error_code = e.sqlite_errorcode
-            error_name = e.sqlite_errorname
-        else:
-            error_code = None
-            error_name = None
-        error_msg = str(exc).lower()
-
-        if "locked" in error_msg:
-            msg = f"AIOSQLite database locked: {exc}. Consider enabling WAL mode or reducing concurrency."
-            raise SQLSpecError(msg) from exc
-
-        if not error_code:
-            if "unique constraint" in error_msg:
-                self._raise_unique_violation(e, 0)
-            elif "foreign key constraint" in error_msg:
-                self._raise_foreign_key_violation(e, 0)
-            elif "not null constraint" in error_msg:
-                self._raise_not_null_violation(e, 0)
-            elif "check constraint" in error_msg:
-                self._raise_check_violation(e, 0)
-            elif "syntax" in error_msg:
-                self._raise_parsing_error(e, None)
-            else:
-                self._raise_generic_error(e)
-            return
-
-        if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
-            self._raise_unique_violation(e, error_code)
-        elif error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
-            self._raise_not_null_violation(e, error_code)
-        elif error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
-            self._raise_check_violation(e, error_code)
-        elif error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
-            self._raise_integrity_error(e, error_code)
-        elif error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
-            self._raise_connection_error(e, error_code)
-        elif error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
-            self._raise_operational_error(e, error_code)
-        elif error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
-            self._raise_data_error(e, error_code)
-        elif error_code == 1 or "syntax" in error_msg:
-            self._raise_parsing_error(e, error_code)
-        else:
-            self._raise_generic_error(e)
-
-    def _raise_unique_violation(self, e: Any, code: int) -> None:
-        msg = f"SQLite unique constraint violation [code {code}]: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any, code: int) -> None:
-        msg = f"SQLite foreign key constraint violation [code {code}]: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any, code: int) -> None:
-        msg = f"SQLite not-null constraint violation [code {code}]: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any, code: int) -> None:
-        msg = f"SQLite check constraint violation [code {code}]: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any, code: int) -> None:
-        msg = f"SQLite integrity constraint violation [code {code}]: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_parsing_error(self, e: Any, code: "int | None") -> None:
-        code_str = f"[code {code}]" if code else ""
-        msg = f"SQLite SQL syntax error {code_str}: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: int) -> None:
-        msg = f"SQLite connection error [code {code}]: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: int) -> None:
-        msg = f"SQLite operational error [code {code}]: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: int) -> None:
-        msg = f"SQLite data error [code {code}]: {e}"
-        raise DataError(msg) from e
-
-    def _raise_generic_error(self, e: Any) -> None:
-        msg = f"SQLite database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class AiosqliteDriver(AsyncDriverAdapterBase):
@@ -224,11 +110,101 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
-            cache_config = get_cache_config()
-            statement_config = aiosqlite_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
+            )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
+        self._data_dictionary: AiosqliteDataDictionary | None = None
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CORE DISPATCH METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def dispatch_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute single SQL statement."""
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
+
+        if statement.returns_rows():
+            fetched_data = await cursor.fetchall()
+
+            # aiosqlite returns Iterable[Row], core helper expects Iterable[Any]
+            # Use cast to satisfy mypy and pyright
+            data, column_names, row_count = collect_rows(cast("list[Any]", fetched_data), cursor.description)
+
+            return self.create_execution_result(
+                cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
+            )
+
+        affected_rows = resolve_rowcount(cursor)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    async def dispatch_execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets."""
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
+
+        affected_rows = resolve_rowcount(cursor)
+
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    async def dispatch_execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script."""
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        last_cursor = cursor
+
+        for stmt in statements:
+            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            successful_count += 1
+
+        return self.create_execution_result(
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def begin(self) -> None:
+        """Begin a database transaction."""
+        try:
+            if not self.connection.in_transaction:
+                await self.connection.execute("BEGIN IMMEDIATE")
+        except aiosqlite.Error as e:
+            max_retries = 3
+            for attempt in range(max_retries):
+                delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
+                await asyncio.sleep(delay)
+                try:
+                    await self.connection.execute("BEGIN IMMEDIATE")
+                except aiosqlite.Error:
+                    if attempt == max_retries - 1:
+                        break
+                else:
+                    return
+            msg = f"Failed to begin transaction after retries: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        try:
+            await self.connection.commit()
+        except aiosqlite.Error as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction."""
+        try:
+            await self.connection.rollback()
+        except aiosqlite.Error as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""
@@ -238,54 +214,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Handle AIOSQLite-specific exceptions."""
         return AiosqliteExceptionHandler()
 
-    async def _execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_cursor = cursor
-
-        for stmt in statements:
-            await cursor.execute(stmt, prepared_parameters or ())
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    async def _execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
-
-        await cursor.executemany(sql, prepared_parameters)
-
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
-
-    async def _execute_statement(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        await cursor.execute(sql, prepared_parameters or ())
-
-        if statement.returns_rows():
-            fetched_data = await cursor.fetchall()
-
-            # aiosqlite returns Iterable[Row], core helper expects Iterable[Any]
-            # Use cast to satisfy mypy and pyright
-            data, column_names, row_count = process_sqlite_result(cast("list[Any]", fetched_data), cursor.description)
-
-            return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
-            )
-
-        affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -324,11 +255,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            await self._truncate_table_async(table)
+            statement = f"DELETE FROM {format_identifier(table)}"
+            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+                await cursor.execute(statement)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = build_sqlite_insert_statement(table, columns)
+            insert_sql = build_insert_statement(table, columns)
             async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
                 await cursor.executemany(insert_sql, records)
 
@@ -353,46 +286,24 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    async def begin(self) -> None:
-        """Begin a database transaction."""
-        try:
-            if not self.connection.in_transaction:
-                await self.connection.execute("BEGIN IMMEDIATE")
-        except aiosqlite.Error as e:
-            max_retries = 3
-            for attempt in range(max_retries):
-                delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
-                await asyncio.sleep(delay)
-                try:
-                    await self.connection.execute("BEGIN IMMEDIATE")
-                except aiosqlite.Error:
-                    if attempt == max_retries - 1:
-                        break
-                else:
-                    return
-            msg = f"Failed to begin transaction after retries: {e}"
-            raise SQLSpecError(msg) from e
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
-    async def rollback(self) -> None:
-        """Rollback the current transaction."""
-        try:
-            await self.connection.rollback()
-        except aiosqlite.Error as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
+    @property
+    def data_dictionary(self) -> "AiosqliteDataDictionary":
+        """Get the data dictionary for this driver.
 
-    async def commit(self) -> None:
-        """Commit the current transaction."""
-        try:
-            await self.connection.commit()
-        except aiosqlite.Error as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = AiosqliteDataDictionary()
+        return self._data_dictionary
 
-    async def _truncate_table_async(self, table: str) -> None:
-        statement = f"DELETE FROM {format_sqlite_identifier(table)}"
-        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
-            await cursor.execute(statement)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
@@ -402,22 +313,5 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """
         return bool(self.connection.in_transaction)
 
-    @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
-        """Get the data dictionary for this driver.
 
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = AiosqliteAsyncDataDictionary()
-        return self._data_dictionary
-
-
-_AIOSQLITE_PROFILE = build_aiosqlite_profile()
-
-register_driver_profile("aiosqlite", _AIOSQLITE_PROFILE)
-
-aiosqlite_statement_config = build_statement_config_from_profile(
-    _AIOSQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
-)
+register_driver_profile("aiosqlite", driver_profile)

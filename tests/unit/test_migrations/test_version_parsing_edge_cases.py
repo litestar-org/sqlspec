@@ -2,7 +2,7 @@
 
 import pytest
 
-from sqlspec.utils.version import (
+from sqlspec.migrations.version import (
     VersionType,
     convert_to_sequential_version,
     generate_conversion_map,

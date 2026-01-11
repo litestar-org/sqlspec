@@ -10,7 +10,7 @@ from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
 
 @pytest.fixture
-async def asyncpg_adk_store(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgADKStore, None]":
+async def asyncpg_adk_store(postgres_service: "PostgresService") -> "AsyncGenerator[AsyncpgADKStore, None]":
     """Create AsyncPG ADK store with test database.
 
     Args:
@@ -48,6 +48,7 @@ async def asyncpg_adk_store(postgres_service: PostgresService) -> "AsyncGenerato
     finally:
         if config.connection_instance:
             await config.close_pool()
+        config.connection_instance = None
 
 
 @pytest.fixture

@@ -6,8 +6,8 @@ Used to communicate API changes and migration paths to users.
 
 import inspect
 from collections.abc import Callable
-from functools import wraps
-from typing import Literal
+from functools import WRAPPER_ASSIGNMENTS, WRAPPER_UPDATES
+from typing import Generic, Literal, cast
 from warnings import warn
 
 from typing_extensions import ParamSpec, TypeVar
@@ -96,20 +96,95 @@ def deprecated(
         A decorator wrapping the function call with a warning
     """
 
-    def decorator(func: Callable[P, T]) -> Callable[P, T]:
-        @wraps(func)
-        def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
-            warn_deprecation(
-                version=version,
-                deprecated_name=func.__name__,
-                info=info,
-                alternative=alternative,
-                pending=pending,
-                removal_in=removal_in,
-                kind=kind or ("method" if inspect.ismethod(func) else "function"),
-            )
-            return func(*args, **kwargs)
+    return cast(
+        "Callable[[Callable[P, T]], Callable[P, T]]",
+        _DeprecatedFactory(
+            version=version, removal_in=removal_in, alternative=alternative, info=info, pending=pending, kind=kind
+        ),
+    )
 
-        return wrapped
 
-    return decorator
+class _DeprecatedWrapper(Generic[P, T]):
+    __slots__ = ("__dict__", "_alternative", "_func", "_info", "_kind", "_pending", "_removal_in", "_version")
+
+    def __init__(
+        self,
+        func: Callable[P, T],
+        *,
+        version: str,
+        removal_in: str | None,
+        alternative: str | None,
+        info: str | None,
+        pending: bool,
+        kind: Literal["function", "method", "classmethod", "property"] | None,
+    ) -> None:
+        self._func = func
+        self._version = version
+        self._removal_in = removal_in
+        self._alternative = alternative
+        self._info = info
+        self._pending = pending
+        self._kind = kind
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
+        kind = cast("DeprecatedKind", self._kind or ("method" if inspect.ismethod(self._func) else "function"))
+        warn_deprecation(
+            version=self._version,
+            deprecated_name=self._func.__name__,
+            info=self._info,
+            alternative=self._alternative,
+            pending=self._pending,
+            removal_in=self._removal_in,
+            kind=kind,
+        )
+        return self._func(*args, **kwargs)
+
+
+class _DeprecatedFactory(Generic[P, T]):
+    __slots__ = ("_alternative", "_info", "_kind", "_pending", "_removal_in", "_version")
+
+    def __init__(
+        self,
+        *,
+        version: str,
+        removal_in: str | None,
+        alternative: str | None,
+        info: str | None,
+        pending: bool,
+        kind: Literal["function", "method", "classmethod", "property"] | None,
+    ) -> None:
+        self._version = version
+        self._removal_in = removal_in
+        self._alternative = alternative
+        self._info = info
+        self._pending = pending
+        self._kind: Literal["function", "method", "classmethod", "property"] | None = kind
+
+    def __call__(self, func: Callable[P, T]) -> Callable[P, T]:
+        wrapper = _DeprecatedWrapper(
+            func,
+            version=self._version,
+            removal_in=self._removal_in,
+            alternative=self._alternative,
+            info=self._info,
+            pending=self._pending,
+            kind=self._kind,
+        )
+        return cast("Callable[P, T]", _copy_wrapper_metadata(wrapper, func))
+
+
+def _copy_wrapper_metadata(wrapper: "_DeprecatedWrapper[P, T]", func: "Callable[P, T]") -> "_DeprecatedWrapper[P, T]":
+    assignments: tuple[str, ...] = tuple(WRAPPER_ASSIGNMENTS)
+    updates: tuple[str, ...] = tuple(WRAPPER_UPDATES)
+    wrapper_dict = wrapper.__dict__
+    wrapper_dict.update(getattr(func, "__dict__", {}))
+    for attr in assignments:
+        if hasattr(func, attr):
+            wrapper_dict[attr] = getattr(func, attr)
+    wrapper_dict["__wrapped__"] = func
+    for attr in updates:
+        if attr == "__dict__":
+            continue
+        if hasattr(func, attr):
+            wrapper_dict[attr] = getattr(func, attr)
+    return wrapper

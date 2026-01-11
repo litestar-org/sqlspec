@@ -12,8 +12,7 @@ from rich.table import Table
 
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.exceptions import ConfigResolverError
-from sqlspec.utils.config_discovery import discover_config_from_pyproject
-from sqlspec.utils.config_resolver import resolve_config_sync
+from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import run_
 
@@ -47,18 +46,20 @@ def get_sqlspec_group() -> "Group":
     )
     @click.pass_context
     def sqlspec_group(ctx: "click.Context", config: str | None, validate_config: bool) -> None:
-        """SQLSpec CLI commands."""
+        """SQLSpec CLI commands.
+
+        Configuration resolution prefers CLI flag, SQLSPEC_CONFIG env var, and finally the [tool.sqlspec] section.
+        Comma-separated paths are split, deduplicated by bind key, and loaded from the current working directory so local modules can be imported.
+        When --validate-config is used we report each config's async capability.
+        """
         console = get_console()
         ctx.ensure_object(dict)
 
-        # Click already handled: CLI flag > SQLSPEC_CONFIG env var
-        # Now check pyproject.toml as final fallback
         if config is None:
             config = discover_config_from_pyproject()
             if config:
                 console.print("[dim]Using config from pyproject.toml[/]")
 
-        # No config from any source - show helpful error
         if config is None:
             console.print("[red]Error: No SQLSpec config found.[/]")
             console.print("\nSpecify config using one of:")
@@ -68,7 +69,6 @@ def get_sqlspec_group() -> "Group":
             console.print('                      config = "myapp.config:get_configs"')
             ctx.exit(1)
 
-        # Add current working directory to sys.path to allow loading local config modules
         cwd = str(Path.cwd())
         cwd_added = False
         if cwd not in sys.path:
@@ -76,7 +76,6 @@ def get_sqlspec_group() -> "Group":
             cwd_added = True
 
         try:
-            # Split comma-separated config paths and resolve each
             all_configs: list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] = []
             for config_path in config.split(","):
                 config_path = config_path.strip()
@@ -88,7 +87,6 @@ def get_sqlspec_group() -> "Group":
                 else:
                     all_configs.append(config_result)  # pyright: ignore
 
-            # Deduplicate by bind_key (later configs override earlier ones)
             configs_by_key: dict[
                 str | None, AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]
             ] = {}
@@ -97,7 +95,6 @@ def get_sqlspec_group() -> "Group":
 
             ctx.obj["configs"] = list(configs_by_key.values())
 
-            # Check for empty configs after resolution
             if not ctx.obj["configs"]:
                 console.print("[red]Error: No valid configs found after resolution.[/]")
                 console.print("\nEnsure your config path returns valid config instance(s).")
@@ -118,7 +115,6 @@ def get_sqlspec_group() -> "Group":
             console.print(f"[red]Error loading config: {e}[/]")
             ctx.exit(1)
         finally:
-            # Clean up: remove the cwd from sys.path if we added it
             if cwd_added and cwd in sys.path and sys.path[0] == cwd:
                 sys.path.remove(cwd)
 
@@ -233,7 +229,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         adapter_name = config_module.split(".")[2]
         store_class_name = config_name.replace("Config", "ADKMemoryStore")
-        store_path = f"sqlspec.adapters.{adapter_name}.adk.memory_store.{store_class_name}"
+        store_path = f"sqlspec.adapters.{adapter_name}.adk.store.{store_class_name}"
 
         try:
             return cast("type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]]", import_string(store_path))
@@ -345,6 +341,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     ) -> "list[tuple[str, Any]] | None":
         """Process configuration selection for multi-config operations.
 
+        Requests targeting a single bind key or with only one available config run in single-config mode.
+        Enabled configs are used unless include/exclude widen the set, and dry runs simply list the configs that would execute.
+
         Args:
             ctx: Click context.
             bind_key: Specific bind key to target.
@@ -356,26 +355,21 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         Returns:
             List of (config_name, config) tuples to process, or None for single config mode.
         """
-        # If specific bind_key requested, use single config mode
         if bind_key and not include and not exclude:
             return None
 
-        # Get enabled configs by default, all configs if include/exclude specified
         enabled_only = not include and not exclude
         migration_configs = get_configs_with_migrations(ctx, enabled_only=enabled_only)
 
-        # If only one config and no filtering, use single config mode
         if len(migration_configs) <= 1 and not include and not exclude:
             return None
 
-        # Apply filtering
         configs_to_process = filter_configs(migration_configs, include, exclude)
 
         if not configs_to_process:
             console.print("[yellow]No configurations match the specified criteria.[/]")
             return []
 
-        # Show what will be processed
         if dry_run:
             console.print(f"[blue]Dry run: Would {operation_name} {len(configs_to_process)} configuration(s)[/]")
             for config_name, _ in configs_to_process:
@@ -392,7 +386,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     def show_database_revision(  # pyright: ignore[reportUnusedFunction]
         bind_key: str | None, verbose: bool, include: "tuple[str, ...]", exclude: "tuple[str, ...]"
     ) -> None:
-        """Show current database revision."""
+        """Show current database revision.
+
+        Supports multi-config execution by partitioning selected configs into sync and async groups before dispatching them separately.
+        """
         from sqlspec.migrations.commands import create_migration_commands
 
         ctx = _ensure_click_context()
@@ -411,7 +408,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             _execute_for_config(config, sync_show, async_show)
 
-        # Check if this is a multi-config operation
         configs_to_process = process_multiple_configs(
             ctx, bind_key, include, exclude, dry_run=False, operation_name="show current revision"
         )
@@ -422,10 +418,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             console.rule("[yellow]Listing current revisions for all configurations[/]", align="left")
 
-            # Partition configs by sync/async for proper execution
             sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
 
-            # Process sync configs directly (no event loop)
             for config_name, config in sync_configs:
                 console.print(f"\n[blue]Configuration: {config_name}[/]")
                 try:
@@ -433,7 +427,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 except Exception as e:
                     console.print(f"[red]✗ Failed to get current revision for {config_name}: {e}[/]")
 
-            # Process async configs via single run_() call
             if async_configs:
 
                 async def _run_async_configs() -> None:
@@ -490,7 +483,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             _execute_for_config(config, sync_downgrade, async_downgrade)
 
-        # Check if this is a multi-config operation
         configs_to_process = process_multiple_configs(
             ctx, bind_key, include, exclude, dry_run=dry_run, operation_name=f"downgrade to {revision}"
         )
@@ -507,10 +499,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             console.rule("[yellow]Starting multi-configuration downgrade process[/]", align="left")
 
-            # Partition configs by sync/async for proper execution
             sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
 
-            # Process sync configs directly (no event loop)
             for config_name, config in sync_configs:
                 console.print(f"[blue]Downgrading configuration: {config_name}[/]")
                 try:
@@ -519,7 +509,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 except Exception as e:
                     console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
 
-            # Process async configs via single run_() call
             if async_configs:
 
                 async def _run_async_configs() -> None:
@@ -536,7 +525,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
                 run_(_run_async_configs)()
         else:
-            # Single config operation
             console.rule("[yellow]Starting database downgrade process[/]", align="left")
             input_confirmed = (
                 True
@@ -566,11 +554,13 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         execution_mode: str,
         no_auto_sync: bool,
     ) -> None:
-        """Upgrade the database to the latest revision."""
+        """Upgrade the database to the latest revision.
+
+        Non-automatic execution modes are surfaced in the console, and multi-config flows reuse ``process_multiple_configs`` to split sync/async executions while honoring dry-run and auto-sync flags.
+        """
         from sqlspec.migrations.commands import create_migration_commands
 
         ctx = _ensure_click_context()
-        # Report execution mode when specified
         if execution_mode != "auto":
             console.print(f"[dim]Execution mode: {execution_mode}[/]")
 
@@ -590,7 +580,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             _execute_for_config(config, sync_upgrade, async_upgrade)
 
-        # Check if this is a multi-config operation
         configs_to_process = process_multiple_configs(
             ctx, bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}"
         )
@@ -607,10 +596,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             console.rule("[yellow]Starting multi-configuration upgrade process[/]", align="left")
 
-            # Partition configs by sync/async for proper execution
             sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
 
-            # Process sync configs directly (no event loop)
             for config_name, config in sync_configs:
                 console.print(f"[blue]Upgrading configuration: {config_name}[/]")
                 try:
@@ -619,7 +606,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 except Exception as e:
                     console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
 
-            # Process async configs via single run_() call
             if async_configs:
 
                 async def _run_async_configs() -> None:
@@ -638,7 +624,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
                 run_(_run_async_configs)()
         else:
-            # Single config operation
             console.rule("[yellow]Starting database upgrade process[/]", align="left")
             input_confirmed = (
                 True
@@ -677,7 +662,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     def init_sqlspec(  # pyright: ignore[reportUnusedFunction]
         bind_key: str | None, directory: str | None, package: bool, no_prompt: bool
     ) -> None:
-        """Initialize the database migrations."""
+        """Initialize the database migrations.
+
+        Sync configs are handled inline while async configs run via a single ``run_`` call so migrations stay in sync.
+        """
         from sqlspec.migrations.commands import create_migration_commands
 
         ctx = _ensure_click_context()
@@ -691,11 +679,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         configs = [get_config_by_bind_key(ctx, bind_key)] if bind_key is not None else ctx.obj["configs"]
 
-        # Partition configs by sync/async
         sync_configs = [cfg for cfg in configs if not cfg.is_async]
         async_configs = [cfg for cfg in configs if cfg.is_async]
 
-        # Process sync configs directly
         for config in sync_configs:
             migration_config_dict = config.migration_config or {}
             target_directory = (
@@ -704,7 +690,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             migration_commands = create_migration_commands(config=config)
             migration_commands.init(directory=target_directory, package=package)
 
-        # Process async configs via single run_() call
         if async_configs:
 
             async def _init_async_configs() -> None:
@@ -796,13 +781,14 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
     @bind_key_option
     def show_config(bind_key: str | None = None) -> None:  # pyright: ignore[reportUnusedFunction]
-        """Show and display all configurations with migrations enabled."""
+        """Show and display all configurations with migrations enabled.
+
+        Providing a bind key validates that config while still iterating the original config list to remain compatible with existing callers.
+        """
         ctx = _ensure_click_context()
 
-        # If bind_key is provided, filter to only that config
         if bind_key is not None:
             get_config_by_bind_key(ctx, bind_key)
-            # Convert single config to list format for compatibility
             all_configs: list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] = ctx.obj[
                 "configs"
             ]

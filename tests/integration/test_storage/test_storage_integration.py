@@ -46,7 +46,7 @@ def local_test_setup(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def fsspec_s3_backend(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> "ObjectStoreProtocol":
     """Set up FSSpec S3 backend for testing."""
     _ = minio_client  # Ensures bucket is created
@@ -64,7 +64,7 @@ def fsspec_s3_backend(
 
 @pytest.fixture
 def obstore_s3_backend(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> "ObjectStoreProtocol":
     """Set up ObStore S3 backend for testing."""
     _ = minio_client  # Ensures bucket is created
@@ -177,7 +177,7 @@ async def test_local_store_async_operations(local_test_setup: Path) -> None:
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_basic_operations(
     fsspec_s3_backend: "ObjectStoreProtocol", minio_client: "Minio", minio_default_bucket_name: str
 ) -> None:
@@ -200,7 +200,7 @@ def test_fsspec_s3_basic_operations(
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_binary_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend binary operations."""
     test_path = "integration_test/binary.bin"
@@ -211,7 +211,7 @@ def test_fsspec_s3_binary_operations(fsspec_s3_backend: "ObjectStoreProtocol") -
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_fsspec_s3_async_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend async operations."""
     test_path = "integration_test/async_test.txt"
@@ -227,7 +227,7 @@ async def test_fsspec_s3_async_operations(fsspec_s3_backend: "ObjectStoreProtoco
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_listing_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend listing operations."""
     # Write multiple test files
@@ -244,7 +244,7 @@ def test_fsspec_s3_listing_operations(fsspec_s3_backend: "ObjectStoreProtocol") 
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_copy_move_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend copy and move operations."""
     # Setup source file
@@ -273,7 +273,7 @@ def test_fsspec_s3_copy_move_operations(fsspec_s3_backend: "ObjectStoreProtocol"
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_basic_operations(
     obstore_s3_backend: "ObjectStoreProtocol", minio_client: "Minio", minio_default_bucket_name: str
 ) -> None:
@@ -295,7 +295,7 @@ def test_obstore_s3_basic_operations(
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_binary_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test ObStore S3 backend binary operations."""
     test_path = "integration_test/obstore_binary.bin"
@@ -306,7 +306,7 @@ def test_obstore_s3_binary_operations(obstore_s3_backend: "ObjectStoreProtocol")
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_obstore_s3_async_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test ObStore S3 backend async operations."""
     test_path = "integration_test/obstore_async.txt"
@@ -321,7 +321,7 @@ async def test_obstore_s3_async_operations(obstore_s3_backend: "ObjectStoreProto
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_listing_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test ObStore S3 backend listing operations."""
     # Write test files in different paths
@@ -378,9 +378,9 @@ def test_registry_path_resolution(tmp_path: Path) -> None:
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_registry_s3_fsspec_resolution(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> None:
     """Test storage registry S3 resolution with FSSpec backend."""
     _ = minio_client  # Ensures bucket is created
@@ -410,7 +410,7 @@ def test_registry_s3_fsspec_resolution(
 
 @pytest.mark.xdist_group("storage")
 def test_registry_alias_registration(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str, tmp_path: Path
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str, tmp_path: Path
 ) -> None:
     """Test storage registry alias registration and usage."""
     _ = minio_client  # Ensures bucket is created
@@ -475,12 +475,12 @@ def local_backend(tmp_path: Path) -> "ObjectStoreProtocol":
 
 @pytest.fixture
 def fsspec_s3_backend_optional(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> "ObjectStoreProtocol":
     """Create FSSpec S3 backend if available."""
     _ = minio_client  # Ensures bucket is created
     if not FSSPEC_INSTALLED:
-        pytest.skip("fsspec not installed")
+        pytest.skip("fsspec missing")
 
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
@@ -497,12 +497,12 @@ def fsspec_s3_backend_optional(
 
 @pytest.fixture
 def obstore_s3_backend_optional(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> "ObjectStoreProtocol":
     """Create ObStore S3 backend if available."""
     _ = minio_client  # Ensures bucket is created
     if not OBSTORE_INSTALLED:
-        pytest.skip("obstore not installed")
+        pytest.skip("obstore missing")
 
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
@@ -523,7 +523,7 @@ def test_backend_consistency(request: pytest.FixtureRequest, backend_name: str) 
     """Test that all backends provide consistent behavior."""
     backend = request.getfixturevalue(backend_name)
     if backend is None:
-        pytest.skip(f"Backend {backend_name} not available")
+        pytest.skip(f"Backend {backend_name} missing")
 
     test_path = f"consistency_test_{backend_name}.txt"
 
@@ -551,7 +551,7 @@ async def test_backend_async_consistency(request: pytest.FixtureRequest, backend
     """Test that all backends provide consistent async behavior."""
     backend = request.getfixturevalue(backend_name)
     if backend is None:
-        pytest.skip(f"Backend {backend_name} not available")
+        pytest.skip(f"Backend {backend_name} missing")
 
     test_path = f"async_consistency_{backend_name}.txt"
 
@@ -584,9 +584,9 @@ def test_local_backend_error_handling(tmp_path: Path) -> None:
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_error_handling(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> None:
     """Test FSSpec S3 backend error handling."""
     _ = minio_client  # Ensures bucket is created
@@ -679,7 +679,7 @@ def test_registry_alias_management(tmp_path: Path) -> None:
 
 @pytest.mark.xdist_group("storage")
 def test_registry_backend_fallback_order(
-    tmp_path: Path, minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    tmp_path: Path, minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> None:
     """Test that registry follows correct backend fallback order."""
     _ = minio_client  # Ensures bucket is created
@@ -725,7 +725,7 @@ def test_registry_backend_fallback_order(
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not PYARROW_INSTALLED, reason="PyArrow not installed")
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow missing")
 def test_local_arrow_operations(tmp_path: Path) -> None:
     """Test LocalStore Arrow operations if pyarrow is available."""
     from sqlspec.storage.backends.local import LocalStore
@@ -750,10 +750,10 @@ def test_local_arrow_operations(tmp_path: Path) -> None:
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
-@pytest.mark.skipif(not PYARROW_INSTALLED, reason="PyArrow not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow missing")
 def test_fsspec_s3_arrow_operations(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> None:
     """Test FSSpec S3 backend Arrow operations if pyarrow is available."""
     _ = minio_client  # Ensures bucket is created
@@ -875,9 +875,9 @@ def test_local_metadata_operations(tmp_path: Path) -> None:
 
 
 @pytest.mark.xdist_group("storage")
-@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_metadata_operations(
-    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
 ) -> None:
     """Test FSSpec S3 backend metadata operations."""
     _ = minio_client  # Ensures bucket is created

@@ -1,25 +1,19 @@
 """SQLite database configuration with thread-local connections."""
 
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
-from sqlspec.adapters.sqlite.driver import (
-    SqliteCursor,
-    SqliteDriver,
-    SqliteExceptionHandler,
-    SqliteSessionContext,
-    sqlite_statement_config,
-)
+from sqlspec.adapters.sqlite.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, SqliteSessionContext
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
 
-logger = get_logger("adapters.sqlite")
+logger = get_logger("sqlspec.adapters.sqlite")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -66,6 +60,8 @@ class SqliteDriverFeatures(TypedDict):
     enable_custom_adapters: NotRequired[bool]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
@@ -83,14 +79,33 @@ class SqliteConnectionContext:
     def __enter__(self) -> SqliteConnection:
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
-        return self._ctx.__enter__()  # type: ignore[no-any-return]
+        return cast("SqliteConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> bool | None:
         if self._ctx:
-            return self._ctx.__exit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
         return None
+
+
+class _SqliteSessionConnectionHandler:
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: "SqliteConfig") -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    def acquire_connection(self) -> "SqliteConnection":
+        pool = self._config.provide_pool()
+        self._ctx = pool.get_connection()
+        return cast("SqliteConnection", self._ctx.__enter__())
+
+    def release_connection(self, _conn: "SqliteConnection") -> None:
+        if self._ctx is None:
+            return
+        self._ctx.__exit__(None, None, None)
+        self._ctx = None
 
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
@@ -144,47 +159,24 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
                 )
                 config_dict["uri"] = True
 
-        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        processed_driver_features.setdefault("enable_custom_adapters", True)
-        json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
-        json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
-
-        base_statement_config = statement_config or sqlite_statement_config
-        if json_serializer is not None:
-            parameter_config = base_statement_config.parameter_config.with_json_serializers(
-                json_serializer, deserializer=json_deserializer
-            )
-            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         super().__init__(
             bind_key=bind_key,
             connection_instance=connection_instance,
             connection_config=config_dict,
             migration_config=migration_config,
-            statement_config=base_statement_config,
-            driver_features=processed_driver_features,
+            statement_config=statement_config,
+            driver_features=driver_features,
             extension_config=extension_config,
             observability_config=observability_config,
             **kwargs,
         )
 
-    def _get_connection_config_dict(self) -> "dict[str, Any]":
-        """Get connection configuration as plain dict for pool creation."""
-
-        excluded_keys = {
-            "enable_optimizations",
-            "health_check_interval",
-            "pool_min_size",
-            "pool_max_size",
-            "pool_timeout",
-            "pool_recycle_seconds",
-            "extra",
-        }
-        return {k: v for k, v in self.connection_config.items() if v is not None and k not in excluded_keys}
-
     def _create_pool(self) -> SqliteConnectionPool:
         """Create connection pool from configuration."""
-        config_dict = self._get_connection_config_dict()
+        config_dict = build_connection_config(self.connection_config)
 
         pool_kwargs: dict[str, Any] = {}
         recycle_seconds = self.connection_config.get("pool_recycle_seconds")
@@ -257,23 +249,12 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         Returns:
             A Sqlite driver session context manager.
         """
-        conn_ctx_holder: dict[str, Any] = {}
-
-        def acquire_connection() -> SqliteConnection:
-            pool = self.provide_pool()
-            ctx = pool.get_connection()
-            conn_ctx_holder["ctx"] = ctx
-            return ctx.__enter__()
-
-        def release_connection(_conn: SqliteConnection) -> None:
-            if "ctx" in conn_ctx_holder:
-                conn_ctx_holder["ctx"].__exit__(None, None, None)
-                conn_ctx_holder.clear()
+        handler = _SqliteSessionConnectionHandler(self)
 
         return SqliteSessionContext(
-            acquire_connection=acquire_connection,
-            release_connection=release_connection,
-            statement_config=statement_config or self.statement_config or sqlite_statement_config,
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

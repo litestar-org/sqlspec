@@ -9,16 +9,25 @@ Tests the hook-based pattern introduced for DDL generation standardization:
 - _table_clause(): Additional table options (CLUSTER BY, INMEMORY)
 """
 
+from typing import TYPE_CHECKING
+
 import pytest
 
-from sqlspec.extensions.events._store import BaseEventQueueStore
+from sqlspec.extensions.events import BaseEventQueueStore
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    BaseEventQueueStoreBase = BaseEventQueueStore[SqliteConfig]
+else:
+    BaseEventQueueStoreBase = BaseEventQueueStore
 
 
 def test_base_store_string_type_default() -> None:
     """Base store _string_type returns VARCHAR(N) format."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -34,7 +43,7 @@ def test_base_store_integer_type_default() -> None:
     """Base store _integer_type returns INTEGER."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -48,7 +57,7 @@ def test_base_store_timestamp_default() -> None:
     """Base store _timestamp_default returns CURRENT_TIMESTAMP."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -62,7 +71,7 @@ def test_base_store_primary_key_syntax_default() -> None:
     """Base store _primary_key_syntax returns empty string (column-level PK)."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -76,7 +85,7 @@ def test_base_store_table_clause_default() -> None:
     """Base store _table_clause returns empty string."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -90,7 +99,7 @@ def test_hook_override_string_type() -> None:
     """Subclass can override _string_type for dialect-specific syntax."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class CustomStore(BaseEventQueueStore[SqliteConfig]):
+    class CustomStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -109,7 +118,7 @@ def test_hook_override_integer_type() -> None:
     """Subclass can override _integer_type for dialect-specific syntax."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class CustomStore(BaseEventQueueStore[SqliteConfig]):
+    class CustomStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -127,7 +136,7 @@ def test_hook_override_timestamp_default() -> None:
     """Subclass can override _timestamp_default for dialect-specific syntax."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class CustomStore(BaseEventQueueStore[SqliteConfig]):
+    class CustomStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "DATETIME(6)"
 
@@ -145,7 +154,7 @@ def test_hook_override_primary_key_syntax() -> None:
     """Subclass can override _primary_key_syntax for table-level PK."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class CustomStore(BaseEventQueueStore[SqliteConfig]):
+    class CustomStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -165,7 +174,7 @@ def test_hook_override_table_clause() -> None:
     """Subclass can override _table_clause for additional options."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class CustomStore(BaseEventQueueStore[SqliteConfig]):
+    class CustomStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -183,7 +192,7 @@ def test_ddl_generation_uses_all_hooks() -> None:
     """DDL generation correctly uses all hook methods together."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class FullCustomStore(BaseEventQueueStore[SqliteConfig]):
+    class FullCustomStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -428,7 +437,7 @@ def test_ddl_column_primary_key_without_inline_pk() -> None:
     """When _primary_key_syntax is empty, PRIMARY KEY is on the column."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class ColumnPKStore(BaseEventQueueStore[SqliteConfig]):
+    class ColumnPKStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -444,7 +453,7 @@ def test_ddl_inline_primary_key_with_override() -> None:
     """When _primary_key_syntax is set, PRIMARY KEY is at table level."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class InlinePKStore(BaseEventQueueStore[SqliteConfig]):
+    class InlinePKStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -464,7 +473,7 @@ def test_ddl_contains_all_required_columns() -> None:
     """DDL includes all required event queue columns."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -493,7 +502,7 @@ def test_ddl_default_values() -> None:
     """DDL includes default values for status, attempts, available_at, created_at."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -510,7 +519,7 @@ def test_ddl_nullable_columns() -> None:
     """DDL correctly marks optional columns as nullable (no NOT NULL)."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -527,7 +536,7 @@ def test_ddl_not_null_columns() -> None:
     """DDL correctly marks required columns as NOT NULL."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
@@ -547,7 +556,7 @@ def test_create_statements_with_no_index() -> None:
     """create_statements returns only table when _build_index_sql returns None."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class NoIndexStore(BaseEventQueueStore[SqliteConfig]):
+    class NoIndexStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -566,7 +575,7 @@ def test_wrap_create_statement_unknown_object_type() -> None:
     """_wrap_create_statement returns statement unchanged for unknown object types."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -583,7 +592,7 @@ def test_wrap_create_statement_table() -> None:
     """_wrap_create_statement adds IF NOT EXISTS for table."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -599,7 +608,7 @@ def test_wrap_create_statement_index() -> None:
     """_wrap_create_statement adds IF NOT EXISTS for index."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -615,7 +624,7 @@ def test_wrap_drop_statement() -> None:
     """_wrap_drop_statement adds IF EXISTS for DROP TABLE."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -631,7 +640,7 @@ def test_index_name_generation() -> None:
     """_index_name generates correct index name from table name."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -645,7 +654,7 @@ def test_index_name_with_schema_qualified_table() -> None:
     """_index_name replaces dots with underscores for schema-qualified tables."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -661,7 +670,7 @@ def test_build_index_sql() -> None:
     """_build_index_sql generates correct CREATE INDEX statement."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -678,7 +687,7 @@ def test_settings_property() -> None:
     """settings property returns extension settings dict."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStore[SqliteConfig]):
+    class TestStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 

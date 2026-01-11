@@ -5,17 +5,17 @@ type conversion for different database backends (PostgreSQL, SQLite, DuckDB,
 MySQL, BigQuery, Snowflake).
 """
 
-from typing import Any, Final
+from typing import Any
 
 from sqlspec.core.type_converter import CachedOutputConverter
 from sqlspec.utils.serializers import to_json
 
 __all__ = ("ADBC_SPECIAL_CHARS", "ADBCOutputConverter", "get_adbc_type_converter")
 
-ADBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
+ADBC_SPECIAL_CHARS: "frozenset[str]" = frozenset({"{", "[", "-", ":", "T", "."})
 
 # Native type support by dialect
-_NATIVE_SUPPORT: Final[dict[str, list[str]]] = {
+_NATIVE_SUPPORT: "dict[str, list[str]]" = {
     "postgres": ["uuid", "json", "interval", "pg_array"],
     "postgresql": ["uuid", "json", "interval", "pg_array"],
     "duckdb": ["uuid", "json"],

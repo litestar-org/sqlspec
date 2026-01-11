@@ -1,133 +1,71 @@
 """BigQuery-specific data dictionary for metadata queries."""
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, ClassVar
 
-from sqlspec.driver import ForeignKeyMetadata, SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
-from sqlspec.utils.logging import get_logger
+from mypy_extensions import mypyc_attr
+
+from sqlspec.driver import SyncDataDictionaryBase
+from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
+
+__all__ = ("BigQueryDataDictionary",)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
-logger = get_logger("adapters.bigquery.data_dictionary")
 
-__all__ = ("BigQuerySyncDataDictionary",)
-
-
-class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class BigQueryDataDictionary(SyncDataDictionaryBase):
     """BigQuery-specific sync data dictionary."""
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
-        """Get BigQuery version information.
+    dialect: ClassVar[str] = "bigquery"
 
-        BigQuery is a fully managed cloud service that doesn't expose
-        traditional version information. Feature availability is determined
-        by the service itself, not version numbers.
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_version(self, driver: "BigQueryDriver") -> "VersionInfo | None":
+        """Return BigQuery version information.
 
         Args:
-            driver: BigQuery driver instance
+            driver: BigQuery driver instance.
 
         Returns:
-            None - BigQuery doesn't provide version information.
+            None because BigQuery does not expose version info.
+
         """
         _ = driver
         return None
 
-    def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
+    def get_feature_flag(self, driver: "BigQueryDriver", feature: str) -> bool:
         """Check if BigQuery supports a specific feature.
 
         Args:
-            driver: BigQuery driver instance
-            feature: Feature name to check
+            driver: BigQuery driver instance.
+            feature: Feature name to check.
 
         Returns:
-            True if feature is supported, False otherwise
+            True if feature is supported, False otherwise.
+
         """
-        # BigQuery feature support based on current capabilities
-        feature_checks = {
-            "supports_json": True,  # Native JSON type
-            "supports_arrays": True,  # ARRAY types
-            "supports_structs": True,  # STRUCT types
-            "supports_geography": True,  # GEOGRAPHY type
-            "supports_returning": False,  # No RETURNING clause
-            "supports_upsert": True,  # MERGE statement
-            "supports_window_functions": True,
-            "supports_cte": True,
-            "supports_transactions": True,  # Multi-statement transactions
-            "supports_prepared_statements": True,
-            "supports_schemas": True,  # Datasets and projects
-            "supports_partitioning": True,  # Table partitioning
-            "supports_clustering": True,  # Table clustering
-            "supports_uuid": False,  # No native UUID, use STRING
-        }
+        _ = driver
+        return self.resolve_feature_flag(feature, None)
 
-        return feature_checks.get(feature, False)
-
-    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:
+    def get_optimal_type(self, driver: "BigQueryDriver", type_category: str) -> str:
         """Get optimal BigQuery type for a category.
 
         Args:
-            driver: BigQuery driver instance
-            type_category: Type category
+            driver: BigQuery driver instance.
+            type_category: Type category.
 
         Returns:
-            BigQuery-specific type name
+            BigQuery-specific type name.
+
         """
-        type_map = {
-            "json": "JSON",
-            "uuid": "STRING",
-            "boolean": "BOOL",
-            "timestamp": "TIMESTAMP",
-            "text": "STRING",
-            "blob": "BYTES",
-            "array": "ARRAY",
-            "struct": "STRUCT",
-            "geography": "GEOGRAPHY",
-            "numeric": "NUMERIC",
-            "bignumeric": "BIGNUMERIC",
-        }
-        return type_map.get(type_category, "STRING")
+        _ = driver
+        return self.get_dialect_config().get_optimal_type(type_category)
 
-    def get_columns(
-        self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get column information for a table using INFORMATION_SCHEMA.
-
-        Args:
-            driver: BigQuery driver instance
-            table: Table name to query columns for
-            schema: Schema name (dataset name in BigQuery)
-
-        Returns:
-            List of column metadata dictionaries with keys:
-                - column_name: Name of the column
-                - data_type: BigQuery data type
-                - is_nullable: Whether column allows NULL (YES/NO)
-                - column_default: Default value if any
-        """
-        bigquery_driver = cast("BigQueryDriver", driver)
-
-        if schema:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM `{schema}.INFORMATION_SCHEMA.COLUMNS`
-                WHERE table_name = '{table}'
-                ORDER BY ordinal_position
-            """
-        else:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE table_name = '{table}'
-                ORDER BY ordinal_position
-            """
-
-        result = bigquery_driver.execute(sql)
-        return result.data or []
-
-    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+    def get_tables(self, driver: "BigQueryDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by topological dependency order using BigQuery catalog."""
-        bigquery_driver = cast("BigQueryDriver", driver)
-
+        self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="tables")
         if schema:
             tables_table = f"`{schema}.INFORMATION_SCHEMA.TABLES`"
             kcu_table = f"`{schema}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
@@ -137,119 +75,54 @@ class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
             kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
             rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
 
-        sql = f"""
-        WITH RECURSIVE dependency_tree AS (
-            SELECT
-                t.table_name,
-                0 AS level,
-                [t.table_name] AS path
-            FROM {tables_table} t
-            WHERE t.table_type = 'BASE TABLE'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM {kcu_table} kcu
-                  JOIN {rc_table} rc ON kcu.constraint_name = rc.constraint_name
-                  WHERE kcu.table_name = t.table_name
-              )
-
-            UNION ALL
-
-            SELECT
-                kcu.table_name,
-                dt.level + 1,
-                ARRAY_CONCAT(dt.path, [kcu.table_name])
-            FROM {kcu_table} kcu
-            JOIN {rc_table} rc ON kcu.constraint_name = rc.constraint_name
-            JOIN {kcu_table} pk_kcu
-              ON rc.unique_constraint_name = pk_kcu.constraint_name
-              AND kcu.ordinal_position = pk_kcu.ordinal_position
-            JOIN dependency_tree dt ON pk_kcu.table_name = dt.table_name
-            WHERE kcu.table_name NOT IN UNNEST(dt.path)
+        query_text = self.get_query_text("tables_by_schema").format(
+            tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
         )
-        SELECT DISTINCT table_name
-        FROM dependency_tree
-        ORDER BY level, table_name
-        """
+        return driver.select(query_text, schema_type=TableMetadata)
 
-        result = bigquery_driver.execute(sql)
-        return [row["table_name"] for row in result.get_data()]
+    def get_columns(
+        self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_prefix = f"`{schema}`." if schema else ""
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="columns")
+            query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
+            return driver.select(query_text, schema_name=schema, schema_type=ColumnMetadata)
+
+        self._log_table_describe(driver, schema_name=schema, table_name=table, operation="columns")
+        query_text = self.get_query_text("columns_by_table").format(schema_prefix=schema_prefix)
+        return driver.select(query_text, table_name=table, schema_name=schema, schema_type=ColumnMetadata)
+
+    def get_indexes(
+        self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="indexes")
+            return driver.select(self.get_query("indexes_by_schema"), schema_type=IndexMetadata)
+
+        self._log_table_describe(driver, schema_name=schema, table_name=table, operation="indexes")
+        return driver.select(self.get_query("indexes_by_table"), schema_type=IndexMetadata)
 
     def get_foreign_keys(
-        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        bigquery_driver = cast("BigQueryDriver", driver)
-
-        dataset = schema
-        if dataset:
-            kcu_table = f"`{dataset}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
-            rc_table = f"`{dataset}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="foreign_keys")
+        else:
+            self._log_table_describe(driver, schema_name=schema, table_name=table, operation="foreign_keys")
+        if schema:
+            kcu_table = f"`{schema}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
+            rc_table = f"`{schema}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
         else:
             kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
             rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
 
-        where_clauses = []
-        if table:
-            where_clauses.append(f"kcu.table_name = '{table}'")
+        if table is None:
+            query_text = self.get_query_text("foreign_keys_by_schema").format(kcu_table=kcu_table, rc_table=rc_table)
+            return driver.select(query_text, schema_name=schema, schema_type=ForeignKeyMetadata)
 
-        where_str = " AND ".join(where_clauses)
-        if where_str:
-            where_str = "WHERE " + where_str
-
-        sql = f"""
-            SELECT
-                kcu.table_name,
-                kcu.column_name,
-                pk_kcu.table_name AS referenced_table_name,
-                pk_kcu.column_name AS referenced_column_name,
-                kcu.constraint_name,
-                kcu.table_schema,
-                pk_kcu.table_schema AS referenced_table_schema
-            FROM {kcu_table} kcu
-            JOIN {rc_table} rc ON kcu.constraint_name = rc.constraint_name
-            JOIN {kcu_table} pk_kcu
-              ON rc.unique_constraint_name = pk_kcu.constraint_name
-              AND kcu.ordinal_position = pk_kcu.ordinal_position
-            {where_str}
-        """
-
-        try:
-            result = bigquery_driver.execute(sql)
-            return [
-                ForeignKeyMetadata(
-                    table_name=row["table_name"],
-                    column_name=row["column_name"],
-                    referenced_table=row["referenced_table_name"],
-                    referenced_column=row["referenced_column_name"],
-                    constraint_name=row["constraint_name"],
-                    schema=row["table_schema"],
-                    referenced_schema=row["referenced_table_schema"],
-                )
-                for row in result.data
-            ]
-        except Exception:
-            logger.warning("Failed to fetch foreign keys from BigQuery")
-            return []
-
-    def list_available_features(self) -> "list[str]":
-        """List available BigQuery feature flags.
-
-        Returns:
-            List of supported feature names
-        """
-        return [
-            "supports_json",
-            "supports_arrays",
-            "supports_structs",
-            "supports_geography",
-            "supports_returning",
-            "supports_upsert",
-            "supports_window_functions",
-            "supports_cte",
-            "supports_transactions",
-            "supports_prepared_statements",
-            "supports_schemas",
-            "supports_partitioning",
-            "supports_clustering",
-            "supports_uuid",
-        ]
+        query_text = self.get_query_text("foreign_keys_by_table").format(kcu_table=kcu_table, rc_table=rc_table)
+        return driver.select(query_text, table_name=table, schema_name=schema, schema_type=ForeignKeyMetadata)

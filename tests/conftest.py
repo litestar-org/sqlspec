@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import warnings
 
 warnings.filterwarnings(
@@ -53,7 +51,7 @@ here = Path(__file__).parent
 
 
 @pytest.fixture(scope="session")
-def minio_client(minio_service: MinioService, minio_default_bucket_name: str) -> Generator[Minio, None, None]:
+def minio_client(minio_service: "MinioService", minio_default_bucket_name: str) -> Generator[Minio, None, None]:
     """Override pytest-databases minio_client to use new minio API with keyword arguments."""
     client = Minio(
         endpoint=minio_service.endpoint,

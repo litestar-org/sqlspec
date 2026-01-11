@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Any
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from starlette.requests import Request
@@ -11,8 +10,6 @@ if TYPE_CHECKING:
     from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
 __all__ = ("SQLSpecAutocommitMiddleware", "SQLSpecManualMiddleware")
-
-logger = get_logger("extensions.starlette.middleware")
 
 HTTP_200_OK = 200
 HTTP_300_MULTIPLE_CHOICES = 300

@@ -13,7 +13,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import JoinClauseMixin
 from sqlspec.builder._parsing_utils import (
@@ -78,6 +78,64 @@ def is_explicitly_quoted(identifier: Any) -> bool:
     )
 
 
+def _expr_eq(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.EQ(this=col, expression=placeholder)
+
+
+def _expr_neq(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.NEQ(this=col, expression=placeholder)
+
+
+def _expr_gt(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.GT(this=col, expression=placeholder)
+
+
+def _expr_gte(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.GTE(this=col, expression=placeholder)
+
+
+def _expr_lt(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.LT(this=col, expression=placeholder)
+
+
+def _expr_lte(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.LTE(this=col, expression=placeholder)
+
+
+def _expr_like_exp(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.Like(this=col, expression=placeholder)
+
+
+def _expr_like_method(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return cast("exp.Expression", col.like(placeholder))
+
+
+def _expr_not_like(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.Not(this=exp.Like(this=col, expression=placeholder))
+
+
+def _expr_like_not(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return exp.Not(this=cast("exp.Expression", col.like(placeholder)))
+
+
+def _expr_ilike(col: "exp.Expression", placeholder: "exp.Placeholder") -> "exp.Expression":
+    return cast("exp.Expression", col.ilike(placeholder))
+
+
+_SIMPLE_OPERATOR_MAP: dict[str, Any] = {
+    "=": _expr_eq,
+    "==": _expr_eq,
+    "!=": _expr_neq,
+    "<>": _expr_neq,
+    ">": _expr_gt,
+    ">=": _expr_gte,
+    "<": _expr_lt,
+    "<=": _expr_lte,
+    "LIKE": _expr_like_exp,
+    "NOT LIKE": _expr_not_like,
+}
+
+
 class Case:
     """Represent a SQL CASE expression with structured components."""
 
@@ -132,7 +190,7 @@ class SubqueryBuilder:
             subquery_expr = subquery
         elif has_parameter_builder(subquery):
             built_query = subquery.build()
-            sql_text = built_query.sql if isinstance(built_query, SafeQuery) else str(built_query)
+            sql_text = built_query.sql if isinstance(built_query, BuiltQuery) else str(built_query)
             dialect = subquery.dialect if isinstance(subquery, QueryBuilder) else None
             parsed_expr: exp.Expression | None = exp.maybe_parse(sql_text, dialect=dialect)
             if parsed_expr is None:
@@ -140,7 +198,7 @@ class SubqueryBuilder:
                 raise SQLBuilderError(msg)
             subquery_expr = parsed_expr
         else:
-            dialect = subquery.dialect if isinstance(subquery, (QueryBuilder, SafeQuery)) else None
+            dialect = subquery.dialect if isinstance(subquery, (QueryBuilder, BuiltQuery)) else None
             parsed_expr = exp.maybe_parse(str(subquery), dialect=dialect)
             if parsed_expr is None:
                 msg = f"Could not convert subquery to expression: {subquery}"
@@ -249,9 +307,21 @@ class SelectClauseMixin:
         builder.set_expression(select_expr)
         return cast("Self", builder)
 
-    def from_(self, table: str | exp.Expression | Any, alias: str | None = None) -> Self:
+    def from_(
+        self,
+        table: str | exp.Expression | Any,
+        alias: str | None = None,
+        as_of: Any | None = None,
+        as_of_type: str | None = None,
+    ) -> Self:
+        """Set the FROM clause and optionally attach temporal versioning.
+
+        ``as_of`` copies the resolved table expression, normalizes aliases, and adds an ``exp.Version`` so sqlglot's generator emits dialect-specific time-travel SQL.
+        """
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="FROM clause only valid for SELECT.")
+        from_expr: exp.Expression
+
         if isinstance(table, str):
             from_expr = parse_table_expression(table, alias)
         elif is_expression(table):
@@ -272,6 +342,25 @@ class SelectClauseMixin:
             from_expr = exp.alias_(wrapped_subquery, alias) if alias else wrapped_subquery
         else:
             from_expr = table
+
+        if as_of is not None:
+            inner_expr = from_expr.copy()
+            target_alias = alias
+
+            if isinstance(inner_expr, exp.Alias):
+                target_alias = inner_expr.alias
+                inner_expr = inner_expr.this
+
+            if target_alias is None and isinstance(inner_expr, exp.Table):
+                alias_expr = inner_expr.args.get("alias")
+                if alias_expr is not None:
+                    target_alias = alias_expr.this
+                    inner_expr.set("alias", None)
+
+            version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
+            inner_expr.set("version", version)
+            from_expr = exp.alias_(inner_expr, target_alias) if target_alias else inner_expr
+
         builder.set_expression(select_expr.from_(from_expr, copy=False))
         return cast("Self", builder)
 
@@ -591,7 +680,7 @@ class WhereClauseMixin:
     def _normalize_subquery_expression(self, subquery: Any, builder: "SQLBuilderProtocol") -> exp.Expression:
         if has_parameter_builder(subquery):
             subquery_builder = cast("QueryBuilder", subquery)
-            safe_query: SafeQuery = subquery_builder.build()
+            safe_query: BuiltQuery = subquery_builder.build()
             parsed_subquery: exp.Expression | None = exp.maybe_parse(safe_query.sql, dialect=builder.dialect)
             if parsed_subquery is None:
                 msg = f"Could not parse subquery SQL: {safe_query.sql}"
@@ -650,9 +739,7 @@ class WhereClauseMixin:
     def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expression:
         if len(condition) == PAIR_LENGTH:
             column, value = condition
-            return self._create_parameterized_condition(
-                column, value, lambda col, placeholder: exp.EQ(this=col, expression=placeholder)
-            )
+            return self._create_parameterized_condition(column, value, _expr_eq)
 
         if len(condition) != TRIPLE_LENGTH:
             msg = f"Condition tuple must have 2 or 3 elements, got {len(condition)}"
@@ -663,21 +750,8 @@ class WhereClauseMixin:
         column_expr = parse_column_expression(column_raw)
         column_name = extract_column_name(column_raw)
 
-        simple_operator_map: dict[str, Callable[[exp.Expression, exp.Placeholder], exp.Expression]] = {
-            "=": lambda col, placeholder: exp.EQ(this=col, expression=placeholder),
-            "==": lambda col, placeholder: exp.EQ(this=col, expression=placeholder),
-            "!=": lambda col, placeholder: exp.NEQ(this=col, expression=placeholder),
-            "<>": lambda col, placeholder: exp.NEQ(this=col, expression=placeholder),
-            ">": lambda col, placeholder: exp.GT(this=col, expression=placeholder),
-            ">=": lambda col, placeholder: exp.GTE(this=col, expression=placeholder),
-            "<": lambda col, placeholder: exp.LT(this=col, expression=placeholder),
-            "<=": lambda col, placeholder: exp.LTE(this=col, expression=placeholder),
-            "LIKE": lambda col, placeholder: exp.Like(this=col, expression=placeholder),
-            "NOT LIKE": lambda col, placeholder: exp.Not(this=exp.Like(this=col, expression=placeholder)),
-        }
-
-        if operator_upper in simple_operator_map:
-            return self._create_parameterized_condition(column_raw, value, simple_operator_map[operator_upper])
+        if operator_upper in _SIMPLE_OPERATOR_MAP:
+            return self._create_parameterized_condition(column_raw, value, _SIMPLE_OPERATOR_MAP[operator_upper])
 
         if operator_upper == "IN":
             return self._handle_in_operator(column_expr, value, column_name)
@@ -800,39 +874,27 @@ class WhereClauseMixin:
         raise SQLBuilderError(msg)
 
     def where_eq(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.EQ(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_eq)
         return self.where(condition)
 
     def where_neq(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.NEQ(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_neq)
         return self.where(condition)
 
     def where_lt(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.LT(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_lt)
         return self.where(condition)
 
     def where_lte(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.LTE(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_lte)
         return self.where(condition)
 
     def where_gt(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.GT(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_gt)
         return self.where(condition)
 
     def where_gte(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.GTE(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_gte)
         return self.where(condition)
 
     def where_between(self, column: str | exp.Column, low: Any, high: Any) -> Self:
@@ -861,15 +923,11 @@ class WhereClauseMixin:
         return self.where(condition)
 
     def where_not_like(self, column: str | exp.Column, pattern: str) -> Self:
-        condition = self._create_parameterized_condition(
-            column, pattern, lambda col, placeholder: exp.Not(this=exp.Like(this=col, expression=placeholder))
-        )
+        condition = self._create_parameterized_condition(column, pattern, _expr_not_like)
         return self.where(condition)
 
     def where_ilike(self, column: str | exp.Column, pattern: str) -> Self:
-        condition = self._create_parameterized_condition(
-            column, pattern, lambda col, placeholder: col.ilike(placeholder)
-        )
+        condition = self._create_parameterized_condition(column, pattern, _expr_ilike)
         return self.where(condition)
 
     def where_is_null(self, column: str | exp.Column) -> Self:
@@ -920,47 +978,32 @@ class WhereClauseMixin:
         return self.where(exp.Not(this=exp.Exists(this=subquery_expr)))
 
     def where_like_any(self, column: str | exp.Column, patterns: list[str]) -> Self:
-        conditions = [
-            self._create_parameterized_condition(column, pattern, lambda col, placeholder: col.like(placeholder))
-            for pattern in patterns
-        ]
+        conditions = [self._create_parameterized_condition(column, pattern, _expr_like_method) for pattern in patterns]
         or_condition = self._create_or_expression(conditions)
         return self.where(or_condition)
 
     def or_where_eq(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.EQ(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_eq)
         return self._combine_with_or(condition)
 
     def or_where_neq(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.NEQ(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_neq)
         return self._combine_with_or(condition)
 
     def or_where_lt(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.LT(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_lt)
         return self._combine_with_or(condition)
 
     def or_where_lte(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.LTE(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_lte)
         return self._combine_with_or(condition)
 
     def or_where_gt(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.GT(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_gt)
         return self._combine_with_or(condition)
 
     def or_where_gte(self, column: str | exp.Column, value: Any) -> Self:
-        condition = self._create_parameterized_condition(
-            column, value, lambda col, placeholder: exp.GTE(this=col, expression=placeholder)
-        )
+        condition = self._create_parameterized_condition(column, value, _expr_gte)
         return self._combine_with_or(condition)
 
     def or_where_between(self, column: str | exp.Column, low: Any, high: Any) -> Self:
@@ -982,15 +1025,11 @@ class WhereClauseMixin:
         return self._combine_with_or(cast("exp.Expression", condition))
 
     def or_where_not_like(self, column: str | exp.Column, pattern: str) -> Self:
-        condition = self._create_parameterized_condition(
-            column, pattern, lambda col, placeholder: col.like(placeholder).not_()
-        )
+        condition = self._create_parameterized_condition(column, pattern, _expr_like_not)
         return self._combine_with_or(condition)
 
     def or_where_ilike(self, column: str | exp.Column, pattern: str) -> Self:
-        condition = self._create_parameterized_condition(
-            column, pattern, lambda col, placeholder: col.ilike(placeholder)
-        )
+        condition = self._create_parameterized_condition(column, pattern, _expr_ilike)
         return self._combine_with_or(condition)
 
     def or_where_is_null(self, column: str | exp.Column) -> Self:
@@ -1194,21 +1233,11 @@ class CommonTableExpressionMixin:
     _with_ctes: Any
     dialect: Any
 
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _update_placeholders_in_expression(
-        self, expression: exp.Expression, param_mapping: dict[str, str]
-    ) -> exp.Expression:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
     def with_(self, name: str, query: Any | str, recursive: bool = False, columns: list[str] | None = None) -> Self:
+        """Add a CTE via the WITH clause.
+
+        When ``query`` is another builder we reuse its expression, merge parameters with unique names, and let sqlglot handle the actual CTE wrapping to avoid duplicating ``_with_ctes`` state.
+        """
         builder = cast("QueryBuilder", self)
         expression = builder.get_expression()
         if expression is None:
@@ -1225,36 +1254,31 @@ class CommonTableExpressionMixin:
         elif isinstance(query, exp.Expression):
             cte_select = query
         else:
-            # Query is a builder - get its expression directly instead of converting to SQL
             cte_select = query.get_expression()
             if cte_select is None:
                 msg = f"Could not get expression from builder: {query}"
                 raise SQLBuilderError(msg)
 
-            # Get parameters from the builder's statement
             built_query = query.to_statement()
             parameters = built_query.parameters
             if isinstance(parameters, dict):
                 param_mapping: dict[str, str] = {}
                 for param_name, param_value in parameters.items():
-                    unique_name = self._generate_unique_parameter_name(f"{name}_{param_name}")
+                    unique_name = builder._generate_unique_parameter_name(f"{name}_{param_name}")
                     param_mapping[param_name] = unique_name
-                    self.add_parameter(param_value, name=unique_name)
-                cte_select = self._update_placeholders_in_expression(cte_select, param_mapping)
+                    builder.add_parameter(param_value, name=unique_name)
+                cte_select = builder._update_placeholders_in_expression(cte_select, param_mapping)
             elif isinstance(parameters, (list, tuple)):
                 for param_value in parameters:
-                    self.add_parameter(param_value)
+                    builder.add_parameter(param_value)
             elif parameters is not None:
-                self.add_parameter(parameters)
+                builder.add_parameter(parameters)
 
         if cte_select is None:
             msg = f"Could not parse CTE query: {query}"
             raise SQLBuilderError(msg)
 
-        # Always use sqlglot's with_() method - it handles everything correctly
-        # Do NOT store in _with_ctes as that causes duplication in _build_final_expression
         if isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
-            # Pass alias name and query separately - sqlglot handles the CTE wrapping
             updated = expression.with_(name, as_=cte_select.copy(), recursive=recursive, copy=True)
             builder.set_expression(updated)
 
@@ -1329,6 +1353,27 @@ class SetOperationMixin:
 TABLE_HINT_PATTERN: Final[str] = r"\b{}\b(\s+AS\s+\w+)?"
 
 
+def _parse_hint_expression(hint: Any, dialect: "DialectType | str | None") -> exp.Expression:
+    try:
+        hint_str = str(hint)
+        hint_expr: exp.Expression | None = exp.maybe_parse(hint_str, dialect=dialect)
+        return hint_expr or exp.Anonymous(this=hint_str)
+    except Exception:
+        return exp.Anonymous(this=str(hint))
+
+
+class _TableHintReplacer:
+    __slots__ = ("_hint", "_table")
+
+    def __init__(self, hint: str, table: str) -> None:
+        self._hint = hint
+        self._table = table
+
+    def __call__(self, match: "re.Match[str]") -> str:
+        alias_part = match.group(1) or ""
+        return f"/*+ {self._hint} */ {self._table}{alias_part}"
+
+
 class Select(
     QueryBuilder,
     WhereClauseMixin,
@@ -1370,7 +1415,17 @@ class Select(
             Select("id", "name")  # Shorthand for Select().select("id", "name")
             Select()              # Same as Select() - start empty
         """
-        super().__init__(**kwargs)
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_query_builder_kwargs(kwargs)
+        )
+        super().__init__(
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
 
         self._hints: list[dict[str, object]] = []
 
@@ -1411,14 +1466,14 @@ class Select(
         self._hints.append({"hint": hint, "location": location, "table": table, "dialect": dialect})
         return self
 
-    def build(self, dialect: "DialectType" = None) -> "SafeQuery":
+    def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
         """Builds the SQL query string and parameters with hint injection.
 
         Args:
             dialect: Optional dialect override for SQL generation.
 
         Returns:
-            SafeQuery: A dataclass containing the SQL string and parameters.
+            BuiltQuery: A dataclass containing the SQL string and parameters.
         """
         safe_query = super().build(dialect=dialect)
 
@@ -1432,16 +1487,9 @@ class Select(
         if isinstance(modified_expr, exp.Select):
             statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
             if statement_hints:
-
-                def parse_hint_safely(hint: Any) -> exp.Expression:
-                    try:
-                        hint_str = str(hint)
-                        hint_expr: exp.Expression | None = exp.maybe_parse(hint_str, dialect=target_dialect)
-                        return hint_expr or exp.Anonymous(this=hint_str)
-                    except Exception:
-                        return exp.Anonymous(this=str(hint))
-
-                hint_expressions: list[exp.Expression] = [parse_hint_safely(hint) for hint in statement_hints]
+                hint_expressions: list[exp.Expression] = [
+                    _parse_hint_expression(hint, target_dialect) for hint in statement_hints
+                ]
 
                 if hint_expressions:
                     modified_expr.set("hint", exp.Hint(expressions=hint_expressions))
@@ -1454,18 +1502,11 @@ class Select(
                 hint = str(hint_dict["hint"])
                 pattern = TABLE_HINT_PATTERN.format(re.escape(table))
 
-                def make_replacement(hint_val: str, table_val: str) -> "Callable[[re.Match[str]], str]":
-                    def replacement_func(match: re.Match[str]) -> str:
-                        alias_part = match.group(1) or ""
-                        return f"/*+ {hint_val} */ {table_val}{alias_part}"
-
-                    return replacement_func
-
                 modified_sql = re.sub(
-                    pattern, make_replacement(hint, table), modified_sql, count=1, flags=re.IGNORECASE
+                    pattern, _TableHintReplacer(hint, table), modified_sql, count=1, flags=re.IGNORECASE
                 )
 
-        return SafeQuery(sql=modified_sql, parameters=safe_query.parameters, dialect=safe_query.dialect)
+        return BuiltQuery(sql=modified_sql, parameters=safe_query.parameters, dialect=safe_query.dialect)
 
     def _validate_select_expression(self) -> None:
         """Validate that current expression is a valid SELECT statement.

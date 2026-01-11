@@ -40,7 +40,7 @@ from sqlspec.builder._expression_wrappers import (
     StringExpression,
 )
 from sqlspec.builder._insert import Insert
-from sqlspec.builder._join import JoinBuilder
+from sqlspec.builder._join import JoinBuilder, create_join_builder
 from sqlspec.builder._merge import Merge
 from sqlspec.builder._parsing_utils import extract_expression, to_expression
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
@@ -88,7 +88,7 @@ __all__ = (
     "sql",
 )
 
-logger = get_logger("builder.factory")
+logger = get_logger("sqlspec.builder.factory")
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
@@ -218,17 +218,19 @@ def build_copy_to_statement(
 class SQLFactory:
     """Factory for creating SQL builders and column expressions."""
 
-    @classmethod
-    def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
+    @staticmethod
+    def _detect_type_from_expression(parsed_expr: exp.Expression) -> str:
+        if parsed_expr.key:
+            return parsed_expr.key.upper()
+        command_type = type(parsed_expr).__name__.upper()
+        if command_type == "COMMAND" and parsed_expr.this:
+            return str(parsed_expr.this).upper()
+        return command_type
+
+    @staticmethod
+    def _parse_sql_expression(sql: str, dialect: DialectType | None) -> "exp.Expression | None":
         try:
-            parsed_expr = sqlglot.parse_one(sql, read=dialect)
-            if parsed_expr and parsed_expr.key:
-                return parsed_expr.key.upper()
-            if parsed_expr:
-                command_type = type(parsed_expr).__name__.upper()
-                if command_type == "COMMAND" and parsed_expr.this:
-                    return str(parsed_expr.this).upper()
-                return command_type
+            return sqlglot.parse_one(sql, read=dialect)
         except SQLGlotParseError:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
@@ -242,7 +244,14 @@ class SQLFactory:
                     exc_info=True,
                     extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
                 )
-        return "UNKNOWN"
+        return None
+
+    @classmethod
+    def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
+        parsed_expr = cls._parse_sql_expression(sql, dialect)
+        if parsed_expr is None:
+            return "UNKNOWN"
+        return cls._detect_type_from_expression(parsed_expr)
 
     def __init__(self, dialect: DialectType = None) -> None:
         """Initialize the SQL factory.
@@ -306,7 +315,8 @@ class SQLFactory:
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
             if self._looks_like_sql(sql_candidate):
-                detected = self.detect_sql_type(sql_candidate, dialect=builder_dialect)
+                parsed_expr = self._parse_sql_expression(sql_candidate, builder_dialect)
+                detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
                 if detected not in {"SELECT", "WITH"}:
                     msg = (
                         f"sql.select() expects a SELECT or WITH statement, got {detected}. "
@@ -314,7 +324,7 @@ class SQLFactory:
                     )
                     raise SQLBuilderError(msg)
                 select_builder = Select(dialect=builder_dialect)
-                return self._populate_select_from_sql(select_builder, sql_candidate)
+                return self._populate_select_from_sql(select_builder, sql_candidate, parsed_expr)
         select_builder = Select(dialect=builder_dialect)
         if columns_or_sql:
             select_builder.select(*columns_or_sql)
@@ -325,7 +335,8 @@ class SQLFactory:
         builder = Insert(dialect=builder_dialect)
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
-                detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
+                parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
+                detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
                 if detected not in {"INSERT", "SELECT"}:
                     msg = (
                         f"sql.insert() expects INSERT or SELECT (for insert-from-select), got {detected}. "
@@ -333,7 +344,7 @@ class SQLFactory:
                         f"or ensure the SQL is INSERT/SELECT."
                     )
                     raise SQLBuilderError(msg)
-                return self._populate_insert_from_sql(builder, table_or_sql)
+                return self._populate_insert_from_sql(builder, table_or_sql, parsed_expr)
             return builder.into(table_or_sql)
         return builder
 
@@ -342,14 +353,15 @@ class SQLFactory:
         builder = Update(dialect=builder_dialect)
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
-                detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
+                parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
+                detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
                 if detected != "UPDATE":
                     msg = (
                         f"sql.update() expects UPDATE statement, got {detected}. "
                         f"Use sql.{detected.lower()}() if a dedicated builder exists."
                     )
                     raise SQLBuilderError(msg)
-                return self._populate_update_from_sql(builder, table_or_sql)
+                return self._populate_update_from_sql(builder, table_or_sql, parsed_expr)
             return builder.table(table_or_sql)
         return builder
 
@@ -357,14 +369,15 @@ class SQLFactory:
         builder_dialect = dialect or self.dialect
         if table_or_sql and self._looks_like_sql(table_or_sql):
             builder = Delete(dialect=builder_dialect)
-            detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
+            parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
+            detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
             if detected != "DELETE":
                 msg = (
                     f"sql.delete() expects DELETE statement, got {detected}. "
                     f"Use sql.{detected.lower()}() if a dedicated builder exists."
                 )
                 raise SQLBuilderError(msg)
-            return self._populate_delete_from_sql(builder, table_or_sql)
+            return self._populate_delete_from_sql(builder, table_or_sql, parsed_expr)
 
         return Delete(table_or_sql, dialect=builder_dialect) if table_or_sql else Delete(dialect=builder_dialect)
 
@@ -372,14 +385,15 @@ class SQLFactory:
         builder_dialect = dialect or self.dialect
         if table_or_sql and self._looks_like_sql(table_or_sql):
             builder = Merge(dialect=builder_dialect)
-            detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
+            parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
+            detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
             if detected != "MERGE":
                 msg = (
                     f"sql.merge() expects MERGE statement, got {detected}. "
                     f"Use sql.{detected.lower()}() if a dedicated builder exists."
                 )
                 raise SQLBuilderError(msg)
-            return self._populate_merge_from_sql(builder, table_or_sql)
+            return self._populate_merge_from_sql(builder, table_or_sql, parsed_expr)
 
         return Merge(table_or_sql, dialect=builder_dialect) if table_or_sql else Merge(dialect=builder_dialect)
 
@@ -729,10 +743,13 @@ class SQLFactory:
 
         return False
 
-    def _populate_insert_from_sql(self, builder: "Insert", sql_string: str) -> "Insert":
+    def _populate_insert_from_sql(
+        self, builder: "Insert", sql_string: str, parsed_expr: "exp.Expression | None" = None
+    ) -> "Insert":
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""
         try:
-            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
                 builder.set_expression(parsed_expr)
@@ -758,11 +775,20 @@ class SQLFactory:
             )
         return builder
 
-    def _populate_select_from_sql(self, builder: "Select", sql_string: str) -> "Select":
+    def _populate_select_from_sql(
+        self, builder: "Select", sql_string: str, parsed_expr: "exp.Expression | None" = None
+    ) -> "Select":
         """Parse SQL string and populate SELECT builder using SQLGlot directly."""
         try:
-            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
 
+            if isinstance(parsed_expr, exp.With):
+                base_expression = parsed_expr.this
+                if isinstance(base_expression, exp.Select):
+                    builder.set_expression(base_expression)
+                    builder.load_ctes(list(parsed_expr.expressions))
+                    return builder
             if isinstance(parsed_expr, exp.Select):
                 builder.set_expression(parsed_expr)
                 return builder
@@ -780,10 +806,13 @@ class SQLFactory:
             )
         return builder
 
-    def _populate_update_from_sql(self, builder: "Update", sql_string: str) -> "Update":
+    def _populate_update_from_sql(
+        self, builder: "Update", sql_string: str, parsed_expr: "exp.Expression | None" = None
+    ) -> "Update":
         """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
         try:
-            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
                 builder.set_expression(parsed_expr)
@@ -802,10 +831,13 @@ class SQLFactory:
             )
         return builder
 
-    def _populate_delete_from_sql(self, builder: "Delete", sql_string: str) -> "Delete":
+    def _populate_delete_from_sql(
+        self, builder: "Delete", sql_string: str, parsed_expr: "exp.Expression | None" = None
+    ) -> "Delete":
         """Parse SQL string and populate DELETE builder using SQLGlot directly."""
         try:
-            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
                 builder.set_expression(parsed_expr)
@@ -824,10 +856,13 @@ class SQLFactory:
             )
         return builder
 
-    def _populate_merge_from_sql(self, builder: "Merge", sql_string: str) -> "Merge":
+    def _populate_merge_from_sql(
+        self, builder: "Merge", sql_string: str, parsed_expr: "exp.Expression | None" = None
+    ) -> "Merge":
         """Parse SQL string and populate MERGE builder using SQLGlot directly."""
         try:
-            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
                 builder.set_expression(parsed_expr)
@@ -930,27 +965,27 @@ class SQLFactory:
     @property
     def inner_join_(self) -> "JoinBuilder":
         """Create an INNER JOIN builder."""
-        return JoinBuilder("inner join")
+        return create_join_builder("inner join")
 
     @property
     def left_join_(self) -> "JoinBuilder":
         """Create a LEFT JOIN builder."""
-        return JoinBuilder("left join")
+        return create_join_builder("left join")
 
     @property
     def right_join_(self) -> "JoinBuilder":
         """Create a RIGHT JOIN builder."""
-        return JoinBuilder("right join")
+        return create_join_builder("right join")
 
     @property
     def full_join_(self) -> "JoinBuilder":
         """Create a FULL OUTER JOIN builder."""
-        return JoinBuilder("full join")
+        return create_join_builder("full join")
 
     @property
     def cross_join_(self) -> "JoinBuilder":
         """Create a CROSS JOIN builder."""
-        return JoinBuilder("cross join")
+        return create_join_builder("cross join")
 
     @property
     def lateral_join_(self) -> "JoinBuilder":
@@ -969,7 +1004,7 @@ class SQLFactory:
             )
             ```
         """
-        return JoinBuilder("lateral join", lateral=True)
+        return create_join_builder("lateral join", lateral=True)
 
     @property
     def left_lateral_join_(self) -> "JoinBuilder":
@@ -978,7 +1013,7 @@ class SQLFactory:
         Returns:
             JoinBuilder configured for LEFT LATERAL JOIN
         """
-        return JoinBuilder("left join", lateral=True)
+        return create_join_builder("left join", lateral=True)
 
     @property
     def cross_lateral_join_(self) -> "JoinBuilder":
@@ -987,7 +1022,7 @@ class SQLFactory:
         Returns:
             JoinBuilder configured for CROSS LATERAL JOIN
         """
-        return JoinBuilder("cross join", lateral=True)
+        return create_join_builder("cross join", lateral=True)
 
     def __getattr__(self, name: str) -> "Column":
         """Dynamically create column references.

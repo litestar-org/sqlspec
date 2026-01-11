@@ -6,7 +6,7 @@ automatic parsing of query parameters into SQLSpec filter objects.
 
 import datetime
 import inspect
-from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple
 from uuid import UUID
 
 from fastapi import Depends, Query
@@ -146,6 +146,10 @@ class DependencyCache(metaclass=SingletonMeta):
 dep_cache = DependencyCache()
 
 
+def _empty_filter_list() -> "list[FilterTypes]":
+    return []
+
+
 def provide_filters(
     config: FilterConfig, dep_defaults: DependencyDefaults = DEPENDENCY_DEFAULTS
 ) -> "Callable[..., list[FilterTypes]]":
@@ -205,7 +209,7 @@ def provide_filters(
             break
 
     if not has_filters:
-        return lambda: cast("list[FilterTypes]", [])
+        return _empty_filter_list
 
     cache_key = hash(_make_hashable(config))
 

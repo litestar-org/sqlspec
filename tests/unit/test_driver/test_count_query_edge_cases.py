@@ -7,23 +7,13 @@ where SELECT statements are missing required clauses (FROM, etc.).
 import pytest
 
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
+from tests.conftest import requires_interpreted
 
 # pyright: reportPrivateUsage=false
 
-
-def _is_compiled() -> bool:
-    """Check if driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-pytestmark = pytest.mark.skipif(_is_compiled(), reason="Test requires interpreted subclasses of compiled driver bases.")
+pytestmark = requires_interpreted
 
 
 class MockSyncDriver(SyncDriverAdapterBase):
@@ -36,10 +26,10 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def connection(self):
         return None
 
-    def _execute_statement(self, *args, **kwargs):
+    def dispatch_execute(self, *args, **kwargs):
         raise NotImplementedError("Mock driver - not implemented")
 
-    def _execute_many(self, *args, **kwargs):
+    def dispatch_execute_many(self, *args, **kwargs):
         raise NotImplementedError("Mock driver - not implemented")
 
     def with_cursor(self, *args, **kwargs):
@@ -63,7 +53,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def rollback(self, *args, **kwargs):
         raise NotImplementedError("Mock driver - not implemented")
 
-    def _try_special_handling(self, *args, **kwargs):
+    def dispatch_special_handling(self, *args, **kwargs):
         raise NotImplementedError("Mock driver - not implemented")
 
     @property
