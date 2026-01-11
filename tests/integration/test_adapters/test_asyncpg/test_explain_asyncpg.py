@@ -9,7 +9,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.builder import Explain, sql
 from sqlspec.core import SQL
 
-pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.anyio]
+pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncio(loop_scope="function")]
 
 
 @pytest.fixture

@@ -9,7 +9,7 @@ from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.builder import Explain, sql
 from sqlspec.core import SQL
 
-pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.anyio]
+pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.asyncio(loop_scope="function")]
 
 
 @pytest.fixture
