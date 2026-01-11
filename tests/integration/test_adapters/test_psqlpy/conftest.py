@@ -11,10 +11,13 @@ if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def psqlpy_config(postgres_service: "PostgresService") -> AsyncGenerator[PsqlpyConfig, None]:
-    """Fixture for PsqlpyConfig using the postgres service."""
+    """Fixture for PsqlpyConfig using the postgres service.
 
+    Ensures proper pool cleanup to prevent event loop issues
+    when running with pytest-xdist and function-scoped event loops.
+    """
     dsn = (
         f"postgres://{postgres_service.user}:{postgres_service.password}@"
         f"{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
@@ -23,7 +26,9 @@ async def psqlpy_config(postgres_service: "PostgresService") -> AsyncGenerator[P
     try:
         yield config
     finally:
-        await config.close_pool()
+        if config.connection_instance:
+            config.connection_instance.close()
+        config.connection_instance = None
 
 
 @pytest.fixture

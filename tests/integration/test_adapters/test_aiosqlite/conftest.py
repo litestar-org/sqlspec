@@ -11,10 +11,13 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 pytestmark = pytest.mark.xdist_group("sqlite")
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
-    """Create an aiosqlite session with test table."""
+    """Create an aiosqlite session with test table.
 
+    Ensures proper pool cleanup to prevent event loop issues
+    when running with pytest-xdist and function-scoped event loops.
+    """
     config = AiosqliteConfig()
 
     try:
@@ -41,23 +44,35 @@ async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
                     except Exception:
                         pass
     finally:
-        await config.close_pool()
+        if config.connection_instance:
+            await config.close_pool()
+        config.connection_instance = None
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def aiosqlite_config() -> AsyncGenerator[AiosqliteConfig, None]:
-    """Provide AiosqliteConfig for connection tests."""
+    """Provide AiosqliteConfig for connection tests.
+
+    Ensures proper pool cleanup to prevent event loop issues
+    when running with pytest-xdist and function-scoped event loops.
+    """
     config = AiosqliteConfig()
 
     try:
         yield config
     finally:
-        await config.close_pool()
+        if config.connection_instance:
+            await config.close_pool()
+        config.connection_instance = None
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def aiosqlite_config_file() -> AsyncGenerator[AiosqliteConfig, None]:
-    """Provide AiosqliteConfig with temporary file database for concurrent access tests."""
+    """Provide AiosqliteConfig with temporary file database for concurrent access tests.
+
+    Ensures proper pool cleanup to prevent event loop issues
+    when running with pytest-xdist and function-scoped event loops.
+    """
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 
@@ -66,7 +81,9 @@ async def aiosqlite_config_file() -> AsyncGenerator[AiosqliteConfig, None]:
     try:
         yield config
     finally:
-        await config.close_pool()
+        if config.connection_instance:
+            await config.close_pool()
+        config.connection_instance = None
         try:
             os.unlink(db_path)
         except Exception:

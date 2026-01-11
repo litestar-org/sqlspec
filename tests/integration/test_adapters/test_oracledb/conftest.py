@@ -29,10 +29,13 @@ def oracle_sync_config(oracle_connection_config: "dict[str, Any]") -> OracleSync
     return OracleSyncConfig(connection_config=dict(oracle_connection_config))
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def oracle_async_config(oracle_connection_config: "dict[str, Any]") -> "AsyncGenerator[OracleAsyncConfig, None]":
-    """Create Oracle async configuration."""
+    """Create Oracle async configuration.
 
+    Ensures proper pool cleanup to prevent event loop issues
+    when running with pytest-xdist and function-scoped event loops.
+    """
     connection_config = dict(oracle_connection_config)
     connection_config.setdefault("min", 1)
     connection_config.setdefault("max", 5)
@@ -40,7 +43,9 @@ async def oracle_async_config(oracle_connection_config: "dict[str, Any]") -> "As
     try:
         yield config
     finally:
-        await config.close_pool()
+        if config.connection_instance:
+            await config.close_pool()
+        config.connection_instance = None
 
 
 @pytest.fixture

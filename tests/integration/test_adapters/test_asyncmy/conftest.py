@@ -10,7 +10,11 @@ from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_state
 
 @pytest.fixture(scope="function")
 async def asyncmy_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:
-    """Create AsyncMy configuration for testing with proper cleanup."""
+    """Create AsyncMy configuration for testing with proper cleanup.
+
+    Uses pool.terminate() for forceful cleanup to prevent event loop issues
+    when running with pytest-xdist and function-scoped event loops.
+    """
     config = AsyncmyConfig(
         connection_config={
             "host": mysql_service.host,
@@ -27,9 +31,13 @@ async def asyncmy_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyC
     try:
         yield config
     finally:
-        if config.connection_instance:
-            await config.close_pool()
-        config.connection_instance = None
+        pool = config.connection_instance
+        if pool is not None:
+            # Use terminate() for forceful cleanup - more reliable than close()
+            # when dealing with function-scoped event loops in pytest-xdist
+            pool.terminate()
+            await pool.wait_closed()
+            config.connection_instance = None
 
 
 @pytest.fixture

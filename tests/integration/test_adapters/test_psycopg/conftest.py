@@ -39,7 +39,11 @@ def psycopg_sync_config(postgres_service: "PostgresService") -> "Generator[Psyco
 
 @pytest.fixture(scope="function")
 async def psycopg_async_config(postgres_service: "PostgresService") -> "AsyncGenerator[PsycopgAsyncConfig, None]":
-    """Create a psycopg async configuration."""
+    """Create a psycopg async configuration.
+
+    Ensures proper pool cleanup to prevent event loop issues
+    when running with pytest-xdist and function-scoped event loops.
+    """
     config = PsycopgAsyncConfig(
         connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
@@ -50,3 +54,4 @@ async def psycopg_async_config(postgres_service: "PostgresService") -> "AsyncGen
     finally:
         if config.connection_instance:
             await config.close_pool()
+        config.connection_instance = None
