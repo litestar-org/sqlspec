@@ -48,6 +48,7 @@ async def asyncpg_adk_store(postgres_service: "PostgresService") -> "AsyncGenera
     finally:
         if config.connection_instance:
             await config.close_pool()
+        config.connection_instance = None
 
 
 @pytest.fixture
