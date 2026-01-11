@@ -175,7 +175,7 @@ def test_non_special_type(detector: "BaseTypeConverter") -> None:
 @requires_interpreted
 def test_none_input(detector: "BaseTypeConverter") -> None:
     """Test that None input is handled correctly."""
-    detected = detector.detect_type(cast("str | None", None))
+    detected = detector.detect_type(cast("str", None))
     assert detected is None
 
 
@@ -185,7 +185,7 @@ def test_non_string_input(detector: "BaseTypeConverter") -> None:
     non_strings = [123, [], {}, True]
 
     for value in non_strings:
-        detected = detector.detect_type(cast("str | None", value))
+        detected = detector.detect_type(cast("str", value))
         assert detected is None
 
 
