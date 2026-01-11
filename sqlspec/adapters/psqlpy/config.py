@@ -215,6 +215,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             return
 
         self.connection_instance.close()
+        self.connection_instance = None
 
     async def close_pool(self) -> None:
         """Close the connection pool."""

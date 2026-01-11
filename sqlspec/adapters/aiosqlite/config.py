@@ -302,6 +302,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         """Close the connection pool."""
         if self.connection_instance and not self.connection_instance.is_closed:
             await self.connection_instance.close()
+            self.connection_instance = None
 
     async def create_connection(self) -> "AiosqliteConnection":
         """Create a single async connection from the pool.

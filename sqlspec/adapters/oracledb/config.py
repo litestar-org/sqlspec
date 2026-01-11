@@ -252,6 +252,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Close the actual connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
+            self.connection_instance = None
 
     def create_connection(self) -> "OracleSyncConnection":
         """Create a single connection (not from pool).
@@ -465,6 +466,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Close the actual async connection pool."""
         if self.connection_instance:
             await self.connection_instance.close()
+            self.connection_instance = None
 
     async def close_pool(self) -> None:
         """Close the connection pool."""

@@ -211,6 +211,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Close the actual async connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
+            await self.connection_instance.wait_closed()
+            self.connection_instance = None
 
     async def close_pool(self) -> None:
         """Close the connection pool."""

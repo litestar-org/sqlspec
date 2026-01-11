@@ -8,10 +8,10 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_statement_config
 
 
-@pytest.fixture
-async def asyncmy_config(mysql_service: MySQLService) -> AsyncmyConfig:
-    """Create AsyncMy configuration for testing."""
-    return AsyncmyConfig(
+@pytest.fixture(scope="function")
+async def asyncmy_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:
+    """Create AsyncMy configuration for testing with proper cleanup."""
+    config = AsyncmyConfig(
         connection_config={
             "host": mysql_service.host,
             "port": mysql_service.port,
@@ -24,6 +24,12 @@ async def asyncmy_config(mysql_service: MySQLService) -> AsyncmyConfig:
         },
         statement_config=default_statement_config,
     )
+    try:
+        yield config
+    finally:
+        if config.connection_instance:
+            await config.close_pool()
+        config.connection_instance = None
 
 
 @pytest.fixture

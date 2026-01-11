@@ -462,6 +462,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """Close the actual async connection pool and cleanup connectors."""
         if self.connection_instance:
             await self.connection_instance.close()
+            self.connection_instance = None
 
         if self._cloud_sql_connector is not None:
             await self._cloud_sql_connector.close_async()
