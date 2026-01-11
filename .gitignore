@@ -53,6 +53,7 @@ CLAUDE.md
 AGENTS.md
 docs-build
 .envs/
-.claude/* 
+.claude/*
+specs/
 .pre-commit-cache
 .gh-cache
