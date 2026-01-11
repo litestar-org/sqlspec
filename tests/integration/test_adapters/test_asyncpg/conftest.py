@@ -24,8 +24,8 @@ def asyncpg_connection_config(postgres_service: "PostgresService") -> "dict[str,
 async def asyncpg_config(asyncpg_connection_config: "dict[str, Any]") -> "AsyncGenerator[AsyncpgConfig, None]":
     """Provide an AsyncpgConfig instance with shared pool settings.
 
-    Uses pool.terminate() for forceful cleanup to prevent event loop issues
-    when running with pytest-xdist and function-scoped event loops.
+    Uses await pool.close() for async cleanup to properly clean up Future
+    references on the current event loop before it terminates.
     """
     config = AsyncpgConfig(connection_config=dict(asyncpg_connection_config))
     try:
@@ -33,9 +33,9 @@ async def asyncpg_config(asyncpg_connection_config: "dict[str, Any]") -> "AsyncG
     finally:
         pool = config.connection_instance
         if pool is not None:
-            # Use terminate() for forceful cleanup - more reliable than close()
-            # when dealing with function-scoped event loops in pytest-xdist
-            pool.terminate()
+            # Use await pool.close() for async cleanup - ensures all Futures
+            # are properly cleaned up on the current loop before termination
+            await pool.close()
             config.connection_instance = None
 
 

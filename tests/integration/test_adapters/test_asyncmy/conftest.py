@@ -12,8 +12,8 @@ from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_state
 async def asyncmy_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:
     """Create AsyncMy configuration for testing with proper cleanup.
 
-    Uses pool.terminate() for forceful cleanup to prevent event loop issues
-    when running with pytest-xdist and function-scoped event loops.
+    Uses pool.close() + wait_closed() for async cleanup to properly clean up
+    Future references on the current event loop before it terminates.
     """
     config = AsyncmyConfig(
         connection_config={
@@ -33,9 +33,9 @@ async def asyncmy_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyC
     finally:
         pool = config.connection_instance
         if pool is not None:
-            # Use terminate() for forceful cleanup - more reliable than close()
-            # when dealing with function-scoped event loops in pytest-xdist
-            pool.terminate()
+            # Use close() + wait_closed() for async cleanup - ensures all Futures
+            # are properly cleaned up on the current loop before termination
+            pool.close()
             await pool.wait_closed()
             config.connection_instance = None
 
