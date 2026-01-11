@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from mypy_extensions import trait
 from typing_extensions import Self
 
-from sqlspec.core import SQL
+from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_sql, has_parameter_builder, is_expression
@@ -511,10 +511,15 @@ class Explain:
         """
         target_dialect = dialect or self._dialect
         explain_sql = build_explain_sql(self._statement_sql, self._options, target_dialect)
+        statement_config = StatementConfig(dialect=target_dialect) if target_dialect is not None else None
 
         if self._parameters:
-            return SQL(explain_sql, self._parameters)
-        return SQL(explain_sql)
+            if statement_config is None:
+                return SQL(explain_sql, self._parameters)
+            return SQL(explain_sql, self._parameters, statement_config=statement_config)
+        if statement_config is None:
+            return SQL(explain_sql)
+        return SQL(explain_sql, statement_config=statement_config)
 
     def to_sql(self, dialect: "DialectType | None" = None) -> str:
         """Build and return just the SQL string.
