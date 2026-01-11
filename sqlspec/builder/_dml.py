@@ -90,15 +90,7 @@ class InsertValuesMixin:
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    _columns: Any
-
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
+    _columns: list[str]
 
     def columns(self, *columns: str | exp.Expression) -> Self:
         current_expr = self.get_expression()
@@ -161,12 +153,12 @@ class InsertValuesMixin:
             raise SQLBuilderError(msg)
 
         row_expressions: list[exp.Expression] = []
-        column_defs = cast("list[str]", self._columns or [])
+        column_defs: list[str] = list(self._columns or [])
 
         if kwargs:
             if not column_defs:
                 self.columns(*kwargs.keys())
-                column_defs = cast("list[str]", self._columns)
+                column_defs = list(self._columns or [])
             for col, val in kwargs.items():
                 if isinstance(val, exp.Expression):
                     row_expressions.append(val)
@@ -217,10 +209,6 @@ class InsertFromSelectMixin:
 
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
-
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
 
     def from_select(self, select_builder: SQLBuilderProtocol) -> Self:
         current_expr = self.get_expression()
@@ -283,14 +271,6 @@ class UpdateSetClauseMixin:
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
     def _process_update_value(self, val: Any, col: Any) -> exp.Expression:
         if isinstance(val, exp.Expression):
             return val
@@ -300,7 +280,7 @@ class UpdateSetClauseMixin:
             query_builder = cast("QueryBuilder", self)
             value_expr = exp.paren(exp.maybe_parse(sql_text, dialect=query_builder.dialect))
             for p_name, p_value in val.parameters.items():
-                self.add_parameter(p_value, name=p_name)
+                query_builder.add_parameter(p_value, name=p_name)
             return value_expr
         if has_expression_and_sql(val):
             return extract_sql_object_expression(val, builder=self)

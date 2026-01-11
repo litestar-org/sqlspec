@@ -6,6 +6,7 @@ dialect-aware SQL generation.
 
 from typing import TYPE_CHECKING, Any
 
+from mypy_extensions import trait
 from typing_extensions import Self
 
 from sqlspec.core import SQL
@@ -532,6 +533,7 @@ class Explain:
         return f"Explain({self._statement_sql!r}, dialect={self._dialect!r}, options={self._options!r})"
 
 
+@trait
 class ExplainMixin:
     """Mixin to add .explain() method to QueryBuilder subclasses.
 

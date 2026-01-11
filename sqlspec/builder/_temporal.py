@@ -29,11 +29,13 @@ def _oracle_version_sql(self: "Oracle.Generator", expression: exp.Version) -> st
 
 
 def _snowflake_version_sql(self: "Snowflake.Generator", expression: exp.Version) -> str:
-    """Snowflake: AT (TIMESTAMP => timestamp) or BEFORE (TIMESTAMP => ...)."""
+    """Snowflake: AT (TIMESTAMP => timestamp) or BEFORE (TIMESTAMP => ...).
+
+    AS OF is mapped to AT, and BEFORE is supported for point-before queries.
+    """
     kind = expression.text("kind")
     expr = self.sql(expression, "expression")
     this = expression.name or "TIMESTAMP"
-    # Map AS OF -> AT, support BEFORE for point-before queries
     if kind and "BEFORE" in kind.upper():
         return f"BEFORE ({this} => {expr})"
     return f"AT ({this} => {expr})"
@@ -75,6 +77,10 @@ def create_temporal_table(
     Returns:
         Table expression with version clause that generates dialect-specific SQL.
 
+    Notes:
+        Inputs are normalized before building the ``exp.Version`` clause so both string table names and literal timestamps
+        work consistently.
+
     Example:
         >>> from sqlspec.builder import create_temporal_table
         >>> from sqlglot import exp
@@ -86,7 +92,6 @@ def create_temporal_table(
         >>> t.sql(dialect="bigquery")
         "orders FOR SYSTEM_TIME AS OF '2024-01-01'"
     """
-    # Normalize table to expression
     if isinstance(table, str):
         table_expr = exp.to_table(table)
     elif isinstance(table, exp.Table):
@@ -94,13 +99,10 @@ def create_temporal_table(
     else:
         table_expr = exp.to_table(str(table))
 
-    # Normalize as_of to expression
     as_of_expr = exp.Literal.string(as_of) if isinstance(as_of, str) else as_of
 
-    # Create Version expression
     version = exp.Version(this=kind or "TIMESTAMP", kind="AS OF", expression=as_of_expr)
 
-    # Attach to table
     table_expr.set("version", version)
     return table_expr
 
@@ -127,14 +129,11 @@ def register_version_generators() -> None:
     if _VERSION_GENERATORS_REGISTERED:
         return
 
-    # Register default (base Generator) for when no dialect is specified
     Generator.TRANSFORMS[exp.Version] = _default_version_sql
 
-    # Override for dialects that need custom syntax
     Oracle.Generator.TRANSFORMS[exp.Version] = _oracle_version_sql
     Snowflake.Generator.TRANSFORMS[exp.Version] = _snowflake_version_sql
     DuckDB.Generator.TRANSFORMS[exp.Version] = _duckdb_version_sql
     Postgres.Generator.TRANSFORMS[exp.Version] = _cockroachdb_version_sql
-    # BigQuery uses built-in version_sql which already handles FOR SYSTEM_TIME AS OF
 
     _VERSION_GENERATORS_REGISTERED = True

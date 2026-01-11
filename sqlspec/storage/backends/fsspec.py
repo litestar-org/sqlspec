@@ -71,6 +71,14 @@ class FSSpecBackend:
     __slots__ = ("_fs_uri", "backend_type", "base_path", "fs", "protocol")
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
+        """Initialize the fsspec-backed storage backend.
+
+        Args:
+            uri: Filesystem URI (protocol://path).
+            **kwargs: Additional fsspec configuration options, including an optional base_path.
+
+        For cloud URIs such as S3/GS/Azure, we derive a default base_path from the bucket/path when no explicit base_path is provided.
+        """
         ensure_fsspec()
 
         base_path = kwargs.pop("base_path", "")
@@ -79,15 +87,12 @@ class FSSpecBackend:
             self.protocol = uri.split("://", maxsplit=1)[0]
             self._fs_uri = uri
 
-            # For S3/cloud URIs, extract bucket/path from URI as base_path
             if self.protocol in {"s3", "gs", "az", "gcs"}:
                 parsed = urlparse(uri)
-                # Combine netloc (bucket) and path for base_path
                 if parsed.netloc:
                     uri_base_path = parsed.netloc
                     if parsed.path and parsed.path != "/":
                         uri_base_path = f"{uri_base_path}{parsed.path}"
-                    # Only use URI base_path if no explicit base_path provided
                     if not base_path:
                         base_path = uri_base_path
         else:

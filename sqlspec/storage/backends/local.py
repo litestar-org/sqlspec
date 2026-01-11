@@ -73,28 +73,27 @@ class LocalStore:
         Args:
             uri: File URI or path (e.g., "file:///path" or "/path")
             **kwargs: Additional options (base_path for relative operations)
+
+        The URI may be a file:// path (Windows style like file:///C:/path is supported),
+        and an explicit base_path override will take precedence before we ensure the directory exists.
         """
         if uri.startswith("file://"):
             parsed = urlparse(uri)
             path = unquote(parsed.path)
-            # Handle Windows paths (file:///C:/path)
             if path and len(path) > 2 and path[2] == ":":  # noqa: PLR2004
-                path = path[1:]  # Remove leading slash for Windows
+                path = path[1:]
             self.base_path = Path(path).resolve()
         elif uri:
             self.base_path = Path(uri).resolve()
         else:
             self.base_path = Path.cwd()
 
-        # Allow override with explicit base_path
         if "base_path" in kwargs:
             self.base_path = Path(kwargs["base_path"]).resolve()
 
-        # Create base directory if it doesn't exist and it's actually a directory
         if not self.base_path.exists():
             self.base_path.mkdir(parents=True, exist_ok=True)
         elif self.base_path.is_file():
-            # If base_path points to a file, use its parent as the base directory
             self.base_path = self.base_path.parent
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -147,7 +146,7 @@ class LocalStore:
     def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
         """Stream bytes from file."""
         resolved = self._resolve_path(path)
-        chunk_size = chunk_size or 65536  # Default 64KB
+        chunk_size = chunk_size or 65536
         try:
             with resolved.open("rb") as f:
                 while True:
@@ -159,8 +158,20 @@ class LocalStore:
             raise FileNotFoundError(str(resolved)) from error
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
-        """List objects in directory."""
-        # If prefix looks like a directory path, treat as directory
+        """List objects in directory.
+
+        Args:
+            prefix: Optional prefix that may look like a directory or filename filter.
+            recursive: Whether to walk subdirectories.
+            **kwargs: Additional backend-specific options (currently unused).
+
+        Args:
+            prefix: Optional prefix that may look like a directory or filename filter.
+            recursive: Whether to walk subdirectories.
+
+        When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
+        Paths outside base_path are returned with their absolute names.
+        """
         if prefix and (prefix.endswith("/") or "/" in prefix):
             search_path = self._resolve_path(prefix)
             if not search_path.exists():
@@ -168,7 +179,6 @@ class LocalStore:
             if search_path.is_file():
                 return [str(search_path.relative_to(self.base_path))]
         else:
-            # Treat as filename prefix filter
             search_path = self.base_path
 
         pattern = "**/*" if recursive else "*"
@@ -178,11 +188,9 @@ class LocalStore:
                 try:
                     relative = path.relative_to(self.base_path)
                     relative_str = str(relative)
-                    # Apply prefix filter if provided
                     if not prefix or relative_str.startswith(prefix):
                         files.append(relative_str)
                 except ValueError:
-                    # Path is outside base_path, use absolute
                     path_str = str(path)
                     if not prefix or path_str.startswith(prefix):
                         files.append(path_str)
@@ -221,8 +229,10 @@ class LocalStore:
         )
 
     def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
-        """Find files matching pattern."""
-        # Handle both relative and absolute patterns
+        """Find files matching pattern.
+
+        Supports both relative and absolute patterns by adjusting where the glob search begins.
+        """
         if Path(pattern).is_absolute():
             base_path = Path(pattern).parent
             pattern_name = Path(pattern).name
@@ -348,7 +358,6 @@ class LocalStore:
         msg = "URL signing is not applicable to local file storage. Use file:// URIs directly."
         raise NotImplementedError(msg)
 
-    # Async methods using sync_tools.async_
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file asynchronously."""
         return await async_(self.read_bytes)(path, **kwargs)

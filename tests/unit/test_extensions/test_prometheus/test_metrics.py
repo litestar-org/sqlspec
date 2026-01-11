@@ -22,7 +22,7 @@ def test_default_labels_are_db_system_and_operation(monkeypatch) -> None:
     from sqlspec.extensions import prometheus
 
     observer = prometheus.PrometheusStatementObserver()
-    assert observer._label_names == ("db_system", "operation")
+    assert observer._label_names == ("db_system", "operation")  # pyright: ignore[reportPrivateUsage]
 
 
 def test_enable_metrics_uses_db_system_labels(monkeypatch) -> None:
@@ -34,7 +34,7 @@ def test_enable_metrics_uses_db_system_labels(monkeypatch) -> None:
     config = prometheus.enable_metrics()
     assert config.statement_observers is not None
     observer = config.statement_observers[-1]
-    assert observer._label_names == ("db_system", "operation")
+    assert observer._label_names == ("db_system", "operation")  # pyright: ignore[reportPrivateUsage, reportFunctionMemberAccess]
 
 
 def test_db_system_label_extraction_from_event(monkeypatch) -> None:
@@ -61,7 +61,7 @@ def test_db_system_label_extraction_from_event(monkeypatch) -> None:
         db_system="postgresql",
     )
 
-    labels = observer._label_values(event)
+    labels = observer._label_values(event)  # pyright: ignore[reportPrivateUsage]
     assert labels == ("postgresql", "SELECT")
 
 
@@ -89,7 +89,7 @@ def test_db_system_fallback_to_resolve(monkeypatch) -> None:
         db_system=None,
     )
 
-    labels = observer._label_values(event)
+    labels = observer._label_values(event)  # pyright: ignore[reportPrivateUsage]
     assert labels[0] == "postgresql"
     assert labels[1] == "SELECT"
 
@@ -100,10 +100,8 @@ def test_custom_label_names(monkeypatch) -> None:
 
     from sqlspec.extensions import prometheus
 
-    observer = prometheus.PrometheusStatementObserver(
-        label_names=("driver", "adapter", "operation")
-    )
-    assert observer._label_names == ("driver", "adapter", "operation")
+    observer = prometheus.PrometheusStatementObserver(label_names=("driver", "adapter", "operation"))
+    assert observer._label_names == ("driver", "adapter", "operation")  # pyright: ignore[reportPrivateUsage]
 
     event = create_event(
         sql="INSERT INTO foo VALUES (1)",
@@ -120,7 +118,7 @@ def test_custom_label_names(monkeypatch) -> None:
         correlation_id=None,
     )
 
-    labels = observer._label_values(event)
+    labels = observer._label_values(event)  # pyright: ignore[reportPrivateUsage]
     assert labels == ("SqliteDriver", "SqliteConfig", "INSERT")
 
 
@@ -130,9 +128,7 @@ def test_bind_key_label_defaults_to_default(monkeypatch) -> None:
 
     from sqlspec.extensions import prometheus
 
-    observer = prometheus.PrometheusStatementObserver(
-        label_names=("db_system", "bind_key")
-    )
+    observer = prometheus.PrometheusStatementObserver(label_names=("db_system", "bind_key"))
 
     event = create_event(
         sql="SELECT 1",
@@ -150,7 +146,7 @@ def test_bind_key_label_defaults_to_default(monkeypatch) -> None:
         db_system="postgresql",
     )
 
-    labels = observer._label_values(event)
+    labels = observer._label_values(event)  # pyright: ignore[reportPrivateUsage]
     assert labels == ("postgresql", "default")
 
 
@@ -160,9 +156,7 @@ def test_bind_key_label_uses_value_when_set(monkeypatch) -> None:
 
     from sqlspec.extensions import prometheus
 
-    observer = prometheus.PrometheusStatementObserver(
-        label_names=("db_system", "bind_key")
-    )
+    observer = prometheus.PrometheusStatementObserver(label_names=("db_system", "bind_key"))
 
     event = create_event(
         sql="SELECT 1",
@@ -180,7 +174,7 @@ def test_bind_key_label_uses_value_when_set(monkeypatch) -> None:
         db_system="postgresql",
     )
 
-    labels = observer._label_values(event)
+    labels = observer._label_values(event)  # pyright: ignore[reportPrivateUsage]
     assert labels == ("postgresql", "analytics")
 
 
@@ -208,7 +202,7 @@ def test_operation_defaults_to_execute(monkeypatch) -> None:
         db_system="oracle",
     )
 
-    labels = observer._label_values(event)
+    labels = observer._label_values(event)  # pyright: ignore[reportPrivateUsage]
     assert labels == ("oracle", "EXECUTE")
 
 
@@ -299,12 +293,9 @@ def test_custom_namespace_and_subsystem(monkeypatch) -> None:
 
     from sqlspec.extensions import prometheus
 
-    observer = prometheus.PrometheusStatementObserver(
-        namespace="myapp",
-        subsystem="database",
-    )
+    observer = prometheus.PrometheusStatementObserver(namespace="myapp", subsystem="database")
 
-    assert observer._label_names == ("db_system", "operation")
+    assert observer._label_names == ("db_system", "operation")  # pyright: ignore[reportPrivateUsage]
 
 
 def test_custom_duration_buckets(monkeypatch) -> None:
@@ -314,9 +305,7 @@ def test_custom_duration_buckets(monkeypatch) -> None:
     from sqlspec.extensions import prometheus
 
     custom_buckets = (0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0)
-    observer = prometheus.PrometheusStatementObserver(
-        duration_buckets=custom_buckets,
-    )
+    observer = prometheus.PrometheusStatementObserver(duration_buckets=custom_buckets)
 
     event = create_event(
         sql="SELECT 1",

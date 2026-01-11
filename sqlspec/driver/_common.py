@@ -272,6 +272,11 @@ def make_cache_key_hashable(obj: Any) -> Any:
     For array-like objects (NumPy arrays, Python arrays, etc.), we use structural
     info (dtype + shape or typecode + length) rather than content for cache keys.
 
+    Collections are processed with stack entries that track (object, parent_list, index)
+    so we can convert substructures in-place and then replace placeholders with tuples or frozensets
+    only after their children are evaluated. Dictionaries are iterated in sorted order for determinism
+    while sets fall back to a best-effort ordering if necessary.
+
     Args:
         obj: Object to make hashable.
 
@@ -279,20 +284,15 @@ def make_cache_key_hashable(obj: Any) -> Any:
         A hashable representation of the object. Collections become tuples,
         arrays become structural tuples like ("ndarray", dtype, shape).
     """
-    # Fast path for common immutable scalar types
     if isinstance(obj, (int, str, bytes, bool, float, type(None))):
         return obj
 
-    # Stack contains tuples of (object, parent_list, index_in_parent)
-    # We build the result in-place in temporary lists, then convert to tuples/sets
-    # A placeholder list is used as the root "parent"
     root: list[Any] = [obj]
     stack = [(obj, root, 0)]
 
     while stack:
         current_obj, parent, idx = stack.pop()
 
-        # Post-processing markers
         if current_obj is _CONVERT_TO_TUPLE:
             parent[idx] = tuple(parent[idx])
             continue
@@ -301,7 +301,6 @@ def make_cache_key_hashable(obj: Any) -> Any:
             parent[idx] = frozenset(parent[idx])
             continue
 
-        # Handle structural types (arrays) - these are terminal nodes
         if has_typecode_and_len(current_obj):
             parent[idx] = ("array", current_obj.typecode, len(current_obj))
             continue
@@ -321,21 +320,16 @@ def make_cache_key_hashable(obj: Any) -> Any:
                     parent[idx] = ("array_like", type(current_obj).__name__)
             continue
 
-        # Handle collections
         if isinstance(current_obj, (list, tuple)):
-            # Create a new list for transformed items
             new_list = [None] * len(current_obj)
-            parent[idx] = new_list  # Placeholder, will be converted to tuple later
+            parent[idx] = new_list
 
-            # Push marker first so it is processed LAST (LIFO)
             stack.append((_CONVERT_TO_TUPLE, parent, idx))
 
-            # Push items in reverse order
             stack.extend((current_obj[i], new_list, i) for i in range(len(current_obj) - 1, -1, -1))
             continue
 
         if isinstance(current_obj, dict):
-            # Sort items by key for deterministic caching
             try:
                 sorted_items = sorted(current_obj.items())
             except TypeError:
@@ -343,21 +337,18 @@ def make_cache_key_hashable(obj: Any) -> Any:
 
             items_list = []
             for k, v in sorted_items:
-                items_list.append([k, v])  # Temporary list [k, v]
+                items_list.append([k, v])
 
-            parent[idx] = items_list  # Will become tuple(tuple(k, v')...)
+            parent[idx] = items_list
 
-            # Push marker first
-            stack.append((_CONVERT_TO_TUPLE, parent, idx))  # Convert items_list to tuple of tuples
+            stack.append((_CONVERT_TO_TUPLE, parent, idx))
 
-            # Push children
             for i in range(len(items_list) - 1, -1, -1):
                 stack.extend(((_CONVERT_TO_TUPLE, items_list, i), (items_list[i][1], items_list[i], 1)))
 
             continue
 
         if isinstance(current_obj, set):
-            # Convert to list, sort if possible
             try:
                 sorted_list = sorted(current_obj)
             except TypeError:
@@ -366,13 +357,11 @@ def make_cache_key_hashable(obj: Any) -> Any:
             new_list = [None] * len(sorted_list)
             parent[idx] = new_list
 
-            # Push marker first
             stack.append((_CONVERT_TO_FROZENSET, parent, idx))
 
             stack.extend((sorted_list[i], new_list, i) for i in range(len(sorted_list) - 1, -1, -1))
             continue
 
-        # Base case: Object is likely hashable or unknown
         parent[idx] = current_obj
 
     return root[0]
@@ -802,16 +791,17 @@ class DataDictionaryMixin:
         Returns:
             List of table names in topological order (dependencies first).
 
+        Notes:
+            Self-referencing foreign keys are ignored to avoid simple cycles, and every dependency is added with the referencing table depending on its referenced table.
+
         """
         sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
         for table in tables:
             sorter.add(table)
 
         for fk in foreign_keys:
-            # If self-referencing, ignore for sorting purposes to avoid simple cycles
             if fk.table_name == fk.referenced_table:
                 continue
-            # table_name depends on referenced_table
             sorter.add(fk.table_name, fk.referenced_table)
 
         return list(sorter.static_order())
@@ -1543,6 +1533,8 @@ class CommonDriverAttributesMixin:
 
         Transforms the original SELECT statement to count total rows while preserving
         WHERE, HAVING, and GROUP BY clauses but removing ORDER BY, LIMIT, and OFFSET.
+        Copies any existing ``WITH`` clause (sqlglot stores it under ``with_``) and falls back to inferred tables if the FROM clause is missing.
+        When GROUP BY, JOINs, or a WITH clause exist we wrap the payload in a subquery before counting.
         """
         if not original_sql.expression:
             original_sql.compile()
@@ -1554,7 +1546,6 @@ class CommonDriverAttributesMixin:
         expr = original_sql.expression
         cte: exp.Expression | None = None
         if isinstance(expr, exp.Expression):  # pyright: ignore
-            # sqlglot uses 'with_' as the key for WITH clauses (not 'with')
             cte = expr.args.get("with_")
             if cte is not None:
                 expr = expr.copy()
@@ -1563,7 +1554,6 @@ class CommonDriverAttributesMixin:
         if isinstance(expr, exp.Select):
             from_clause = expr.args.get("from")
             if from_clause is None:
-                # Fallback: try alternate keys or inferred tables
                 from_clause = expr.args.get("froms")
             if from_clause is None:
                 tables = list(expr.find_all(exp.Table))
@@ -1581,7 +1571,6 @@ class CommonDriverAttributesMixin:
             has_joins = expr.args.get("joins")
             needs_subquery = has_group or has_joins or cte is not None
             if needs_subquery:
-                # Strip ORDER BY, LIMIT, OFFSET from the subquery before wrapping
                 subquery_expr = expr.copy()
                 subquery_expr.set("order", None)
                 subquery_expr.set("limit", None)

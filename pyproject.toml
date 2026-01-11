@@ -147,22 +147,26 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc", "hatch-cython"]
 enable-by-default = false
 exclude = [
-  "tests/**",                       # Test files
-  "sqlspec/__main__.py",            # Entry point (can't run directly when compiled)
-  "sqlspec/cli.py",                 # CLI module (not performance critical)
-  "sqlspec/typing.py",              # Type aliases
-  "sqlspec/_typing.py",             # Type aliases
-  "sqlspec/**/_typing.py",          # Type aliases (mypyc-incompatible)
-  "sqlspec/config.py",              # Main config
-  "sqlspec/extensions/**",          # All extensions
-  "sqlspec/**/__init__.py",         # Init files (usually just imports)
-  "sqlspec/protocols.py",           # Protocol definitions
-  "sqlspec/builder/**/*.py",        # Builder (not performance critical)
-  "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
-  "sqlspec/data_dictionary/_loader.py", # Loader relies on __file__ which fails in compiled modules
+  "tests/**",                                 # Test files
+  "sqlspec/__main__.py",                      # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                           # CLI module (not performance critical)
+  "sqlspec/typing.py",                        # Type aliases
+  "sqlspec/_typing.py",                       # Type aliases
+  "sqlspec/**/_typing.py",                    # Type aliases (mypyc-incompatible)
+  "sqlspec/config.py",                        # Main config
+  "sqlspec/extensions/**",                    # All extensions
+  "sqlspec/**/__init__.py",                   # Init files (usually just imports)
+  "sqlspec/protocols.py",                     # Protocol definitions
+  "sqlspec/adapters/mock/**",                 # Mock adapter (testing only)
+  "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
+  "sqlspec/data_dictionary/_loader.py",       # Loader relies on __file__ which fails in compiled modules
+  "sqlspec/builder/_vector_expressions.py",   # Inherits from sqlglot.exp.Expression which has a metaclass
+  "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
+  "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
 ]
 include = [
   "sqlspec/core/**/*.py",                   # Core module
+  "sqlspec/builder/**/*.py",                # Builder module
   "sqlspec/loader.py",                      # Loader module
   "sqlspec/observability/**/*.py",          # Observability utilities
   "sqlspec/driver/**/*.py",                 # Driver module

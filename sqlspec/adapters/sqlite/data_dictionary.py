@@ -28,8 +28,15 @@ class SqliteDataDictionary(SyncDataDictionaryBase["SqliteDriver"]):
 
     dialect = "sqlite"
 
-    def __init__(self) -> None:
-        super().__init__()
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        if driver_id in self._version_fetch_attempted:
+            return True, self._version_cache.get(driver_id)
+        return False, None
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        self._version_fetch_attempted.add(driver_id)
+        if version is not None:
+            self._version_cache[driver_id] = version
 
     def get_version(self, driver: "SqliteDriver") -> "VersionInfo | None":
         """Get SQLite database version information.

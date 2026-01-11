@@ -817,10 +817,14 @@ class CreateIndex(DDLBuilder):
         return self
 
     def _create_base_expression(self) -> exp.Expression:
+        """Build the CREATE INDEX expression used by this builder.
+
+        Columns are turned into raw expressions (not ``Ordered``) to preserve natural NULL ordering,
+        string ``where`` clauses become expressions, and the final ``exp.Index`` is wrapped in an ``exp.Create`` with the configured flags.
+        """
         if not self._index_name or not self._table_name:
             self._raise_sql_builder_error("Index name and table name must be set for CREATE INDEX.")
 
-        # Build column expressions - don't wrap in Ordered to avoid NULLS FIRST/LAST
         cols: list[exp.Expression] = []
         for col in self._columns:
             if isinstance(col, str):
@@ -832,19 +836,15 @@ class CreateIndex(DDLBuilder):
         if self._where:
             where_expr = exp.condition(self._where) if isinstance(self._where, str) else self._where
 
-        # Create IndexParameters with columns
         index_params = exp.IndexParameters(columns=cols) if cols else None
 
-        # Create Index expression with table and parameters
         index_expr = exp.Index(
             this=exp.to_identifier(self._index_name), table=exp.to_table(self._table_name), params=index_params
         )
 
-        # Set where clause if provided
         if where_expr:
             index_expr.set("where", where_expr)
 
-        # Wrap in Create expression with unique and if_not_exists flags
         return exp.Create(kind="INDEX", this=index_expr, unique=self._unique, exists=self._if_not_exists)
 
 

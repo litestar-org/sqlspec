@@ -2,6 +2,9 @@
 
 Provides functionality to load, cache, and manage SQL statements
 from files using named SQL queries.
+
+SQL files declare query metadata with comment directives like ``-- name: query_name`` (hyphens and suffixes allowed)
+and ``-- dialect: dialect_name``.
 """
 
 import hashlib
@@ -33,12 +36,9 @@ __all__ = ("NamedStatement", "SQLFile", "SQLFileCacheEntry", "SQLFileLoader")
 
 logger = get_logger("sqlspec.loader")
 
-# Matches: -- name: query_name (supports hyphens and special suffixes)
-# We capture the name plus any trailing special characters
 QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
 TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 
-# Matches: -- dialect: dialect_name (optional dialect specification)
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
@@ -66,12 +66,10 @@ def _normalize_query_name(name: str) -> str:
     Returns:
         Normalized query name suitable as Python identifier.
     """
-    # Handle namespace parts separately to preserve dots
     parts = name.split(".")
     normalized_parts = []
 
     for part in parts:
-        # Use slugify with underscore separator and remove any remaining invalid chars
         normalized_part = slugify(part, separator="_")
         normalized_parts.append(normalized_part)
 
@@ -266,18 +264,19 @@ class SQLFileLoader:
         Raises:
             SQLFileNotFoundError: If file does not exist.
             SQLFileParseError: If file cannot be read or parsed.
+
+        Notes:
+            File:// URIs are normalized before delegation to the backend, including trimming Windows-style leading slashes so filenames resolve correctly.
         """
         path_str = str(path)
 
         try:
             backend = self.storage_registry.get(path)
-            # For file:// URIs, extract just the filename for the backend call
             if path_str.startswith("file://"):
                 parsed = urlparse(path_str)
                 file_path = unquote(parsed.path)
-                # Handle Windows paths (file:///C:/path)
                 if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
-                    file_path = file_path[1:]  # Remove leading slash for Windows
+                    file_path = file_path[1:]
                 filename = Path(file_path).name
                 return backend.read_text(filename, encoding=self.encoding)
             return backend.read_text(path_str, encoding=self.encoding)

@@ -23,8 +23,7 @@ def test_prometheus_metrics_with_sqlite() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
-            connection_config={"database": tmp.name},
-            observability_config=enable_metrics(registry=registry),
+            connection_config={"database": tmp.name}, observability_config=enable_metrics(registry=registry)
         )
 
         with config.provide_session() as session:
@@ -36,15 +35,13 @@ def test_prometheus_metrics_with_sqlite() -> None:
 
         # CREATE TABLE is classified as "DDL" operation type
         ddl_total = registry.get_sample_value(
-            "sqlspec_driver_query_total",
-            labels={"db_system": "sqlite", "operation": "DDL"},
+            "sqlspec_driver_query_total", labels={"db_system": "sqlite", "operation": "DDL"}
         )
         assert ddl_total is not None
         assert ddl_total >= 1.0
 
         select_total = registry.get_sample_value(
-            "sqlspec_driver_query_total",
-            labels={"db_system": "sqlite", "operation": "SELECT"},
+            "sqlspec_driver_query_total", labels={"db_system": "sqlite", "operation": "SELECT"}
         )
         assert select_total is not None
         assert select_total >= 1.0
@@ -62,10 +59,7 @@ def test_prometheus_metrics_with_custom_labels() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
             connection_config={"database": tmp.name},
-            observability_config=enable_metrics(
-                registry=registry,
-                label_names=("driver", "operation", "bind_key"),
-            ),
+            observability_config=enable_metrics(registry=registry, label_names=("driver", "operation", "bind_key")),
         )
 
         with config.provide_session() as session:
@@ -91,23 +85,20 @@ def test_prometheus_duration_histogram() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
-            connection_config={"database": tmp.name},
-            observability_config=enable_metrics(registry=registry),
+            connection_config={"database": tmp.name}, observability_config=enable_metrics(registry=registry)
         )
 
         with config.provide_session() as session:
             session.execute("SELECT 1")
 
         duration_count = registry.get_sample_value(
-            "sqlspec_driver_query_duration_seconds_count",
-            labels={"db_system": "sqlite", "operation": "SELECT"},
+            "sqlspec_driver_query_duration_seconds_count", labels={"db_system": "sqlite", "operation": "SELECT"}
         )
         assert duration_count is not None
         assert duration_count >= 1.0
 
         duration_sum = registry.get_sample_value(
-            "sqlspec_driver_query_duration_seconds_sum",
-            labels={"db_system": "sqlite", "operation": "SELECT"},
+            "sqlspec_driver_query_duration_seconds_sum", labels={"db_system": "sqlite", "operation": "SELECT"}
         )
         assert duration_sum is not None
         assert duration_sum >= 0.0
@@ -124,8 +115,7 @@ def test_prometheus_rows_histogram() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
-            connection_config={"database": tmp.name},
-            observability_config=enable_metrics(registry=registry),
+            connection_config={"database": tmp.name}, observability_config=enable_metrics(registry=registry)
         )
 
         with config.provide_session() as session:
@@ -133,8 +123,7 @@ def test_prometheus_rows_histogram() -> None:
             session.execute("INSERT INTO test_rows (id) VALUES (1), (2), (3)")
 
         rows_count = registry.get_sample_value(
-            "sqlspec_driver_query_rows_count",
-            labels={"db_system": "sqlite", "operation": "INSERT"},
+            "sqlspec_driver_query_rows_count", labels={"db_system": "sqlite", "operation": "INSERT"}
         )
         assert rows_count is not None
         assert rows_count >= 1.0
@@ -152,19 +141,14 @@ def test_prometheus_custom_namespace_and_subsystem() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
             connection_config={"database": tmp.name},
-            observability_config=enable_metrics(
-                registry=registry,
-                namespace="myapp",
-                subsystem="database",
-            ),
+            observability_config=enable_metrics(registry=registry, namespace="myapp", subsystem="database"),
         )
 
         with config.provide_session() as session:
             session.execute("SELECT 1")
 
         query_total = registry.get_sample_value(
-            "myapp_database_query_total",
-            labels={"db_system": "sqlite", "operation": "SELECT"},
+            "myapp_database_query_total", labels={"db_system": "sqlite", "operation": "SELECT"}
         )
         assert query_total is not None
         assert query_total >= 1.0
@@ -183,10 +167,7 @@ def test_prometheus_custom_duration_buckets() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
             connection_config={"database": tmp.name},
-            observability_config=enable_metrics(
-                registry=registry,
-                duration_buckets=custom_buckets,
-            ),
+            observability_config=enable_metrics(registry=registry, duration_buckets=custom_buckets),
         )
 
         with config.provide_session() as session:
@@ -210,8 +191,7 @@ def test_prometheus_multiple_queries() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(
-            connection_config={"database": tmp.name},
-            observability_config=enable_metrics(registry=registry),
+            connection_config={"database": tmp.name}, observability_config=enable_metrics(registry=registry)
         )
 
         with config.provide_session() as session:
@@ -219,8 +199,7 @@ def test_prometheus_multiple_queries() -> None:
                 session.execute("SELECT 1")
 
         query_total = registry.get_sample_value(
-            "sqlspec_driver_query_total",
-            labels={"db_system": "sqlite", "operation": "SELECT"},
+            "sqlspec_driver_query_total", labels={"db_system": "sqlite", "operation": "SELECT"}
         )
         assert query_total is not None
         assert query_total >= 5.0

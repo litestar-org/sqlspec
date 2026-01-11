@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary import get_dialect_config
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     ColumnMetadata,
@@ -14,6 +15,7 @@ from sqlspec.driver import (
     TableMetadata,
     VersionInfo,
 )
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
@@ -25,6 +27,7 @@ ORACLE_MIN_OSON_VERSION = 19
 ORACLE_VERSION_PARTS_COUNT = 3
 
 VERSION_NUMBER_PATTERN = re.compile(r"(\d+)")
+logger = get_logger("sqlspec.adapters.oracledb.data_dictionary")
 
 __all__ = ("OracleVersionInfo", "OracledbAsyncDataDictionary", "OracledbSyncDataDictionary")
 
@@ -88,12 +91,25 @@ class OracleVersionInfo(VersionInfo):
 
 
 @mypyc_attr(native_class=False)
-class OracleDataDictionaryMixin:
-    """Shared helpers for Oracle data dictionary implementations."""
+class OracledbSyncDataDictionary(SyncDataDictionaryBase["OracleSyncDriver"]):
+    """Oracle-specific sync data dictionary."""
 
     __slots__ = ()
 
     dialect = "oracle"
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        if driver_id in self._version_fetch_attempted:
+            return True, self._version_cache.get(driver_id)
+        return False, None
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        self._version_fetch_attempted.add(driver_id)
+        if version is not None:
+            self._version_cache[driver_id] = version
 
     def _extract_version_value(self, row: Any) -> "str | None":
         if isinstance(row, dict):
@@ -158,7 +174,6 @@ class OracleDataDictionaryMixin:
             return version_info.supports_json_blob()
         if feature == "supports_json":
             return version_info.supports_json_blob()
-        from sqlspec.data_dictionary import get_dialect_config
 
         config = get_dialect_config(self.dialect)
         flag = config.get_feature_flag(feature)
@@ -170,8 +185,6 @@ class OracleDataDictionaryMixin:
         return bool(version_info >= required_version)
 
     def list_available_features(self) -> "list[str]":
-        from sqlspec.data_dictionary import get_dialect_config
-
         config = get_dialect_config(self.dialect)
         features: set[str] = set()
         features.update(config.feature_flags.keys())
@@ -184,16 +197,6 @@ class OracleDataDictionaryMixin:
             "supports_json",
         })
         return sorted(features)
-
-
-@mypyc_attr(native_class=False)
-class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase["OracleSyncDriver"]):
-    """Oracle-specific sync data dictionary."""
-
-    __slots__ = ()
-
-    def __init__(self) -> None:
-        super().__init__()
 
     def _get_compatible_value(self, driver: "OracleSyncDriver") -> "str | None":
         query_text = self.get_query_text("compatible")
@@ -316,13 +319,112 @@ class OracledbSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBa
 
 
 @mypyc_attr(native_class=False)
-class OracledbAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBase["OracleAsyncDriver"]):
+class OracledbAsyncDataDictionary(AsyncDataDictionaryBase["OracleAsyncDriver"]):
     """Oracle-specific async data dictionary."""
 
     __slots__ = ()
 
+    dialect = "oracle"
+
     def __init__(self) -> None:
         super().__init__()
+
+    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+        if driver_id in self._version_fetch_attempted:
+            return True, self._version_cache.get(driver_id)
+        return False, None
+
+    def cache_version(self, driver_id: int, version: "VersionInfo | None") -> None:
+        self._version_fetch_attempted.add(driver_id)
+        if version is not None:
+            self._version_cache[driver_id] = version
+
+    def _extract_version_value(self, row: Any) -> "str | None":
+        if isinstance(row, dict):
+            for key in ("version", "VERSION", "Version"):
+                value = row.get(key)
+                if value:
+                    return str(value)
+        if isinstance(row, (list, tuple)) and row:
+            return str(row[0])
+        if row is not None:
+            return str(row)
+        return None
+
+    def _parse_version_components(self, version_str: str) -> "tuple[int, int, int] | None":
+        parts = [int(value) for value in VERSION_NUMBER_PATTERN.findall(version_str)]
+        if not parts:
+            return None
+        while len(parts) < ORACLE_VERSION_PARTS_COUNT:
+            parts.append(0)
+        return parts[0], parts[1], parts[2]
+
+    def _build_version_info(
+        self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
+    ) -> "OracleVersionInfo | None":
+        if not version_value:
+            return None
+        parts = self._parse_version_components(version_value)
+        if parts is None:
+            return None
+        return OracleVersionInfo(parts[0], parts[1], parts[2], compatible=compatible, is_autonomous=is_autonomous)
+
+    def _get_oracle_json_type(self, version_info: "OracleVersionInfo | None") -> str:
+        if version_info is None:
+            return "CLOB"
+        if version_info.supports_native_json():
+            return "JSON"
+        if version_info.supports_oson_blob():
+            return "BLOB"
+        if version_info.supports_json_blob():
+            return "BLOB"
+        return "CLOB"
+
+    def _merge_table_lists(
+        self, ordered: "list[TableMetadata]", all_tables: "list[TableMetadata]"
+    ) -> "list[TableMetadata]":
+        if not ordered:
+            return sorted(all_tables, key=lambda item: item.get("table_name") or "")
+        ordered_names = {item.get("table_name") for item in ordered if item.get("table_name")}
+        remainder = [item for item in all_tables if item.get("table_name") not in ordered_names]
+        return ordered + remainder
+
+    def _resolve_feature_flag(self, version_info: "OracleVersionInfo | None", feature: str) -> bool:
+        if feature == "is_autonomous":
+            return bool(version_info and version_info.is_autonomous)
+        if version_info is None:
+            return False
+        if feature == "supports_native_json":
+            return version_info.supports_native_json()
+        if feature == "supports_oson_blob":
+            return version_info.supports_oson_blob()
+        if feature == "supports_json_blob":
+            return version_info.supports_json_blob()
+        if feature == "supports_json":
+            return version_info.supports_json_blob()
+
+        config = get_dialect_config(self.dialect)
+        flag = config.get_feature_flag(feature)
+        if flag is not None:
+            return flag
+        required_version = config.get_feature_version(feature)
+        if required_version is None:
+            return False
+        return bool(version_info >= required_version)
+
+    def list_available_features(self) -> "list[str]":
+        config = get_dialect_config(self.dialect)
+        features: set[str] = set()
+        features.update(config.feature_flags.keys())
+        features.update(config.feature_versions.keys())
+        features.update({
+            "is_autonomous",
+            "supports_native_json",
+            "supports_oson_blob",
+            "supports_json_blob",
+            "supports_json",
+        })
+        return sorted(features)
 
     async def _get_compatible_value(self, driver: "OracleAsyncDriver") -> "str | None":
         query_text = self.get_query_text("compatible")

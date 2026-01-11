@@ -314,6 +314,10 @@ class SelectClauseMixin:
         as_of: Any | None = None,
         as_of_type: str | None = None,
     ) -> Self:
+        """Set the FROM clause and optionally attach temporal versioning.
+
+        ``as_of`` copies the resolved table expression, normalizes aliases, and adds an ``exp.Version`` so sqlglot's generator emits dialect-specific time-travel SQL.
+        """
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="FROM clause only valid for SELECT.")
         from_expr: exp.Expression
@@ -340,8 +344,7 @@ class SelectClauseMixin:
             from_expr = table
 
         if as_of is not None:
-            # Handle alias stripping/re-applying if from_expr is an Alias or Table with alias
-            inner_expr = from_expr.copy()  # Avoid mutating original expression if shared
+            inner_expr = from_expr.copy()
             target_alias = alias
 
             if isinstance(inner_expr, exp.Alias):
@@ -349,14 +352,11 @@ class SelectClauseMixin:
                 inner_expr = inner_expr.this
 
             if target_alias is None and isinstance(inner_expr, exp.Table):
-                # Extract alias from Table if present
                 alias_expr = inner_expr.args.get("alias")
                 if alias_expr is not None:
                     target_alias = alias_expr.this
                     inner_expr.set("alias", None)
 
-            # Use sqlglot's built-in Version expression for temporal queries
-            # Custom version_sql generators are registered in _temporal module
             version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
             inner_expr.set("version", version)
             from_expr = exp.alias_(inner_expr, target_alias) if target_alias else inner_expr
@@ -1233,21 +1233,11 @@ class CommonTableExpressionMixin:
     _with_ctes: Any
     dialect: Any
 
-    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
-    def _update_placeholders_in_expression(
-        self, expression: exp.Expression, param_mapping: dict[str, str]
-    ) -> exp.Expression:
-        msg = "Method must be provided by QueryBuilder subclass"
-        raise NotImplementedError(msg)
-
     def with_(self, name: str, query: Any | str, recursive: bool = False, columns: list[str] | None = None) -> Self:
+        """Add a CTE via the WITH clause.
+
+        When ``query`` is another builder we reuse its expression, merge parameters with unique names, and let sqlglot handle the actual CTE wrapping to avoid duplicating ``_with_ctes`` state.
+        """
         builder = cast("QueryBuilder", self)
         expression = builder.get_expression()
         if expression is None:
@@ -1264,36 +1254,31 @@ class CommonTableExpressionMixin:
         elif isinstance(query, exp.Expression):
             cte_select = query
         else:
-            # Query is a builder - get its expression directly instead of converting to SQL
             cte_select = query.get_expression()
             if cte_select is None:
                 msg = f"Could not get expression from builder: {query}"
                 raise SQLBuilderError(msg)
 
-            # Get parameters from the builder's statement
             built_query = query.to_statement()
             parameters = built_query.parameters
             if isinstance(parameters, dict):
                 param_mapping: dict[str, str] = {}
                 for param_name, param_value in parameters.items():
-                    unique_name = self._generate_unique_parameter_name(f"{name}_{param_name}")
+                    unique_name = builder._generate_unique_parameter_name(f"{name}_{param_name}")
                     param_mapping[param_name] = unique_name
-                    self.add_parameter(param_value, name=unique_name)
-                cte_select = self._update_placeholders_in_expression(cte_select, param_mapping)
+                    builder.add_parameter(param_value, name=unique_name)
+                cte_select = builder._update_placeholders_in_expression(cte_select, param_mapping)
             elif isinstance(parameters, (list, tuple)):
                 for param_value in parameters:
-                    self.add_parameter(param_value)
+                    builder.add_parameter(param_value)
             elif parameters is not None:
-                self.add_parameter(parameters)
+                builder.add_parameter(parameters)
 
         if cte_select is None:
             msg = f"Could not parse CTE query: {query}"
             raise SQLBuilderError(msg)
 
-        # Always use sqlglot's with_() method - it handles everything correctly
-        # Do NOT store in _with_ctes as that causes duplication in _build_final_expression
         if isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
-            # Pass alias name and query separately - sqlglot handles the CTE wrapping
             updated = expression.with_(name, as_=cte_select.copy(), recursive=recursive, copy=True)
             builder.set_expression(updated)
 

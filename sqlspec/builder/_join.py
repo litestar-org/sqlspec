@@ -131,11 +131,13 @@ def build_join_clause(
 
 @trait
 class JoinClauseMixin:
-    """Mixin providing JOIN clause methods for SELECT builders."""
+    """Mixin providing JOIN clause methods for SELECT builders.
+
+    ``_expression`` is populated by the base builder class so the mixin can append JOINs without initializing the underlying SELECT expression.
+    """
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
     _expression: exp.Expression | None
 
     def join(
@@ -148,6 +150,10 @@ class JoinClauseMixin:
         as_of: Any | None = None,
         as_of_type: str | None = None,
     ) -> Self:
+        """Add a JOIN clause to the SELECT expression.
+
+        ``as_of`` attaches a temporal version clause by copying the inner table, honoring existing aliases, and updating the JOIN target without mutating shared expressions.
+        """
         builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
@@ -162,31 +168,24 @@ class JoinClauseMixin:
         join_expr = build_join_clause(builder, table, on, alias, join_type, lateral=lateral)
 
         if as_of is not None:
-            # Add temporal version clause to the table in JOIN expression
             inner_table = join_expr.this
-
-            # Copy to avoid mutating original expression if it's shared
             inner_table = inner_table.copy()
 
-            # Handle alias if present on the inner table
             target_alias = alias
 
             if isinstance(inner_table, exp.Alias):
                 target_alias = inner_table.alias
                 inner_table = inner_table.this
 
-            # If alias was None, check if table had internal alias
             if target_alias is None and isinstance(inner_table, exp.Table):
                 alias_expr = inner_table.args.get("alias")
                 if alias_expr is not None:
                     target_alias = alias_expr.this
                     inner_table.set("alias", None)
 
-            # Create Version expression and attach to table
             version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
             inner_table.set("version", version)
 
-            # Update the join expression's 'this'
             new_this = exp.alias_(inner_table, target_alias) if target_alias else inner_table
             join_expr.set("this", new_this)
 

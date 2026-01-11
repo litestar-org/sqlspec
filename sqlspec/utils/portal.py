@@ -10,11 +10,10 @@ import functools
 import os
 import queue
 import threading
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.singleton import SingletonMeta
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -246,7 +245,7 @@ class Portal:
         return self._provider.call(func, *args, **kwargs)
 
 
-class PortalManager(metaclass=SingletonMeta):
+class PortalManager:
     """Singleton manager for global portal instance.
 
     Provides a global portal for use by sync_tools and other utilities
@@ -260,13 +259,29 @@ class PortalManager(metaclass=SingletonMeta):
 
     """
 
+    _instance: "ClassVar[PortalManager | None]" = None
+    _singleton_lock: "ClassVar[threading.Lock]" = threading.Lock()
+    _initialized: bool = False
+
+    def __new__(cls) -> "PortalManager":
+        """Get the singleton instance of PortalManager."""
+        if cls._instance is None:
+            with cls._singleton_lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self) -> None:
         """Initialize the PortalManager singleton."""
+        if getattr(self, "_initialized", False):
+            return
+
         self._provider: PortalProvider | None = None
         self._portal: Portal | None = None
         self._lock = threading.Lock()
         self._pid: int | None = None
         self._atexit_registered: bool = False
+        self._initialized = True
 
     def get_or_create_portal(self) -> Portal:
         """Get or create the global portal instance.
@@ -341,6 +356,11 @@ class PortalManager(metaclass=SingletonMeta):
         pid_changed = self._pid is not None and self._pid != current_pid
         return portal_missing or provider_missing or pid_changed
 
+    @classmethod
+    def get_instance(cls) -> "PortalManager":
+        """Get the singleton instance."""
+        return cls()
+
 
 def get_global_portal() -> Portal:
     """Get the global portal instance for async-to-sync bridging.
@@ -352,5 +372,4 @@ def get_global_portal() -> Portal:
         Global portal instance.
 
     """
-    manager = PortalManager()
-    return manager.get_or_create_portal()
+    return PortalManager().get_or_create_portal()
