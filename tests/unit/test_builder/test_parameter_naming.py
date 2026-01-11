@@ -187,6 +187,30 @@ def test_insert_values_from_dict_preserves_keys() -> None:
         assert key in stmt.parameters or any(key in param_key for param_key in stmt.parameters.keys())
 
 
+def test_insert_without_columns_uses_positional_names() -> None:
+    """Test that INSERT without specified columns uses descriptive positional names."""
+    query = sql.insert("logs").values("INFO", "User login", "2023-01-01")
+    stmt = query.build()
+
+    param_keys = list(stmt.parameters.keys())
+    assert len(param_keys) == 3
+    assert any("value" in key for key in param_keys)
+
+
+def test_case_when_uses_descriptive_names() -> None:
+    """Test that CASE WHEN expressions work correctly with new property syntax."""
+    case_expr = sql.case_.when("age > 65", "Senior").when("age > 18", "Adult").else_("Minor").end()
+    query = sql.select("name", case_expr).from_("users")
+    stmt = query.build()
+
+    assert "CASE" in stmt.sql
+    assert "Senior" in stmt.sql
+    assert "Adult" in stmt.sql
+    assert "Minor" in stmt.sql
+    assert "> 65" in stmt.sql
+    assert "> 18" in stmt.sql
+
+
 def test_complex_query_preserves_all_column_names() -> None:
     """Test that complex queries preserve column names across all operations."""
     query = (

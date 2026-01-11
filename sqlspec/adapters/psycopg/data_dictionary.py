@@ -28,6 +28,9 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase["PsycopgSyncDriver"]):
 
     dialect = "postgres"
 
+    def __init__(self) -> None:
+        super().__init__()
+
     def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
         if driver_id in self._version_fetch_attempted:
             return True, self._version_cache.get(driver_id)
@@ -172,6 +175,9 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase["PsycopgAsyncDriver"]):
     __slots__ = ()
 
     dialect = "postgres"
+
+    def __init__(self) -> None:
+        super().__init__()
 
     def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
         if driver_id in self._version_fetch_attempted:
