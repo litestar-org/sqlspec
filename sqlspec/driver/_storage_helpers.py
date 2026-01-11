@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.storage import StorageBridgeJob, StorageTelemetry, create_storage_bridge_job
-from sqlspec.utils.arrow_impl import arrow_table_to_rows as _arrow_table_to_rows_impl
-from sqlspec.utils.arrow_impl import build_ingest_telemetry as _build_ingest_telemetry_impl
-from sqlspec.utils.arrow_impl import coerce_arrow_table as _coerce_arrow_table_impl
+from sqlspec.utils.arrow_helpers import arrow_table_to_rows as _arrow_table_to_rows_impl
+from sqlspec.utils.arrow_helpers import build_ingest_telemetry as _build_ingest_telemetry_impl
+from sqlspec.utils.arrow_helpers import coerce_arrow_table as _coerce_arrow_table_impl
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult

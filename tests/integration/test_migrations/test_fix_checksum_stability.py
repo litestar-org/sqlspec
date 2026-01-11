@@ -9,7 +9,7 @@ from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import SyncMigrationRunner
 from sqlspec.migrations.tracker import SyncMigrationTracker
-from sqlspec.utils.version import generate_conversion_map
+from sqlspec.migrations.version import generate_conversion_map
 
 
 @pytest.fixture

@@ -12,8 +12,7 @@ from rich.table import Table
 
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.exceptions import ConfigResolverError
-from sqlspec.utils.config_discovery import discover_config_from_pyproject
-from sqlspec.utils.config_resolver import resolve_config_sync
+from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import run_
 

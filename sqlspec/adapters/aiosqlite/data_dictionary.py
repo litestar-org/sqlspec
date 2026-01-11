@@ -1,29 +1,47 @@
 """SQLite-specific data dictionary for metadata queries via aiosqlite."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.aiosqlite.core import format_identifier
+from sqlspec.data_dictionary import get_dialect_config
 from sqlspec.driver import AsyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
+    from sqlspec.data_dictionary._types import DialectConfig
 
 __all__ = ("AiosqliteDataDictionary",)
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class AiosqliteDataDictionary(AsyncDataDictionaryBase):
     """SQLite-specific async data dictionary."""
 
-    __slots__ = ()
-
-    dialect = "sqlite"
+    dialect: ClassVar[str] = "sqlite"
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_dialect_config(self) -> "DialectConfig":
+        """Return the dialect configuration for this data dictionary."""
+        return get_dialect_config(type(self).dialect)
+
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        if schema is not None:
+            return schema
+        return self.get_dialect_config().default_schema
+
+    def list_available_features(self) -> "list[str]":
+        """List available feature flags for this dialect."""
+        config = self.get_dialect_config()
+        features = {"supports_transactions", "supports_prepared_statements"}
+        features.update(config.feature_flags.keys())
+        features.update(config.feature_versions.keys())
+        return sorted(features)
 
     async def get_version(self, driver: "AiosqliteDriver") -> "VersionInfo | None":
         """Get SQLite database version information.
@@ -36,23 +54,24 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
 
         """
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cached_version
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+        # Not cached, fetch from database
 
         version_value = await driver.select_value_or_none(self.get_query("version"))
         if not version_value:
-            self._log_version_unavailable(self.dialect, "missing")
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
-            self._log_version_unavailable(self.dialect, "parse_failed")
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        self._log_version_detected(self.dialect, version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 

@@ -4,7 +4,7 @@ Provides a fluent interface for building EXPLAIN statements with
 dialect-aware SQL generation.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from mypy_extensions import trait
 from typing_extensions import Self
@@ -285,7 +285,7 @@ class Explain:
             )
     """
 
-    __slots__ = ("_dialect", "_options", "_parameters", "_statement", "_statement_sql")
+    __slots__: ClassVar[tuple[str, ...]] = ("_dialect", "_options", "_parameters", "_statement", "_statement_sql")
 
     def __init__(
         self,

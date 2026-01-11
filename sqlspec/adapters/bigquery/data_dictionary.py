@@ -1,6 +1,6 @@
 """BigQuery-specific data dictionary for metadata queries."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
@@ -13,13 +13,11 @@ if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class BigQueryDataDictionary(SyncDataDictionaryBase):
     """BigQuery-specific sync data dictionary."""
 
-    __slots__ = ()
-
-    dialect = "bigquery"
+    dialect: ClassVar[str] = "bigquery"
 
     def __init__(self) -> None:
         super().__init__()

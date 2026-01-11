@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from sqlspec.utils.version import (
+from sqlspec.migrations.version import (
     convert_to_sequential_version,
     generate_conversion_map,
     get_next_sequential_number,

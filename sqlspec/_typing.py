@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checka
 
 from typing_extensions import TypeVar, dataclass_transform
 
-from sqlspec.utils.dependencies import dependency_flag, module_available
+from sqlspec.utils.module_loader import dependency_flag, module_available
 
 
 @runtime_checkable

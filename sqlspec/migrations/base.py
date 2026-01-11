@@ -13,10 +13,10 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateDescriptionHints, build_template_settings
+from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.sync_tools import await_
-from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol

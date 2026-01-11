@@ -10,7 +10,7 @@ if sys.version_info >= (3, 11):
 else:
     pass
 
-from sqlspec.utils.config_discovery import discover_config_from_pyproject, find_pyproject_toml, parse_pyproject_config
+from sqlspec.utils.config_tools import discover_config_from_pyproject, find_pyproject_toml, parse_pyproject_config
 
 
 def test_discover_from_pyproject_single(tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch") -> None:

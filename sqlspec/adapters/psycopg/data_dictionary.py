@@ -1,6 +1,6 @@
 """PostgreSQL-specific data dictionary for metadata queries via psycopg."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
@@ -13,13 +13,11 @@ if TYPE_CHECKING:
 __all__ = ("PsycopgAsyncDataDictionary", "PsycopgSyncDataDictionary")
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
     """PostgreSQL-specific sync data dictionary."""
 
-    __slots__ = ()
-
-    dialect = "postgres"
+    dialect: ClassVar[str] = "postgres"
 
     def __init__(self) -> None:
         super().__init__()
@@ -35,23 +33,24 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
 
         """
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cached_version
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+        # Not cached, fetch from database
 
         version_value = driver.select_value_or_none(self.get_query("version"))
         if not version_value:
-            self._log_version_unavailable(self.dialect, "missing")
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
-            self._log_version_unavailable(self.dialect, "parse_failed")
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        self._log_version_detected(self.dialect, version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 
@@ -151,13 +150,11 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
         )
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
 
-    __slots__ = ()
-
-    dialect = "postgres"
+    dialect: ClassVar[str] = "postgres"
 
     def __init__(self) -> None:
         super().__init__()
@@ -173,23 +170,24 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
 
         """
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cached_version
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+        # Not cached, fetch from database
 
         version_value = await driver.select_value_or_none(self.get_query("version"))
         if not version_value:
-            self._log_version_unavailable(self.dialect, "missing")
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
-            self._log_version_unavailable(self.dialect, "parse_failed")
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        self._log_version_detected(self.dialect, version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 

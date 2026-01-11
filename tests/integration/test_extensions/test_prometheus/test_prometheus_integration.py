@@ -4,7 +4,7 @@ import tempfile
 
 import pytest
 
-from sqlspec.utils.dependencies import module_available
+from sqlspec.utils.module_loader import module_available
 
 pytestmark = [
     pytest.mark.skipif(not module_available("prometheus_client"), reason="prometheus_client not installed"),

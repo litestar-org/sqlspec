@@ -4,7 +4,7 @@ Tests the transform_dict_keys function and related utilities for field name
 conversion when mapping database results to schema objects.
 """
 
-from sqlspec.utils.data_transformation import transform_dict_keys
+from sqlspec.utils.schema import transform_dict_keys
 from sqlspec.utils.text import camelize, kebabize, pascalize
 
 

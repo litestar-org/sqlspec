@@ -23,7 +23,7 @@ from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, reg
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable

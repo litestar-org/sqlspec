@@ -1,6 +1,6 @@
 """ADBC multi-dialect data dictionary for metadata queries."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
@@ -22,11 +22,11 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class AdbcDataDictionary(SyncDataDictionaryBase):
     """ADBC multi-dialect data dictionary."""
 
-    __slots__ = ()
+    dialect: ClassVar[str] = "generic"
 
     def __init__(self) -> None:
         super().__init__()
@@ -89,9 +89,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return None
 
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cached_version
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+        # Not cached, fetch from database
 
         try:
             version_value = driver.select_value_or_none(self._get_query(dialect, "version"))

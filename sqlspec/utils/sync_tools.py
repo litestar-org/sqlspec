@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from typing_extensions import ParamSpec
 
-from sqlspec.utils.dependencies import module_available
+from sqlspec.utils.module_loader import module_available
 from sqlspec.utils.portal import get_global_portal
 
 if TYPE_CHECKING:

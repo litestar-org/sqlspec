@@ -27,7 +27,7 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable

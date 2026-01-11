@@ -1,8 +1,6 @@
 """PostgreSQL-specific data dictionary for metadata queries via asyncpg."""
 
-from typing import TYPE_CHECKING
-
-from mypy_extensions import mypyc_attr
+from typing import TYPE_CHECKING, ClassVar
 
 from sqlspec.driver import AsyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
@@ -13,16 +11,19 @@ if TYPE_CHECKING:
 __all__ = ("AsyncpgDataDictionary",)
 
 
-@mypyc_attr(native_class=False)
 class AsyncpgDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
 
-    __slots__ = ()
-
-    dialect = "postgres"
+    dialect: ClassVar[str] = "postgres"
 
     def __init__(self) -> None:
         super().__init__()
+
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        if schema is not None:
+            return schema
+        return self.get_dialect_config().default_schema
 
     async def get_version(self, driver: "AsyncpgDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
@@ -35,23 +36,25 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase):
 
         """
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cached_version
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+        # Not cached, fetch from database
 
         version_value = await driver.select_value_or_none(self.get_query("version"))
         if not version_value:
-            self._log_version_unavailable(self.dialect, "missing")
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
-        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
+        config = self.get_dialect_config()
+        version_info = self.parse_version_with_pattern(config.version_pattern, str(version_value))
         if version_info is None:
-            self._log_version_unavailable(self.dialect, "parse_failed")
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        self._log_version_detected(self.dialect, version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(id(driver), version_info)
         return version_info
 
@@ -93,6 +96,12 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase):
             return "TEXT"
 
         return config.get_optimal_type(type_category)
+
+    def list_available_features(self) -> "list[str]":
+        """List available feature flags for this dialect."""
+        config = self.get_dialect_config()
+        features = set(config.feature_flags.keys()) | set(config.feature_versions.keys())
+        return sorted(features)
 
     async def get_tables(self, driver: "AsyncpgDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by topological dependency order using Recursive CTE."""

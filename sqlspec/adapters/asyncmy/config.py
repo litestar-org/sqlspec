@@ -13,7 +13,7 @@ from sqlspec.adapters.asyncmy.core import apply_driver_features, default_stateme
 from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, AsyncmyExceptionHandler, AsyncmySessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable

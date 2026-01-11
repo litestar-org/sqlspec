@@ -17,7 +17,7 @@ from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.observability import ObservabilityConfig
-from sqlspec.utils.config_normalization import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:

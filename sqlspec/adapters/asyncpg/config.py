@@ -22,7 +22,7 @@ from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
-from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 

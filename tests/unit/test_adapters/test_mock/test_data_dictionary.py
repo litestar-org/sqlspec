@@ -1,8 +1,11 @@
 """Unit tests for mock data dictionary."""
 
+from typing import cast
+
 import pytest
 
 from sqlspec.adapters.mock import MockAsyncConfig, MockSyncConfig
+from sqlspec.typing import VersionInfo
 
 
 def test_mock_data_dictionary_get_version() -> None:
@@ -26,11 +29,11 @@ def test_mock_data_dictionary_version_caching() -> None:
         dd = session.data_dictionary
         driver_id = id(session)
 
-        was_cached, cached_version = dd.get_cached_version(driver_id)
+        was_cached, cached_version = cast("tuple[bool, VersionInfo | None]", dd.get_cached_version(driver_id))
         assert was_cached is False
 
         version1 = dd.get_version(session)
-        was_cached, cached_version = dd.get_cached_version(driver_id)
+        was_cached, cached_version = cast("tuple[bool, VersionInfo | None]", dd.get_cached_version(driver_id))
         assert was_cached is True
         assert cached_version == version1
 
@@ -208,11 +211,11 @@ async def test_mock_async_data_dictionary_version_caching() -> None:
         dd = session.data_dictionary
         driver_id = id(session)
 
-        was_cached, cached_version = dd.get_cached_version(driver_id)
+        was_cached, cached_version = cast("tuple[bool, VersionInfo | None]", dd.get_cached_version(driver_id))
         assert was_cached is False
 
         version1 = await dd.get_version(session)
-        was_cached, cached_version = dd.get_cached_version(driver_id)
+        was_cached, cached_version = cast("tuple[bool, VersionInfo | None]", dd.get_cached_version(driver_id))
         assert was_cached is True
         assert cached_version == version1
 

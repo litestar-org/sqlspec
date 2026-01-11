@@ -11,8 +11,8 @@ from rich.console import Console
 
 from sqlspec.builder import CreateTable, Select, sql
 from sqlspec.migrations.base import BaseMigrationTracker
+from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase

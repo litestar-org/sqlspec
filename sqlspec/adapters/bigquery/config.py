@@ -18,7 +18,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
-from sqlspec.utils.config_normalization import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable

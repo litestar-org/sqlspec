@@ -11,7 +11,7 @@ from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection
 from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, PsqlpyExceptionHandler, PsqlpySessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable

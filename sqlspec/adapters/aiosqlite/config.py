@@ -20,7 +20,7 @@ from sqlspec.adapters.aiosqlite.pool import (
 )
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
-from sqlspec.utils.config_normalization import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:

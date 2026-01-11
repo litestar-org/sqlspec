@@ -461,7 +461,7 @@ class DataDictionaryMixin:
         self._version_cache = {}
         self._version_fetch_attempted = set()
 
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+    def get_cached_version(self, driver_id: int) -> object:
         """Get cached version info for a driver.
 
         Args:
@@ -488,7 +488,7 @@ class DataDictionaryMixin:
         if version is not None:
             self._version_cache[driver_id] = version
 
-    def get_cached_version_for_driver(self, driver: Any) -> "tuple[bool, VersionInfo | None]":
+    def get_cached_version_for_driver(self, driver: Any) -> object:
         """Get cached version info for a driver instance.
 
         Args:
@@ -560,8 +560,9 @@ class DataDictionaryMixin:
 
     def _resolve_log_adapter(self) -> str:
         """Resolve adapter identifier for logging."""
-
-        return str(getattr(self, "dialect", type(self).__name__))
+        if hasattr(self, "dialect"):
+            return str(self.dialect)  # pyright: ignore[reportAttributeAccessIssue]
+        return type(self).__name__
 
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
         """Log detected database version with db.system context."""

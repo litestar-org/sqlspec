@@ -6,7 +6,7 @@ import re
 from abc import abstractmethod
 from contextlib import suppress
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, cast, final, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
 
 from mypy_extensions import mypyc_attr
 
@@ -38,7 +38,7 @@ from sqlspec.driver._storage_helpers import (
 from sqlspec.exceptions import ImproperConfigurationError, SQLFileNotFoundError, StackExecutionError
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 from sqlspec.typing import VersionInfo
-from sqlspec.utils.arrow_impl import convert_dict_to_arrow_with_schema
+from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -1358,22 +1358,19 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         return create_storage_job(produced, provided, status=status)
 
 
-@mypyc_attr(native_class=False, allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class AsyncDataDictionaryBase:
     """Base class for asynchronous data dictionary implementations.
 
-    This class uses native_class=False to ensure proper inheritance works
-    in mypyc compiled mode. When both base and concrete classes use
-    native_class=False, the inheritance chain remains intact.
+    Uses Python-compatible class layouts for cross-module inheritance.
+    Child classes define dialect as a class attribute.
     """
-
-    __slots__ = ("_version_cache", "_version_fetch_attempted")
 
     _version_cache: "dict[int, VersionInfo | None]"
     _version_fetch_attempted: "set[int]"
 
-    dialect: str
-    """Dialect identifier. Must be defined by subclasses."""
+    dialect: "ClassVar[str]"
+    """Dialect identifier. Must be defined by subclasses as a class attribute."""
 
     def __init__(self) -> None:
         self._version_cache = {}
@@ -1385,17 +1382,17 @@ class AsyncDataDictionaryBase:
 
     def get_dialect_config(self) -> "DialectConfig":
         """Return the dialect configuration for this data dictionary."""
-        return get_dialect_config(self.dialect)
+        return get_dialect_config(type(self).dialect)
 
     def get_query(self, name: str) -> "SQL":
         """Return a named SQL query for this dialect."""
         loader = get_data_dictionary_loader()
-        return loader.get_query(self.dialect, name)
+        return loader.get_query(type(self).dialect, name)
 
     def get_query_text(self, name: str) -> str:
         """Return raw SQL text for a named query for this dialect."""
         loader = get_data_dictionary_loader()
-        return loader.get_query_text(self.dialect, name)
+        return loader.get_query_text(type(self).dialect, name)
 
     def get_query_text_or_none(self, name: str) -> "str | None":
         """Return raw SQL text for a named query or None if missing."""
@@ -1426,16 +1423,7 @@ class AsyncDataDictionaryBase:
     # VERSION CACHING METHODS (inlined from DataDictionaryMixin)
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def _ensure_version_cache(self) -> None:
-        """Ensure version cache containers exist."""
-        try:
-            _ = self._version_fetch_attempted
-            _ = self._version_cache
-        except AttributeError:
-            self._version_cache = {}
-            self._version_fetch_attempted = set()
-
-    def get_cached_version(self, driver_id: int) -> "tuple[bool, VersionInfo | None]":
+    def get_cached_version(self, driver_id: int) -> object:
         """Get cached version info for a driver.
 
         Args:
@@ -1445,7 +1433,6 @@ class AsyncDataDictionaryBase:
             Tuple of (was_cached, version_info). If was_cached is False,
             the caller should fetch the version and call cache_version().
         """
-        self._ensure_version_cache()
         if driver_id in self._version_fetch_attempted:
             return True, self._version_cache.get(driver_id)
         return False, None
@@ -1457,7 +1444,6 @@ class AsyncDataDictionaryBase:
             driver_id: The id() of the driver instance.
             version: The version info to cache (can be None if detection failed).
         """
-        self._ensure_version_cache()
         self._version_fetch_attempted.add(driver_id)
         if version is not None:
             self._version_cache[driver_id] = version
@@ -1505,7 +1491,7 @@ class AsyncDataDictionaryBase:
 
     def _resolve_log_adapter(self) -> str:
         """Resolve adapter identifier for logging."""
-        return str(getattr(self, "dialect", type(self).__name__))
+        return str(type(self).dialect)
 
     def _log_version_detected(self, adapter: str, version: "VersionInfo") -> None:
         """Log detected database version with db.system context."""
@@ -1615,7 +1601,7 @@ class AsyncDataDictionaryBase:
             sorter.add(fk.table_name, fk.referenced_table)
         return list(sorter.static_order())
 
-    def get_cached_version_for_driver(self, driver: Any) -> "tuple[bool, VersionInfo | None]":
+    def get_cached_version_for_driver(self, driver: Any) -> object:
         """Get cached version info for a driver instance.
 
         Args:

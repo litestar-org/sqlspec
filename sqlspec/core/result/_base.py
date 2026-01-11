@@ -25,8 +25,7 @@ from sqlspec.storage import (
     StorageTelemetry,
     SyncStoragePipeline,
 )
-from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
-from sqlspec.utils.arrow_impl import (
+from sqlspec.utils.arrow_helpers import (
     arrow_table_column_names,
     arrow_table_num_columns,
     arrow_table_num_rows,
@@ -35,6 +34,7 @@ from sqlspec.utils.arrow_impl import (
     arrow_table_to_pylist,
     arrow_table_to_return_format,
     cast_arrow_table_schema,
+    convert_dict_to_arrow,
     ensure_arrow_table,
 )
 from sqlspec.utils.schema import to_schema

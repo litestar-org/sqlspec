@@ -40,7 +40,7 @@ from sqlspec.builder._expression_wrappers import (
     StringExpression,
 )
 from sqlspec.builder._insert import Insert
-from sqlspec.builder._join import JoinBuilder
+from sqlspec.builder._join import JoinBuilder, create_join_builder
 from sqlspec.builder._merge import Merge
 from sqlspec.builder._parsing_utils import extract_expression, to_expression
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
@@ -965,27 +965,27 @@ class SQLFactory:
     @property
     def inner_join_(self) -> "JoinBuilder":
         """Create an INNER JOIN builder."""
-        return JoinBuilder("inner join")
+        return create_join_builder("inner join")
 
     @property
     def left_join_(self) -> "JoinBuilder":
         """Create a LEFT JOIN builder."""
-        return JoinBuilder("left join")
+        return create_join_builder("left join")
 
     @property
     def right_join_(self) -> "JoinBuilder":
         """Create a RIGHT JOIN builder."""
-        return JoinBuilder("right join")
+        return create_join_builder("right join")
 
     @property
     def full_join_(self) -> "JoinBuilder":
         """Create a FULL OUTER JOIN builder."""
-        return JoinBuilder("full join")
+        return create_join_builder("full join")
 
     @property
     def cross_join_(self) -> "JoinBuilder":
         """Create a CROSS JOIN builder."""
-        return JoinBuilder("cross join")
+        return create_join_builder("cross join")
 
     @property
     def lateral_join_(self) -> "JoinBuilder":
@@ -1004,7 +1004,7 @@ class SQLFactory:
             )
             ```
         """
-        return JoinBuilder("lateral join", lateral=True)
+        return create_join_builder("lateral join", lateral=True)
 
     @property
     def left_lateral_join_(self) -> "JoinBuilder":
@@ -1013,7 +1013,7 @@ class SQLFactory:
         Returns:
             JoinBuilder configured for LEFT LATERAL JOIN
         """
-        return JoinBuilder("left join", lateral=True)
+        return create_join_builder("left join", lateral=True)
 
     @property
     def cross_lateral_join_(self) -> "JoinBuilder":
@@ -1022,7 +1022,7 @@ class SQLFactory:
         Returns:
             JoinBuilder configured for CROSS LATERAL JOIN
         """
-        return JoinBuilder("cross join", lateral=True)
+        return create_join_builder("cross join", lateral=True)
 
     def __getattr__(self, name: str) -> "Column":
         """Dynamically create column references.

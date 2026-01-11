@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sqlspec.utils.version import (
+from sqlspec.migrations.version import (
     VersionType,
     generate_timestamp_version,
     is_sequential_version,

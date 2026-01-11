@@ -163,6 +163,9 @@ exclude = [
   "sqlspec/builder/_vector_expressions.py",   # Inherits from sqlglot.exp.Expression which has a metaclass
   "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
   "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
+  "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
+  "sqlspec/observability/_formatting.py",     # Inherits from non-compiled logging.Formatter
+  "sqlspec/utils/arrow_helpers.py",           # Arrow operations cause segfaults when compiled
 ]
 include = [
   "sqlspec/core/**/*.py",                   # Core module
@@ -173,13 +176,10 @@ include = [
   "sqlspec/data_dictionary/**/*.py",        # Data dictionary mixin (required for adapter inheritance)
   "sqlspec/adapters/**/core.py",            # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py",  # All adapters type converters
-  "sqlspec/adapters/**/data_dictionary.py", # Adapter metadata queries
   "sqlspec/utils/text.py",                  # Text utilities
   "sqlspec/utils/sync_tools.py",            # Synchronous utility functions
   "sqlspec/utils/type_guards.py",           # Type guard utilities
   "sqlspec/utils/fixtures.py",              # File fixture loading
-  "sqlspec/utils/data_transformation.py",   # Data transformation utilities
-  "sqlspec/utils/arrow_helpers.py",         # Arrow result helpers
   "sqlspec/utils/serializers.py",           # Serialization helpers
   "sqlspec/utils/type_converters.py",       # Adapter type converters
   "sqlspec/utils/correlation.py",           # Correlation context helpers

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
     from sqlspec.protocols import HasParameterBuilderProtocol, SQLBuilderProtocol
 
-__all__ = ("JoinBuilder", "JoinClauseMixin")
+__all__ = ("JoinBuilder", "JoinClauseMixin", "create_join_builder")
 
 
 def _handle_sql_object_condition(on: Any, builder: "SQLBuilderProtocol") -> exp.Expression:
@@ -328,7 +328,6 @@ class JoinClauseMixin:
         return self.join(table, on=None, alias=alias, join_type="CROSS", lateral=True)
 
 
-@trait
 class JoinBuilder:
     """Builder for JOIN operations with fluent syntax.
 
@@ -411,7 +410,6 @@ class JoinBuilder:
             msg = "Table must be set before calling .on()"
             raise SQLBuilderError(msg)
 
-        # Parse the condition
         condition_expr: exp.Expression
         if isinstance(condition, str):
             parsed: exp.Expression | None = exp.maybe_parse(condition)
@@ -419,7 +417,6 @@ class JoinBuilder:
         else:
             condition_expr = condition
 
-        # Build table expression
         table_expr: exp.Expression
         if isinstance(self._table, str):
             table_expr = exp.to_table(self._table)
@@ -430,13 +427,8 @@ class JoinBuilder:
             if self._alias:
                 table_expr = exp.alias_(table_expr, self._alias)
 
-        # Handle AS OF clause
         if self._as_of is not None:
-            inner_table = table_expr
-
-            # Copy to avoid mutating original expression if it's shared
-            inner_table = inner_table.copy()
-
+            inner_table = table_expr.copy()
             target_alias = self._alias
 
             if isinstance(inner_table, exp.Alias):
@@ -448,14 +440,12 @@ class JoinBuilder:
                     target_alias = alias_expr.this
                     inner_table.set("alias", None)
 
-            # Create Version expression and attach to table
             version = exp.Version(
                 this=self._as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(self._as_of)
             )
             inner_table.set("version", version)
             table_expr = exp.alias_(inner_table, target_alias) if target_alias else inner_table
 
-        # Create the appropriate join type using same pattern as existing JoinClauseMixin
         if self._join_type in {"INNER JOIN", "INNER", "LATERAL JOIN"}:
             join_expr = exp.Join(this=table_expr, on=condition_expr)
         elif self._join_type in {"LEFT JOIN", "LEFT"}:
@@ -465,7 +455,6 @@ class JoinBuilder:
         elif self._join_type in {"FULL JOIN", "FULL"}:
             join_expr = exp.Join(this=table_expr, on=condition_expr, side="FULL", kind="OUTER")
         elif self._join_type in {"CROSS JOIN", "CROSS"}:
-            # CROSS JOIN doesn't use ON condition
             join_expr = exp.Join(this=table_expr, kind="CROSS")
         else:
             join_expr = exp.Join(this=table_expr, on=condition_expr)
@@ -477,12 +466,34 @@ class JoinBuilder:
             if current_kind == "CROSS":
                 join_expr.set("kind", "CROSS LATERAL")
             elif current_kind == "OUTER" and current_side == "FULL":
-                join_expr.set("side", "FULL")  # Keep side
+                join_expr.set("side", "FULL")
                 join_expr.set("kind", "OUTER LATERAL")
             elif current_side:
                 join_expr.set("kind", f"{current_side} LATERAL")
-                join_expr.set("side", None)  # Clear side to avoid duplication
+                join_expr.set("side", None)
             else:
                 join_expr.set("kind", "LATERAL")
 
         return join_expr
+
+
+def create_join_builder(join_type: str, lateral: bool = False) -> "JoinBuilder":
+    """Create a JoinBuilder without tripping trait instantiation errors.
+
+    This guards against runtime environments where a trait-decorated JoinBuilder
+    may raise on direct construction.
+    """
+    try:
+        return JoinBuilder(join_type, lateral=lateral)
+    except TypeError as exc:
+        if "traits may not be directly created" not in str(exc):
+            raise
+        builder = object.__new__(JoinBuilder)
+        builder._join_type = join_type.upper()
+        builder._lateral = lateral
+        builder._table = None
+        builder._condition = None
+        builder._alias = None
+        builder._as_of = None
+        builder._as_of_type = None
+        return builder

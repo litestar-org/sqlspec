@@ -4,7 +4,7 @@ __all__ = ("test_version_comparison",)
 def test_version_comparison() -> None:
 
     # start-example
-    from sqlspec.utils.version import parse_version
+    from sqlspec.migrations.version import parse_version
 
     v1 = parse_version("0001")
     v2 = parse_version("20251018120000")

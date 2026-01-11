@@ -1,6 +1,6 @@
 """Spanner metadata queries using INFORMATION_SCHEMA."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
@@ -13,13 +13,11 @@ if TYPE_CHECKING:
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SpannerDataDictionary(SyncDataDictionaryBase):
     """Fetch table, column, and index metadata from Spanner."""
 
-    __slots__ = ()
-
-    dialect = "spanner"
+    dialect: ClassVar[str] = "spanner"
 
     def __init__(self) -> None:
         super().__init__()

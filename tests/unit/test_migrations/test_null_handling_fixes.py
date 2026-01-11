@@ -6,7 +6,7 @@ import pytest
 
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.validation import detect_out_of_order_migrations
-from sqlspec.utils.version import is_sequential_version, is_timestamp_version, parse_version
+from sqlspec.migrations.version import is_sequential_version, is_timestamp_version, parse_version
 
 
 def test_parse_version_with_none() -> None:

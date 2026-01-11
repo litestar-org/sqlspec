@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 
 from sqlspec.exceptions import OutOfOrderMigrationError
-from sqlspec.utils.version import parse_version
+from sqlspec.migrations.version import parse_version
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.utils.version import MigrationVersion
+    from sqlspec.migrations.version import MigrationVersion
 
 __all__ = ("MigrationGap", "detect_out_of_order_migrations", "format_out_of_order_warning")
 

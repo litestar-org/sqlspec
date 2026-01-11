@@ -11,7 +11,7 @@ from sqlspec.migrations.validation import (
     format_out_of_order_warning,
     validate_migration_order,
 )
-from sqlspec.utils.version import parse_version
+from sqlspec.migrations.version import parse_version
 
 
 def test_detect_out_of_order_no_applied() -> None:

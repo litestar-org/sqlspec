@@ -12,7 +12,7 @@ from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDr
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_normalization import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:

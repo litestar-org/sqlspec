@@ -1,7 +1,7 @@
 """Oracle-specific data dictionary for metadata queries."""
 
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -12,6 +12,7 @@ from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+    from sqlspec.data_dictionary._types import DialectConfig
 
 ORACLE_MIN_JSON_NATIVE_VERSION = 21
 ORACLE_MIN_JSON_NATIVE_COMPATIBLE = 20
@@ -27,8 +28,6 @@ __all__ = ("OracleVersionInfo", "OracledbAsyncDataDictionary", "OracledbSyncData
 
 class OracleVersionInfo(VersionInfo):
     """Oracle database version information."""
-
-    __slots__ = ("compatible", "is_autonomous")
 
     def __init__(
         self, major: int, minor: int = 0, patch: int = 0, compatible: "str | None" = None, is_autonomous: bool = False
@@ -83,16 +82,24 @@ class OracleVersionInfo(VersionInfo):
         return version_str
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class OracledbSyncDataDictionary(SyncDataDictionaryBase):
     """Oracle-specific sync data dictionary."""
 
-    __slots__ = ()
-
-    dialect = "oracle"
+    dialect: ClassVar[str] = "oracle"
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_dialect_config(self) -> "DialectConfig":
+        """Return the dialect configuration for this data dictionary."""
+        return get_dialect_config(type(self).dialect)
+
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        if schema is not None:
+            return schema
+        return self.get_dialect_config().default_schema
 
     def _extract_version_value(self, row: Any) -> "str | None":
         if isinstance(row, dict):
@@ -158,7 +165,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         if feature == "supports_json":
             return version_info.supports_json_blob()
 
-        config = get_dialect_config(self.dialect)
+        config = get_dialect_config(type(self).dialect)
         flag = config.get_feature_flag(feature)
         if flag is not None:
             return flag
@@ -168,7 +175,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         return bool(version_info >= required_version)
 
     def list_available_features(self) -> "list[str]":
-        config = get_dialect_config(self.dialect)
+        config = get_dialect_config(type(self).dialect)
         features: set[str] = set()
         features.update(config.feature_flags.keys())
         features.update(config.feature_versions.keys())
@@ -201,19 +208,20 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
     def get_version(self, driver: "OracleSyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information."""
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cast("OracleVersionInfo | None", cached_version)
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return cast("OracleVersionInfo | None", self._version_cache.get(driver_id))
+        # Not cached, fetch from database
 
         version_row = driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
-            self._log_version_unavailable(self.dialect, "missing")
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
         version_value = self._extract_version_value(version_row)
         if not version_value:
-            self._log_version_unavailable(self.dialect, "parse_failed")
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
@@ -221,11 +229,11 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         is_autonomous = self._is_autonomous(driver)
         version_info = self._build_version_info(version_value, compatible, is_autonomous)
         if version_info is None:
-            self._log_version_unavailable(self.dialect, "parse_failed")
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        self._log_version_detected(self.dialect, version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 
@@ -301,16 +309,24 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         )
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
     """Oracle-specific async data dictionary."""
 
-    __slots__ = ()
-
-    dialect = "oracle"
+    dialect: ClassVar[str] = "oracle"
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_dialect_config(self) -> "DialectConfig":
+        """Return the dialect configuration for this data dictionary."""
+        return get_dialect_config(type(self).dialect)
+
+    def resolve_schema(self, schema: "str | None") -> "str | None":
+        """Return a schema name using dialect defaults when missing."""
+        if schema is not None:
+            return schema
+        return self.get_dialect_config().default_schema
 
     def _extract_version_value(self, row: Any) -> "str | None":
         if isinstance(row, dict):
@@ -376,7 +392,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         if feature == "supports_json":
             return version_info.supports_json_blob()
 
-        config = get_dialect_config(self.dialect)
+        config = get_dialect_config(type(self).dialect)
         flag = config.get_feature_flag(feature)
         if flag is not None:
             return flag
@@ -386,7 +402,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         return bool(version_info >= required_version)
 
     def list_available_features(self) -> "list[str]":
-        config = get_dialect_config(self.dialect)
+        config = get_dialect_config(type(self).dialect)
         features: set[str] = set()
         features.update(config.feature_flags.keys())
         features.update(config.feature_versions.keys())
@@ -419,19 +435,20 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_version(self, driver: "OracleAsyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information."""
         driver_id = id(driver)
-        was_cached, cached_version = self.get_cached_version(driver_id)
-        if was_cached:
-            return cast("OracleVersionInfo | None", cached_version)
+        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        if driver_id in self._version_fetch_attempted:
+            return cast("OracleVersionInfo | None", self._version_cache.get(driver_id))
+        # Not cached, fetch from database
 
         version_row = await driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
-            self._log_version_unavailable(self.dialect, "missing")
+            self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
         version_value = self._extract_version_value(version_row)
         if not version_value:
-            self._log_version_unavailable(self.dialect, "parse_failed")
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
@@ -439,11 +456,11 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         is_autonomous = await self._is_autonomous(driver)
         version_info = self._build_version_info(version_value, compatible, is_autonomous)
         if version_info is None:
-            self._log_version_unavailable(self.dialect, "parse_failed")
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
             self.cache_version(driver_id, None)
             return None
 
-        self._log_version_detected(self.dialect, version_info)
+        self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 

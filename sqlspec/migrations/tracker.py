@@ -5,15 +5,16 @@ This module provides functionality to track applied migrations in the database.
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
 from sqlspec.builder import sql
 from sqlspec.migrations.base import BaseMigrationTracker
+from sqlspec.migrations.version import parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -21,6 +22,19 @@ if TYPE_CHECKING:
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 
 logger = get_logger("sqlspec.migrations.tracker")
+
+
+def _extract_column_name(metadata: Any) -> "str | None":
+    """Extract column name from a metadata entry."""
+    if isinstance(metadata, Mapping):
+        value = metadata.get("column_name")
+        if value is None:
+            value = metadata.get("COLUMN_NAME")
+        return str(value).lower() if value is not None else None
+    value = getattr(metadata, "column_name", None)
+    if value is not None:
+        return str(value).lower()
+    return None
 
 
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
@@ -47,9 +61,9 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                     operation="table_check",
                     status="missing",
                 )
-                return
+                columns_data = []
 
-            existing_columns = {col["column_name"] for col in columns_data}
+            existing_columns = {name for col in columns_data if (name := _extract_column_name(col)) is not None}
             missing_columns = self._detect_missing_columns(existing_columns)
 
             if not missing_columns:
@@ -334,9 +348,9 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                     operation="table_check",
                     status="missing",
                 )
-                return
+                columns_data = []
 
-            existing_columns = {col["column_name"] for col in columns_data}
+            existing_columns = {name for col in columns_data if (name := _extract_column_name(col)) is not None}
             missing_columns = self._detect_missing_columns(existing_columns)
 
             if not missing_columns:

@@ -8,7 +8,7 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.migrations.fix import MigrationFixer
-from sqlspec.utils.version import generate_conversion_map
+from sqlspec.migrations.version import generate_conversion_map
 
 
 @pytest.fixture

@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import PANDAS_INSTALLED, POLARS_INSTALLED, PYARROW_INSTALLED
-from sqlspec.utils import dependencies
+from sqlspec.utils import module_loader as dependencies
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 
 

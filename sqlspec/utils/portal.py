@@ -273,7 +273,7 @@ class PortalManager:
 
     def __init__(self) -> None:
         """Initialize the PortalManager singleton."""
-        if getattr(self, "_initialized", False):
+        if hasattr(self, "_initialized") and self._initialized:
             return
 
         self._provider: PortalProvider | None = None

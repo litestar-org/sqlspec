@@ -5,8 +5,8 @@ from unittest.mock import Mock, NonCallableMock, patch
 
 import pytest
 
-from sqlspec.utils.config_resolver import (
-    ConfigResolverError,
+from sqlspec.exceptions import ConfigResolverError
+from sqlspec.utils.config_tools import (
     _is_valid_config,  # pyright: ignore[reportPrivateUsage]
     resolve_config_async,
     resolve_config_sync,
@@ -34,7 +34,7 @@ async def test_resolve_direct_config_instance() -> None:
     """Test resolving a direct config instance."""
     mock_config = _create_mock_config()
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=mock_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=mock_config):
         result = await resolve_config_async("myapp.config.database_config")
         assert hasattr(result, "database_url")
         assert hasattr(result, "bind_key")
@@ -47,7 +47,7 @@ async def test_resolve_config_list() -> None:
     mock_config2 = _create_mock_config(database_url="sqlite:///test2.db", bind_key="test2")
     config_list = [mock_config1, mock_config2]
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=config_list):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=config_list):
         result = await resolve_config_async("myapp.config.database_configs")
         assert result == config_list
         assert isinstance(result, list) and len(result) == 2
@@ -60,7 +60,7 @@ async def test_resolve_sync_callable_config() -> None:
     def get_config() -> NonCallableMock:
         return mock_config
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=get_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=get_config):
         result = await resolve_config_async("myapp.config.get_database_config")
         assert result is mock_config
 
@@ -72,7 +72,7 @@ async def test_resolve_async_callable_config() -> None:
     async def get_config() -> NonCallableMock:
         return mock_config
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=get_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=get_config):
         result = await resolve_config_async("myapp.config.async_get_database_config")
         assert result is mock_config
 
@@ -84,7 +84,7 @@ async def test_resolve_sync_callable_config_list() -> None:
     def get_configs() -> list[NonCallableMock]:
         return [mock_config]
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=get_configs):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=get_configs):
         result = await resolve_config_async("myapp.config.get_database_configs")
         assert isinstance(result, list)
         assert len(result) == 1
@@ -93,7 +93,7 @@ async def test_resolve_sync_callable_config_list() -> None:
 
 async def test_import_error_handling() -> None:
     """Test proper handling of import errors."""
-    with patch("sqlspec.utils.config_resolver.import_string", side_effect=ImportError("Module not found")):
+    with patch("sqlspec.utils.config_tools.import_string", side_effect=ImportError("Module not found")):
         with pytest.raises(ConfigResolverError, match="Failed to import config from path"):
             await resolve_config_async("nonexistent.config")
 
@@ -104,7 +104,7 @@ async def test_callable_execution_error() -> None:
     def failing_config() -> None:
         raise ValueError("Config generation failed")
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=failing_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=failing_config):
         with pytest.raises(ConfigResolverError, match="Failed to execute callable config"):
             await resolve_config_async("myapp.config.failing_config")
 
@@ -115,7 +115,7 @@ async def test_none_result_validation() -> None:
     def none_config() -> None:
         return None
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=none_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=none_config):
         with pytest.raises(ConfigResolverError, match="resolved to None"):
             await resolve_config_async("myapp.config.none_config")
 
@@ -126,7 +126,7 @@ async def test_empty_list_validation() -> None:
     def empty_list_config() -> list[Any]:
         return []
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=empty_list_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=empty_list_config):
         with pytest.raises(ConfigResolverError, match="resolved to empty list"):
             await resolve_config_async("myapp.config.empty_list_config")
 
@@ -137,7 +137,7 @@ async def test_invalid_config_type_validation() -> None:
     def invalid_config() -> str:
         return "not a config"
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=invalid_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=invalid_config):
         with pytest.raises(ConfigResolverError, match="returned invalid type"):
             await resolve_config_async("myapp.config.invalid_config")
 
@@ -149,7 +149,7 @@ async def test_invalid_config_in_list_validation() -> None:
     def mixed_config_list() -> list[Any]:
         return [mock_valid_config, "invalid_config"]
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=mixed_config_list):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=mixed_config_list):
         with pytest.raises(ConfigResolverError, match="returned invalid config at index"):
             await resolve_config_async("myapp.config.mixed_configs")
 
@@ -165,7 +165,7 @@ async def test_config_validation_attributes() -> None:
     def incomplete_config() -> IncompleteConfig:
         return IncompleteConfig()
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=incomplete_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=incomplete_config):
         with pytest.raises(ConfigResolverError, match="returned invalid type"):
             await resolve_config_async("myapp.config.incomplete_config")
 
@@ -210,7 +210,7 @@ async def test_config_class_in_list_rejected() -> None:
     def mixed_list() -> list[Any]:
         return [mock_instance, MockConfigClass]
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=mixed_list):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=mixed_list):
         with pytest.raises(ConfigResolverError, match="returned invalid config at index"):
             await resolve_config_async("myapp.config.mixed_list")
 
@@ -228,7 +228,7 @@ async def test_config_instance_accepted() -> None:
 
     mock_instance = MockConfigClass()
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=mock_instance):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=mock_instance):
         result = await resolve_config_async("myapp.config.config_instance")
         assert hasattr(result, "database_url")
         assert hasattr(result, "bind_key")
@@ -239,7 +239,7 @@ def test_resolve_config_sync_wrapper() -> None:
     """Test that the sync wrapper works correctly."""
     mock_config = _create_mock_config()
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=mock_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=mock_config):
         result = resolve_config_sync("myapp.config.database_config")
         assert hasattr(result, "database_url")
         assert hasattr(result, "bind_key")
@@ -253,6 +253,6 @@ def test_resolve_config_sync_callable() -> None:
     def get_config() -> NonCallableMock:
         return mock_config
 
-    with patch("sqlspec.utils.config_resolver.import_string", return_value=get_config):
+    with patch("sqlspec.utils.config_tools.import_string", return_value=get_config):
         result = resolve_config_sync("myapp.config.get_database_config")
         assert result is mock_config

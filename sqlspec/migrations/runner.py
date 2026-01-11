@@ -15,10 +15,10 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
+from sqlspec.migrations.version import parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_, await_
-from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine

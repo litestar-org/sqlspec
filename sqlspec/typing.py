@@ -188,8 +188,6 @@ class IndexMetadata(TypedDict, total=False):
 class VersionInfo:
     """Parsed database version info."""
 
-    __slots__ = ("major", "minor", "patch")
-
     def __init__(self, major: int, minor: int = 0, patch: int = 0) -> None:
         """Initialize version info.
 
