@@ -6,9 +6,8 @@ from typing import Any
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.asyncmy import AsyncmyConfig
-from sqlspec.migrations.commands import AsyncMigrationCommands
+from tests.integration.test_adapters._events_helpers import setup_async_event_channel
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
@@ -33,12 +32,7 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService,
         extension_config={"events": {}},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     assert channel._backend_name == "table_queue"
 
@@ -79,12 +73,7 @@ async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLServi
         extension_config={"events": {}},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_ids = [
         await channel.publish("multi_test", {"index": 0}),
@@ -126,12 +115,7 @@ async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService
         extension_config={"events": {}},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_id = await channel.publish("nack_test", {"retry": True})
 

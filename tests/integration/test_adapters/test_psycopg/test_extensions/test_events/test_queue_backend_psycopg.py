@@ -6,9 +6,12 @@ import asyncio
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
-from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+from tests.integration.test_adapters._events_helpers import (
+    prepare_events_migrations,
+    setup_async_event_channel,
+    setup_sync_event_channel,
+)
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -21,8 +24,7 @@ def _build_conninfo(service: PostgresService) -> str:
 def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: PostgresService) -> None:
     """Psycopg sync configs use the queue fallback successfully."""
 
-    migrations_dir = tmp_path / "psycopg_events"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
 
     config = PsycopgSyncConfig(
         connection_config={"conninfo": _build_conninfo(postgres_service)},
@@ -30,12 +32,7 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: P
         extension_config={"events": {"backend": "table_queue"}},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = setup_sync_event_channel(config)
 
     try:
         event_id = channel.publish("notifications", {"action": "queue"})
@@ -70,12 +67,7 @@ async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_ser
         extension_config={"events": {"backend": "table_queue"}},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     try:
         event_id = await channel.publish("notifications", {"action": "async_queue"})

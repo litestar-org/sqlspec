@@ -2,9 +2,8 @@
 
 import pytest
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.migrations.commands import SyncMigrationCommands
+from tests.integration.test_adapters._events_helpers import prepare_events_migrations, setup_sync_event_channel
 
 
 @pytest.mark.integration
@@ -12,8 +11,7 @@ from sqlspec.migrations.commands import SyncMigrationCommands
 def test_duckdb_event_channel_queue_fallback(tmp_path) -> None:
     """DuckDB configs publish, consume, and ack events via the queue backend."""
 
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "duck_events.db"
 
     config = DuckDBConfig(
@@ -21,12 +19,7 @@ def test_duckdb_event_channel_queue_fallback(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = setup_sync_event_channel(config)
 
     event_id = channel.publish("notifications", {"action": "duck"})
     iterator = channel.iter_events("notifications", poll_interval=0.05)

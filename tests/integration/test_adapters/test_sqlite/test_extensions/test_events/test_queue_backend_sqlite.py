@@ -3,17 +3,15 @@
 
 import pytest
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.migrations.commands import SyncMigrationCommands
+from tests.integration.test_adapters._events_helpers import prepare_events_migrations, setup_sync_event_channel
 
 
 @pytest.mark.integration
 @pytest.mark.sqlite
 def test_sqlite_event_channel_publish_and_consume(tmp_path) -> None:
     """SQLite event channel publishes and consumes events via queue."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "events.db"
 
     config = SqliteConfig(
@@ -21,12 +19,7 @@ def test_sqlite_event_channel_publish_and_consume(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = setup_sync_event_channel(config)
 
     event_id = channel.publish("notifications", {"action": "test"})
     iterator = channel.iter_events("notifications", poll_interval=0.01)
@@ -41,8 +34,7 @@ def test_sqlite_event_channel_publish_and_consume(tmp_path) -> None:
 @pytest.mark.sqlite
 def test_sqlite_event_channel_ack_updates_status(tmp_path) -> None:
     """Acknowledging an event updates its status to acked."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "events_ack.db"
 
     config = SqliteConfig(
@@ -50,12 +42,7 @@ def test_sqlite_event_channel_ack_updates_status(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = setup_sync_event_channel(config)
 
     event_id = channel.publish("alerts", {"level": "info"})
     iterator = channel.iter_events("alerts", poll_interval=0.01)
@@ -74,8 +61,7 @@ def test_sqlite_event_channel_ack_updates_status(tmp_path) -> None:
 @pytest.mark.sqlite
 def test_sqlite_event_channel_custom_table_name(tmp_path) -> None:
     """Custom queue table name is used for events."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "custom_events.db"
 
     config = SqliteConfig(
@@ -84,12 +70,7 @@ def test_sqlite_event_channel_custom_table_name(tmp_path) -> None:
         extension_config={"events": {"queue_table": "app_events"}},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = setup_sync_event_channel(config)
 
     event_id = channel.publish("events", {"custom": True})
 
@@ -103,8 +84,7 @@ def test_sqlite_event_channel_custom_table_name(tmp_path) -> None:
 @pytest.mark.sqlite
 def test_sqlite_event_channel_multiple_channels(tmp_path) -> None:
     """Events are correctly filtered by channel."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "multi_channel.db"
 
     config = SqliteConfig(
@@ -112,12 +92,7 @@ def test_sqlite_event_channel_multiple_channels(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = setup_sync_event_channel(config)
 
     id_alerts = channel.publish("alerts", {"type": "alert"})
     channel.publish("notifications", {"type": "notification"})
@@ -134,8 +109,7 @@ def test_sqlite_event_channel_multiple_channels(tmp_path) -> None:
 @pytest.mark.sqlite
 def test_sqlite_event_channel_metadata_preserved(tmp_path) -> None:
     """Event metadata is preserved through publish/consume cycle."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "metadata.db"
 
     config = SqliteConfig(
@@ -143,12 +117,7 @@ def test_sqlite_event_channel_metadata_preserved(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = setup_sync_event_channel(config)
 
     event_id = channel.publish("events", {"action": "create"}, metadata={"user_id": "user_123", "source": "api"})
 
@@ -165,8 +134,7 @@ def test_sqlite_event_channel_metadata_preserved(tmp_path) -> None:
 @pytest.mark.sqlite
 def test_sqlite_event_channel_attempts_tracked(tmp_path) -> None:
     """Event attempts counter is incremented on dequeue."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "attempts.db"
 
     config = SqliteConfig(
@@ -174,12 +142,7 @@ def test_sqlite_event_channel_attempts_tracked(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = setup_sync_event_channel(config)
 
     event_id = channel.publish("events", {"action": "test"})
 
@@ -198,8 +161,7 @@ def test_sqlite_event_channel_attempts_tracked(tmp_path) -> None:
 @pytest.mark.sqlite
 def test_sqlite_event_channel_telemetry(tmp_path) -> None:
     """Event operations are tracked in telemetry."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "telemetry.db"
 
     config = SqliteConfig(
@@ -207,12 +169,7 @@ def test_sqlite_event_channel_telemetry(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = SyncMigrationCommands(config)
-    commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    spec, channel = setup_sync_event_channel(config)
 
     channel.publish("events", {"action": "telemetry_test"})
     iterator = channel.iter_events("events", poll_interval=0.01)

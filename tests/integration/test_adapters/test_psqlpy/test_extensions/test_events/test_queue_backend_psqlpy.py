@@ -6,9 +6,8 @@ import asyncio
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.psqlpy import PsqlpyConfig
-from sqlspec.migrations.commands import AsyncMigrationCommands
+from tests.integration.test_adapters._events_helpers import setup_async_event_channel
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -31,12 +30,7 @@ async def test_psqlpy_event_channel_queue_fallback(tmp_path, postgres_service: P
         extension_config={"events": {"backend": "table_queue"}},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_id = await channel.publish("notifications", {"action": "psqlpy"})
     iterator = channel.iter_events("notifications", poll_interval=0.1)

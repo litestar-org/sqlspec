@@ -3,17 +3,15 @@
 
 import pytest
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.migrations.commands import AsyncMigrationCommands
+from tests.integration.test_adapters._events_helpers import prepare_events_migrations, setup_async_event_channel
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_publish(tmp_path) -> None:
     """Aiosqlite event channel publishes events asynchronously."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "async_events.db"
 
     config = AiosqliteConfig(
@@ -21,12 +19,7 @@ async def test_aiosqlite_event_channel_publish(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_id = await channel.publish("notifications", {"action": "async_test"})
 
@@ -45,8 +38,7 @@ async def test_aiosqlite_event_channel_publish(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_consume(tmp_path) -> None:
     """Aiosqlite event channel consumes events asynchronously."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "async_consume.db"
 
     config = AiosqliteConfig(
@@ -54,12 +46,7 @@ async def test_aiosqlite_event_channel_consume(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_id = await channel.publish("events", {"data": "async_value"})
 
@@ -77,8 +64,7 @@ async def test_aiosqlite_event_channel_consume(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_ack(tmp_path) -> None:
     """Aiosqlite event channel acknowledges events asynchronously."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "async_ack.db"
 
     config = AiosqliteConfig(
@@ -86,12 +72,7 @@ async def test_aiosqlite_event_channel_ack(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_id = await channel.publish("alerts", {"priority": "high"})
 
@@ -115,8 +96,7 @@ async def test_aiosqlite_event_channel_ack(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_metadata(tmp_path) -> None:
     """Aiosqlite event channel preserves metadata in async operations."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "async_metadata.db"
 
     config = AiosqliteConfig(
@@ -124,12 +104,7 @@ async def test_aiosqlite_event_channel_metadata(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_id = await channel.publish(
         "events", {"action": "async_meta"}, metadata={"request_id": "req_abc", "timestamp": "2024-01-15T10:00:00Z"}
@@ -150,8 +125,7 @@ async def test_aiosqlite_event_channel_metadata(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_telemetry(tmp_path) -> None:
     """Aiosqlite event operations are tracked in telemetry."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "async_telemetry.db"
 
     config = AiosqliteConfig(
@@ -159,12 +133,7 @@ async def test_aiosqlite_event_channel_telemetry(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    spec, channel = await setup_async_event_channel(config)
 
     await channel.publish("events", {"track": "async"})
     generator = channel.iter_events("events", poll_interval=0.01)
@@ -184,8 +153,7 @@ async def test_aiosqlite_event_channel_telemetry(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_custom_table_name(tmp_path) -> None:
     """Custom queue table name is used for events."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "custom_events.db"
 
     config = AiosqliteConfig(
@@ -194,12 +162,7 @@ async def test_aiosqlite_event_channel_custom_table_name(tmp_path) -> None:
         extension_config={"events": {"queue_table": "app_events"}},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_id = await channel.publish("events", {"custom": True})
 
@@ -217,8 +180,7 @@ async def test_aiosqlite_event_channel_custom_table_name(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_multiple_channels(tmp_path) -> None:
     """Events are correctly filtered by channel."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "multi_channel.db"
 
     config = AiosqliteConfig(
@@ -226,12 +188,7 @@ async def test_aiosqlite_event_channel_multiple_channels(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     id_alerts = await channel.publish("alerts", {"type": "alert"})
     await channel.publish("notifications", {"type": "notification"})
@@ -251,8 +208,7 @@ async def test_aiosqlite_event_channel_multiple_channels(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_aiosqlite_event_channel_attempts_tracked(tmp_path) -> None:
     """Event attempts counter is incremented on dequeue."""
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
+    migrations_dir = prepare_events_migrations(tmp_path)
     db_path = tmp_path / "attempts.db"
 
     config = AiosqliteConfig(
@@ -260,12 +216,7 @@ async def test_aiosqlite_event_channel_attempts_tracked(tmp_path) -> None:
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade()
-
-    spec = SQLSpec()
-    spec.add_config(config)
-    channel = spec.event_channel(config)
+    _spec, channel = await setup_async_event_channel(config)
 
     event_id = await channel.publish("events", {"action": "test"})
 
