@@ -175,6 +175,45 @@ Driver Protocols
    :undoc-members:
    :show-inheritance:
 
+Adapter Implementation Contract
+===============================
+
+Each adapter's ``core.py`` module must export standardized helper functions:
+
+.. list-table:: Standardized core.py Functions
+   :header-rows: 1
+   :widths: 30 50 20
+
+   * - Function
+     - Purpose
+     - Return Type
+   * - ``collect_rows``
+     - Extract rows from cursor result
+     - ``tuple[list[dict], list[str]]``
+   * - ``resolve_rowcount``
+     - Get affected row count (handles negative values)
+     - ``int``
+   * - ``normalize_execute_parameters``
+     - Prepare parameters for single execution
+     - ``Any``
+   * - ``normalize_execute_many_parameters``
+     - Prepare parameters for batch execution
+     - ``Any``
+   * - ``build_connection_config``
+     - Transform raw config to driver format
+     - ``dict``
+   * - ``raise_exception``
+     - Map driver errors to SQLSpec exceptions
+     - ``NoReturn``
+
+**Why standardized names matter:**
+
+- Consistent naming across all adapters reduces cognitive load
+- Enables mypyc optimization of hot-path functions
+- Clear contract for new adapter implementations
+
+Reference implementations: ``sqlspec.adapters.asyncpg.core``, ``sqlspec.adapters.sqlite.core``
+
 See Also
 ========
 

@@ -534,6 +534,221 @@ EXPLAIN Plan Support
 
 For detailed usage, see :doc:`/guides/builder/explain`.
 
+Observability
+=============
+
+SQLSpec provides structured observability through the ``sqlspec.observability`` module, following OpenTelemetry semantic conventions.
+
+.. currentmodule:: sqlspec.observability
+
+Configuration
+-------------
+
+.. autoclass:: ObservabilityConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Main configuration for observability features.
+
+   **Options:**
+
+   - ``print_sql`` - Include SQL in log output
+   - ``redaction`` - Redaction configuration for sensitive data
+   - ``lifecycle`` - Lifecycle hook registration
+   - ``statement_observers`` - Statement event observers
+
+.. autoclass:: LoggingConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Configuration for structured logging output.
+
+   **Options:**
+
+   - ``include_sql_hash`` - Include SHA-256 hash prefix for statement correlation
+   - ``sql_truncation_length`` - Maximum SQL length before truncation (default: 2000)
+   - ``parameter_truncation_count`` - Maximum parameters to log at DEBUG (default: 100)
+   - ``include_trace_context`` - Include trace_id/span_id from OpenTelemetry
+
+Statement Events
+----------------
+
+.. autoclass:: StatementEvent
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Event emitted after each SQL statement execution.
+
+   **Key Fields:**
+
+   - ``sql`` - Executed SQL (may be redacted)
+   - ``parameters`` - Bound parameters (may be redacted)
+   - ``driver`` - Driver class name
+   - ``adapter`` - Config class name
+   - ``db_system`` - OpenTelemetry ``db.system`` value
+   - ``operation`` - SQL operation type (SELECT, INSERT, etc.)
+   - ``duration_s`` - Execution time in seconds
+   - ``rows_affected`` - Number of affected rows
+
+Helper Functions
+----------------
+
+.. autofunction:: resolve_db_system
+
+   Maps adapter name to OpenTelemetry ``db.system`` semantic convention value.
+
+   .. code-block:: python
+
+      from sqlspec.observability import resolve_db_system
+
+      resolve_db_system("AsyncpgDriver")  # Returns "postgresql"
+      resolve_db_system("SqliteDriver")   # Returns "sqlite"
+      resolve_db_system("DuckdbDriver")   # Returns "duckdb"
+
+.. autofunction:: compute_sql_hash
+
+   Computes SHA-256 hash prefix for statement correlation.
+
+   .. code-block:: python
+
+      from sqlspec.observability import compute_sql_hash
+
+      hash_prefix = compute_sql_hash("SELECT * FROM users")
+      # Returns first 16 chars of SHA-256 hex digest
+
+.. autofunction:: get_trace_context
+
+   Extracts OpenTelemetry trace context when available.
+
+   .. code-block:: python
+
+      from sqlspec.observability import get_trace_context
+
+      trace_id, span_id = get_trace_context()
+      # Returns (None, None) if OpenTelemetry not installed
+
+Log Formatters
+--------------
+
+.. autoclass:: OTelConsoleFormatter
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Console formatter following OpenTelemetry log format conventions.
+
+   **Output format:**
+
+   .. code-block:: text
+
+      db.query db.system=postgresql db.operation=SELECT duration_ms=1.23 db.statement=SELECT 1
+
+.. autoclass:: OTelJSONFormatter
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   JSON formatter for structured log aggregation.
+
+   **Output format:**
+
+   .. code-block:: json
+
+      {"timestamp": "...", "level": "INFO", "message": "db.query", "db.system": "postgresql", "duration_ms": 1.23}
+
+Default Observer
+----------------
+
+.. autofunction:: default_statement_observer
+
+   Built-in statement observer that logs events using the configured format.
+
+   **Log Level Behavior:**
+
+   - INFO: Logs statement metadata without SQL or parameters
+   - DEBUG: Includes truncated SQL and parameters
+
+   **Usage:**
+
+   .. code-block:: python
+
+      from sqlspec import ObservabilityConfig, default_statement_observer
+
+      config = ObservabilityConfig(
+          statement_observers=(default_statement_observer,),
+      )
+
+Log Event Reference
+-------------------
+
+SQLSpec emits structured log records with static event names:
+
+.. list-table:: Log Events
+   :header-rows: 1
+   :widths: 25 25 50
+
+   * - Event
+     - Module
+     - Key Fields
+   * - ``db.query``
+     - ``sqlspec.observability``
+     - ``db.system``, ``db.operation``, ``duration_ms``
+   * - ``stack.execute.start``
+     - ``sqlspec.driver``
+     - ``db.system``, ``stack_size``, ``native_pipeline``
+   * - ``stack.execute.complete``
+     - ``sqlspec.driver``
+     - ``duration_ms``, ``success_count``, ``error_count``
+   * - ``migration.apply``
+     - ``sqlspec.migrations.runner``
+     - ``db_system``, ``version``, ``duration_ms``
+   * - ``sql.load``
+     - ``sqlspec.loader``
+     - ``file_path``, ``query_name``, ``count``
+   * - ``storage.read``
+     - ``sqlspec.storage.backends``
+     - ``backend_type``, ``path``, ``duration_ms``
+   * - ``storage.write``
+     - ``sqlspec.storage.backends``
+     - ``backend_type``, ``path``, ``duration_ms``
+
+Prometheus Integration
+----------------------
+
+.. currentmodule:: sqlspec.extensions.prometheus
+
+.. autoclass:: PrometheusStatementObserver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Statement observer that records Prometheus metrics.
+
+   **Metrics:**
+
+   - ``sqlspec_driver_query_total`` - Counter of executed statements
+   - ``sqlspec_driver_query_duration_seconds`` - Histogram of execution times
+   - ``sqlspec_driver_query_rows`` - Histogram of affected rows
+
+.. autofunction:: enable_metrics
+
+   Helper to attach Prometheus metrics to an ObservabilityConfig.
+
+   **Usage:**
+
+   .. code-block:: python
+
+      from sqlspec.extensions.prometheus import enable_metrics
+      from sqlspec import ObservabilityConfig
+
+      config = enable_metrics(
+          namespace="myapp",
+          label_names=("db_system", "operation", "bind_key"),
+      )
+
 See Also
 ========
 

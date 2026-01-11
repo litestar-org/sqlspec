@@ -187,9 +187,9 @@ SQLSpec drivers use the Template Method pattern for consistent execution:
 1. **Special Handling Check**: Try database-specific optimizations (PostgreSQL COPY, bulk operations)
 2. **Execution Routing**: Route to appropriate method based on query type:
 
-   - ``_execute_statement``: Single statement execution
-   - ``_execute_many``: Batch execution (executemany)
-   - ``_execute_script``: Multi-statement scripts
+   - ``dispatch_execute``: Single statement execution
+   - ``dispatch_execute_many``: Batch execution (executemany)
+   - ``dispatch_execute_script``: Multi-statement scripts (where supported)
 
 3. **Database Interaction**: Execute via DBAPI connection
 4. **Result Building**: Package raw results into SQLResult
