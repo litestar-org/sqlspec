@@ -550,7 +550,7 @@ def test_repeated_named_params_expand_for_qmark_style() -> None:
     assert converted_sql.count("?") == 4
     # Parameters should be expanded: 3 times query_like value + 1 time limit value
     assert converted_params == ("%duckdb%", "%duckdb%", "%duckdb%", 10)
-    assert len(converted_params) == 4
+    assert len(converted_params) == 4  # type: ignore[arg-type]
 
 
 def test_edge_case_all_numeric_parameters() -> None:
