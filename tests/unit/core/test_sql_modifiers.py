@@ -426,7 +426,8 @@ class TestMethodChaining:
         stmt = SQL("SELECT * FROM orders")
 
         modified = (
-            stmt.where_eq("customer_id", 123)
+            stmt
+            .where_eq("customer_id", 123)
             .where_gte("total", 100)
             .where_lt("total", 1000)
             .where_in("status", ["pending", "processing"])

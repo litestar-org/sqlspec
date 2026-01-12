@@ -11,8 +11,14 @@ The utilities are organized in layers:
     - CTE utilities: Safe CTE extraction and reattachment
 
 Example:
-    >>> from sqlspec.core.query_modifiers import expr_eq, create_condition, apply_where
-    >>> condition = create_condition("status", "status_param", expr_eq)
+    >>> from sqlspec.core.query_modifiers import (
+    ...     expr_eq,
+    ...     create_condition,
+    ...     apply_where,
+    ... )
+    >>> condition = create_condition(
+    ...     "status", "status_param", expr_eq
+    ... )
     >>> modified = apply_where(select_expr, condition)
 """
 
@@ -145,7 +151,6 @@ def parse_column_for_condition(column: str | exp.Column | exp.Expression) -> exp
         return column
 
     if isinstance(column, str):
-        # Handle table.column notation
         if "." in column:
             parts = column.split(".", 1)
             return exp.column(parts[1], table=parts[0])
@@ -164,7 +169,6 @@ def extract_column_name(column: str | exp.Column | exp.Expression) -> str:
         Column name as string for use as parameter name base
     """
     if isinstance(column, str):
-        # Handle table.column notation
         return column.split(".")[-1] if "." in column else column
 
     if isinstance(column, exp.Column):
@@ -182,9 +186,7 @@ def extract_column_name(column: str | exp.Column | exp.Expression) -> str:
 
 
 def create_condition(
-    column: str | exp.Column | exp.Expression,
-    param_name: str,
-    condition_factory: ConditionFactory,
+    column: str | exp.Column | exp.Expression, param_name: str, condition_factory: ConditionFactory
 ) -> exp.Expression:
     """Create parameterized condition expression.
 
@@ -203,10 +205,7 @@ def create_condition(
     return condition_factory(col_expr, placeholder)
 
 
-def create_in_condition(
-    column: str | exp.Column | exp.Expression,
-    param_names: list[str],
-) -> exp.Expression:
+def create_in_condition(column: str | exp.Column | exp.Expression, param_names: list[str]) -> exp.Expression:
     """Create IN condition with multiple placeholders.
 
     Args:
@@ -221,10 +220,7 @@ def create_in_condition(
     return exp.In(this=col_expr, expressions=placeholders)
 
 
-def create_not_in_condition(
-    column: str | exp.Column | exp.Expression,
-    param_names: list[str],
-) -> exp.Expression:
+def create_not_in_condition(column: str | exp.Column | exp.Expression, param_names: list[str]) -> exp.Expression:
     """Create NOT IN condition with multiple placeholders.
 
     Args:
@@ -239,9 +235,7 @@ def create_not_in_condition(
 
 
 def create_between_condition(
-    column: str | exp.Column | exp.Expression,
-    low_param: str,
-    high_param: str,
+    column: str | exp.Column | exp.Expression, low_param: str, high_param: str
 ) -> exp.Expression:
     """Create BETWEEN condition.
 
@@ -288,10 +282,7 @@ def create_not_exists_condition(subquery: exp.Expression) -> exp.Expression:
 # =============================================================================
 
 
-def apply_where(
-    expression: exp.Expression,
-    condition: exp.Expression,
-) -> exp.Expression:
+def apply_where(expression: exp.Expression, condition: exp.Expression) -> exp.Expression:
     """Apply WHERE condition to an expression using AND.
 
     Works with SELECT, UPDATE, and DELETE expressions.
@@ -313,10 +304,7 @@ def apply_where(
     return expression.where(condition, copy=False)
 
 
-def apply_or_where(
-    expression: exp.Expression,
-    condition: exp.Expression,
-) -> exp.Expression:
+def apply_or_where(expression: exp.Expression, condition: exp.Expression) -> exp.Expression:
     """Apply WHERE condition to an expression using OR.
 
     Combines the new condition with any existing WHERE clause using OR.
@@ -345,10 +333,7 @@ def apply_or_where(
     return expression
 
 
-def apply_limit(
-    expression: exp.Expression,
-    limit_value: int,
-) -> exp.Expression:
+def apply_limit(expression: exp.Expression, limit_value: int) -> exp.Expression:
     """Apply LIMIT clause to expression.
 
     Args:
@@ -368,10 +353,7 @@ def apply_limit(
     return expression.limit(limit_value, copy=False)
 
 
-def apply_offset(
-    expression: exp.Expression,
-    offset_value: int,
-) -> exp.Expression:
+def apply_offset(expression: exp.Expression, offset_value: int) -> exp.Expression:
     """Apply OFFSET clause to expression.
 
     Args:
@@ -391,10 +373,7 @@ def apply_offset(
     return expression.offset(offset_value, copy=False)
 
 
-def apply_select_only(
-    expression: exp.Expression,
-    columns: tuple[str | exp.Expression, ...],
-) -> exp.Expression:
+def apply_select_only(expression: exp.Expression, columns: tuple[str | exp.Expression, ...]) -> exp.Expression:
     """Replace SELECT clause with only specified columns.
 
     Args:
@@ -411,10 +390,8 @@ def apply_select_only(
         msg = f"select_only only valid for SELECT, got {type(expression).__name__}"
         raise SQLSpecError(msg)
 
-    # Clear existing selections
     expression.set("expressions", [])
 
-    # Add new columns
     for col in columns:
         col_expr = parse_column_for_condition(col) if isinstance(col, str) else col
         expression = expression.select(col_expr, copy=False)
@@ -428,8 +405,7 @@ def apply_select_only(
 
 
 def safe_modify_with_cte(
-    expression: exp.Expression,
-    modification_fn: Callable[[exp.Expression], exp.Expression],
+    expression: exp.Expression, modification_fn: Callable[[exp.Expression], exp.Expression]
 ) -> exp.Expression:
     """Safely apply a modification, preserving CTEs at top level.
 
@@ -444,7 +420,6 @@ def safe_modify_with_cte(
     Returns:
         Modified expression with CTE preserved at top level
     """
-    # Extract CTE if present (sqlglot uses "with_" as the key name)
     cte: Any = None
     working_expr = expression
 
@@ -454,10 +429,8 @@ def safe_modify_with_cte(
             working_expr = expression.copy()
             working_expr.set("with_", None)
 
-    # Apply the modification
     result = modification_fn(working_expr)
 
-    # Reattach CTE at top level
     if cte and isinstance(result, exp.Select):
         result.set("with_", cte)
 

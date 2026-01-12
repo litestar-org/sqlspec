@@ -9,7 +9,11 @@ import asyncpg
 from sqlspec.adapters.asyncpg.core import driver_profile, raise_exception
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgSessionContext
-from sqlspec.adapters.cockroach_asyncpg.core import CockroachAsyncpgRetryConfig, calculate_backoff_seconds, is_retryable_error
+from sqlspec.adapters.cockroach_asyncpg.core import (
+    CockroachAsyncpgRetryConfig,
+    calculate_backoff_seconds,
+    is_retryable_error,
+)
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.core import SQL, register_driver_profile
 from sqlspec.exceptions import SerializationConflictError, TransactionRetryError

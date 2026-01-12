@@ -634,10 +634,7 @@ class SQL:
             New SQL instance with the expression and copied state
         """
         new_sql = SQL(
-            new_expr,
-            *self._original_parameters,
-            statement_config=self._statement_config,
-            is_many=self._is_many,
+            new_expr, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
         )
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
@@ -879,7 +876,6 @@ class SQL:
             New SQL instance with WHERE condition applied
         """
         expression = self._get_or_parse_expression()
-        # IS NULL doesn't need a parameter, but we use the factory pattern
         condition = create_condition(column, "_unused", expr_is_null)
         new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
         return self._create_modified_copy_with_expression(new_expr)
@@ -894,7 +890,6 @@ class SQL:
             New SQL instance with WHERE condition applied
         """
         expression = self._get_or_parse_expression()
-        # IS NOT NULL doesn't need a parameter, but we use the factory pattern
         condition = create_condition(column, "_unused", expr_is_not_null)
         new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
         return self._create_modified_copy_with_expression(new_expr)
@@ -910,7 +905,6 @@ class SQL:
             New SQL instance with WHERE condition applied
         """
         if not values:
-            # Empty IN is always false - return 1=0 condition
             expression = self._get_or_parse_expression()
             false_condition = exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0))
             new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, false_condition))
@@ -943,7 +937,6 @@ class SQL:
             New SQL instance with WHERE condition applied
         """
         if not values:
-            # Empty NOT IN is always true - return unchanged
             return self
 
         expression = self._get_or_parse_expression()

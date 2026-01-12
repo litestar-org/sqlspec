@@ -391,7 +391,20 @@ class ParameterConverter:
                             unique_params[param_key] = value
                             param_order.append(param_key)
 
-            param_values = [unique_params[param_key] for param_key in param_order]
+            needs_expansion = target_style in {
+                ParameterStyle.QMARK,
+                ParameterStyle.POSITIONAL_PYFORMAT,
+                ParameterStyle.POSITIONAL_COLON,
+            }
+
+            if needs_expansion:
+                param_values = []
+                for param in param_info:
+                    param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
+                    if param_key in unique_params:
+                        param_values.append(unique_params[param_key])
+            else:
+                param_values = [unique_params[param_key] for param_key in param_order]
 
             if preserve_parameter_format and original_parameters is not None:
                 return self._preserve_original_format(param_values, original_parameters)

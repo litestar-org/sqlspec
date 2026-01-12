@@ -13,7 +13,11 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
 )
-from sqlspec.adapters.cockroach_psycopg.core import CockroachPsycopgRetryConfig, apply_driver_features, build_statement_config
+from sqlspec.adapters.cockroach_psycopg.core import (
+    CockroachPsycopgRetryConfig,
+    apply_driver_features,
+    build_statement_config,
+)
 from sqlspec.adapters.cockroach_psycopg.driver import (
     CockroachPsycopgAsyncDriver,
     CockroachPsycopgAsyncExceptionHandler,

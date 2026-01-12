@@ -148,7 +148,16 @@ class LoggingConfig:
 class ObservabilityConfig:
     """Aggregates lifecycle hooks, observers, and telemetry toggles."""
 
-    __slots__ = ("cloud_formatter", "lifecycle", "logging", "print_sql", "redaction", "sampling", "statement_observers", "telemetry")
+    __slots__ = (
+        "cloud_formatter",
+        "lifecycle",
+        "logging",
+        "print_sql",
+        "redaction",
+        "sampling",
+        "statement_observers",
+        "telemetry",
+    )
 
     def __init__(
         self,

@@ -553,6 +553,102 @@ Debugging Loaded Queries
    :caption: `Debugging loaded queries with SQLFileLoader`
 
 
+Modifying Loaded Queries
+------------------------
+
+After loading a query, you can modify it using fluent methods. Each method returns a new SQL object, preserving immutability.
+
+Adding WHERE Conditions
+^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+
+   sqlspec = SQLSpec()
+   sqlspec.load_sql_files("sql/")
+
+   # Get base query
+   query = sqlspec.get_sql("list_users")
+
+   # Add conditions with auto-generated parameters
+   filtered = (
+       query
+       .where_eq("status", "active")
+       .where_gte("created_at", "2024-01-01")
+       .where_in("role", ["admin", "moderator"])
+   )
+
+   # Execute with driver
+   results = driver.select(filtered)
+
+**Available WHERE Methods:**
+
+- ``where_eq(column, value)`` - Equal to
+- ``where_neq(column, value)`` - Not equal to
+- ``where_lt(column, value)`` - Less than
+- ``where_lte(column, value)`` - Less than or equal
+- ``where_gt(column, value)`` - Greater than
+- ``where_gte(column, value)`` - Greater than or equal
+- ``where_like(column, pattern)`` - LIKE pattern match
+- ``where_ilike(column, pattern)`` - Case-insensitive LIKE
+- ``where_is_null(column)`` - IS NULL check
+- ``where_is_not_null(column)`` - IS NOT NULL check
+- ``where_in(column, values)`` - IN list
+- ``where_not_in(column, values)`` - NOT IN list
+- ``where_between(column, low, high)`` - BETWEEN range
+
+Pagination
+^^^^^^^^^^
+
+.. code-block:: python
+
+   # Add pagination
+   paginated = query.limit(20).offset(40)
+
+   # Or use the convenience method
+   paginated = query.paginate(page=3, page_size=20)
+
+Column Projection
+^^^^^^^^^^^^^^^^^
+
+Restrict the columns returned by a query:
+
+.. code-block:: python
+
+   # Select only specific columns
+   projected = query.select_only("id", "name", "email")
+
+Chaining Methods
+^^^^^^^^^^^^^^^^
+
+All methods can be chained fluently:
+
+.. code-block:: python
+
+   result = (
+       sqlspec.get_sql("list_orders")
+       .where_eq("customer_id", customer_id)
+       .where_gte("total", 100)
+       .where_in("status", ["pending", "processing"])
+       .select_only("id", "total", "created_at")
+       .limit(50)
+       .offset(100)
+   )
+
+CTE Preservation
+^^^^^^^^^^^^^^^^
+
+Queries with Common Table Expressions (CTEs) are handled correctly:
+
+.. code-block:: python
+
+   # Query with CTE remains valid after modification
+   complex_query = sqlspec.get_sql("analytics_with_cte")
+   filtered = complex_query.where_eq("region", "us-east")
+   # CTE is preserved at the top level
+
+
 Next Steps
 ----------
 

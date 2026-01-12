@@ -385,6 +385,23 @@ Implement the :class:`~sqlspec.observability.CloudLogFormatter` protocol:
                # ... your custom format
            }
 
+Configuring Cloud Formatter
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Add a cloud formatter directly to :class:`~sqlspec.observability.ObservabilityConfig`:
+
+.. code-block:: python
+
+   from sqlspec import ObservabilityConfig
+   from sqlspec.observability import GCPLogFormatter
+
+   config = ObservabilityConfig(
+       cloud_formatter=GCPLogFormatter(project_id="my-project"),
+       print_sql=True,
+   )
+
+The ``cloud_formatter`` field accepts any object implementing the :class:`~sqlspec.observability.CloudLogFormatter` protocol. When merged, the override formatter replaces the base formatter.
+
 Configuration Merging
 ---------------------
 

@@ -29,7 +29,9 @@ class TestCockroachAsyncpgRetryConfig:
 
     def test_custom_values(self) -> None:
         """Config should accept custom values."""
-        config = CockroachAsyncpgRetryConfig(max_retries=5, base_delay_ms=100.0, max_delay_ms=2000.0, enable_logging=False)
+        config = CockroachAsyncpgRetryConfig(
+            max_retries=5, base_delay_ms=100.0, max_delay_ms=2000.0, enable_logging=False
+        )
         assert config.max_retries == 5
         assert config.base_delay_ms == 100.0
         assert config.max_delay_ms == 2000.0

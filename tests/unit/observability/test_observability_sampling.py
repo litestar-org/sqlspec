@@ -2,14 +2,7 @@
 
 import pytest
 
-from sqlspec.observability import (
-    AWSLogFormatter,
-    GCPLogFormatter,
-    ObservabilityConfig,
-    SamplingConfig,
-    StatementEvent,
-)
-
+from sqlspec.observability import AWSLogFormatter, GCPLogFormatter, ObservabilityConfig, SamplingConfig, StatementEvent
 
 # =============================================================================
 # ObservabilityConfig Sampling Tests

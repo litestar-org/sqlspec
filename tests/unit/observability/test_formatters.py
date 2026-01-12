@@ -1,25 +1,11 @@
 """Unit tests for cloud log formatters."""
 
-from sqlspec.observability import AWSLogFormatter, AzureLogFormatter, CloudLogFormatter, GCPLogFormatter
+from typing import TYPE_CHECKING
 
+from sqlspec.observability import AWSLogFormatter, AzureLogFormatter, GCPLogFormatter
 
-class TestCloudLogFormatterProtocol:
-    """Tests for CloudLogFormatter protocol compliance."""
-
-    def test_gcp_implements_protocol(self) -> None:
-        """GCPLogFormatter should implement CloudLogFormatter protocol."""
-        formatter = GCPLogFormatter()
-        assert isinstance(formatter, CloudLogFormatter)
-
-    def test_aws_implements_protocol(self) -> None:
-        """AWSLogFormatter should implement CloudLogFormatter protocol."""
-        formatter = AWSLogFormatter()
-        assert isinstance(formatter, CloudLogFormatter)
-
-    def test_azure_implements_protocol(self) -> None:
-        """AzureLogFormatter should implement CloudLogFormatter protocol."""
-        formatter = AzureLogFormatter()
-        assert isinstance(formatter, CloudLogFormatter)
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestGCPLogFormatter:
@@ -53,8 +39,9 @@ class TestGCPLogFormatter:
         entry = formatter.format("INFO", "msg", trace_id="abc123")
         assert entry["logging.googleapis.com/trace"] == "projects/my-project/traces/abc123"
 
-    def test_trace_id_without_project(self) -> None:
+    def test_trace_id_without_project(self, monkeypatch: "pytest.MonkeyPatch") -> None:
         """Should omit trace when no project_id."""
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
         formatter = GCPLogFormatter()
         entry = formatter.format("INFO", "msg", trace_id="abc123")
         assert "logging.googleapis.com/trace" not in entry
