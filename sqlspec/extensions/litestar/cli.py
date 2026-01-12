@@ -1,11 +1,12 @@
 """Litestar CLI integration for SQLSpec migrations."""
 
+from collections.abc import Callable
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 import rich_click as click
-from litestar.cli._utils import LitestarGroup
+from litestar.cli._utils import LitestarGroup  # noqa: PLC2701
 
 from sqlspec.cli import add_migration_commands
 from sqlspec.exceptions import ImproperConfigurationError
@@ -15,6 +16,15 @@ if TYPE_CHECKING:
     from litestar import Litestar
 
     from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
+
+
+def _safe_group(*, aliases: "list[str] | None" = None, **kwargs: Any) -> Callable[[Callable[..., Any]], Any]:
+    if aliases is None:
+        return cast("Callable[[Callable[..., Any]], Any]", click.group(**kwargs))
+    try:
+        return cast("Callable[[Callable[..., Any]], Any]", click.group(aliases=aliases, **kwargs))
+    except TypeError:
+        return cast("Callable[[Callable[..., Any]], Any]", click.group(**kwargs))
 
 
 def get_database_migration_plugin(app: "Litestar") -> "SQLSpecPlugin":
@@ -37,7 +47,7 @@ def get_database_migration_plugin(app: "Litestar") -> "SQLSpecPlugin":
     raise ImproperConfigurationError(msg)
 
 
-@click.group(cls=LitestarGroup, name="db", aliases=["database"])
+@_safe_group(cls=LitestarGroup, name="db", aliases=["database"])
 def database_group(ctx: "click.Context") -> None:
     """Manage SQLSpec database components."""
     ctx.obj = {"app": ctx.obj, "configs": get_database_migration_plugin(ctx.obj.app).config}

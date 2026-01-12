@@ -31,6 +31,7 @@ target/
 .python-version
 .ruff_cache
 /docs/_build/
+docs/autoapi/
 coverage.*
 setup.py
 tmp/

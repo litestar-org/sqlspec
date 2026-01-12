@@ -1,0 +1,351 @@
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/sql/sql.js"></script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
+
+<style>
+  .sqlspec-playground {
+    border: 1px solid var(--sl-color-gray-4);
+    border-radius: 16px;
+    padding: 1.5rem;
+    background: var(--sl-color-bg);
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+  }
+
+  .sqlspec-playground__header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 1.25rem;
+  }
+
+  .sqlspec-playground__header h2 {
+    margin: 0 0 0.35rem 0;
+  }
+
+  .sqlspec-playground__header p {
+    margin: 0;
+    color: var(--sl-color-gray-6);
+    max-width: 46rem;
+  }
+
+  .sqlspec-playground__status {
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: var(--sl-color-gray-2);
+    color: var(--sl-color-gray-7);
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .sqlspec-playground__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+  }
+
+  .sqlspec-playground__panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .sqlspec-playground__panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-weight: 600;
+  }
+
+  .sqlspec-playground__panel-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .sqlspec-playground__button {
+    border: 1px solid var(--sl-color-gray-4);
+    background: var(--sl-color-gray-1);
+    color: var(--sl-color-text);
+    border-radius: 8px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .sqlspec-playground__button:hover:not(:disabled) {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-primary);
+  }
+
+  .sqlspec-playground__button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .sqlspec-playground__output {
+    margin-top: 1rem;
+    border: 1px solid var(--sl-color-gray-3);
+    border-radius: 12px;
+    background: var(--sl-color-gray-1);
+    padding: 0.75rem;
+  }
+
+  .sqlspec-playground__output pre {
+    margin: 0.5rem 0 0 0;
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 0.75rem;
+    background: #0f172a;
+    color: #e2e8f0;
+    border-radius: 10px;
+    font-size: 0.85rem;
+  }
+
+  .sqlspec-playground__output pre:focus {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .sqlspec-playground .CodeMirror {
+    border: 1px solid var(--sl-color-gray-3);
+    border-radius: 12px;
+    height: 220px;
+    font-family: var(--sl-font-mono);
+    font-size: 0.85rem;
+    background: #f8fafc;
+    color: #0f172a;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror {
+    background: #0b1220;
+    color: #e2e8f0;
+    border-color: #334155;
+  }
+
+  html.dark .sqlspec-playground__output pre {
+    background: #020617;
+  }
+
+  @media (max-width: 700px) {
+    .sqlspec-playground {
+      padding: 1rem;
+    }
+
+    .sqlspec-playground__header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+</style>
+
+<section class="sqlspec-playground" id="sqlspec-playground-{{ id }}">
+  <div class="sqlspec-playground__header">
+    <div>
+      <h2>SQL Playground</h2>
+      <p>Run SQLSpec inside your browser. Execute Python or run SQL against a seeded, in-memory SQLite database.</p>
+    </div>
+    <div class="sqlspec-playground__status" data-status>Loading runtime</div>
+  </div>
+
+  <div class="sqlspec-playground__grid">
+    <div class="sqlspec-playground__panel">
+      <div class="sqlspec-playground__panel-header">
+        <span>Python</span>
+        <div class="sqlspec-playground__panel-actions">
+          <button class="sqlspec-playground__button" data-run-python>Run Python</button>
+          <button class="sqlspec-playground__button" data-reset-python>Reset</button>
+        </div>
+      </div>
+      <textarea data-python-editor>
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+spec = SQLSpec()
+config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+
+with spec.provide_session(config) as session:
+    session.execute("create table if not exists teams (id integer primary key, name text)")
+    session.execute("insert into teams (name) values ('Litestar'), ('SQLSpec')")
+    result = session.execute("select * from teams")
+    print(result.all())
+      </textarea>
+    </div>
+
+    <div class="sqlspec-playground__panel">
+      <div class="sqlspec-playground__panel-header">
+        <span>SQL</span>
+        <div class="sqlspec-playground__panel-actions">
+          <button class="sqlspec-playground__button" data-run-sql>Run SQL</button>
+          <button class="sqlspec-playground__button" data-reset-sql>Reset</button>
+        </div>
+      </div>
+      <textarea data-sql-editor>
+select id, name from teams order by id;
+      </textarea>
+    </div>
+  </div>
+
+  <div class="sqlspec-playground__output">
+    <div class="sqlspec-playground__panel-header">
+      <span>Output</span>
+      <button class="sqlspec-playground__button" data-clear-output>Clear</button>
+    </div>
+    <pre data-output tabindex="0" aria-live="polite"></pre>
+  </div>
+</section>
+
+<script>
+  (function() {
+    const root = document.getElementById("sqlspec-playground-{{ id }}");
+    const statusEl = root.querySelector("[data-status]");
+    const outputEl = root.querySelector("[data-output]");
+    const pythonTextarea = root.querySelector("[data-python-editor]");
+    const sqlTextarea = root.querySelector("[data-sql-editor]");
+    const runPythonButton = root.querySelector("[data-run-python]");
+    const runSqlButton = root.querySelector("[data-run-sql]");
+    const resetPythonButton = root.querySelector("[data-reset-python]");
+    const resetSqlButton = root.querySelector("[data-reset-sql]");
+    const clearOutputButton = root.querySelector("[data-clear-output]");
+
+    const pythonDefault = pythonTextarea.value.trim();
+    const sqlDefault = sqlTextarea.value.trim();
+
+    const pythonEditor = CodeMirror.fromTextArea(pythonTextarea, {
+      mode: "python",
+      lineNumbers: true,
+      indentUnit: 4,
+      viewportMargin: Infinity
+    });
+
+    const sqlEditor = CodeMirror.fromTextArea(sqlTextarea, {
+      mode: "text/x-sql",
+      lineNumbers: true,
+      indentUnit: 2,
+      viewportMargin: Infinity
+    });
+
+    let pyodide = null;
+
+    const writeOutput = (text) => {
+      outputEl.textContent += `${text}\n`;
+      outputEl.scrollTop = outputEl.scrollHeight;
+    };
+
+    const setStatus = (text) => {
+      statusEl.textContent = text;
+    };
+
+    const clearOutput = () => {
+      outputEl.textContent = "";
+    };
+
+    const initializePlayground = async () => {
+      try {
+        setStatus("Initializing Pyodide");
+        pyodide = await loadPyodide({
+          indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/"
+        });
+
+        pyodide.setStdout({ batched: writeOutput });
+        pyodide.setStderr({ batched: writeOutput });
+
+        writeOutput("Loading micropip...");
+        await pyodide.loadPackage("micropip");
+        const micropip = pyodide.pyimport("micropip");
+
+        writeOutput("Installing sqlspec...");
+        await micropip.install("sqlspec");
+
+        await pyodide.runPythonAsync(`
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+_playground_spec = SQLSpec()
+_playground_config = _playground_spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
+with _playground_spec.provide_session(_playground_config) as session:
+    session.execute("create table if not exists teams (id integer primary key, name text)")
+    session.execute("insert into teams (name) values ('Litestar'), ('SQLSpec')")
+
+def run_sql(query: str):
+    with _playground_spec.provide_session(_playground_config) as session:
+        result = session.execute(query)
+        rows = result.all()
+        rows_affected = result.rows_affected
+    return rows, rows_affected
+        `);
+
+        setStatus("Ready");
+        runPythonButton.disabled = false;
+        runSqlButton.disabled = false;
+      } catch (err) {
+        setStatus("Failed to load");
+        writeOutput(`Error: ${err}`);
+        console.error(err);
+      }
+    };
+
+    runPythonButton.disabled = true;
+    runSqlButton.disabled = true;
+
+    runPythonButton.addEventListener("click", async () => {
+      if (!pyodide) {
+        writeOutput("Pyodide is not ready yet.");
+        return;
+      }
+
+      clearOutput();
+      writeOutput("Running Python...");
+      try {
+        await pyodide.runPythonAsync(pythonEditor.getValue());
+      } catch (err) {
+        writeOutput(`Python error: ${err}`);
+        console.error(err);
+      }
+    });
+
+    runSqlButton.addEventListener("click", async () => {
+      if (!pyodide) {
+        writeOutput("Pyodide is not ready yet.");
+        return;
+      }
+
+      clearOutput();
+      writeOutput("Running SQL...");
+      try {
+        pyodide.globals.set("sqlspec_sql", sqlEditor.getValue());
+        await pyodide.runPythonAsync(`
+rows, rows_affected = run_sql(sqlspec_sql)
+if rows:
+    print(rows)
+else:
+    print(f"Rows affected: {rows_affected}")
+        `);
+      } catch (err) {
+        writeOutput(`SQL error: ${err}`);
+        console.error(err);
+      }
+    });
+
+    resetPythonButton.addEventListener("click", () => {
+      pythonEditor.setValue(pythonDefault);
+    });
+
+    resetSqlButton.addEventListener("click", () => {
+      sqlEditor.setValue(sqlDefault);
+    });
+
+    clearOutputButton.addEventListener("click", () => {
+      clearOutput();
+    });
+
+    initializePlayground();
+  })();
+</script>

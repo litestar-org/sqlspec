@@ -2,162 +2,228 @@
 SQLSpec Example Library
 =======================
 
-The example catalog now mirrors the way teams explore SQLSpec. Each snippet focuses on a single idea, keeps inline commentary to a minimum, and favors lightweight backends (SQLite, AioSQLite, DuckDB) so the code can run anywhere.
+This catalog mirrors the primary SQLSpec workflows. Each snippet focuses on a single
+idea, stays under 75 lines, and can be executed via pytest.
 
-Quick Start
-===========
+Quickstart
+==========
 
-Run a smoke sweep that exercises the SQLite/AioSQLite/DuckDB demos:
+.. list-table::
+   :header-rows: 1
 
-.. code-block:: console
-
-   make examples-smoke
-
-Each file exposes a ``main()`` helper so you can execute it directly:
-
-.. code-block:: console
-
-   uv run python docs/examples/frameworks/litestar/aiosqlite_app.py
-
-Folder Guide
-============
+   * - File
+     - Description
+   * - ``quickstart/basic_connection.py``
+     - Create a registry, open a session, and run a simple query.
+   * - ``quickstart/first_query.py``
+     - Insert and read back a row.
+   * - ``quickstart/configuration.py``
+     - Configure statement behavior and verify execution.
 
 Frameworks
-----------
+==========
 
-.. list-table:: Litestar demos
+.. list-table::
    :header-rows: 1
 
    * - File
      - Description
-   * - ``frameworks/litestar/aiosqlite_app.py``
-     - Async Litestar app backed by SQLSpec and AioSQLite with automatic seeding.
-   * - ``frameworks/litestar/duckdb_app.py``
-     - Sync Litestar handlers using DuckDB for quick analytics dashboards.
-   * - ``frameworks/litestar/sqlite_app.py``
-      - Litestar routes backed by the synchronous SQLite adapter.
+   * - ``frameworks/litestar/basic_setup.py``
+     - Register the SQLSpec plugin in Litestar.
+   * - ``frameworks/litestar/dependency_injection.py``
+     - Customize Litestar session dependency keys.
+   * - ``frameworks/litestar/commit_modes.py``
+     - Configure autocommit vs manual commit behavior.
+   * - ``frameworks/litestar/session_stores.py``
+     - Use SQLSpec-backed session stores.
+   * - ``frameworks/fastapi/basic_setup.py``
+     - FastAPI dependency injection with SQLSpec.
+   * - ``frameworks/flask/basic_setup.py``
+     - Flask extension setup and session access.
+   * - ``frameworks/starlette/basic_setup.py``
+     - Starlette plugin setup with async sessions.
 
-.. list-table:: FastAPI / Starlette / Flask demos
+Drivers
+=======
+
+.. list-table::
    :header-rows: 1
 
    * - File
      - Description
-   * - ``frameworks/fastapi/aiosqlite_app.py``
-     - FastAPI app using the AioSQLite adapter with dependency-injected sessions.
-   * - ``frameworks/fastapi/sqlite_app.py``
-     - Synchronous FastAPI handlers powered by the SQLite adapter.
-   * - ``frameworks/starlette/aiosqlite_app.py``
-     - Starlette routes that read from an AioSQLite-backed dataset.
-   * - ``frameworks/flask/sqlite_app.py``
-     - Flask blueprint that serves data via the synchronous SQLite adapter.
+   * - ``drivers/sqlite_connection.py``
+     - Configure and run a SQLite session.
+   * - ``drivers/asyncpg_connection.py``
+     - AsyncPG configuration example.
+   * - ``drivers/cockroach_asyncpg_connection.py``
+     - CockroachDB config using AsyncPG.
+   * - ``drivers/cockroach_psycopg_connection.py``
+     - CockroachDB config using Psycopg.
+   * - ``drivers/mysqlconnector_connection.py``
+     - MySQL connector configuration.
+   * - ``drivers/pymysql_connection.py``
+     - PyMySQL configuration.
+   * - ``drivers/transaction_handling.py``
+     - Manual transactions with begin/commit/rollback.
+   * - ``drivers/parameter_binding.py``
+     - Named and positional parameter binding.
 
-Adapters
---------
+Querying
+========
 
-.. list-table:: Connection-focused snippets
-   :header-rows: 1
-
-   * - File
-     - Adapter
-     - Highlights
-   * - ``adapters/adbc_postgres_ingest.py``
-     - ADBC (Postgres)
-     - Rich Click CLI that exports SELECT queries to Parquet/Arrow and loads them via the storage bridge.
-   * - ``adapters/asyncpg/connect_pool.py``
-     - AsyncPG
-     - Minimal pool configuration plus a version probe.
-   * - ``adapters/psycopg/connect_sync.py``
-     - Psycopg (sync)
-     - Blocking workflow familiar to scripts and management commands.
-   * - ``adapters/oracledb/connect_async.py``
-     - oracledb (async)
-     - Async driver setup with timestamp sampling.
-
-Patterns
---------
-
-.. list-table:: Common tasks
-   :header-rows: 1
-
-   * - File
-     - Scenario
-   * - ``patterns/builder/select_and_insert.py``
-     - Fluent SQL builder usage with a tiny articles dataset.
-   * - ``patterns/migrations/runner_basic.py``
-     - Sync migration commands pointed at bundled demo migrations.
-   * - ``patterns/migrations/files/0001_create_articles.py``
-     - Python migration file consumed by the runner example.
-   * - ``patterns/multi_tenant/router.py``
-     - Routing requests to dedicated SQLite configs per tenant slug.
-   * - ``patterns/configs/multi_adapter_registry.py``
-     - Register multiple adapters on a single SQLSpec registry.
-   * - ``patterns/stacks/query_stack_example.py``
-     - Immutable StatementStack workflow executed against SQLite and AioSQLite drivers.
-
-Arrow
------
-
-.. list-table:: Arrow-powered exports
-   :header-rows: 1
-
-   * - File
-     - Scenario
-   * - ``arrow/arrow_basic_usage.py``
-     - ``select_to_arrow()`` walkthrough covering native Arrow, pandas, polars, and Parquet exports.
-
-Loaders
--------
-
-.. list-table:: SQL file loading
+.. list-table::
    :header-rows: 1
 
    * - File
      - Description
-   * - ``loaders/sql_files.py``
-     - Shows how ``SQLFileLoader`` binds named queries in ``queries/users.sql`` and executes them with SQLite.
+   * - ``querying/execute_select.py``
+     - Basic SELECT execution.
+   * - ``querying/execute_insert.py``
+     - INSERT execution with row counts.
+   * - ``querying/batch_operations.py``
+     - Execute batches with execute_many.
+   * - ``querying/statement_stack.py``
+     - Execute multi-statement stacks.
+
+SQL Files
+=========
+
+.. list-table::
+   :header-rows: 1
+
+   * - File
+     - Description
+   * - ``sql_files/load_sql_files.py``
+     - Load SQL from files with named queries.
+   * - ``sql_files/named_queries.py``
+     - Register named SQL directly in the registry.
+
+Builder
+=======
+
+.. list-table::
+   :header-rows: 1
+
+   * - File
+     - Description
+   * - ``builder/select_query.py``
+     - Build a SELECT with the fluent builder.
+   * - ``builder/insert_query.py``
+     - Build an INSERT statement.
+   * - ``builder/update_query.py``
+     - Build an UPDATE statement.
+   * - ``builder/complex_joins.py``
+     - Join across multiple tables.
+   * - ``builder/query_modifiers.py``
+     - Use where helpers, pagination, and select_only.
 
 Extensions
-----------
+==========
 
-.. list-table:: Adapter Development Kit
+.. list-table::
    :header-rows: 1
 
    * - File
      - Description
-   * - ``extensions/adk/basic_aiosqlite.py``
-     - Create an ADK session, append events, and fetch the transcript using SQLSpec’s AioSQLite store.
-   * - ``extensions/adk/litestar_aiosqlite.py``
-     - Wire ``SQLSpecSessionService`` into Litestar and expose a simple ``/sessions`` endpoint.
-   * - ``extensions/adk/runner_memory_aiosqlite.py``
-     - Run an ADK ``Runner`` with SQLSpec-backed session + memory services, then query stored memories.
+   * - ``extensions/litestar/plugin_setup.py``
+     - Configure Litestar extension settings.
+   * - ``extensions/litestar/dependency_keys.py``
+     - Multiple Litestar dependency keys.
+   * - ``extensions/litestar/multiple_databases.py``
+     - Multi-database registry setup.
+   * - ``extensions/adk/memory_store.py``
+     - ADK session store workflow.
+   * - ``extensions/adk/tool_integration.py``
+     - ADK memory store and search workflow.
+   * - ``extensions/adk/backend_config.py``
+     - ADBC + GizmoSQL backend configuration.
 
-Shared Utilities
-----------------
+Observability
+=============
 
-``shared/configs.py`` and ``shared/data.py`` provide registry builders and seed data so the individual examples can stay short and consistent.
+.. list-table::
+   :header-rows: 1
+
+   * - File
+     - Description
+   * - ``patterns/observability/correlation_middleware.py``
+     - Correlation context example.
+   * - ``patterns/observability/sampling_config.py``
+     - Sampling configuration.
+   * - ``patterns/observability/cloud_formatters.py``
+     - Cloud log formatters.
+
+Reference
+=========
+
+.. list-table::
+   :header-rows: 1
+
+   * - File
+     - Description
+   * - ``reference/base_api.py``
+     - SQLSpec registry APIs.
+   * - ``reference/core_api.py``
+     - SQL and result APIs.
+   * - ``reference/driver_api.py``
+     - Driver execution APIs.
+   * - ``reference/builder_api.py``
+     - Builder entry points.
+
+Contributing
+============
+
+.. list-table::
+   :header-rows: 1
+
+   * - File
+     - Description
+   * - ``contributing/new_adapter.py``
+     - Adapter skeleton example.
 
 .. toctree::
    :hidden:
 
-   frameworks/litestar/aiosqlite_app
-   frameworks/litestar/duckdb_app
-   frameworks/litestar/sqlite_app
-   adapters/adbc_postgres_ingest
-   adapters/asyncpg/connect_pool
-   adapters/psycopg/connect_sync
-   adapters/oracledb/connect_async
-   patterns/builder/select_and_insert
-   patterns/migrations/runner_basic
-   patterns/multi_tenant/router
-   loaders/sql_files
-   extensions/adk/basic_aiosqlite
-   extensions/adk/litestar_aiosqlite
-   extensions/adk/runner_memory_aiosqlite
-   frameworks/fastapi/aiosqlite_app
-   frameworks/fastapi/sqlite_app
-   frameworks/starlette/aiosqlite_app
-   frameworks/flask/sqlite_app
-   patterns/configs/multi_adapter_registry
-   patterns/stacks/query_stack_example
-   arrow/arrow_basic_usage
-   README
+   quickstart/basic_connection
+   quickstart/first_query
+   quickstart/configuration
+   frameworks/litestar/basic_setup
+   frameworks/litestar/dependency_injection
+   frameworks/litestar/commit_modes
+   frameworks/litestar/session_stores
+   frameworks/fastapi/basic_setup
+   frameworks/flask/basic_setup
+   frameworks/starlette/basic_setup
+   drivers/asyncpg_connection
+   drivers/cockroach_asyncpg_connection
+   drivers/cockroach_psycopg_connection
+   drivers/mysqlconnector_connection
+   drivers/pymysql_connection
+   drivers/sqlite_connection
+   drivers/transaction_handling
+   drivers/parameter_binding
+   querying/execute_select
+   querying/execute_insert
+   querying/batch_operations
+   querying/statement_stack
+   sql_files/load_sql_files
+   sql_files/named_queries
+   builder/select_query
+   builder/insert_query
+   builder/update_query
+   builder/complex_joins
+   builder/query_modifiers
+   extensions/litestar/plugin_setup
+   extensions/litestar/dependency_keys
+   extensions/litestar/multiple_databases
+   extensions/adk/memory_store
+   extensions/adk/tool_integration
+   extensions/adk/backend_config
+   patterns/observability/correlation_middleware
+   patterns/observability/sampling_config
+   patterns/observability/cloud_formatters
+   reference/base_api
+   reference/core_api
+   reference/driver_api
+   reference/builder_api
+   contributing/new_adapter

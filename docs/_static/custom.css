@@ -71,6 +71,18 @@ html.dark .title-with-logo .brand-text {
   text-shadow: var(--brand-text-glow);
 }
 
+.only-dark {
+  display: none;
+}
+
+html.dark .only-dark {
+  display: block;
+}
+
+html.dark .only-light {
+  display: none;
+}
+
 /* Button container wrapping */
 .buttons.wrap {
   display: flex;

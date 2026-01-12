@@ -255,7 +255,7 @@ docs-serve: docs-clean                             ## Serve documentation locall
 .PHONY: docs
 docs: docs-clean                                   ## Build documentation
 	@echo "${INFO} Building documentation... 📝"
-	@uv run sphinx-build -M html docs docs/_build/ -E -a -j auto -W --keep-going
+	@PYTHONWARNINGS="ignore::FutureWarning" uv run sphinx-build -M html docs docs/_build/ -E -a -j 1 -W --keep-going
 	@echo "${OK} Documentation built successfully"
 
 .PHONY: docs-linkcheck

@@ -42,6 +42,12 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
 
       The complete, auto-generated API documentation for the ``sqlspec`` library.
 
+    .. grid-item-card:: :octicon:`play` Playground
+      :link: playground
+      :link-type: doc
+
+      Run SQLSpec in your browser with an interactive SQL playground.
+
 .. toctree::
     :hidden:
     :titlesonly:
@@ -49,8 +55,10 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
 
     getting_started/index
     usage/index
+    extensions/index
     examples/index
     reference/index
+    playground
 
 .. toctree::
     :hidden:

@@ -2,7 +2,8 @@
 Usage
 =====
 
-This section provides comprehensive guides on using SQLSpec for database operations. Whether you're new to SQLSpec or looking to leverage advanced features, these guides will help you get the most out of the library.
+This section provides focused guides on core SQLSpec workflows. Each page highlights the
+minimum you need to move fast, with links to deeper examples when you want more detail.
 
 .. toctree::
    :maxdepth: 2
@@ -20,67 +21,38 @@ This section provides comprehensive guides on using SQLSpec for database operati
 Overview
 --------
 
-SQLSpec provides a unified interface for database operations across multiple backends while maintaining a direct connection to SQL. The key concepts are:
-
-**Data Flow**
-   Understand how SQLSpec processes queries from input to result using its sophisticated pipeline architecture.
-
-**Configuration**
-   Learn how to configure database connections, connection pools, and statement processing options.
-
-**Drivers and Querying**
-   Discover the available database drivers and how to execute queries effectively.
-
-**Query Builder**
-   Explore the experimental fluent API for programmatically constructing SQL queries.
-
-**Query Stack**
-   Learn how to batch heterogeneous SQL statements with immutable stacks, choose between fail-fast and continue-on-error execution, and monitor native vs. sequential paths in :doc:`/reference/query-stack`.
-
-**SQL Files**
-   Manage SQL statements from files using the SQL file loader.
-
-**Command Line Interface**
-   Use the SQLSpec CLI for migrations, with shell completion support for bash, zsh, and fish.
-
-**Database Migrations**
-   Manage database schema changes with support for hybrid versioning, automatic schema migration,
-   and extension migrations.
-
-**Framework Integrations**
-   Integrate SQLSpec with Litestar, FastAPI, and other Python web frameworks.
-
-**Observability**
-   Monitor and trace database operations with correlation tracking, sampling, and cloud-native logging.
+SQLSpec provides a unified interface for database operations across multiple backends while
+keeping SQL at the center. Start with configuration and drivers, then move into query
+construction, migration tooling, and framework integrations.
 
 Quick Reference
 ---------------
 
-**Basic Query Execution**
+**Connect and run a query**
 
-.. literalinclude:: /examples/usage/usage_index_1.py
+.. literalinclude:: /examples/quickstart/basic_connection.py
    :language: python
-   :caption: ``basic query execution``
+   :caption: ``basic connection``
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
    :no-upgrade:
 
-**Using the Query Builder**
+**Build a query programmatically**
 
-.. literalinclude:: /examples/usage/usage_index_2.py
+.. literalinclude:: /examples/builder/select_query.py
    :language: python
-   :caption: ``using the query builder``
+   :caption: ``select query``
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
    :no-upgrade:
 
-**Loading from SQL Files**
+**Load SQL from files**
 
-.. literalinclude:: /examples/usage/usage_index_3.py
+.. literalinclude:: /examples/sql_files/load_sql_files.py
    :language: python
-   :caption: ``loading from sql files``
+   :caption: ``load sql files``
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
@@ -89,4 +61,5 @@ Quick Reference
 Next Steps
 ----------
 
-Start with :doc:`data_flow` to understand SQLSpec's execution pipeline, then move on to :doc:`configuration` to set up your database connections.
+Start with :doc:`configuration` for connection options, then review :doc:`drivers_and_querying`
+for driver-specific guidance and execution patterns.

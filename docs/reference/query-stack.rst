@@ -18,6 +18,31 @@ The stack system is composed of:
 - ``StackResult`` – wraps the driver’s raw result while surfacing stack metadata (rows_affected, warning, error)
 - ``AsyncDriverAdapterBase.execute_stack`` / ``SyncDriverAdapterBase.execute_stack`` – adapter hooks that select native pipelines or the sequential fallback
 
+Execute a Stack
+==============
+
+.. literalinclude:: /examples/querying/statement_stack.py
+   :language: python
+   :caption: ``statement stack``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+Native Pipelines and Round Trips
+================================
+
+``StatementStack`` always runs in order. When a driver supports native pipelines,
+the stack can be sent as a single pipeline or batch, reducing round trips. Drivers
+without native support fall back to sequential execution while preserving results
+per operation.
+
+Native stack execution is available in:
+
+- AsyncPG
+- Psycopg (pipeline mode)
+- OracleDB
+
 StatementStack
 ==============
 

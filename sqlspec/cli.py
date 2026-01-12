@@ -25,6 +25,17 @@ if TYPE_CHECKING:
 __all__ = ("add_migration_commands", "get_sqlspec_group")
 
 
+def _safe_group_command(
+    group: "Group", *, aliases: "list[str] | None" = None, **kwargs: Any
+) -> "Callable[[Callable[..., Any]], Callable[..., Any]]":
+    if aliases is None:
+        return group.command(**kwargs)
+    try:
+        return group.command(aliases=aliases, **kwargs)
+    except TypeError:
+        return group.command(**kwargs)
+
+
 def get_sqlspec_group() -> "Group":
     """Get the SQLSpec CLI group.
 
@@ -707,8 +718,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             run_(_init_async_configs)()
 
-    @database_group.command(
-        name="create-migration", aliases=["make-migration"], help="Create a new migration revision."
+    @_safe_group_command(
+        database_group, name="create-migration", help="Create a new migration revision.", aliases=["make-migration"]
     )
     @bind_key_option
     @click.option("-m", "--message", default=None, help="Revision message")

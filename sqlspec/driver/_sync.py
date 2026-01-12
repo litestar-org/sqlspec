@@ -563,8 +563,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SchemaT | dict[str, Any] | None":
         """Execute a select statement and return at most one row.
 
-        Returns None if no rows are found.
-        Raises an exception if more than one row is returned.
+        Returns None if no rows are found. Raises ``ValueError`` if more than one
+        row is returned. Any database or SQL execution errors raised by the driver
+        are propagated unchanged.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return result.one_or_none(schema_type=schema_type)

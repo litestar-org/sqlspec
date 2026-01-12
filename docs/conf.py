@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from datetime import date
 from functools import partial
 from typing import TYPE_CHECKING
@@ -19,6 +20,15 @@ __all__ = ("setup", "update_html_context")
 
 current_year = date.today().year
 
+warnings.filterwarnings("ignore", category=FutureWarning, module=r"google\\.api_core\\._python_version_support")
+warnings.filterwarnings("ignore", category=FutureWarning, module=r"google\\..*")
+try:
+    from sphinx.deprecation import RemovedInSphinx90Warning
+
+    warnings.filterwarnings("ignore", category=RemovedInSphinx90Warning)
+except ImportError:
+    RemovedInSphinx90Warning = None
+
 
 # -- Project information -----------------------------------------------------
 project = __project__
@@ -28,17 +38,22 @@ release = os.getenv("_SQLSPEC_DOCS_BUILD_VERSION", __version__.rsplit(".")[0])
 suppress_warnings = [
     "autosectionlabel.*",
     "ref.python",  # TODO: remove when https://github.com/sphinx-doc/sphinx/issues/4961 is fixed
+    "ref",
     "autodoc.import_object",  # Suppress autodoc import warnings for mocked dependencies
     "autodoc",  # Suppress other autodoc warnings
     "myst.xref_missing",  # Suppress missing cross-references in cheat sheets
     "misc.highlighting_failure",  # Suppress pygments highlighting issues in cheat sheets
     "app.add_directive",  # Suppress extension parallel safety warnings
+    "app.add_extension",
     "docutils",  # Suppress docstring formatting warnings from source code
     "ref.doc",  # Suppress document reference warnings
     "toc.not_readable",  # Suppress cheat sheet files not in toctree warnings
+    "toc.not_included",
+    "autosummary",
 ]
 # -- General configuration ---------------------------------------------------
 extensions = [
+    "sphinxcontrib.jquery",
     "sphinx.ext.intersphinx",
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
@@ -52,19 +67,25 @@ extensions = [
     "auto_pytabs.sphinx_ext",
     "sphinx_copybutton",
     "sphinx.ext.todo",
-    "sphinx.ext.viewcode",
     "sphinx_click",
+    "click_extra.sphinx",
     "sphinx_toolbox.collapse",
     "sphinx_design",
+    "sphinx_tabs.tabs",
     "sphinx_togglebutton",
     "sphinx_paramlinks",
     "sphinxcontrib.mermaid",
+    "numpydoc",
+    "sphinx_iconify",
+    "sphinx_docsearch",
+    "sphinx_datatables",
+    "jupyter_sphinx",
+    "nbsphinx",
+    "tools.sphinx_ext.playground",
 ]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "msgspec": ("https://jcristharif.com/msgspec/", None),
-    "sqlalchemy": ("https://docs.sqlalchemy.org/en/20/", None),
-    "alembic": ("https://alembic.sqlalchemy.org/en/latest/", None),
     "litestar": ("https://docs.litestar.dev/latest/", None),
     "click": ("https://click.palletsprojects.com/en/stable/", None),
     "anyio": ("https://anyio.readthedocs.io/en/stable/", None),
@@ -97,6 +118,8 @@ napoleon_use_admonition_for_notes = True
 napoleon_use_admonition_for_references = False
 napoleon_attr_annotations = True
 
+numpydoc_show_class_members = False
+
 autoclass_content = "class"
 autodoc_class_signature = "separated"
 autodoc_default_options = {"special-members": "__init__", "show-inheritance": True, "members": True}
@@ -121,8 +144,6 @@ autodoc_type_aliases = {
     "Optional": "typing.Optional",
 }
 autodoc_mock_imports = [
-    "sqlalchemy",
-    "alembic",
     "asyncpg",
     "psycopg",
     "aiomysql",
@@ -137,12 +158,20 @@ autodoc_mock_imports = [
     "google.cloud.bigquery",
 ]
 
+autosummary_generate = False
+
 
 autosectionlabel_prefix_document = True
 
 # Strip the dollar prompt when copying code
 # https://sphinx-copybutton.readthedocs.io/en/latest/use.html#strip-and-configure-input-prompts-for-code-cells
 copybutton_prompt_text = "$ "
+
+docsearch_app_id = os.getenv("DOCSEARCH_APP_ID", "disabled")
+docsearch_api_key = os.getenv("DOCSEARCH_SEARCH_API_KEY", "disabled")
+docsearch_index_name = os.getenv("DOCSEARCH_INDEX_NAME", "disabled")
+nbsphinx_requirejs_path = ""
+jupyter_sphinx_require_url = ""
 
 # -- Style configuration -----------------------------------------------------
 html_theme = "shibuya"
@@ -155,7 +184,16 @@ html_favicon = "_static/favicon.png"
 templates_path = ["_templates"]
 html_js_files = ["versioning.js"]
 html_css_files = ["custom.css"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "PYPI_README.md", "STYLE_GUIDE.md", "VOICE_AUDIT_REPORT.md"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "PYPI_README.md",
+    "STYLE_GUIDE.md",
+    "VOICE_AUDIT_REPORT.md",
+    "autoapi/sqlspec/index.rst",
+    "examples/README.md",
+]
 html_show_sourcelink = True
 html_copy_source = True
 

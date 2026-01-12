@@ -2,127 +2,45 @@
 Extensions
 ==========
 
-SQLSpec provides integration modules for popular web frameworks and external services, enabling seamless database connectivity with dependency injection, lifecycle management, and framework-specific utilities.
+SQLSpec extensions integrate the registry with frameworks and services such as
+Litestar and Google ADK. Use these extensions for dependency injection, lifecycle
+hooks, and application-facing helpers.
 
 .. currentmodule:: sqlspec.extensions
 
 Overview
 ========
 
-Available integrations:
+- **Google ADK**: Session, event, and memory storage.
+- **Litestar**: Plugin-based integration with dependency injection and lifecycle management.
+- **FastAPI/Flask/Starlette/Sanic**: Framework helpers (see usage docs).
 
-**AI & ML:**
+ADK Example
+===========
 
-- **Google ADK** - Session, event, and memory storage for Google Agent Development Kit
+.. literalinclude:: /examples/extensions/adk/memory_store.py
+   :language: python
+   :caption: ``adk memory store``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
 
-**Web Frameworks:**
+Litestar Example
+================
 
-- **Litestar** - Modern async Python web framework
-- **FastAPI** - High-performance async web framework
-- **Flask** - Traditional Python web framework
-- **Sanic** - Async Python web framework
-- **Starlette** - Lightweight ASGI framework
+.. literalinclude:: /examples/extensions/litestar/plugin_setup.py
+   :language: python
+   :caption: ``litestar plugin``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
 
-Each extension provides:
-
-- Configuration integration
-- Dependency injection (where applicable)
-- Lifecycle hooks (startup/shutdown)
-- Session management
-- Framework/service-specific utilities
-
-Google ADK Integration
-=======================
+Reference Modules
+=================
 
 .. currentmodule:: sqlspec.extensions.adk
-
-The ADK extension provides persistent session, event, and memory storage for the Google Agent Development Kit (ADK), enabling stateful AI agent applications with database-backed conversation history and recall.
-
-**Features:**
-
-- Session state persistence across multiple database backends
-- Event history storage with full ADK event model support
-- Searchable memory entries extracted from completed sessions
-- Multi-tenant support with customizable table names
-- Type-safe storage with TypedDicts
-- Production-ready for PostgreSQL, MySQL, SQLite, Oracle
-
-**Complete Documentation:**
-
-See :doc:`/extensions/adk/index` for comprehensive documentation including:
-
-- Installation and quickstart guides
-- Complete API reference
-- Database adapter details
-- Schema reference
-- Migration strategies
-- Production examples
-
-**Quick Example:**
-
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-   from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
-   from sqlspec.extensions.adk import SQLSpecSessionService
-
-   config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
-   store = AsyncpgADKStore(config)
-   await store.create_tables()
-
-   service = SQLSpecSessionService(store)
-   session = await service.create_session(
-       app_name="my_agent",
-       user_id="user123",
-       state={"context": "initial"}
-   )
-
-   # Memory service (optional)
-   from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKMemoryStore
-   from sqlspec.extensions.adk.memory import SQLSpecMemoryService
-
-   memory_store = AsyncpgADKMemoryStore(config)
-   await memory_store.create_tables()
-   memory_service = SQLSpecMemoryService(memory_store)
-   await memory_service.add_session_to_memory(session)
-
-Base Store Classes
-------------------
-
-.. autoclass:: BaseAsyncADKStore
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-
-   Abstract base class for async ADK session stores. See :doc:`/extensions/adk/api` for details.
-
-.. autoclass:: BaseSyncADKStore
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-
-   Abstract base class for sync ADK session stores. See :doc:`/extensions/adk/api` for details.
-
-.. autoclass:: BaseAsyncADKMemoryStore
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-
-   Abstract base class for async ADK memory stores. See :doc:`/extensions/adk/api` for details.
-
-.. autoclass:: BaseSyncADKMemoryStore
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-
-   Abstract base class for sync ADK memory stores. See :doc:`/extensions/adk/api` for details.
-
-Session Service
----------------
 
 .. autoclass:: SQLSpecSessionService
    :members:
@@ -130,98 +48,17 @@ Session Service
    :show-inheritance:
    :no-index:
 
-   SQLSpec-backed implementation of Google ADK's BaseSessionService. See :doc:`/extensions/adk/api` for details.
-
-Memory Service
---------------
-
-.. autoclass:: sqlspec.extensions.adk.memory.SQLSpecMemoryService
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-
-   SQLSpec-backed implementation of Google ADK's BaseMemoryService. See :doc:`/extensions/adk/api` for details.
-
-Litestar Integration
-====================
-
 .. currentmodule:: sqlspec.extensions.litestar
-
-The Litestar extension provides a plugin for SQLSpec integration with automatic dependency injection.
-
-Plugin
-------
 
 .. autoclass:: SQLSpecPlugin
    :members:
    :undoc-members:
    :show-inheritance:
-
-   Main plugin for Litestar integration.
-
-   **Features:**
-
-   - Automatic connection pool lifecycle
-   - Dependency injection for drivers
-   - Per-request session management
-   - Transaction handling
-   - Configuration from Litestar settings
-
-   **Basic usage:**
-
-   .. code-block:: python
-
-      from litestar import Litestar, get
-      from sqlspec import SQLSpec
-      from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-      from sqlspec.extensions.litestar import SQLSpecPlugin
-
-      sql = SQLSpec()
-      db = sql.add_config(
-          AsyncpgConfig(
-              connection_config={"dsn": "postgresql://localhost/db"}
-          )
-      )
-
-      plugin = SQLSpecPlugin(sqlspec=sql)
-
-      @get("/users")
-      async def get_users(db: AsyncpgDriver) -> list[dict]:
-          result = await db.select("SELECT * FROM users")
-          return result.all()
-
-      app = Litestar(route_handlers=[get_users], plugins=[plugin])
-
-Configuration
--------------
-
-
-
-Session Backend
----------------
-
-.. autoclass:: BaseSQLSpecStore
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-   Abstract base class for session storage backends.
-
-Starlette Integration
-=====================
-
-.. currentmodule:: sqlspec.extensions.starlette
-
-.. automodule:: sqlspec.extensions.starlette
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   :no-index:
 
 See Also
 ========
 
-- :doc:`/usage/framework_integrations` - Framework integration guide
-- :doc:`/examples/index` - Framework integration examples
-- :doc:`base` - SQLSpec configuration
-- :doc:`adapters` - Database adapters
+- :doc:`/extensions/adk/index`
+- :doc:`/extensions/litestar/index`
+- :doc:`/usage/framework_integrations`
