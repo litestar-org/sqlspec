@@ -1,13 +1,13 @@
 """PyMySQL ADK store for Google Agent Development Kit session/event storage."""
 
-import json
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import pymysql  # type: ignore[import-untyped]
+import pymysql
 
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -105,7 +105,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
-        state_json = json.dumps(state)
+        state_json = to_json(state)
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -160,7 +160,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
                     id=session_id_val,
                     app_name=app_name,
                     user_id=user_id,
-                    state=json.loads(state_json) if isinstance(state_json, str) else state_json,
+                    state=from_json(state_json) if isinstance(state_json, str) else state_json,
                     create_time=create_time,
                     update_time=update_time,
                 )
@@ -170,7 +170,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
             raise
 
     def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        state_json = json.dumps(state)
+        state_json = to_json(state)
 
         sql = f"""
         UPDATE {self._session_table}
@@ -229,7 +229,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
                         id=row[0],
                         app_name=row[1],
                         user_id=row[2],
-                        state=json.loads(row[3]) if isinstance(row[3], str) else row[3],
+                        state=from_json(row[3]) if isinstance(row[3], str) else row[3],
                         create_time=row[4],
                         update_time=row[5],
                     )
@@ -241,12 +241,12 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
             raise
 
     def append_event(self, event_record: EventRecord) -> None:
-        content_json = json.dumps(event_record.get("content")) if event_record.get("content") else None
+        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
         grounding_metadata_json = (
-            json.dumps(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
+            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
         )
         custom_metadata_json = (
-            json.dumps(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
+            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
         )
 
         sql = f"""
@@ -334,9 +334,9 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
                         long_running_tool_ids_json=row[7],
                         branch=row[8],
                         timestamp=row[9],
-                        content=json.loads(row[10]) if row[10] and isinstance(row[10], str) else row[10],
-                        grounding_metadata=json.loads(row[11]) if row[11] and isinstance(row[11], str) else row[11],
-                        custom_metadata=json.loads(row[12]) if row[12] and isinstance(row[12], str) else row[12],
+                        content=from_json(row[10]) if row[10] and isinstance(row[10], str) else row[10],
+                        grounding_metadata=from_json(row[11]) if row[11] and isinstance(row[11], str) else row[11],
+                        custom_metadata=from_json(row[12]) if row[12] and isinstance(row[12], str) else row[12],
                         partial=row[13],
                         turn_complete=row[14],
                         interrupted=row[15],
@@ -440,9 +440,9 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
                             entry["author"],
                             owner_id,
                             entry["timestamp"],
-                            json.dumps(entry["content_json"]),
+                            to_json(entry["content_json"]),
                             entry["content_text"],
-                            json.dumps(entry["metadata_json"]),
+                            to_json(entry["metadata_json"]),
                             entry["inserted_at"],
                         )
                     else:
@@ -454,9 +454,9 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
                             entry["event_id"],
                             entry["author"],
                             entry["timestamp"],
-                            json.dumps(entry["content_json"]),
+                            to_json(entry["content_json"]),
                             entry["content_text"],
-                            json.dumps(entry["metadata_json"]),
+                            to_json(entry["metadata_json"]),
                             entry["inserted_at"],
                         )
                     cursor.execute(sql, params)

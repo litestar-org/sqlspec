@@ -14,10 +14,7 @@ from sqlspec.adapters.cockroach_psycopg import (
 
 
 def _conninfo(service: "CockroachDBService") -> str:
-    return (
-        f"host={service.host} port={service.port} user={service.user} password={service.password} "
-        f"dbname={service.database} sslmode=disable"
-    )
+    return f"host={service.host} port={service.port} user=root dbname={service.database} sslmode=disable"
 
 
 @pytest.fixture(scope="function")

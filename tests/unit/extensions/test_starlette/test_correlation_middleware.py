@@ -1,5 +1,6 @@
 """Tests for Starlette CorrelationMiddleware behavior."""
 
+from collections.abc import MutableMapping
 from typing import Any
 
 import pytest
@@ -253,10 +254,16 @@ class TestCorrelationMiddlewareNonHTTP:
 
         scope = {"type": "websocket"}
 
-        async def run_test() -> None:
-            await middleware(scope, None, None)
+        async def mock_receive() -> "MutableMapping[str, Any]":
+            return {}
 
-        asyncio.get_event_loop().run_until_complete(run_test())
+        async def mock_send(message: "MutableMapping[str, Any]") -> None:
+            pass
+
+        async def run_test() -> None:
+            await middleware(scope, mock_receive, mock_send)
+
+        asyncio.run(run_test())
         assert app_called == ["websocket"]
 
 

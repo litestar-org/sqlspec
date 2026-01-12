@@ -2,6 +2,7 @@
 
 import pickle
 from datetime import datetime, timezone
+from typing import cast
 
 import pytest
 
@@ -36,10 +37,10 @@ async def test_storage_types_verification(mysqlconnector_adk_store: MysqlConnect
             assert state_col[1] == "json", "state column must use native JSON type (not TEXT)"
 
             create_time_col = next(col for col in session_columns if col[0] == "create_time")
-            assert "timestamp(6)" in create_time_col[2].lower()
+            assert "timestamp(6)" in cast("str", create_time_col[2]).lower()
 
             update_time_col = next(col for col in session_columns if col[0] == "update_time")
-            assert "timestamp(6)" in update_time_col[2].lower()
+            assert "timestamp(6)" in cast("str", update_time_col[2]).lower()
 
             await cursor.execute("""
                 SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE
@@ -58,7 +59,7 @@ async def test_storage_types_verification(mysqlconnector_adk_store: MysqlConnect
                 assert content_col[1] == "json"
 
             timestamp_col = next(col for col in event_columns if col[0] == "timestamp")
-            assert "timestamp(6)" in timestamp_col[2].lower()
+            assert "timestamp(6)" in cast("str", timestamp_col[2]).lower()
         finally:
             await cursor.close()
 
@@ -210,8 +211,10 @@ async def test_append_and_get_events(mysqlconnector_adk_store: MysqlConnectorAsy
     assert len(events) == 2
     assert events[0]["id"] == "event-001"
     assert events[1]["id"] == "event-002"
-    assert events[0]["content"]["text"] == "Hello"
-    assert events[1]["content"]["text"] == "Hi there"
+    content0 = events[0]["content"]
+    content1 = events[1]["content"]
+    assert content0 is not None and content0["text"] == "Hello"
+    assert content1 is not None and content1["text"] == "Hi there"
     assert isinstance(events[0]["actions"], bytes)
     assert pickle.loads(events[0]["actions"])[0]["type"] == "message"
 

@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final
 
-import pymysql  # type: ignore[import-untyped]
+import pymysql
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -83,11 +83,11 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                         SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
                         WHERE session_id = %s
                         """
-                        cursor = conn.cursor()
+                        update_cursor = conn.cursor()
                         try:
-                            cursor.execute(update_sql, (naive_expires_at, key))
+                            update_cursor.execute(update_sql, (naive_expires_at, key))
                         finally:
-                            cursor.close()
+                            update_cursor.close()
                         conn.commit()
 
                 return bytes(row["data"])

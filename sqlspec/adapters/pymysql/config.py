@@ -104,7 +104,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
     """Configuration for PyMySQL synchronous connections."""
 
     driver_type: "ClassVar[type[PyMysqlDriver]]" = PyMysqlDriver
-    connection_type: "ClassVar[type[PyMysqlConnection]]" = PyMysqlConnection
+    connection_type: "ClassVar[type[PyMysqlConnection]]" = cast("type[PyMysqlConnection]", PyMysqlConnection)
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True

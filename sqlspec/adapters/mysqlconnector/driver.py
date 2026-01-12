@@ -475,10 +475,10 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
     def _connection_in_transaction(self) -> bool:
-        autocommit = getattr(self.connection, "autocommit", None)
-        if autocommit is not None:
+        in_tx = getattr(self.connection, "in_transaction", None)
+        if in_tx is not None:
             try:
-                return not bool(autocommit)
+                return bool(in_tx)
             except Exception:
                 return False
         return False

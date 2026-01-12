@@ -71,11 +71,11 @@ class MysqlConnectorSyncConnectionParams(TypedDict):
 
 
 class MysqlConnectorPoolParams(MysqlConnectorSyncConnectionParams):
-    """MysqlConnector pooling parameters."""
+    """MysqlConnector pooling parameters.
 
-    pool_name: NotRequired[str]
-    pool_size: NotRequired[int]
-    pool_reset_session: NotRequired[bool]
+    Note: pool_name, pool_size, and pool_reset_session are inherited
+    from MysqlConnectorSyncConnectionParams.
+    """
 
 
 class MysqlConnectorAsyncConnectionParams(TypedDict):
@@ -268,9 +268,9 @@ class MysqlConnectorSyncConfig(
     def create_connection(self) -> MysqlConnectorSyncConnection:
         connection = cast("MysqlConnectorSyncConnection", mysql.connector.connect(**self.connection_config))
         autocommit = self.connection_config.get("autocommit")
-        if autocommit is not None:
+        if autocommit is not None and hasattr(connection, "autocommit"):
             with contextlib.suppress(Exception):
-                connection.autocommit = bool(autocommit)
+                setattr(connection, "autocommit", bool(autocommit))
         return connection
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "MysqlConnectorSyncConnectionContext":
@@ -311,7 +311,7 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
     """Configuration for mysql-connector async MySQL connections."""
 
     driver_type: ClassVar[type[MysqlConnectorAsyncDriver]] = MysqlConnectorAsyncDriver
-    connection_type: ClassVar[type[MysqlConnectorAsyncConnection]] = MysqlConnectorAsyncConnection
+    connection_type: "ClassVar[type[Any]]" = cast("type[Any]", MysqlConnectorAsyncConnection)
     supports_transactional_ddl: ClassVar[bool] = False
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
@@ -355,9 +355,9 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
 
         connection = await aio.connect(**self.connection_config)
         autocommit = self.connection_config.get("autocommit")
-        if autocommit is not None:
+        if autocommit is not None and hasattr(connection, "set_autocommit"):
             with contextlib.suppress(Exception):
-                connection.autocommit = bool(autocommit)
+                await connection.set_autocommit(bool(autocommit))
         return cast("MysqlConnectorAsyncConnection", connection)
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "MysqlConnectorAsyncConnectionContext":

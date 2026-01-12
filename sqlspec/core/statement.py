@@ -45,6 +45,7 @@ logger = get_logger("sqlspec.core.statement")
 
 RETURNS_ROWS_OPERATIONS: Final = {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA"}
 MODIFYING_OPERATIONS: Final = {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"}
+_ORDER_PARTS_COUNT: Final = 2
 
 
 SQL_CONFIG_SLOTS: Final = (
@@ -600,6 +601,72 @@ class SQL:
             new_expr = current_expr.where(condition_expr, copy=False)
         else:
             new_expr = exp.Select().from_(current_expr).where(condition_expr, copy=False)
+
+        original_params = self._original_parameters
+        config = self._statement_config
+        is_many = self._is_many
+        new_sql = SQL(new_expr, *original_params, statement_config=config, is_many=is_many)
+
+        new_sql._named_parameters.update(self._named_parameters)
+        new_sql._positional_parameters = self._positional_parameters.copy()
+        new_sql._filters = self._filters.copy()
+        return new_sql
+
+    def order_by(self, *items: "str | exp.Expression", desc: bool = False) -> "SQL":
+        """Add ORDER BY clause to the SQL statement.
+
+        Args:
+            *items: ORDER BY expressions as strings or SQLGlot expressions
+            desc: Apply descending order to each item
+
+        Returns:
+            New SQL instance with ORDER BY applied
+        """
+        if not items:
+            return self
+
+        if self.statement_expression is not None:
+            current_expr = self.statement_expression.copy()
+        elif not self._statement_config.enable_parsing:
+            current_expr = exp.Select().from_(f"({self._raw_sql})")
+        else:
+            try:
+                current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+            except ParseError:
+                current_expr = exp.Select().from_(f"({self._raw_sql})")
+
+        def parse_order_item(order_item: str) -> exp.Expression:
+            normalized = order_item.strip()
+            if not normalized:
+                return exp.column(order_item)
+
+            if self._statement_config.enable_parsing:
+                try:
+                    parsed = sqlglot.parse_one(normalized, dialect=self._dialect, into=exp.Ordered)
+                except ParseError:
+                    parsed = None
+                if parsed is not None:
+                    return parsed
+
+            parts = normalized.rsplit(None, 1)
+            if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
+                base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
+                return base_expr.desc() if parts[1].lower() == "desc" else base_expr.asc()
+
+            return exp.column(normalized)
+
+        new_expr = current_expr
+        for item in items:
+            if isinstance(item, str):
+                order_expr = parse_order_item(item)
+                if desc and not isinstance(order_expr, exp.Ordered):
+                    order_expr = order_expr.desc()
+            else:
+                order_expr = item.desc() if desc and not isinstance(item, exp.Ordered) else item
+            if isinstance(new_expr, exp.Select):
+                new_expr = new_expr.order_by(order_expr, copy=False)
+            else:
+                new_expr = exp.Select().from_(new_expr).order_by(order_expr)
 
         original_params = self._original_parameters
         config = self._statement_config

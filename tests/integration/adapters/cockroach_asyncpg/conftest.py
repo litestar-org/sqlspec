@@ -17,8 +17,8 @@ async def cockroach_asyncpg_config(
         connection_config={
             "host": cockroachdb_service.host,
             "port": cockroachdb_service.port,
-            "user": cockroachdb_service.user,
-            "password": cockroachdb_service.password,
+            "user": "root",
+            "password": "",
             "database": cockroachdb_service.database,
             "ssl": None,
         }

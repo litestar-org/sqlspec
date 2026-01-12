@@ -9,21 +9,32 @@ from typing import TYPE_CHECKING, Any
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
 
 try:
-    from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection
+    from mysql.connector.aio import (
+        MySQLConnection as _MysqlConnectorAsyncConnection,  # pyright: ignore[reportMissingImports]
+    )
 except ImportError:  # pragma: no cover - optional async import
-    _MysqlConnectorAsyncConnection = Any  # type: ignore[assignment]
+    _MysqlConnectorAsyncConnection = _MysqlConnectorSyncConnection  # type: ignore[assignment,misc]
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import TypeAlias
+    from typing import Protocol, TypeAlias
 
     from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
     from sqlspec.core import StatementConfig
 
-    MysqlConnectorSyncConnection: TypeAlias = _MysqlConnectorSyncConnection
-    MysqlConnectorAsyncConnection: TypeAlias = _MysqlConnectorAsyncConnection  # pyright: ignore
+    class MysqlConnectorAsyncConnectionProtocol(Protocol):
+        def cursor(self, **kwargs: Any) -> Any: ...
 
-if not TYPE_CHECKING:
+        async def commit(self) -> Any: ...
+
+        async def rollback(self) -> Any: ...
+
+        async def close(self) -> Any: ...
+
+    MysqlConnectorSyncConnection: TypeAlias = _MysqlConnectorSyncConnection
+    MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
+else:
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
 

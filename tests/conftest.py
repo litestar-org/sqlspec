@@ -44,6 +44,7 @@ pytest_plugins = [
     "pytest_databases.docker.bigquery",
     "pytest_databases.docker.spanner",
     "pytest_databases.docker.minio",
+    "pytest_databases.docker.cockroachdb",
 ]
 
 pytestmark = pytest.mark.anyio

@@ -1,7 +1,7 @@
 """MysqlConnector session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import mysql.connector
 
@@ -70,7 +70,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                 if row is None:
                     return None
 
-                data_value, expires_at = row
+                data_value: Any = row[0]
+                expires_at: Any = row[1]
 
                 if renew_for is not None and expires_at is not None:
                     new_expires_at = self._calculate_expires_at(renew_for)
@@ -81,14 +82,14 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                             SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
                             WHERE session_id = %s
                             """
-                        cursor = await conn.cursor()
+                        update_cursor = await conn.cursor()
                         try:
-                            await cursor.execute(update_sql, (naive_expires_at, key))
+                            await update_cursor.execute(update_sql, (naive_expires_at, key))
                         finally:
-                            await cursor.close()
+                            await update_cursor.close()
                         await conn.commit()
 
-                return bytes(data_value)
+                return bytes(cast("bytes", data_value))
         except mysql.connector.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -183,7 +184,7 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             if row is None or row[0] is None:
                 return None
 
-            expires_at_naive = row[0]
+            expires_at_naive: datetime = cast("datetime", row[0])
             expires_at_utc = expires_at_naive.replace(tzinfo=timezone.utc)
             now = datetime.now(timezone.utc)
 
@@ -264,7 +265,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                 if row is None:
                     return None
 
-                data_value, expires_at = row
+                data_value: Any = row[0]
+                expires_at: Any = row[1]
 
                 if renew_for is not None and expires_at is not None:
                     new_expires_at = self._calculate_expires_at(renew_for)
@@ -275,14 +277,14 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                             SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
                             WHERE session_id = %s
                             """
-                        cursor = conn.cursor()
+                        update_cursor = conn.cursor()
                         try:
-                            cursor.execute(update_sql, (naive_expires_at, key))
+                            update_cursor.execute(update_sql, (naive_expires_at, key))
                         finally:
-                            cursor.close()
+                            update_cursor.close()
                         conn.commit()
 
-                return bytes(data_value)
+                return bytes(cast("bytes", data_value))
         except mysql.connector.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -392,7 +394,7 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             if row is None or row[0] is None:
                 return None
 
-            expires_at_naive = row[0]
+            expires_at_naive: datetime = cast("datetime", row[0])
             expires_at_utc = expires_at_naive.replace(tzinfo=timezone.utc)
             now = datetime.now(timezone.utc)
 

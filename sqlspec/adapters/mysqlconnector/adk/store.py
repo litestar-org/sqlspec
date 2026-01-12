@@ -1,6 +1,5 @@
 """MysqlConnector ADK store for Google Agent Development Kit session/event storage."""
 
-import json
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -8,6 +7,7 @@ import mysql.connector
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -110,7 +110,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
-        state_json = json.dumps(state)
+        state_json = to_json(state)
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -155,15 +155,15 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 if row is None:
                     return None
 
-                session_id_val, app_name, user_id, state_json, create_time, update_time = row
+                session_id_val, app_name_val, user_id_val, state_json, create_time_val, update_time_val = row
 
                 return SessionRecord(
-                    id=session_id_val,
-                    app_name=app_name,
-                    user_id=user_id,
-                    state=json.loads(state_json) if isinstance(state_json, str) else state_json,
-                    create_time=create_time,
-                    update_time=update_time,
+                    id=cast("str", session_id_val),
+                    app_name=cast("str", app_name_val),
+                    user_id=cast("str", user_id_val),
+                    state=from_json(state_json) if isinstance(state_json, str) else cast("dict[str, Any]", state_json),
+                    create_time=cast("datetime", create_time_val),
+                    update_time=cast("datetime", update_time_val),
                 )
         except mysql.connector.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
@@ -171,7 +171,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             raise
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        state_json = json.dumps(state)
+        state_json = to_json(state)
 
         sql = f"""
         UPDATE {self._session_table}
@@ -227,12 +227,12 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
                 return [
                     SessionRecord(
-                        id=row[0],
-                        app_name=row[1],
-                        user_id=row[2],
-                        state=json.loads(row[3]) if isinstance(row[3], str) else row[3],
-                        create_time=row[4],
-                        update_time=row[5],
+                        id=cast("str", row[0]),
+                        app_name=cast("str", row[1]),
+                        user_id=cast("str", row[2]),
+                        state=from_json(row[3]) if isinstance(row[3], str) else cast("dict[str, Any]", row[3]),
+                        create_time=cast("datetime", row[4]),
+                        update_time=cast("datetime", row[5]),
                     )
                     for row in rows
                 ]
@@ -242,12 +242,12 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             raise
 
     async def append_event(self, event_record: EventRecord) -> None:
-        content_json = json.dumps(event_record.get("content")) if event_record.get("content") else None
+        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
         grounding_metadata_json = (
-            json.dumps(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
+            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
         )
         custom_metadata_json = (
-            json.dumps(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
+            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
         )
 
         sql = f"""
@@ -325,24 +325,30 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
                 return [
                     EventRecord(
-                        id=row[0],
-                        session_id=row[1],
-                        app_name=row[2],
-                        user_id=row[3],
-                        invocation_id=row[4],
-                        author=row[5],
-                        actions=bytes(row[6]),
-                        long_running_tool_ids_json=row[7],
-                        branch=row[8],
-                        timestamp=row[9],
-                        content=json.loads(row[10]) if row[10] and isinstance(row[10], str) else row[10],
-                        grounding_metadata=json.loads(row[11]) if row[11] and isinstance(row[11], str) else row[11],
-                        custom_metadata=json.loads(row[12]) if row[12] and isinstance(row[12], str) else row[12],
-                        partial=row[13],
-                        turn_complete=row[14],
-                        interrupted=row[15],
-                        error_code=row[16],
-                        error_message=row[17],
+                        id=cast("str", row[0]),
+                        session_id=cast("str", row[1]),
+                        app_name=cast("str", row[2]),
+                        user_id=cast("str", row[3]),
+                        invocation_id=cast("str", row[4]),
+                        author=cast("str", row[5]),
+                        actions=bytes(cast("bytes", row[6])),
+                        long_running_tool_ids_json=cast("str | None", row[7]),
+                        branch=cast("str | None", row[8]),
+                        timestamp=cast("datetime", row[9]),
+                        content=from_json(row[10])
+                        if row[10] and isinstance(row[10], str)
+                        else cast("dict[str, Any] | None", row[10]),
+                        grounding_metadata=from_json(row[11])
+                        if row[11] and isinstance(row[11], str)
+                        else cast("dict[str, Any] | None", row[11]),
+                        custom_metadata=from_json(row[12])
+                        if row[12] and isinstance(row[12], str)
+                        else cast("dict[str, Any] | None", row[12]),
+                        partial=cast("bool | None", row[13]),
+                        turn_complete=cast("bool | None", row[14]),
+                        interrupted=cast("bool | None", row[15]),
+                        error_code=cast("str | None", row[16]),
+                        error_message=cast("str | None", row[17]),
                     )
                     for row in rows
                 ]
@@ -424,7 +430,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
-        state_json = json.dumps(state)
+        state_json = to_json(state)
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -473,15 +479,15 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 if row is None:
                     return None
 
-                session_id_val, app_name, user_id, state_json, create_time, update_time = row
+                session_id_val, app_name_val, user_id_val, state_json, create_time_val, update_time_val = row
 
                 return SessionRecord(
-                    id=session_id_val,
-                    app_name=app_name,
-                    user_id=user_id,
-                    state=json.loads(state_json) if isinstance(state_json, str) else state_json,
-                    create_time=create_time,
-                    update_time=update_time,
+                    id=cast("str", session_id_val),
+                    app_name=cast("str", app_name_val),
+                    user_id=cast("str", user_id_val),
+                    state=from_json(state_json) if isinstance(state_json, str) else cast("dict[str, Any]", state_json),
+                    create_time=cast("datetime", create_time_val),
+                    update_time=cast("datetime", update_time_val),
                 )
         except mysql.connector.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
@@ -489,7 +495,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             raise
 
     def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        state_json = json.dumps(state)
+        state_json = to_json(state)
 
         sql = f"""
         UPDATE {self._session_table}
@@ -545,12 +551,12 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
                 return [
                     SessionRecord(
-                        id=row[0],
-                        app_name=row[1],
-                        user_id=row[2],
-                        state=json.loads(row[3]) if isinstance(row[3], str) else row[3],
-                        create_time=row[4],
-                        update_time=row[5],
+                        id=cast("str", row[0]),
+                        app_name=cast("str", row[1]),
+                        user_id=cast("str", row[2]),
+                        state=from_json(row[3]) if isinstance(row[3], str) else cast("dict[str, Any]", row[3]),
+                        create_time=cast("datetime", row[4]),
+                        update_time=cast("datetime", row[5]),
                     )
                     for row in rows
                 ]
@@ -560,12 +566,12 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             raise
 
     def append_event(self, event_record: EventRecord) -> None:
-        content_json = json.dumps(event_record.get("content")) if event_record.get("content") else None
+        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
         grounding_metadata_json = (
-            json.dumps(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
+            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
         )
         custom_metadata_json = (
-            json.dumps(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
+            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
         )
 
         sql = f"""
@@ -643,24 +649,30 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
                 return [
                     EventRecord(
-                        id=row[0],
-                        session_id=row[1],
-                        app_name=row[2],
-                        user_id=row[3],
-                        invocation_id=row[4],
-                        author=row[5],
-                        actions=bytes(row[6]),
-                        long_running_tool_ids_json=row[7],
-                        branch=row[8],
-                        timestamp=row[9],
-                        content=json.loads(row[10]) if row[10] and isinstance(row[10], str) else row[10],
-                        grounding_metadata=json.loads(row[11]) if row[11] and isinstance(row[11], str) else row[11],
-                        custom_metadata=json.loads(row[12]) if row[12] and isinstance(row[12], str) else row[12],
-                        partial=row[13],
-                        turn_complete=row[14],
-                        interrupted=row[15],
-                        error_code=row[16],
-                        error_message=row[17],
+                        id=cast("str", row[0]),
+                        session_id=cast("str", row[1]),
+                        app_name=cast("str", row[2]),
+                        user_id=cast("str", row[3]),
+                        invocation_id=cast("str", row[4]),
+                        author=cast("str", row[5]),
+                        actions=bytes(cast("bytes", row[6])),
+                        long_running_tool_ids_json=cast("str | None", row[7]),
+                        branch=cast("str | None", row[8]),
+                        timestamp=cast("datetime", row[9]),
+                        content=from_json(row[10])
+                        if row[10] and isinstance(row[10], str)
+                        else cast("dict[str, Any] | None", row[10]),
+                        grounding_metadata=from_json(row[11])
+                        if row[11] and isinstance(row[11], str)
+                        else cast("dict[str, Any] | None", row[11]),
+                        custom_metadata=from_json(row[12])
+                        if row[12] and isinstance(row[12], str)
+                        else cast("dict[str, Any] | None", row[12]),
+                        partial=cast("bool | None", row[13]),
+                        turn_complete=cast("bool | None", row[14]),
+                        interrupted=cast("bool | None", row[15]),
+                        error_code=cast("str | None", row[16]),
+                        error_message=cast("str | None", row[17]),
                     )
                     for row in rows
                 ]
@@ -759,9 +771,9 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
                             entry["author"],
                             owner_id,
                             entry["timestamp"],
-                            json.dumps(entry["content_json"]),
+                            to_json(entry["content_json"]),
                             entry["content_text"],
-                            json.dumps(entry["metadata_json"]),
+                            to_json(entry["metadata_json"]),
                             entry["inserted_at"],
                         )
                     else:
@@ -773,9 +785,9 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
                             entry["event_id"],
                             entry["author"],
                             entry["timestamp"],
-                            json.dumps(entry["content_json"]),
+                            to_json(entry["content_json"]),
                             entry["content_text"],
-                            json.dumps(entry["metadata_json"]),
+                            to_json(entry["metadata_json"]),
                             entry["inserted_at"],
                         )
                     await cursor.execute(sql, params)
@@ -948,9 +960,9 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
                             entry["author"],
                             owner_id,
                             entry["timestamp"],
-                            json.dumps(entry["content_json"]),
+                            to_json(entry["content_json"]),
                             entry["content_text"],
-                            json.dumps(entry["metadata_json"]),
+                            to_json(entry["metadata_json"]),
                             entry["inserted_at"],
                         )
                     else:
@@ -962,12 +974,12 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
                             entry["event_id"],
                             entry["author"],
                             entry["timestamp"],
-                            json.dumps(entry["content_json"]),
+                            to_json(entry["content_json"]),
                             entry["content_text"],
-                            json.dumps(entry["metadata_json"]),
+                            to_json(entry["metadata_json"]),
                             entry["inserted_at"],
                         )
-                    cursor.execute(sql, params)
+                    cursor.execute(sql, cast("tuple[Any, ...]", params))
                     inserted_count += cursor.rowcount
             finally:
                 cursor.close()

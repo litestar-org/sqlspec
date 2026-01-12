@@ -227,7 +227,7 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
         set_state_value(request.state, "correlation_id", correlation_id)
 
         try:
-            response = await call_next(request)
+            response: Response = await call_next(request)
             response.headers["X-Correlation-ID"] = correlation_id
             return response
         finally:
