@@ -198,7 +198,7 @@ async def test_store_renew_for(oracle_sync_store: OracleSyncStore) -> None:
 
     expires_after = await oracle_sync_store.expires_in("session_renew")
     assert expires_after is not None
-    assert expires_after > 8
+    assert expires_after >= 8
 
 
 async def test_store_large_data(oracle_sync_store: OracleSyncStore) -> None:

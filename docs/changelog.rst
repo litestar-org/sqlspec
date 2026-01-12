@@ -258,12 +258,6 @@ Example conversion:
 - Workflow guide: :ref:`hybrid-versioning-guide`
 - CI integration examples for GitHub Actions and GitLab CI
 
-**Use Cases:**
-
-- Teams with parallel development avoiding migration number conflicts
-- Projects requiring deterministic migration ordering in production
-- CI/CD pipelines that standardize migrations before deployment
-
 Shell Completion Support
 -------------------------
 

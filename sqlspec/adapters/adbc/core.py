@@ -54,6 +54,7 @@ __all__ = (
     "prepare_parameters_with_casts",
     "prepare_postgres_parameters",
     "raise_exception",
+    "resolve_dialect_from_config",
     "resolve_dialect_from_driver_path",
     "resolve_dialect_name",
     "resolve_driver_connect_func",
@@ -68,7 +69,7 @@ DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
     "bigquery": ("bigquery",),
     "sqlite": ("sqlite", "flight", "flightsql"),
-    "duckdb": ("duckdb",),
+    "duckdb": ("duckdb", "gizmosql", "gizmo"),
     "mysql": ("mysql",),
     "snowflake": ("snowflake",),
 }
@@ -97,6 +98,8 @@ _DRIVER_ALIASES: "dict[str, str]" = {
     "bq": "adbc_driver_bigquery.dbapi.connect",
     "flightsql": "adbc_driver_flightsql.dbapi.connect",
     "grpc": "adbc_driver_flightsql.dbapi.connect",
+    "gizmosql": "adbc_driver_flightsql.dbapi.connect",
+    "gizmo": "adbc_driver_flightsql.dbapi.connect",
 }
 
 _URI_PREFIX_DRIVER: "tuple[tuple[str, str], ...]" = (
@@ -105,6 +108,9 @@ _URI_PREFIX_DRIVER: "tuple[tuple[str, str], ...]" = (
     ("sqlite://", "adbc_driver_sqlite.dbapi.connect"),
     ("duckdb://", "adbc_driver_duckdb.dbapi.connect"),
     ("grpc://", "adbc_driver_flightsql.dbapi.connect"),
+    ("grpc+tls://", "adbc_driver_flightsql.dbapi.connect"),
+    ("gizmosql://", "adbc_driver_flightsql.dbapi.connect"),
+    ("gizmo://", "adbc_driver_flightsql.dbapi.connect"),
     ("snowflake://", "adbc_driver_snowflake.dbapi.connect"),
     ("bigquery://", "adbc_driver_bigquery.dbapi.connect"),
 )
@@ -115,6 +121,7 @@ _DRIVER_PATH_KEYWORDS_TO_DIALECT: "tuple[tuple[str, str], ...]" = (
     ("duckdb", "duckdb"),
     ("bigquery", "bigquery"),
     ("snowflake", "snowflake"),
+    ("gizmosql", "duckdb"),
     ("flightsql", "sqlite"),
     ("grpc", "sqlite"),
 )
@@ -123,6 +130,7 @@ _PARAMETER_STYLES_BY_KEYWORD: "tuple[tuple[str, tuple[tuple[str, ...], str]], ..
     ("postgresql", (("numeric",), "numeric")),
     ("sqlite", (("qmark", "named_colon"), "qmark")),
     ("duckdb", (("qmark", "numeric"), "qmark")),
+    ("gizmosql", (("qmark", "numeric"), "qmark")),
     ("bigquery", (("named_at",), "named_at")),
     ("snowflake", (("qmark", "numeric"), "qmark")),
 )
@@ -182,6 +190,9 @@ def driver_from_uri(uri: str) -> "str | None":
 
 def driver_kind_from_driver_name(driver_name: str) -> "str | None":
     """Return a canonical driver kind based on driver name content."""
+    lowered_name = driver_name.lower()
+    if lowered_name in {"gizmosql", "gizmo"}:
+        return "gizmosql"
     resolved = _DRIVER_ALIASES.get(driver_name.lower(), driver_name)
     lowered = resolved.lower()
     for keyword, _dialect in _DRIVER_PATH_KEYWORDS_TO_DIALECT:
@@ -192,6 +203,9 @@ def driver_kind_from_driver_name(driver_name: str) -> "str | None":
 
 def driver_kind_from_uri(uri: str) -> "str | None":
     """Return a canonical driver kind based on URI scheme."""
+    lowered = uri.lower()
+    if lowered.startswith(("gizmosql://", "gizmo://", "grpc+tls://")):
+        return "gizmosql"
     for prefix, driver_path in _URI_PREFIX_DRIVER:
         if uri.startswith(prefix):
             return driver_kind_from_driver_name(driver_path)
@@ -246,6 +260,30 @@ def resolve_dialect_from_driver_path(driver_path: str) -> str:
         if keyword in driver_path:
             return dialect
     return "sqlite"
+
+
+def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
+    """Resolve dialect using ADBC connection configuration.
+
+    GizmoSQL connections default to DuckDB unless the backend is explicitly overridden.
+    """
+    backend = connection_config.get("gizmosql_backend")
+    if isinstance(backend, str):
+        lowered_backend = backend.lower()
+        if lowered_backend in {"duckdb", "sqlite"}:
+            return lowered_backend
+
+    driver_name = connection_config.get("driver_name")
+    if isinstance(driver_name, str) and driver_name.lower() in {"gizmosql", "gizmo"}:
+        return "duckdb"
+
+    uri = connection_config.get("uri")
+    if isinstance(uri, str):
+        lowered_uri = uri.lower()
+        if lowered_uri.startswith(("gizmosql://", "gizmo://", "grpc+tls://")):
+            return "duckdb"
+
+    return resolve_dialect_from_driver_path(resolve_driver_name_from_config(connection_config))
 
 
 def resolve_parameter_styles(driver_path: str | None, logger: Any | None = None) -> "tuple[tuple[str, ...], str]":

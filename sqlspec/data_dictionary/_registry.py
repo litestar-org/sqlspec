@@ -10,7 +10,7 @@ __all__ = ("get_dialect_config", "list_registered_dialects", "normalize_dialect_
 _DIALECT_CONFIGS: dict[str, "DialectConfig"] = {}
 _DIALECTS_LOADED = False
 
-DIALECT_ALIASES: dict[str, str] = {"postgresql": "postgres", "mariadb": "mysql"}
+DIALECT_ALIASES: dict[str, str] = {"postgresql": "postgres", "mariadb": "mysql", "cockroach": "cockroachdb"}
 
 
 def normalize_dialect_name(dialect: str) -> str:

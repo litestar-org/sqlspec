@@ -375,22 +375,6 @@ In-Memory Column Store significantly improves session operations:
 - **Concurrent reads**: Reduced I/O contention for high-traffic sites
 - **Real-time analytics**: Fast session counting and user analytics
 
-**Use Cases:**
-
-✅ **High-traffic web applications**
-   - Thousands of concurrent users
-   - Frequent session read operations
-   - Session-heavy workloads
-
-✅ **Real-time session analytics**
-   - Active user counting
-   - Session duration tracking
-   - User behavior analysis
-
-❌ **Small applications** (< 1,000 concurrent users)
-   - Overhead not justified
-   - Standard indexes sufficient
-
 Database Requirements
 ~~~~~~~~~~~~~~~~~~~~~
 

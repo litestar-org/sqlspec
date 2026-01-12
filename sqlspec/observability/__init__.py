@@ -11,6 +11,7 @@ from sqlspec.observability._config import (
 )
 from sqlspec.observability._diagnostics import DiagnosticsPayload, TelemetryDiagnostics
 from sqlspec.observability._dispatcher import LifecycleContext, LifecycleDispatcher
+from sqlspec.observability._formatters import AWSLogFormatter, AzureLogFormatter, CloudLogFormatter, GCPLogFormatter
 from sqlspec.observability._formatting import OTelConsoleFormatter, OTelJSONFormatter
 from sqlspec.observability._observer import (
     StatementEvent,
@@ -20,10 +21,15 @@ from sqlspec.observability._observer import (
     format_statement_event,
 )
 from sqlspec.observability._runtime import ObservabilityRuntime
+from sqlspec.observability._sampling import SamplingConfig
 from sqlspec.observability._spans import SpanManager
 
 __all__ = (
+    "AWSLogFormatter",
+    "AzureLogFormatter",
+    "CloudLogFormatter",
     "DiagnosticsPayload",
+    "GCPLogFormatter",
     "LifecycleContext",
     "LifecycleDispatcher",
     "LifecycleHook",
@@ -33,6 +39,7 @@ __all__ = (
     "ObservabilityConfig",
     "ObservabilityRuntime",
     "RedactionConfig",
+    "SamplingConfig",
     "SpanManager",
     "StatementEvent",
     "StatementObserver",

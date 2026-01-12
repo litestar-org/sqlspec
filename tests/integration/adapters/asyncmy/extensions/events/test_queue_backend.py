@@ -28,8 +28,12 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService,
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        extension_config={"events": {}},
+        migration_config={
+            "script_location": str(migrations),
+            "include_extensions": ["events"],
+            "version_table_name": "ddl_migrations_asyncmy",
+        },
+        extension_config={"events": {"queue_table": "asyncmy_event_queue"}},
     )
 
     _spec, channel = await setup_async_event_channel(config)
@@ -44,7 +48,7 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService,
 
     async with config.provide_session() as driver:
         row = await driver.select_one(
-            "SELECT status FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
+            "SELECT status FROM asyncmy_event_queue WHERE event_id = :event_id", {"event_id": event_id}
         )
 
     assert message.payload["action"] == "mysql"
@@ -69,8 +73,12 @@ async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLServi
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        extension_config={"events": {}},
+        migration_config={
+            "script_location": str(migrations),
+            "include_extensions": ["events"],
+            "version_table_name": "ddl_migrations_asyncmy",
+        },
+        extension_config={"events": {"queue_table": "asyncmy_event_queue"}},
     )
 
     _spec, channel = await setup_async_event_channel(config)
@@ -111,8 +119,12 @@ async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        extension_config={"events": {}},
+        migration_config={
+            "script_location": str(migrations),
+            "include_extensions": ["events"],
+            "version_table_name": "ddl_migrations_asyncmy",
+        },
+        extension_config={"events": {"queue_table": "asyncmy_event_queue"}},
     )
 
     _spec, channel = await setup_async_event_channel(config)
@@ -126,10 +138,10 @@ async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService
 
     async with config.provide_session() as driver:
         row = await driver.select_one(
-            "SELECT status, attempts FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
+            "SELECT status, attempts FROM asyncmy_event_queue WHERE event_id = :event_id", {"event_id": event_id}
         )
 
     assert row["status"] == "pending"
-    assert row["attempts"] == 1
+    assert row["attempts"] == 2  # 1 from claim + 1 from nack
 
     await config.close_pool()

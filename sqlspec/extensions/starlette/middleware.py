@@ -2,14 +2,17 @@ from typing import TYPE_CHECKING, Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from sqlspec.core import CorrelationExtractor
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
+from sqlspec.utils.correlation import CorrelationContext
 
 if TYPE_CHECKING:
     from starlette.requests import Request
+    from starlette.responses import Response
 
     from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
-__all__ = ("SQLSpecAutocommitMiddleware", "SQLSpecManualMiddleware")
+__all__ = ("CorrelationMiddleware", "SQLSpecAutocommitMiddleware", "SQLSpecManualMiddleware")
 
 HTTP_200_OK = 200
 HTTP_300_MULTIPLE_CHOICES = 300
@@ -150,3 +153,83 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         if HTTP_200_OK <= status_code < HTTP_300_MULTIPLE_CHOICES:
             return True
         return bool(self.include_redirect and HTTP_300_MULTIPLE_CHOICES <= status_code < HTTP_400_BAD_REQUEST)
+
+
+class CorrelationMiddleware(BaseHTTPMiddleware):
+    """Middleware for correlation ID extraction and propagation.
+
+    Extracts correlation IDs from request headers (or generates new ones)
+    and propagates them through the request lifecycle via CorrelationContext.
+
+    The middleware:
+    1. Extracts correlation ID from configurable headers
+    2. Sets it in the CorrelationContext for async/sync access
+    3. Stores it in request.state.correlation_id
+    4. Adds X-Correlation-ID header to the response
+    5. Cleans up the context on request completion
+
+    Example:
+        ```python
+        from starlette.applications import Starlette
+        from sqlspec.extensions.starlette.middleware import (
+            CorrelationMiddleware,
+        )
+
+        app = Starlette()
+        app.add_middleware(
+            CorrelationMiddleware,
+            primary_header="x-request-id",
+            auto_trace_headers=True,
+        )
+        ```
+    """
+
+    def __init__(
+        self,
+        app: Any,
+        *,
+        primary_header: str = "x-request-id",
+        additional_headers: tuple[str, ...] | None = None,
+        auto_trace_headers: bool = True,
+        max_length: int = 128,
+    ) -> None:
+        """Initialize correlation middleware.
+
+        Args:
+            app: Starlette application instance.
+            primary_header: The primary header to check first. Defaults to "x-request-id".
+            additional_headers: Additional headers to check after the primary header.
+            auto_trace_headers: If True, include standard trace context headers as fallbacks.
+            max_length: Maximum length for correlation IDs. Defaults to 128.
+        """
+        super().__init__(app)
+        self._extractor = CorrelationExtractor(
+            primary_header=primary_header,
+            additional_headers=additional_headers,
+            auto_trace_headers=auto_trace_headers,
+            max_length=max_length,
+        )
+
+    async def dispatch(self, request: "Request", call_next: Any) -> "Response":
+        """Extract correlation ID and propagate through request lifecycle.
+
+        Args:
+            request: Incoming HTTP request.
+            call_next: Next middleware or route handler.
+
+        Returns:
+            HTTP response with X-Correlation-ID header.
+        """
+        correlation_id = self._extractor.extract(lambda h: request.headers.get(h))
+        previous_id = CorrelationContext.get()
+
+        CorrelationContext.set(correlation_id)
+        set_state_value(request.state, "correlation_id", correlation_id)
+
+        try:
+            response: Response = await call_next(request)
+            response.headers["X-Correlation-ID"] = correlation_id
+            return response
+        finally:
+            CorrelationContext.set(previous_id)
+            pop_state_value(request.state, "correlation_id")

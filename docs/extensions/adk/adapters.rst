@@ -505,14 +505,6 @@ BigQuery
    PARTITION BY DATE(timestamp)
    CLUSTER BY session_id, timestamp;
 
-**Best For:**
-
-- Large-scale AI agent deployments (millions of users)
-- Analytics and insights on agent interactions
-- Long-term storage of conversation history
-- Multi-region deployments requiring global scalability
-- Applications already using Google Cloud Platform
-
 **Considerations:**
 
 - Eventual consistency (writes may take seconds to be visible)
@@ -528,12 +520,6 @@ BigQuery charges based on bytes scanned. The store implements:
 - **Clustering** - Optimizes filtering on app_name, user_id, session_id
 - **Query caching** - Automatically caches results for 24 hours
 - **Byte limits** - Prevents runaway query costs
-
-.. note::
-
-   For highly concurrent transactional workloads with frequent small DML operations,
-   PostgreSQL or Oracle are better choices. BigQuery excels at storing and analyzing
-   large volumes of session/event data with complex analytical queries.
 
 DuckDB Adapter
 ==============
@@ -603,18 +589,9 @@ DuckDB
    CREATE INDEX idx_adk_sessions_update_time
        ON adk_sessions(update_time DESC);
 
-**Best For:**
-
-- Development and testing (zero-configuration setup)
-- Analytical workloads on session data (session analytics, reporting)
-- Embedded applications (single-file database)
-- Offline analysis of session logs
-- Prototyping and demos
-
 **Considerations:**
 
 - Optimized for OLAP, not high-concurrency writes
-- For production systems with frequent concurrent writes, PostgreSQL is recommended
 - Manual cascade delete required (DuckDB doesn't support CASCADE in foreign keys)
 
 ADBC (Arrow Database Connectivity)
@@ -683,14 +660,6 @@ It supports multiple backend databases through a single consistent interface.
    CREATE INDEX IF NOT EXISTS idx_adk_sessions_update_time
        ON adk_sessions(update_time DESC);
 
-**Best For:**
-
-- Multi-database applications requiring portability
-- Analytical AI agents processing large datasets
-- Integration with Arrow ecosystem tools
-- Bulk data operations and ETL pipelines
-- Applications needing zero-copy data transfer
-
 **Considerations:**
 
 - Synchronous API (no native async support)
@@ -703,73 +672,62 @@ Adapter Comparison
 
 .. list-table::
    :header-rows: 1
-   :widths: 15 15 15 15 20 20
+   :widths: 15 15 15 15 25
 
    * - Adapter
      - Database
      - Async
      - JSON Type
-     - Best For
      - Notes
    * - AsyncPG
      - PostgreSQL
      - ✅
      - JSONB
-     - Production (high scale)
-     - Recommended
+     - Native async driver
    * - Psycopg
      - PostgreSQL
      - ✅
      - JSONB
-     - Production
-     - Sync/Async support
+     - Sync/async support
    * - Psqlpy
      - PostgreSQL
      - ✅
      - JSONB
-     - Production (performance)
-     - Rust-based
+     - Rust-based driver
    * - AsyncMy
      - MySQL
      - ✅
      - JSON
-     - Production (MySQL shops)
      - Requires 5.7.8+
    * - BigQuery
      - Google Cloud
      - ✅
      - JSON
-     - Analytics, massive scale
      - Serverless, partitioned
    * - SQLite
      - SQLite
      - ❌
      - TEXT
-     - Development, single-user
      - Simple setup
    * - AIOSqlite
      - SQLite
      - ✅
      - TEXT
-     - Development, testing
      - Native async
    * - OracleDB
      - Oracle
      - ✅
      - JSON/BLOB+CHECK
-     - Enterprise
      - Auto-detects version
    * - DuckDB
      - DuckDB
      - ❌ (sync)
      - JSON
-     - OLAP/Analytics
      - Embedded, zero-config
    * - ADBC
      - Multi (PostgreSQL, SQLite, DuckDB, etc.)
      - ❌ (sync)
      - TEXT
-     - Arrow ecosystem, analytics
      - Zero-copy, vendor-neutral
 
 Custom Table Names

@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from sqlspec.core.filters import OffsetPagination
 from sqlspec.utils.serializers import (
     __all__,
     from_json,
@@ -79,6 +80,16 @@ def test_to_json_special_characters() -> None:
 
     parsed = json.loads(result)
     assert parsed == special_chars
+
+
+def test_to_json_offset_pagination() -> None:
+    """Test serialization of OffsetPagination containers."""
+    pagination = OffsetPagination([{"id": 1}], limit=10, offset=5, total=20)
+
+    result = to_json(pagination)
+
+    parsed = json.loads(result)
+    assert parsed == {"items": [{"id": 1}], "limit": 10, "offset": 5, "total": 20}
 
 
 def test_to_json_numeric_edge_cases() -> None:

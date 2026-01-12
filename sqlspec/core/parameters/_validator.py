@@ -23,7 +23,7 @@ PARAMETER_REGEX = re.compile(
     (?P<pyformat_pos>%s) |
     (?P<positional_colon>(?<![A-Za-z0-9_]):(?P<colon_num>\d+)) |
     (?P<named_colon>(?<![A-Za-z0-9_]):(?P<colon_name>\w+)) |
-    (?P<named_at>(?<![A-Za-z0-9_])@(?P<at_name>\w+)) |
+    (?P<named_at>(?<![A-Za-z0-9_])@(?!sqlspec_)(?P<at_name>\w+)) |
     (?P<numeric>(?<![A-Za-z0-9_])\$(?P<numeric_num>\d+)) |
     (?P<named_dollar_param>(?<![A-Za-z0-9_])\$(?P<dollar_param_name>\w+)) |
     (?P<qmark>\?)

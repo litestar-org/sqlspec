@@ -16,20 +16,12 @@ Oracle Database is a relational database system commonly used for business-criti
 - **Thin & Thick Modes**: Choose between pure Python or Oracle Client deployment
 - **Advanced Data Types**: BLOB, CLOB, and native JSON support
 
-**Ideal Use Cases:**
-
-- AI agent deployments requiring high reliability
-- Organizations with existing Oracle infrastructure
-- Applications requiring advanced security and compliance features
-- Multi-region deployments with timezone awareness
-- Business-critical systems requiring high availability
-
 Installation
 ============
 
 Oracle supports two deployment modes:
 
-Thin Mode (Pure Python - Recommended)
+Thin Mode (Pure Python)
 --------------------------------------
 
 Install SQLSpec with Oracle thin mode support:
@@ -46,7 +38,6 @@ Install SQLSpec with Oracle thin mode support:
 - Smaller deployment footprint
 - Easier containerization
 - Cross-platform compatibility
-- Suitable for most use cases
 
 Thick Mode (Oracle Client)
 ---------------------------
@@ -389,40 +380,6 @@ After table creation, verify In-Memory status:
    Table: ADK_SESSIONS, In-Memory: ENABLED, Priority: NONE
    Table: ADK_EVENTS, In-Memory: ENABLED, Priority: NONE
 
-Use Cases
-~~~~~~~~~
-
-**When to Use In-Memory:**
-
-✅ **Analytics on session data**
-   - Dashboard queries aggregating thousands of sessions
-   - Real-time reporting on AI agent usage patterns
-   - Session duration analysis and user behavior insights
-
-✅ **Large-scale deployments**
-   - Millions of sessions with frequent analytical queries
-   - Multi-tenant platforms with cross-tenant analytics
-   - Historical session analysis without impacting OLTP performance
-
-✅ **Complex filtering**
-   - JSON state queries (``WHERE JSON_VALUE(state, '$.key') = 'value'``)
-   - Multi-column filtering across large datasets
-   - Ad-hoc analytics and data science queries
-
-**When NOT to Use In-Memory:**
-
-❌ **Small deployments**
-   - < 10,000 sessions (overhead not justified)
-   - Primarily OLTP workload (inserts/updates)
-   - No analytics requirements
-
-❌ **Budget constraints**
-   - Licensing cost prohibitive ($23K+ per processor)
-   - Can achieve performance through standard indexes
-
-❌ **No In-Memory license**
-   - Tables will fail to create with ORA-00439 or ORA-62142
-
 Troubleshooting
 ~~~~~~~~~~~~~~~
 
@@ -747,7 +704,7 @@ JSON Storage Types Performance
 
 .. tip::
 
-   **Upgrade Recommendation**: If using Oracle 12c-20c, upgrade to 21c+ for native JSON performance improvements.
+   **Upgrade Note**: If using Oracle 12c-20c, upgrade to 21c+ for native JSON performance improvements.
 
 Connection Pooling Impact
 --------------------------
@@ -897,88 +854,6 @@ Common Oracle Error Codes
 - **ORA-01017**: Invalid username/password
 - **ORA-12541**: TNS:no listener
 
-Use Cases
-=========
-
-Enterprise AI Agent Platform
------------------------------
-
-.. code-block:: python
-
-   from sqlspec.adapters.oracledb import OracleAsyncConfig
-   from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore
-   from sqlspec.extensions.adk import SQLSpecSessionService
-
-   # Production configuration
-   config = OracleAsyncConfig(
-       connection_config={
-           "user": os.environ["ORACLE_USER"],
-           "password": os.environ["ORACLE_PASSWORD"],
-           "dsn": "prod-oracle.example.com:1521/PROD",
-           "min": 5,
-           "max": 20,
-           "threaded": True,
-       }
-   )
-
-   store = OracleAsyncADKStore(config)
-   await store.create_tables()
-
-   service = SQLSpecSessionService(store)
-
-   # Handle thousands of concurrent sessions
-   async def handle_user_request(user_id: str, message: str):
-       session = await service.get_or_create_session(
-           app_name="enterprise_assistant",
-           user_id=user_id,
-       )
-       # Process with ADK
-       # ...
-
-Multi-Region Deployment
------------------------
-
-Oracle's timezone support ensures correct timestamps across regions:
-
-.. code-block:: python
-
-   from datetime import datetime, timezone
-
-   # Store creates events with timezone-aware timestamps
-   event = EventRecord(
-       id="event_id",
-       session_id="session_id",
-       timestamp=datetime.now(timezone.utc),  # UTC
-       # ...
-   )
-
-   await store.append_event(event)
-
-   # Timestamps are preserved with timezone information
-   events = await store.get_events("session_id")
-   for event in events:
-       local_time = event["timestamp"].astimezone()  # Convert to local
-
-High-Availability Setup
------------------------
-
-.. code-block:: python
-
-   # Oracle RAC (Real Application Clusters)
-   config = OracleAsyncConfig(
-       connection_config={
-           "user": "agent_user",
-           "password": "secure_password",
-           "dsn": """(DESCRIPTION=
-                       (ADDRESS_LIST=
-                         (ADDRESS=(PROTOCOL=TCP)(HOST=node1)(PORT=1521))
-                         (ADDRESS=(PROTOCOL=TCP)(HOST=node2)(PORT=1521))
-                         (LOAD_BALANCE=yes)
-                         (FAILOVER=yes))
-                       (CONNECT_DATA=(SERVICE_NAME=PROD)))""",
-       }
-   )
-
 Troubleshooting
 ===============
 
@@ -1089,9 +964,6 @@ Oracle vs PostgreSQL
    * - **Performance**
      - Excellent (enterprise-tuned)
      - Excellent (open source)
-   * - **Best For**
-     - Existing Oracle shops, enterprise
-     - New deployments, cost-sensitive
 
 Oracle vs DuckDB
 ----------------
@@ -1109,33 +981,12 @@ Oracle vs DuckDB
    * - **Concurrency**
      - Excellent
      - Limited writes
-   * - **Use Case**
-     - Production AI agents
-     - Development, analytics
    * - **Setup**
      - Complex
      - Zero config
    * - **Cost**
      - Commercial license
      - Free, open source
-
-When to Choose Oracle
----------------------
-
-**Choose Oracle When:**
-
-✅ Already using Oracle infrastructure
-✅ Require enterprise support and SLAs
-✅ Need advanced HA features (RAC, Data Guard)
-✅ Compliance requires certified databases
-✅ Multi-region deployments with global transactions
-
-**Choose Alternatives When:**
-
-❌ Starting fresh (use PostgreSQL)
-❌ Cost-sensitive (use PostgreSQL)
-❌ Development/testing (use DuckDB or SQLite)
-❌ Small-scale deployment (use PostgreSQL or DuckDB)
 
 API Reference
 =============

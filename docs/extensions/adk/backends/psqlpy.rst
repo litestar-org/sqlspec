@@ -5,7 +5,7 @@ Psqlpy Backend
 Overview
 ========
 
-Psqlpy is a **Rust-based asynchronous PostgreSQL driver** for high-throughput database operations. Built with PyO3, it combines the safety and speed of Rust with Python's ease of use, making it suitable for performance-critical AI agent deployments.
+Psqlpy is a **Rust-based asynchronous PostgreSQL driver** for high-throughput database operations. Built with PyO3, it combines the safety and speed of Rust with Python's ease of use.
 
 **Key Features:**
 
@@ -15,13 +15,6 @@ Psqlpy is a **Rust-based asynchronous PostgreSQL driver** for high-throughput da
 - **Connection Pooling**: Built-in connection pool
 - **Type Safety**: Strong type system inherited from Rust
 - **Zero-Copy Operations**: Efficient memory usage where possible
-
-**Ideal Use Cases:**
-
-- High-throughput AI agent applications with demanding performance requirements
-- Production deployments requiring Rust-based performance characteristics
-- Rust-based technology stacks seeking consistent tooling
-- Applications with high concurrent load and low latency requirements
 
 Installation
 ============
@@ -382,31 +375,6 @@ Optimize JSONB operations:
 Best Practices
 ==============
 
-When to Choose Psqlpy
-----------------------
-
-**Choose Psqlpy When:**
-
-✅ Maximum PostgreSQL performance is required
-✅ High-throughput production deployments
-✅ Latency-sensitive applications
-✅ Large JSONB payloads
-✅ Rust-based technology stack
-✅ High concurrent connection load
-
-**Consider AsyncPG Instead When:**
-
-- Need more mature ecosystem and wider community support
-- Using features that may not yet be in psqlpy
-- Prefer pure Python implementation
-- Already have asyncpg expertise in the team
-
-**Consider Psycopg Instead When:**
-
-- Need both sync and async support
-- Require maximum feature parity with PostgreSQL
-- Need battle-tested production stability
-
 Error Handling
 --------------
 
@@ -481,88 +449,8 @@ Comparison: Psqlpy vs Other PostgreSQL Drivers
      - Growing
      - Large
      - Very Large
-   * - Best For
-     - Max performance
      - Production standard
      - Full feature set
-
-Use Cases
-=========
-
-High-Performance Agent API
----------------------------
-
-.. code-block:: python
-
-   from sqlspec.adapters.psqlpy import PsqlpyConfig
-   from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
-   from sqlspec.extensions.adk import SQLSpecSessionService
-
-   # High-performance configuration
-   config = PsqlpyConfig(
-       connection_config={
-           "dsn": "postgresql://localhost:5432/agents",
-           "max_db_pool_size": 100,
-           "connect_timeout_sec": 5,
-           "keepalives": True,
-       }
-   )
-
-   store = PsqlpyADKStore(config)
-   await store.create_tables()
-   service = SQLSpecSessionService(store)
-
-   # Handle high request rate
-   async def handle_request(user_id: str):
-       session = await service.create_session(
-           app_name="api_agent",
-           user_id=user_id,
-           state={"request_count": 0}
-       )
-       return session
-
-Real-Time Analytics on Sessions
---------------------------------
-
-.. code-block:: python
-
-   # Leverage JSONB GIN index for fast queries
-   async with config.provide_connection() as conn:
-       result = await conn.fetch(
-           """
-           SELECT
-               state->>'category' as category,
-               COUNT(*) as session_count
-           FROM adk_sessions
-           WHERE app_name = $1
-             AND state @> '{"active": true}'::jsonb
-           GROUP BY category
-           ORDER BY session_count DESC
-           """,
-           ["analytics_agent"]
-       )
-       rows = result.result()
-       for row in rows:
-           print(f"{row['category']}: {row['session_count']} sessions")
-
-Rust Microservices Integration
--------------------------------
-
-.. code-block:: python
-
-   # Consistent Rust stack: psqlpy + other Rust Python bindings
-   from sqlspec.adapters.psqlpy import PsqlpyConfig
-   # from orjson import dumps, loads  # Rust-based JSON
-   # from pydantic_core import ValidationError  # Rust-based validation
-
-   config = PsqlpyConfig(
-       connection_config={
-           "dsn": "postgresql://localhost:5432/microservices"
-       }
-   )
-
-   # Entire stack benefits from Rust performance
-   store = PsqlpyADKStore(config)
 
 Troubleshooting
 ===============

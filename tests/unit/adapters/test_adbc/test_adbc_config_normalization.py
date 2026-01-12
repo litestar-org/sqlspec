@@ -52,6 +52,20 @@ def test_resolve_driver_name_from_uri() -> None:
     assert _resolve_driver_name(config) == "adbc_driver_postgresql.dbapi.connect"
 
 
+def test_resolve_driver_name_gizmosql_alias() -> None:
+    """Resolve GizmoSQL aliases to the FlightSQL driver."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
+    assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
+
+
+def test_resolve_driver_name_from_gizmosql_uri() -> None:
+    """Detect FlightSQL driver from GizmoSQL URI schemes."""
+    config = AdbcConfig(connection_config={"uri": "gizmosql://localhost:31337"})
+    assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
+    config = AdbcConfig(connection_config={"uri": "gizmo://localhost:31337"})
+    assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
+
+
 def test_connection_config_dict_strips_sqlite_scheme() -> None:
     """Strip sqlite:// from URI when using the sqlite driver."""
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": "sqlite:///tmp.db"})
@@ -103,3 +117,89 @@ def test_connection_config_dict_flattens_db_kwargs_for_non_bigquery() -> None:
     resolved = _get_connection_config_dict(config)
     assert "db_kwargs" not in resolved
     assert resolved["foo"] == "bar"
+
+
+def test_gizmosql_default_dialect_is_duckdb() -> None:
+    """Default GizmoSQL connections to DuckDB dialect."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
+    assert config.statement_config.dialect == "duckdb"
+
+
+def test_gizmosql_backend_override_to_sqlite() -> None:
+    """Override GizmoSQL dialect to SQLite when requested."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "gizmosql_backend": "sqlite"})
+    assert config.statement_config.dialect == "sqlite"
+
+
+def test_grpc_tls_uri_defaults_to_duckdb() -> None:
+    """Default grpc+tls URIs to DuckDB for GizmoSQL."""
+    config = AdbcConfig(connection_config={"uri": "grpc+tls://localhost:31337"})
+    assert config.statement_config.dialect == "duckdb"
+
+
+def test_gizmosql_parameter_style_is_qmark() -> None:
+    """GizmoSQL connections should use qmark parameter style like DuckDB."""
+    from sqlspec.core import ParameterStyle
+
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
+    assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
+
+
+def test_gizmo_alias_resolves_to_flightsql() -> None:
+    """The short 'gizmo' alias should also resolve to FlightSQL driver."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmo"})
+    assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
+    assert config.statement_config.dialect == "duckdb"
+
+
+def test_flightsql_alias_backward_compatibility() -> None:
+    """Existing flightsql alias should still map to SQLite dialect."""
+    config = AdbcConfig(connection_config={"driver_name": "flightsql"})
+    assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
+    assert config.statement_config.dialect == "sqlite"
+
+
+def test_grpc_alias_backward_compatibility() -> None:
+    """Existing grpc alias should still map to SQLite dialect."""
+    config = AdbcConfig(connection_config={"driver_name": "grpc"})
+    assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
+    assert config.statement_config.dialect == "sqlite"
+
+
+def test_gizmosql_tls_skip_verify_in_config() -> None:
+    """TLS skip verify parameter should be accepted in connection config."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "tls_skip_verify": True}
+    )
+    # Verify the config accepts tls_skip_verify without error
+    assert config.connection_config.get("tls_skip_verify") is True
+
+
+def test_gizmosql_with_authentication() -> None:
+    """GizmoSQL should accept username and password parameters."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "uri": "grpc+tls://localhost:31337",
+            "username": "test_user",
+            "password": "test_password",
+        }
+    )
+    assert config.connection_config.get("username") == "test_user"
+    assert config.connection_config.get("password") == "test_password"
+
+
+def test_gizmosql_backend_duckdb_explicit() -> None:
+    """Explicit DuckDB backend should work."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "gizmosql_backend": "duckdb"})
+    assert config.statement_config.dialect == "duckdb"
+
+
+def test_gizmosql_supported_parameter_styles() -> None:
+    """GizmoSQL should support qmark and numeric parameter styles."""
+    from sqlspec.core import ParameterStyle
+
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
+    # GizmoSQL (DuckDB backend) should support multiple styles
+    supported = config.statement_config.parameter_config.supported_parameter_styles
+    assert ParameterStyle.QMARK in supported

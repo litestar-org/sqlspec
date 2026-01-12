@@ -527,6 +527,32 @@ def test_mixed_parameters_with_repeated_numeric() -> None:
     assert len(converted_params) == 2
 
 
+def test_repeated_named_params_expand_for_qmark_style() -> None:
+    """Test that repeated named params are expanded when converting to QMARK style (Issue #310).
+
+    When converting from NAMED_COLON to QMARK, each occurrence of a named parameter
+    like :query_like must produce a separate ? placeholder with the value duplicated.
+    """
+    sql = (
+        "SELECT name FROM skill WHERE LOWER(name) LIKE :query_like "
+        "OR LOWER(description) LIKE :query_like "
+        "ORDER BY CASE WHEN LOWER(name) LIKE :query_like THEN 1 ELSE 0 END DESC "
+        "LIMIT :limit"
+    )
+    parameters = {"query_like": "%duckdb%", "limit": 10}
+
+    converter = ParameterConverter()
+    converted_sql, converted_params = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.QMARK, is_many=False
+    )
+
+    # SQL should have 4 ? placeholders (3 for query_like + 1 for limit)
+    assert converted_sql.count("?") == 4
+    # Parameters should be expanded: 3 times query_like value + 1 time limit value
+    assert converted_params == ("%duckdb%", "%duckdb%", "%duckdb%", 10)
+    assert len(converted_params) == 4  # type: ignore[arg-type]
+
+
 def test_edge_case_all_numeric_parameters() -> None:
     """Test that non-mixed numeric parameters still work correctly."""
     sql = "SELECT $1::text as name, $2::int as age"

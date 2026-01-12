@@ -732,12 +732,6 @@ The ``fix`` command is still useful for:
 
 See the :ref:`hybrid-versioning-guide` for complete workflows and examples.
 
-**Use Cases:**
-
-- **Pre-merge CI check**: Convert timestamps before merging to main branch
-- **Production deployment**: Ensure deterministic migration ordering
-- **Repository cleanup**: Standardize on sequential format after development
-
 .. seealso::
 
    :ref:`hybrid-versioning-guide` for complete workflow documentation and best practices.

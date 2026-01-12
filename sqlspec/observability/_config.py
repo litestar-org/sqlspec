@@ -5,7 +5,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from sqlspec.config import LifecycleConfig
+    from sqlspec.observability._formatters._base import CloudLogFormatter
     from sqlspec.observability._observer import StatementEvent
+    from sqlspec.observability._sampling import SamplingConfig
 
 
 StatementObserver = Callable[["StatementEvent"], None]
@@ -146,7 +148,16 @@ class LoggingConfig:
 class ObservabilityConfig:
     """Aggregates lifecycle hooks, observers, and telemetry toggles."""
 
-    __slots__ = ("lifecycle", "logging", "print_sql", "redaction", "statement_observers", "telemetry")
+    __slots__ = (
+        "cloud_formatter",
+        "lifecycle",
+        "logging",
+        "print_sql",
+        "redaction",
+        "sampling",
+        "statement_observers",
+        "telemetry",
+    )
 
     def __init__(
         self,
@@ -157,6 +168,8 @@ class ObservabilityConfig:
         telemetry: "TelemetryConfig | None" = None,
         redaction: "RedactionConfig | None" = None,
         logging: "LoggingConfig | None" = None,
+        sampling: "SamplingConfig | None" = None,
+        cloud_formatter: "CloudLogFormatter | None" = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.print_sql = print_sql
@@ -164,6 +177,8 @@ class ObservabilityConfig:
         self.telemetry = telemetry
         self.redaction = redaction
         self.logging = logging
+        self.sampling = sampling
+        self.cloud_formatter = cloud_formatter
 
     def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
         msg = "ObservabilityConfig objects are mutable and unhashable"
@@ -177,6 +192,7 @@ class ObservabilityConfig:
         telemetry_copy = self.telemetry.copy() if self.telemetry else None
         redaction_copy = self.redaction.copy() if self.redaction else None
         logging_copy = self.logging.copy() if self.logging else None
+        sampling_copy = self.sampling.copy() if self.sampling else None
         return ObservabilityConfig(
             lifecycle=lifecycle_copy,
             print_sql=self.print_sql,
@@ -184,6 +200,8 @@ class ObservabilityConfig:
             telemetry=telemetry_copy,
             redaction=redaction_copy,
             logging=logging_copy,
+            sampling=sampling_copy,
+            cloud_formatter=self.cloud_formatter,
         )
 
     @classmethod
@@ -216,6 +234,8 @@ class ObservabilityConfig:
         telemetry = override.telemetry.copy() if override.telemetry else base.telemetry
         redaction = _merge_redaction(base.redaction, override.redaction)
         logging = _merge_logging(base.logging, override.logging)
+        sampling = _merge_sampling(base.sampling, override.sampling)
+        cloud_formatter = override.cloud_formatter if override.cloud_formatter is not None else base.cloud_formatter
 
         return ObservabilityConfig(
             lifecycle=lifecycle,
@@ -224,12 +244,14 @@ class ObservabilityConfig:
             telemetry=telemetry,
             redaction=redaction,
             logging=logging,
+            sampling=sampling,
+            cloud_formatter=cloud_formatter,
         )
 
     def __repr__(self) -> str:
         return (
             f"ObservabilityConfig(lifecycle={self.lifecycle!r}, print_sql={self.print_sql!r}, statement_observers={self.statement_observers!r}, telemetry={self.telemetry!r}, "
-            f"redaction={self.redaction!r}, logging={self.logging!r})"
+            f"redaction={self.redaction!r}, logging={self.logging!r}, sampling={self.sampling!r}, cloud_formatter={self.cloud_formatter!r})"
         )
 
     def __eq__(self, other: object) -> bool:
@@ -242,6 +264,8 @@ class ObservabilityConfig:
             and self.telemetry == other.telemetry
             and self.redaction == other.redaction
             and self.logging == other.logging
+            and self.sampling == other.sampling
+            and self.cloud_formatter == other.cloud_formatter
         )
 
 
@@ -268,6 +292,25 @@ def _merge_logging(base: "LoggingConfig | None", override: "LoggingConfig | None
     if override is None:
         return base.copy() if base else None
     return override.copy()
+
+
+def _merge_sampling(base: "SamplingConfig | None", override: "SamplingConfig | None") -> "SamplingConfig | None":
+    if base is None and override is None:
+        return None
+    if override is None:
+        return base.copy() if base else None
+    if base is None:
+        return override.copy()
+    merged = base.copy()
+    if override.sample_rate != 1.0:
+        merged.sample_rate = override.sample_rate
+    if override.deterministic:
+        merged.deterministic = override.deterministic
+    if override.force_sample_on_error:
+        merged.force_sample_on_error = override.force_sample_on_error
+    if override.force_sample_slow_queries_ms is not None:
+        merged.force_sample_slow_queries_ms = override.force_sample_slow_queries_ms
+    return merged
 
 
 def _normalize_lifecycle(config: "LifecycleConfig | None") -> "LifecycleConfig | None":

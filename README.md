@@ -16,7 +16,7 @@ SQLSpec is currently in active development. The public API may change. Follow th
 
 - Connection pooling with configurable size, timeout, and lifecycle hooks
 - Sync and async support with a unified API surface
-- Adapters for PostgreSQL (psycopg, asyncpg, psqlpy), SQLite (sqlite3, aiosqlite), DuckDB, MySQL (asyncmy), Oracle, BigQuery, and ADBC-compatible databases
+- Adapters for PostgreSQL (psycopg, asyncpg, psqlpy), SQLite (sqlite3, aiosqlite), DuckDB, MySQL (asyncmy, mysql-connector, pymysql), Oracle, BigQuery, and ADBC-compatible databases
 
 **Query Execution**
 

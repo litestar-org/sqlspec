@@ -32,21 +32,6 @@ Why Use the Query Builder?
 - Protection against syntax errors
 - IDE autocomplete support
 
-**When to Use**
-
-- Complex dynamic queries with conditional filters
-- Query templates with variable components
-- Programmatic query generation
-- API query builders (search, filtering)
-
-**When to Use Raw SQL Instead**
-
-- Static, well-defined queries
-- Complex joins and subqueries
-- Database-specific features
-- Performance-critical queries
-- Queries loaded from SQL files
-
 SELECT Queries
 --------------
 

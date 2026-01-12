@@ -9,9 +9,8 @@ from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
     get_statement_config,
-    resolve_dialect_from_driver_path,
+    resolve_dialect_from_config,
     resolve_driver_connect_func,
-    resolve_driver_name_from_config,
 )
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, AdbcSessionContext
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
@@ -58,6 +57,8 @@ class AdbcConnectionParams(TypedDict):
     role: NotRequired[str]
     authorization_header: NotRequired[str]
     grpc_options: NotRequired[dict[str, Any]]
+    gizmosql_backend: NotRequired[str]
+    tls_skip_verify: NotRequired[bool]
     extra: NotRequired[dict[str, Any]]
 
 
@@ -193,9 +194,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.connection_config = normalize_connection_config(connection_config)
 
         if statement_config is None:
-            statement_config = get_statement_config(
-                resolve_dialect_from_driver_path(resolve_driver_name_from_config(self.connection_config))
-            )
+            statement_config = get_statement_config(resolve_dialect_from_config(self.connection_config))
 
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
@@ -259,9 +258,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         statement_config = (
             statement_config
             or self.statement_config
-            or get_statement_config(
-                resolve_dialect_from_driver_path(resolve_driver_name_from_config(self.connection_config))
-            )
+            or get_statement_config(resolve_dialect_from_config(self.connection_config))
         )
         handler = _AdbcSessionConnectionHandler(self)
 

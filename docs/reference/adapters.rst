@@ -12,8 +12,9 @@ Overview
 Available adapters:
 
 - **PostgreSQL**: asyncpg, psycopg, psqlpy
+- **CockroachDB**: cockroach_psycopg, cockroach_asyncpg
 - **SQLite**: sqlite, aiosqlite
-- **MySQL**: asyncmy
+- **MySQL**: asyncmy, mysql-connector, pymysql
 - **DuckDB**: duckdb
 - **Oracle**: oracledb
 - **BigQuery**: bigquery
@@ -262,6 +263,188 @@ psqlpy
    :undoc-members:
    :show-inheritance:
 
+CockroachDB
+===========
+
+cockroach_psycopg
+-----------------
+
+.. currentmodule:: sqlspec.adapters.cockroach_psycopg
+
+**Homepage**: https://www.cockroachlabs.com/
+
+**PyPI**: Uses ``psycopg[binary]>=3.1`` (https://pypi.org/project/psycopg/)
+
+**Concurrency**: Sync and async
+
+**Connection Pooling**: Native pooling via ``psycopg_pool``
+
+**Parameter Style**: ``%s, %s, %s`` (PostgreSQL format style)
+
+**Special Features**:
+
+- CockroachDB-optimized connection classes via ``psycopg.crdb``
+- Automatic transaction retry with exponential backoff (SQLSTATE 40001)
+- Follower reads via ``AS OF SYSTEM TIME`` for read replicas
+- Serialization conflict handling
+- Both synchronous and asynchronous support
+
+**Known Limitations**:
+
+- Requires CockroachDB-compatible PostgreSQL wire protocol
+- Some PostgreSQL features may not be available
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[psycopg]
+
+**Configuration (Sync)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgSyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       CockroachPsycopgSyncConfig(
+           connection_config={
+               "conninfo": "postgresql://root@localhost:26257/defaultdb",
+               "min_size": 5,
+               "max_size": 20
+           },
+           driver_features={
+               "enable_auto_retry": True,
+               "max_retries": 10
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM users WHERE id = %s", [1])
+
+**Configuration (Async)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       CockroachPsycopgAsyncConfig(
+           connection_config={
+               "conninfo": "postgresql://root@localhost:26257/defaultdb",
+               "min_size": 5,
+               "max_size": 20
+           }
+       )
+   )
+
+   async with sql.provide_session(db) as session:
+       result = await session.execute("SELECT * FROM users WHERE id = %s", [1])
+
+**Follower Reads**:
+
+.. code-block:: python
+
+   # Read from follower replicas with staleness tolerance
+   with sql.provide_session(db, follower_reads="15s") as session:
+       result = session.select("SELECT * FROM users")
+
+**API Reference**:
+
+.. autoclass:: CockroachPsycopgSyncConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: CockroachPsycopgAsyncConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: CockroachPsycopgSyncDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: CockroachPsycopgAsyncDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+cockroach_asyncpg
+-----------------
+
+.. currentmodule:: sqlspec.adapters.cockroach_asyncpg
+
+**Homepage**: https://www.cockroachlabs.com/
+
+**PyPI**: Uses ``asyncpg>=0.29`` (https://pypi.org/project/asyncpg/)
+
+**Concurrency**: Async-only
+
+**Connection Pooling**: Native pooling via ``asyncpg.Pool``
+
+**Parameter Style**: ``$1, $2, $3`` (PostgreSQL positional placeholders)
+
+**Special Features**:
+
+- High-performance async driver using asyncpg
+- Automatic transaction retry with exponential backoff
+- Follower reads via ``AS OF SYSTEM TIME``
+- Binary protocol for efficient data transfer
+
+**Known Limitations**:
+
+- Async-only (no synchronous support)
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[asyncpg]
+
+**Configuration**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       CockroachAsyncpgConfig(
+           connection_config={
+               "dsn": "postgresql://root@localhost:26257/defaultdb",
+               "min_size": 5,
+               "max_size": 20
+           },
+           driver_features={
+               "enable_auto_retry": True,
+               "max_retries": 10
+           }
+       )
+   )
+
+   async with sql.provide_session(db) as session:
+       result = await session.execute("SELECT * FROM users WHERE id = $1", [1])
+
+**API Reference**:
+
+.. autoclass:: CockroachAsyncpgConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: CockroachAsyncpgDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 SQLite
 ======
 
@@ -485,6 +668,180 @@ asyncmy
    :show-inheritance:
 
 .. autoclass:: AsyncmyDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mysql-connector-python
+----------------------
+
+.. currentmodule:: sqlspec.adapters.mysqlconnector
+
+**Homepage**: https://github.com/mysql/mysql-connector-python
+
+**PyPI**: https://pypi.org/project/mysql-connector-python/
+
+**Concurrency**: Sync + Async
+
+**Connection Pooling**: Sync pooling supported (async uses direct connections)
+
+**Parameter Style**: ``%s, %s, %s`` (MySQL format style)
+
+**Special Features**:
+
+- Official Oracle-maintained driver
+- Sync and async APIs
+- MySQL protocol support
+
+**Known Limitations**:
+
+- Async API does not provide native pooling
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[mysql-connector]
+
+**Configuration (Sync)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.mysqlconnector import MysqlConnectorSyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       MysqlConnectorSyncConfig(
+           connection_config={
+               "host": "localhost",
+               "port": 3306,
+               "user": "root",
+               "password": "password",
+               "database": "mydb"
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM users WHERE id = %s", [1])
+
+**Configuration (Async)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       MysqlConnectorAsyncConfig(
+           connection_config={
+               "host": "localhost",
+               "port": 3306,
+               "user": "root",
+               "password": "password",
+               "database": "mydb"
+           }
+       )
+   )
+
+   async with sql.provide_session(db) as session:
+       result = await session.execute("SELECT * FROM users WHERE id = %s", [1])
+
+**Driver Features**:
+
+- ``json_serializer`` – Override JSON parameter serialization for ``dict``/``list``/``tuple`` inputs. Defaults to
+  :func:`sqlspec.utils.serializers.to_json` and is invoked for every JSON parameter passed to mysql-connector.
+- ``json_deserializer`` – Customize JSON result decoding. Defaults to
+  :func:`sqlspec.utils.serializers.from_json` and automatically converts JSON columns into Python objects during fetches.
+
+**API Reference**:
+
+.. autoclass:: MysqlConnectorSyncConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: MysqlConnectorAsyncConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: MysqlConnectorSyncDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: MysqlConnectorAsyncDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pymysql
+-------
+
+.. currentmodule:: sqlspec.adapters.pymysql
+
+**Homepage**: https://github.com/PyMySQL/PyMySQL
+
+**PyPI**: https://pypi.org/project/PyMySQL/
+
+**Concurrency**: Sync only
+
+**Connection Pooling**: Thread-local pooling
+
+**Parameter Style**: ``%s, %s, %s`` (MySQL format style)
+
+**Special Features**:
+
+- Pure Python driver (MIT-licensed)
+- Compatible with MySQL and MariaDB
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[pymysql]
+
+**Configuration**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.pymysql import PyMysqlConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       PyMysqlConfig(
+           connection_config={
+               "host": "localhost",
+               "port": 3306,
+               "user": "root",
+               "password": "password",
+               "database": "mydb"
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM users WHERE id = %s", [1])
+
+**Driver Features**:
+
+- ``json_serializer`` – Override JSON parameter serialization for ``dict``/``list``/``tuple`` inputs. Defaults to
+  :func:`sqlspec.utils.serializers.to_json` and is invoked for every JSON parameter passed to PyMySQL.
+- ``json_deserializer`` – Customize JSON result decoding. Defaults to
+  :func:`sqlspec.utils.serializers.from_json` and automatically converts JSON columns into Python objects during fetches.
+
+**API Reference**:
+
+.. autoclass:: PyMysqlConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: PyMysqlDriver
    :members:
    :undoc-members:
    :show-inheritance:
@@ -979,6 +1336,8 @@ ADBC (Arrow Database Connectivity)
 - DuckDB: https://pypi.org/project/adbc-driver-duckdb/
 - BigQuery: https://pypi.org/project/adbc-driver-bigquery/
 - Snowflake: https://pypi.org/project/adbc-driver-snowflake/
+- FlightSQL: https://pypi.org/project/adbc-driver-flightsql/
+- GizmoSQL: https://pypi.org/project/adbc-driver-flightsql/
 
 **Concurrency**: Sync-only
 
@@ -1037,7 +1396,6 @@ ADBC (Arrow Database Connectivity)
    db = sql.add_config(
        AdbcConfig(
            connection_config={
-               "driver_name": "postgresql",
                "uri": "postgresql://user:password@localhost:5432/mydb"
            }
        )
@@ -1059,8 +1417,7 @@ ADBC (Arrow Database Connectivity)
    db = sql.add_config(
        AdbcConfig(
            connection_config={
-               "driver_name": "sqlite",
-               "uri": "/path/to/database.db"
+               "uri": "sqlite:///path/to/database.db"
            }
        )
    )
@@ -1079,8 +1436,7 @@ ADBC (Arrow Database Connectivity)
    db = sql.add_config(
        AdbcConfig(
            connection_config={
-               "driver_name": "duckdb",
-               "uri": "/path/to/analytics.db"
+               "uri": "duckdb:///path/to/analytics.db"
            }
        )
    )
@@ -1099,6 +1455,109 @@ ADBC (Arrow Database Connectivity)
    :members:
    :undoc-members:
    :show-inheritance:
+
+GizmoSQL (Arrow Flight SQL)
+---------------------------
+
+.. currentmodule:: sqlspec.adapters.adbc
+
+**Homepage**: https://gizmodata.com/gizmosql
+
+**Documentation**: https://docs.gizmosql.com/
+
+**GitHub**: https://github.com/gizmodata/gizmosql
+
+**PyPI**: https://pypi.org/project/adbc-driver-flightsql/ (uses FlightSQL driver)
+
+**Concurrency**: Sync-only
+
+**Connection Pooling**: None (stateless connections)
+
+**Parameter Style**: ``?, ?, ?`` (qmark - DuckDB dialect by default)
+
+GizmoSQL is a high-performance SQL server built on Apache Arrow Flight SQL. It provides
+a lightweight, composable SQL interface with support for both DuckDB and SQLite backends.
+SQLSpec automatically detects GizmoSQL from driver aliases or URI schemes and defaults
+to DuckDB dialect.
+
+**Special Features**:
+
+- Apache Arrow Flight SQL protocol for high-speed data transfer
+- Dual backend support (DuckDB or SQLite)
+- Built-in TLS and authentication support
+- Arrow-native data handling
+- Automatic driver detection from URI scheme
+
+**Known Limitations**:
+
+- Synchronous only (no async support)
+- No connection pooling
+- Requires ``adbc-driver-flightsql`` package
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[adbc] adbc-driver-flightsql
+
+**Basic Configuration**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.adbc import AdbcConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       AdbcConfig(
+           connection_config={
+               "uri": "grpc+tls://localhost:31337"
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM my_table WHERE id = ?", [1])
+
+**With Authentication**:
+
+.. code-block:: python
+
+   db = sql.add_config(
+       AdbcConfig(
+           connection_config={
+               "uri": "grpc+tls://gizmosql.example.com:31337",
+               "username": "my_user",
+               "password": "my_password",
+               "tls_skip_verify": False  # Verify TLS certificates (recommended)
+           }
+       )
+   )
+
+**SQLite Backend** (instead of DuckDB):
+
+.. code-block:: python
+
+   db = sql.add_config(
+       AdbcConfig(
+           connection_config={
+               "uri": "grpc+tls://localhost:31337",
+               "gizmosql_backend": "sqlite"  # Override default DuckDB dialect
+           }
+       )
+   )
+
+**Supported Driver Aliases**:
+
+- ``gizmosql`` - GizmoSQL with DuckDB dialect (default)
+- ``gizmo`` - Short alias for GizmoSQL with DuckDB dialect
+- ``flightsql`` - Apache Flight SQL with SQLite dialect
+- ``grpc`` - Apache Flight SQL with SQLite dialect
+
+**URI Scheme Detection**:
+
+- ``grpc://``, ``grpc+tls://`` - Auto-detects as GizmoSQL (DuckDB dialect)
+- ``gizmosql://``, ``gizmo://`` - Explicit GizmoSQL URIs
 
 Testing
 =======
@@ -1190,13 +1649,6 @@ Mock
    with config.provide_session() as session:
        # Tables already exist from initial_sql
        session.execute("INSERT INTO users (id, name) VALUES ($1, $2)", 1, "Alice")
-
-**Use Cases**:
-
-- **Unit Testing**: Test SQL logic without database dependencies
-- **CI/CD Pipelines**: Run tests where real databases aren't available
-- **Rapid Prototyping**: Develop with production-like SQL syntax
-- **Integration Tests**: Validate dialect-specific SQL translates correctly
 
 **Supported Target Dialects**:
 

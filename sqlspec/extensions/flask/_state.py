@@ -28,6 +28,10 @@ class FlaskConfigState:
     extra_rollback_statuses: "set[int] | None"
     is_async: bool
     disable_di: bool
+    enable_correlation_middleware: bool = False
+    correlation_header: str = "x-request-id"
+    correlation_headers: "tuple[str, ...] | None" = None
+    auto_trace_headers: bool = True
 
     def should_commit(self, status_code: int) -> bool:
         """Determine if HTTP status code should trigger commit.

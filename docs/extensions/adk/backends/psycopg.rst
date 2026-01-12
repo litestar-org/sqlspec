@@ -19,14 +19,6 @@ and the COPY protocol.
 - **Server-Side Cursors**: Memory-efficient processing of large result sets
 - **Contemporary Design**: Fully redesigned API for PostgreSQL
 
-**Ideal Use Cases:**
-
-- Applications requiring both async and sync database access patterns
-- PostgreSQL-first applications leveraging JSONB features
-- Production systems needing robust connection pooling
-- Projects prioritizing type safety and explicit type handling
-- Async-capable adapter with dual sync/async support
-
 .. warning::
 
    **CRITICAL: JSONB Type Safety**
@@ -531,23 +523,6 @@ Psycopg3 automatically prepares frequently-used queries:
 Best Practices
 ==============
 
-When to Use Async vs Sync
---------------------------
-
-**Use Async (PsycopgAsyncConfig) When:**
-
-- Building async web applications (Litestar, FastAPI)
-- Need high concurrency with many simultaneous users
-- Integrating with async AI agent frameworks
-- Performance is critical for I/O-bound operations
-
-**Use Sync (PsycopgSyncConfig) When:**
-
-- Simple scripts or batch processing jobs
-- Integration with sync-only frameworks
-- Development/testing with minimal complexity
-- Migration from psycopg2 codebase
-
 SQL Composition Best Practices
 -------------------------------
 
@@ -611,71 +586,6 @@ Connection Pool Sizing
        }
    )
 
-Use Cases
-=========
-
-Async Web Application
----------------------
-
-.. code-block:: python
-
-   from litestar import Litestar, get
-   from sqlspec.adapters.psycopg import PsycopgAsyncConfig
-   from sqlspec.adapters.psycopg.adk import PsycopgAsyncADKStore
-   from sqlspec.extensions.adk import SQLSpecSessionService
-
-   config = PsycopgAsyncConfig(
-       connection_config={"conninfo": "postgresql://..."}
-   )
-   store = PsycopgAsyncADKStore(config)
-   service = SQLSpecSessionService(store)
-
-   @get("/sessions/{user_id:str}")
-   async def list_sessions(user_id: str) -> list:
-       sessions = await service.list_sessions("web_app", user_id)
-       return [s.to_dict() for s in sessions]
-
-   app = Litestar([list_sessions])
-
-Sync Background Worker
-----------------------
-
-.. code-block:: python
-
-   from sqlspec.adapters.psycopg import PsycopgSyncConfig
-   from sqlspec.adapters.psycopg.adk import PsycopgSyncADKStore
-   from sqlspec.extensions.adk import SQLSpecSessionService
-
-   config = PsycopgSyncConfig(
-       connection_config={"conninfo": "postgresql://..."}
-   )
-   store = PsycopgSyncADKStore(config)
-   service = SQLSpecSessionService(store)
-
-   def cleanup_old_sessions():
-       # Sync operation for scheduled job
-       all_sessions = store.list_sessions("my_app", "user_123")
-       for session in all_sessions:
-           if is_expired(session):
-               store.delete_session(session["id"])
-
-Mixed Async/Sync Application
------------------------------
-
-.. code-block:: python
-
-   # Async config for web API
-   async_config = PsycopgAsyncConfig(
-       connection_config={"conninfo": "postgresql://..."}
-   )
-   async_store = PsycopgAsyncADKStore(async_config)
-
-   # Sync config for CLI tools (separate pool)
-   sync_config = PsycopgSyncConfig(
-       connection_config={"conninfo": "postgresql://..."}
-   )
-   sync_store = PsycopgSyncADKStore(sync_config)
-
 Comparison to Other PostgreSQL Drivers
 =======================================
 
@@ -710,9 +620,6 @@ Psycopg3 vs AsyncPG
    * - Cursor Model
      - Context managers required
      - Direct cursor usage
-   * - Best For
-     - Dual async/sync, type safety
-     - Pure async, raw performance
 
 Psycopg3 vs Psqlpy
 -------------------
@@ -742,35 +649,6 @@ Psycopg3 vs Psqlpy
    * - Performance
      - Very fast
      - Extremely fast
-   * - Best For
-     - General-purpose PostgreSQL
-     - Performance-critical workloads
-
-When to Choose Psycopg3
-------------------------
-
-**Choose Psycopg3 When:**
-
-- Need both async AND sync database access
-- Want explicit type safety with JSONB operations
-- Require dual-mode async/sync adapter capabilities
-- Prefer PostgreSQL's official SQL composition tools
-- Building applications with mixed sync/async components
-- Value ecosystem maturity and stability
-
-**Consider AsyncPG When:**
-
-- Pure async application, no sync needed
-- Want simplest JSONB insertion (no wrapper required)
-- Want Cython-based performance characteristics
-- Prefer implicit type conversion
-
-**Consider Psqlpy When:**
-
-- Want Rust-based performance characteristics
-- Building high-throughput data pipelines
-- Want Rust safety guarantees
-- Can work with an evolving ecosystem
 
 Troubleshooting
 ===============

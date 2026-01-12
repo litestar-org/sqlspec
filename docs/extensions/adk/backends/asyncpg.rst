@@ -5,7 +5,7 @@ AsyncPG Backend
 Overview
 ========
 
-AsyncPG is an async-native PostgreSQL driver for Python, written in Cython. It is a recommended choice for production async AI agent deployments.
+AsyncPG is an async-native PostgreSQL driver for Python, written in Cython.
 
 **Key Features:**
 
@@ -16,19 +16,6 @@ AsyncPG is an async-native PostgreSQL driver for Python, written in Cython. It i
 - **Prepared Statements**: Automatic statement preparation and caching
 - **Microsecond Precision**: TIMESTAMPTZ with microsecond-level accuracy
 - **Type Safety**: Rich PostgreSQL type support (arrays, composite types, UUIDs)
-
-**Ideal Use Cases:**
-
-- Production AI agents with high-concurrency async workloads
-- Real-time conversational AI requiring fast response times
-- Multi-user agent platforms with high concurrency requirements
-- Applications with demanding performance requirements
-- Async web frameworks (Litestar, FastAPI, Starlette)
-
-.. tip::
-
-   AsyncPG is designed for high-concurrency workloads, making it suitable for production AI agent
-   applications where response time is critical.
 
 Installation
 ============
@@ -659,116 +646,6 @@ Monitor AsyncPG pool health:
        async with config.provide_connection() as conn:
            await conn.execute("SET log_min_duration_statement = 1000;")
 
-Use Cases
-=========
-
-Production Async Web Applications
-----------------------------------
-
-AsyncPG is ideal for async web frameworks:
-
-.. code-block:: python
-
-   from litestar import Litestar, get
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-   from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
-
-   # Initialize at app startup
-   config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
-   store = AsyncpgADKStore(config)
-
-   @get("/session/{session_id:str}")
-   async def get_session(session_id: str) -> dict:
-       session = await store.get_session(session_id)
-       return session or {"error": "not found"}
-
-   app = Litestar(
-       route_handlers=[get_session],
-       on_startup=[lambda: store.create_tables()]
-   )
-
-High-Concurrency AI Agents
----------------------------
-
-Handle thousands of concurrent users:
-
-.. code-block:: python
-
-   config = AsyncpgConfig(connection_config={
-       "dsn": "postgresql://...",
-       "min_size": 20,
-       "max_size": 50,
-       "command_timeout": 60.0
-   })
-
-   store = AsyncpgADKStore(config)
-   service = SQLSpecSessionService(store)
-
-   async def handle_concurrent_users():
-       tasks = []
-       for user_id in range(10000):
-           task = service.create_session(
-               app_name="assistant",
-               user_id=f"user_{user_id}",
-               state={}
-           )
-           tasks.append(task)
-
-       # AsyncPG efficiently handles concurrent operations
-       sessions = await asyncio.gather(*tasks)
-       print(f"Created {len(sessions)} sessions")
-
-Real-Time Conversational AI
-----------------------------
-
-Minimize latency with AsyncPG's speed:
-
-.. code-block:: python
-
-   import time
-
-   async def measure_latency():
-       start = time.perf_counter()
-
-       # Create session
-       session = await store.create_session(
-           session_id="sess_timing",
-           app_name="realtime_chat",
-           user_id="user_456",
-           state={}
-       )
-
-       # Add event
-       event = Event(...)
-       await store.append_event(event)
-
-       # Get session with events
-       full_session = await store.get_events("sess_timing")
-
-       elapsed_ms = (time.perf_counter() - start) * 1000
-       print(f"Total latency: {elapsed_ms:.2f}ms")  # Typically < 10ms
-
-When to Choose AsyncPG
-======================
-
-**Use AsyncPG When:**
-
-✅ Building production async AI agents
-✅ Need strong PostgreSQL performance characteristics
-✅ Using async web frameworks (Litestar, FastAPI, Starlette)
-✅ Need connection pooling for high concurrency
-✅ Working with JSONB data extensively
-✅ Require microsecond timestamp precision
-✅ Want automatic prepared statement caching
-
-**Consider Alternatives When:**
-
-❌ **Psycopg3**: Need sync AND async in same codebase (psycopg supports both)
-❌ **Psqlpy**: Want Rust-based performance characteristics (experimental)
-❌ **ADBC**: Need cross-database portability with Arrow format
-❌ **SQLite**: Development/testing without PostgreSQL server
-❌ **DuckDB**: Analytical workloads, not transactional
-
 Comparison: AsyncPG vs Other PostgreSQL Drivers
 ------------------------------------------------
 
@@ -816,17 +693,6 @@ Comparison: AsyncPG vs Other PostgreSQL Drivers
      - Stable
      - Experimental
      - Stable
-   * - Best For
-     - Async prod
-     - Sync+async
-     - Max speed
-     - Portability
-
-.. note::
-
-   **Recommendation**: Use AsyncPG for production async workloads. If you need both
-   sync and async in the same application, use Psycopg3. For Rust-based performance
-   characteristics and willing to deal with less maturity, try Psqlpy.
 
 Troubleshooting
 ===============

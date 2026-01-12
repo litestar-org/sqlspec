@@ -351,10 +351,82 @@ Enable request correlation tracking via ``extension_config``:
    # Queries will include correlation IDs in logs (header or generated UUID)
    # Format: [correlation_id=abc123] SELECT * FROM users
 
+Starlette Integration
+---------------------
+
+SQLSpec provides a plugin for Starlette applications with connection management, dependency injection, and correlation middleware.
+
+Basic Setup
+^^^^^^^^^^^
+
+.. code-block:: python
+
+   from starlette.applications import Starlette
+   from starlette.routing import Route
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.extensions.starlette import SQLSpecPlugin
+
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           connection_config={"dsn": "postgresql://localhost/mydb"},
+       )
+   )
+
+   app = Starlette(routes=[...])
+   plugin = SQLSpecPlugin(spec, app)
+
+Correlation Middleware
+^^^^^^^^^^^^^^^^^^^^^^
+
+Enable automatic correlation ID tracking:
+
+.. code-block:: python
+
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           connection_config={"dsn": "postgresql://localhost/mydb"},
+           extension_config={
+               "starlette": {
+                   "enable_correlation_middleware": True,
+                   "correlation_header": "x-request-id",
+                   "correlation_headers": ("x-trace-id",),
+                   "auto_trace_headers": True,
+               }
+           },
+       )
+   )
+
+The correlation middleware:
+
+- Extracts correlation IDs from request headers (x-request-id, traceparent, cloud trace headers)
+- Sets ``CorrelationContext`` for the request scope
+- Stores correlation ID in ``request.state.correlation_id``
+- Adds ``X-Correlation-ID`` header to responses
+- Generates a UUID if no correlation header is present
+
+Access the correlation ID in route handlers:
+
+.. code-block:: python
+
+   from starlette.requests import Request
+   from sqlspec.utils.correlation import CorrelationContext
+
+   async def my_handler(request: Request):
+       # From request state
+       correlation_id = request.state.correlation_id
+
+       # Or from context (works in any async function)
+       correlation_id = CorrelationContext.get()
+
+       return {"correlation_id": correlation_id}
+
 FastAPI Integration
 -------------------
 
-While SQLSpec doesn't have a dedicated FastAPI plugin, integration is straightforward using dependency injection.
+FastAPI uses the Starlette plugin with full feature parity.
 
 Basic Setup
 ^^^^^^^^^^^
@@ -362,32 +434,25 @@ Basic Setup
 .. code-block:: python
 
    from fastapi import FastAPI, Depends
-   from contextlib import asynccontextmanager
    from sqlspec import SQLSpec
    from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.extensions.fastapi import SQLSpecPlugin
    from sqlspec.driver import AsyncDriverAdapterBase
 
-   # Configure database
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
-           connection_config={
-               "dsn": "postgresql://localhost/mydb",
-               "min_size": 10,
-               "max_size": 20,
-           }
+           connection_config={"dsn": "postgresql://localhost/mydb"},
+           extension_config={
+               "fastapi": {
+                   "enable_correlation_middleware": True,
+               }
+           },
        )
    )
 
-   # Lifespan context manager
-   @asynccontextmanager
-   async def lifespan(app: FastAPI):
-       # Startup
-       yield
-       # Shutdown
-       await spec.close_all_pools()
-
-   app = FastAPI(lifespan=lifespan)
+   app = FastAPI()
+   plugin = SQLSpecPlugin(spec, app)
 
 Dependency Injection
 ^^^^^^^^^^^^^^^^^^^^
@@ -547,27 +612,88 @@ Middleware for Automatic Sessions
 Flask Integration
 -----------------
 
-Integrate SQLSpec with Flask using synchronous drivers.
+SQLSpec provides a plugin for Flask applications with automatic connection management and correlation middleware.
 
 Basic Setup
 ^^^^^^^^^^^
 
 .. code-block:: python
 
-   from flask import Flask, g
+   from flask import Flask
    from sqlspec import SQLSpec
    from sqlspec.adapters.sqlite import SqliteConfig
+   from sqlspec.extensions.flask import SQLSpecPlugin
+
+   spec = SQLSpec()
+   db = spec.add_config(
+       SqliteConfig(connection_config={"database": "app.db"})
+   )
 
    app = Flask(__name__)
+   plugin = SQLSpecPlugin(spec, app)
 
-   # Initialize SQLSpec
-   spec = SQLSpec()
-   db = spec.add_config(SqliteConfig(connection_config={"database": "app.db"}))
+The plugin automatically:
 
-Using Request Context
-^^^^^^^^^^^^^^^^^^^^^
+- Manages database connections per request
+- Handles cleanup on request teardown
+- Provides graceful shutdown
+
+Correlation Middleware
+^^^^^^^^^^^^^^^^^^^^^^
+
+Enable automatic correlation ID tracking:
 
 .. code-block:: python
+
+   spec = SQLSpec()
+   db = spec.add_config(
+       SqliteConfig(
+           connection_config={"database": "app.db"},
+           extension_config={
+               "flask": {
+                   "enable_correlation_middleware": True,
+                   "correlation_header": "x-request-id",
+                   "auto_trace_headers": True,
+               }
+           },
+       )
+   )
+
+   app = Flask(__name__)
+   plugin = SQLSpecPlugin(spec, app)
+
+The correlation middleware:
+
+- Extracts correlation IDs from request headers in ``before_request``
+- Stores in ``g.correlation_id`` and ``CorrelationContext``
+- Adds ``X-Correlation-ID`` header to responses in ``after_request``
+- Clears context in ``teardown_appcontext``
+
+Access the correlation ID in route handlers:
+
+.. code-block:: python
+
+   from flask import g
+   from sqlspec.utils.correlation import CorrelationContext
+
+   @app.route('/users/<int:user_id>')
+   def get_user(user_id):
+       # From Flask g object
+       correlation_id = g.correlation_id
+
+       # Or from context
+       correlation_id = CorrelationContext.get()
+
+       return {"user_id": user_id, "correlation_id": correlation_id}
+
+Manual Session Management
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more control, you can manage sessions manually:
+
+.. code-block:: python
+
+   from flask import g
 
    def get_db():
        if 'db' not in g:
@@ -580,7 +706,6 @@ Using Request Context
        if db is not None:
            db.__exit__(None, None, None)
 
-   # Use in routes
    @app.route('/users/<int:user_id>')
    def get_user(user_id):
        db = get_db()

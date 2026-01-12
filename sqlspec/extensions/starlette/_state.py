@@ -24,3 +24,7 @@ class SQLSpecConfigState:
     extra_commit_statuses: "set[int] | None"
     extra_rollback_statuses: "set[int] | None"
     disable_di: bool
+    enable_correlation_middleware: bool = False
+    correlation_header: str = "x-request-id"
+    correlation_headers: "tuple[str, ...] | None" = None
+    auto_trace_headers: bool = True

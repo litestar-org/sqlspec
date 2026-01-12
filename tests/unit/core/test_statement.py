@@ -683,6 +683,39 @@ def test_sql_where_method_with_expression() -> None:
     assert where_stmt._raw_sql != stmt._raw_sql
 
 
+def test_sql_order_by_method_compatibility() -> None:
+    """Test SQL.order_by() method creates new SQL with ORDER BY clause."""
+    stmt = SQL("SELECT * FROM users")
+    order_stmt = stmt.order_by("id")
+
+    assert order_stmt is not stmt
+
+    assert "ORDER BY" not in stmt._raw_sql
+
+    assert "ORDER BY" in order_stmt._raw_sql or "id" in order_stmt._raw_sql
+
+
+def test_sql_order_by_method_with_expression() -> None:
+    """Test SQL.order_by() method works with SQLGlot expressions."""
+    stmt = SQL("SELECT * FROM users")
+
+    order_stmt = stmt.order_by(exp.column("name").desc())
+
+    assert order_stmt is not stmt
+
+    assert order_stmt._raw_sql != stmt._raw_sql
+
+
+def test_sql_order_by_method_without_parsing() -> None:
+    """Test SQL.order_by() when parsing is disabled."""
+    config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_parsing=False)
+    stmt = SQL("SELECT * FROM users", statement_config=config)
+
+    order_stmt = stmt.order_by("id DESC")
+
+    assert "ORDER BY" in order_stmt._raw_sql or "DESC" in order_stmt._raw_sql
+
+
 def test_sql_filters_property_compatibility() -> None:
     """Test SQL.filters property returns copy of filters list."""
     stmt = SQL("SELECT * FROM users")
