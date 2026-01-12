@@ -13,7 +13,7 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
 )
-from sqlspec.adapters.cockroach_psycopg.core import CockroachRetryConfig, apply_driver_features, build_statement_config
+from sqlspec.adapters.cockroach_psycopg.core import CockroachPsycopgRetryConfig, apply_driver_features, build_statement_config
 from sqlspec.adapters.cockroach_psycopg.driver import (
     CockroachPsycopgAsyncDriver,
     CockroachPsycopgAsyncExceptionHandler,
@@ -178,7 +178,7 @@ class CockroachPsycopgSyncConfig(
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
-        _ = CockroachRetryConfig.from_features(driver_features)
+        _ = CockroachPsycopgRetryConfig.from_features(driver_features)
 
         super().__init__(
             connection_config=connection_config,
@@ -367,7 +367,7 @@ class CockroachPsycopgAsyncConfig(
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
-        _ = CockroachRetryConfig.from_features(driver_features)
+        _ = CockroachPsycopgRetryConfig.from_features(driver_features)
 
         super().__init__(
             connection_config=connection_config,

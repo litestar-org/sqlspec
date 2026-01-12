@@ -1,11 +1,10 @@
 """Base protocol for cloud log formatters."""
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 __all__ = ("CloudLogFormatter",)
 
 
-@runtime_checkable
 class CloudLogFormatter(Protocol):
     """Protocol for cloud-specific log formatting.
 

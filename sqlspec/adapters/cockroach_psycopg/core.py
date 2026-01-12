@@ -2,7 +2,7 @@
 
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.adapters.psycopg.core import apply_driver_features, build_statement_config, driver_profile
 from sqlspec.utils.type_guards import has_sqlstate
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 __all__ = (
-    "CockroachRetryConfig",
+    "CockroachPsycopgRetryConfig",
     "apply_driver_features",
     "build_statement_config",
     "calculate_backoff_seconds",
@@ -19,24 +19,30 @@ __all__ = (
     "is_retryable_error",
 )
 
+# Retry configuration defaults (module-level for mypyc compatibility)
+_DEFAULT_MAX_RETRIES: Final[int] = 10
+_DEFAULT_BASE_DELAY_MS: Final[float] = 50.0
+_DEFAULT_MAX_DELAY_MS: Final[float] = 5000.0
+_DEFAULT_ENABLE_LOGGING: Final[bool] = True
+
 
 @dataclass(frozen=True)
-class CockroachRetryConfig:
-    """CockroachDB transaction retry configuration."""
+class CockroachPsycopgRetryConfig:
+    """CockroachDB psycopg transaction retry configuration."""
 
-    max_retries: int = 10
-    base_delay_ms: float = 50.0
-    max_delay_ms: float = 5000.0
-    enable_logging: bool = True
+    max_retries: int = _DEFAULT_MAX_RETRIES
+    base_delay_ms: float = _DEFAULT_BASE_DELAY_MS
+    max_delay_ms: float = _DEFAULT_MAX_DELAY_MS
+    enable_logging: bool = _DEFAULT_ENABLE_LOGGING
 
     @classmethod
-    def from_features(cls, driver_features: "Mapping[str, Any]") -> "CockroachRetryConfig":
+    def from_features(cls, driver_features: "Mapping[str, Any]") -> "CockroachPsycopgRetryConfig":
         """Build retry config from driver feature mappings."""
         return cls(
-            max_retries=int(driver_features.get("max_retries", cls.max_retries)),
-            base_delay_ms=float(driver_features.get("retry_delay_base_ms", cls.base_delay_ms)),
-            max_delay_ms=float(driver_features.get("retry_delay_max_ms", cls.max_delay_ms)),
-            enable_logging=bool(driver_features.get("enable_retry_logging", True)),
+            max_retries=int(driver_features.get("max_retries", _DEFAULT_MAX_RETRIES)),
+            base_delay_ms=float(driver_features.get("retry_delay_base_ms", _DEFAULT_BASE_DELAY_MS)),
+            max_delay_ms=float(driver_features.get("retry_delay_max_ms", _DEFAULT_MAX_DELAY_MS)),
+            enable_logging=bool(driver_features.get("enable_retry_logging", _DEFAULT_ENABLE_LOGGING)),
         )
 
 
@@ -47,7 +53,7 @@ def is_retryable_error(error: BaseException) -> bool:
     return False
 
 
-def calculate_backoff_seconds(attempt: int, config: "CockroachRetryConfig") -> float:
+def calculate_backoff_seconds(attempt: int, config: "CockroachPsycopgRetryConfig") -> float:
     """Calculate exponential backoff delay in seconds."""
     base: float = config.base_delay_ms * (2**attempt)
     scale: int = 1000

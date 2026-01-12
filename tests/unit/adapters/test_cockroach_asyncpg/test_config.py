@@ -9,7 +9,7 @@ Tests cover:
 import pytest
 
 from sqlspec.adapters.cockroach_asyncpg.config import CockroachAsyncpgConfig, CockroachAsyncpgDriverFeatures
-from sqlspec.adapters.cockroach_asyncpg.core import CockroachRetryConfig
+from sqlspec.adapters.cockroach_asyncpg.core import CockroachAsyncpgRetryConfig
 
 
 @pytest.mark.xdist_group("cockroachdb")
@@ -31,7 +31,7 @@ class TestCockroachAsyncpgConfig:
     def test_retry_config_extraction(self) -> None:
         """Retry config should be extractable from driver features."""
         config = CockroachAsyncpgConfig(driver_features={"max_retries": 5, "retry_delay_base_ms": 100.0})
-        retry_config = CockroachRetryConfig.from_features(config.driver_features)
+        retry_config = CockroachAsyncpgRetryConfig.from_features(config.driver_features)
         assert retry_config.max_retries == 5
         assert retry_config.base_delay_ms == 100.0
 

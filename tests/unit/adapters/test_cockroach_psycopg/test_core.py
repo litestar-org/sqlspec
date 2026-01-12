@@ -1,23 +1,27 @@
 """Unit tests for CockroachDB psycopg core module.
 
 Tests cover:
-- CockroachRetryConfig dataclass and factory method
+- CockroachPsycopgRetryConfig dataclass and factory method
 - is_retryable_error() function for SQLSTATE 40001 detection
 - calculate_backoff_seconds() exponential backoff with jitter
 """
 
 import pytest
 
-from sqlspec.adapters.cockroach_psycopg.core import CockroachRetryConfig, calculate_backoff_seconds, is_retryable_error
+from sqlspec.adapters.cockroach_psycopg.core import (
+    CockroachPsycopgRetryConfig,
+    calculate_backoff_seconds,
+    is_retryable_error,
+)
 
 
 @pytest.mark.xdist_group("cockroachdb")
-class TestCockroachRetryConfig:
-    """Tests for CockroachRetryConfig dataclass."""
+class TestCockroachPsycopgRetryConfig:
+    """Tests for CockroachPsycopgRetryConfig dataclass."""
 
     def test_default_values(self) -> None:
         """Default config should have sensible retry defaults."""
-        config = CockroachRetryConfig()
+        config = CockroachPsycopgRetryConfig()
         assert config.max_retries == 10
         assert config.base_delay_ms == 50.0
         assert config.max_delay_ms == 5000.0
@@ -25,7 +29,7 @@ class TestCockroachRetryConfig:
 
     def test_custom_values(self) -> None:
         """Config should accept custom values."""
-        config = CockroachRetryConfig(max_retries=5, base_delay_ms=100.0, max_delay_ms=2000.0, enable_logging=False)
+        config = CockroachPsycopgRetryConfig(max_retries=5, base_delay_ms=100.0, max_delay_ms=2000.0, enable_logging=False)
         assert config.max_retries == 5
         assert config.base_delay_ms == 100.0
         assert config.max_delay_ms == 2000.0
@@ -33,7 +37,7 @@ class TestCockroachRetryConfig:
 
     def test_from_features_with_empty_dict(self) -> None:
         """from_features with empty dict should return defaults."""
-        config = CockroachRetryConfig.from_features({})
+        config = CockroachPsycopgRetryConfig.from_features({})
         assert config.max_retries == 10
         assert config.base_delay_ms == 50.0
         assert config.max_delay_ms == 5000.0
@@ -47,7 +51,7 @@ class TestCockroachRetryConfig:
             "retry_delay_max_ms": 1000.0,
             "enable_retry_logging": False,
         }
-        config = CockroachRetryConfig.from_features(features)
+        config = CockroachPsycopgRetryConfig.from_features(features)
         assert config.max_retries == 3
         assert config.base_delay_ms == 25.0
         assert config.max_delay_ms == 1000.0
@@ -56,14 +60,14 @@ class TestCockroachRetryConfig:
     def test_from_features_type_coercion(self) -> None:
         """from_features should coerce string values to appropriate types."""
         features = {"max_retries": "5", "retry_delay_base_ms": "100", "retry_delay_max_ms": "3000"}
-        config = CockroachRetryConfig.from_features(features)
+        config = CockroachPsycopgRetryConfig.from_features(features)
         assert config.max_retries == 5
         assert config.base_delay_ms == 100.0
         assert config.max_delay_ms == 3000.0
 
     def test_frozen_dataclass(self) -> None:
         """Config should be immutable (frozen dataclass)."""
-        config = CockroachRetryConfig()
+        config = CockroachPsycopgRetryConfig()
         with pytest.raises(AttributeError):
             config.max_retries = 5  # type: ignore[misc]
 
@@ -108,7 +112,7 @@ class TestCalculateBackoffSeconds:
 
     def test_first_attempt_base_delay(self) -> None:
         """First attempt (0) should use base delay with jitter."""
-        config = CockroachRetryConfig(base_delay_ms=100.0, max_delay_ms=5000.0)
+        config = CockroachPsycopgRetryConfig(base_delay_ms=100.0, max_delay_ms=5000.0)
         delay = calculate_backoff_seconds(0, config)
         # base = 100 * 2^0 = 100ms, with jitter up to 100ms more
         # So delay should be between 0.1s and 0.2s (100-200ms)
@@ -116,7 +120,7 @@ class TestCalculateBackoffSeconds:
 
     def test_exponential_growth(self) -> None:
         """Delays should grow exponentially with attempt number."""
-        config = CockroachRetryConfig(base_delay_ms=100.0, max_delay_ms=10000.0)
+        config = CockroachPsycopgRetryConfig(base_delay_ms=100.0, max_delay_ms=10000.0)
 
         # Run multiple times to account for jitter
         delays = []
@@ -140,7 +144,7 @@ class TestCalculateBackoffSeconds:
 
     def test_respects_max_delay(self) -> None:
         """Delay should not exceed max_delay_ms."""
-        config = CockroachRetryConfig(base_delay_ms=100.0, max_delay_ms=500.0)
+        config = CockroachPsycopgRetryConfig(base_delay_ms=100.0, max_delay_ms=500.0)
         # High attempt number would normally produce huge delay
         delay = calculate_backoff_seconds(10, config)
         # Should be capped at 500ms = 0.5s
@@ -148,14 +152,14 @@ class TestCalculateBackoffSeconds:
 
     def test_returns_seconds(self) -> None:
         """Delay should be returned in seconds, not milliseconds."""
-        config = CockroachRetryConfig(base_delay_ms=1000.0, max_delay_ms=5000.0)
+        config = CockroachPsycopgRetryConfig(base_delay_ms=1000.0, max_delay_ms=5000.0)
         delay = calculate_backoff_seconds(0, config)
         # 1000ms base with up to 1000ms jitter = max 2000ms = 2.0s
         assert delay <= 2.0
 
     def test_jitter_variation(self) -> None:
         """Multiple calls should produce different delays due to jitter."""
-        config = CockroachRetryConfig(base_delay_ms=100.0, max_delay_ms=5000.0)
+        config = CockroachPsycopgRetryConfig(base_delay_ms=100.0, max_delay_ms=5000.0)
         delays = [calculate_backoff_seconds(1, config) for _ in range(20)]
         # With jitter, we should see some variation
         unique_delays = set(delays)

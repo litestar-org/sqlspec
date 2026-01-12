@@ -14,7 +14,7 @@ from sqlspec.adapters.cockroach_psycopg.config import (
     CockroachPsycopgDriverFeatures,
     CockroachPsycopgSyncConfig,
 )
-from sqlspec.adapters.cockroach_psycopg.core import CockroachRetryConfig
+from sqlspec.adapters.cockroach_psycopg.core import CockroachPsycopgRetryConfig
 
 
 @pytest.mark.xdist_group("cockroachdb")
@@ -36,7 +36,7 @@ class TestCockroachPsycopgSyncConfig:
     def test_retry_config_extraction(self) -> None:
         """Retry config should be extractable from driver features."""
         config = CockroachPsycopgSyncConfig(driver_features={"max_retries": 5, "retry_delay_base_ms": 100.0})
-        retry_config = CockroachRetryConfig.from_features(config.driver_features)
+        retry_config = CockroachPsycopgRetryConfig.from_features(config.driver_features)
         assert retry_config.max_retries == 5
         assert retry_config.base_delay_ms == 100.0
 
@@ -112,7 +112,7 @@ class TestCockroachPsycopgAsyncConfig:
     def test_retry_config_extraction(self) -> None:
         """Retry config should be extractable from driver features."""
         config = CockroachPsycopgAsyncConfig(driver_features={"max_retries": 7, "retry_delay_base_ms": 75.0})
-        retry_config = CockroachRetryConfig.from_features(config.driver_features)
+        retry_config = CockroachPsycopgRetryConfig.from_features(config.driver_features)
         assert retry_config.max_retries == 7
         assert retry_config.base_delay_ms == 75.0
 
