@@ -23,8 +23,8 @@ async def asyncpg_vector_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncGe
     """Create asyncpg session with pgvector extension and test table."""
     try:
         await asyncpg_async_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
-    except Exception as e:
-        pytest.skip(f"pgvector extension missing: {e}")
+    except Exception:
+        pytest.skip("pgvector extension unavailable")
 
     try:
         await asyncpg_async_driver.execute_script(

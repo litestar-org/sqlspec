@@ -166,7 +166,7 @@ def adbc_duckdb_session(adbc_duckdb_config: "AdbcConfig") -> "Generator[AdbcDriv
             or "Failed to import connect function" in str(exc)
             or "Could not configure connection" in str(exc)
         ):
-            pytest.skip(f"DuckDB ADBC driver not available: {exc}")
+            pytest.skip("DuckDB ADBC driver unavailable")
         raise
 
 

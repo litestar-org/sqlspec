@@ -1,6 +1,6 @@
 """Unit tests for Psycopg pgvector type handlers."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -15,7 +15,12 @@ def test_register_pgvector_sync_with_pgvector_installed() -> None:
     from sqlspec.adapters.psycopg.type_converter import register_pgvector_sync
 
     mock_connection = MagicMock()
-    register_pgvector_sync(mock_connection)
+    # Mock the pgvector registration to avoid warnings with mock connections
+    with patch("sqlspec.adapters.psycopg.type_converter.importlib.import_module") as mock_import:
+        mock_pgvector = MagicMock()
+        mock_import.return_value = mock_pgvector
+        register_pgvector_sync(mock_connection)
+        mock_pgvector.register_vector.assert_called_once_with(mock_connection)
 
 
 def test_register_pgvector_sync_without_pgvector(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,7 +45,13 @@ async def test_register_pgvector_async_with_pgvector_installed() -> None:
     from sqlspec.adapters.psycopg.type_converter import register_pgvector_async
 
     mock_connection = AsyncMock()
-    await register_pgvector_async(mock_connection)
+    # Mock the pgvector registration to avoid warnings with mock connections
+    with patch("sqlspec.adapters.psycopg.type_converter.importlib.import_module") as mock_import:
+        mock_pgvector = MagicMock()
+        mock_pgvector.register_vector_async = AsyncMock()
+        mock_import.return_value = mock_pgvector
+        await register_pgvector_async(mock_connection)
+        mock_pgvector.register_vector_async.assert_called_once_with(mock_connection)
 
 
 async def test_register_pgvector_async_without_pgvector(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,9 +76,13 @@ def test_register_pgvector_sync_handles_registration_failure() -> None:
     from sqlspec.adapters.psycopg.type_converter import register_pgvector_sync
 
     mock_connection = MagicMock()
-    mock_connection.side_effect = Exception("Registration failed")
-
-    register_pgvector_sync(mock_connection)
+    # Mock the pgvector module to raise an exception
+    with patch("sqlspec.adapters.psycopg.type_converter.importlib.import_module") as mock_import:
+        mock_pgvector = MagicMock()
+        mock_pgvector.register_vector.side_effect = Exception("Registration failed")
+        mock_import.return_value = mock_pgvector
+        # Should not raise - errors are logged and swallowed
+        register_pgvector_sync(mock_connection)
 
 
 async def test_register_pgvector_async_handles_registration_failure() -> None:
@@ -78,6 +93,10 @@ async def test_register_pgvector_async_handles_registration_failure() -> None:
     from sqlspec.adapters.psycopg.type_converter import register_pgvector_async
 
     mock_connection = AsyncMock()
-    mock_connection.side_effect = Exception("Registration failed")
-
-    await register_pgvector_async(mock_connection)
+    # Mock the pgvector module to raise an exception
+    with patch("sqlspec.adapters.psycopg.type_converter.importlib.import_module") as mock_import:
+        mock_pgvector = MagicMock()
+        mock_pgvector.register_vector_async = AsyncMock(side_effect=Exception("Registration failed"))
+        mock_import.return_value = mock_pgvector
+        # Should not raise - errors are logged and swallowed
+        await register_pgvector_async(mock_connection)

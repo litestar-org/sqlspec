@@ -24,8 +24,8 @@ def bigquery_vector_session(bigquery_session: BigQueryDriver) -> Generator[BigQu
     try:
         try:
             bigquery_session.execute("SELECT EUCLIDEAN_DISTANCE([0.1, 0.2], [0.1, 0.2]) AS ok")
-        except Exception as exc:  # pragma: no cover - guard for emulator limitations
-            pytest.skip(f"BigQuery vector distance functions unavailable: {exc}")
+        except Exception:  # pragma: no cover - guard for emulator limitations
+            pytest.skip("BigQuery vector functions unavailable")
 
         bigquery_session.execute_script(
             f"""

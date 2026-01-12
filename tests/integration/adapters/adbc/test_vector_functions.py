@@ -26,8 +26,8 @@ def adbc_postgres_vector_session(adbc_sync_driver: AdbcDriver) -> Generator[Adbc
     """Create ADBC PostgreSQL session with pgvector extension and test table."""
     try:
         adbc_sync_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
-    except Exception as e:
-        pytest.skip(f"pgvector extension missing: {e}")
+    except Exception:
+        pytest.skip("pgvector extension unavailable")
 
     try:
         adbc_sync_driver.execute_script(

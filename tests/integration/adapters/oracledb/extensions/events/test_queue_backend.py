@@ -35,8 +35,8 @@ def _maybe_skip(reason: str) -> None:
 def _prepare_queue_table() -> None:
     try:
         import oracledb
-    except ImportError as error:  # pragma: no cover - optional dependency guard
-        _maybe_skip(f"oracledb missing: {error}")
+    except ImportError:  # pragma: no cover - optional dependency guard
+        _maybe_skip("oracledb unavailable")
 
     try:
         connection = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=_build_dsn())
@@ -90,8 +90,8 @@ def test_oracle_sync_event_channel_queue_fallback(tmp_path: "Path") -> None:
 
     try:
         _prepare_queue_table()
-    except SQLSpecError as error:  # pragma: no cover - service unavailable guard
-        _maybe_skip(f"Oracle unavailable: {error}")
+    except SQLSpecError:  # pragma: no cover - service unavailable guard
+        _maybe_skip("Oracle unavailable")
 
     config = OracleSyncConfig(
         connection_config={
@@ -130,8 +130,8 @@ async def test_oracle_async_event_channel_queue_fallback(tmp_path: "Path") -> No
 
     try:
         _prepare_queue_table()
-    except SQLSpecError as error:  # pragma: no cover - service unavailable guard
-        _maybe_skip(f"Oracle unavailable: {error}")
+    except SQLSpecError:  # pragma: no cover - service unavailable guard
+        _maybe_skip("Oracle unavailable")
 
     config = OracleAsyncConfig(
         connection_config={
