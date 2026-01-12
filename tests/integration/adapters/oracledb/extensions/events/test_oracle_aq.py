@@ -56,8 +56,8 @@ def oracle_aq_config(oracle_23ai_service: OracleService) -> Generator[OracleSync
                     """
                 )
             created = True
-        except Exception as error:  # pragma: no cover - privilege detection path
-            pytest.skip(f"Oracle AQ privileges missing: {error}")
+        except Exception:  # pragma: no cover - privilege detection path
+            pytest.skip("Oracle AQ privileges unavailable")
         yield config
     finally:
         if created:

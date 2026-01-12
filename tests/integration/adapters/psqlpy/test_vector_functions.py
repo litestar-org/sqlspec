@@ -24,8 +24,8 @@ async def psqlpy_vector_session(psqlpy_driver: PsqlpyDriver) -> AsyncGenerator[P
     """Create psqlpy session with pgvector extension and test table."""
     try:
         await psqlpy_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
-    except Exception as e:
-        pytest.skip(f"pgvector extension not available on server: {e}")
+    except Exception:
+        pytest.skip("pgvector extension unavailable")
 
     try:
         await psqlpy_driver.execute_script(

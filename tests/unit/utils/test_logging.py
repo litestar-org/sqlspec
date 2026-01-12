@@ -7,12 +7,14 @@ Covers logger configuration, structured formatting, and context tracking.
 import json
 import logging
 import threading
+from collections.abc import Iterator
 from contextvars import copy_context
 from io import StringIO
 from unittest.mock import Mock
 
 import pytest
 
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import (
     CorrelationIDFilter,
     StructuredFormatter,
@@ -371,257 +373,255 @@ def test_get_logger_different_loggers_independent() -> None:
     assert logger1.name != logger2.name
 
 
-class TestLogWithContext:
-    """Test cases for log_with_context function."""
+@pytest.fixture
+def log_context_logger() -> "Iterator[tuple[logging.Logger, StringIO]]":
+    """Set up a test logger and capture output."""
+    logger = logging.getLogger("test_context_logger")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
 
-    def setup_method(self) -> None:
-        """Set up test logger and capture output."""
-        self.logger = logging.getLogger("test_context_logger")
-        self.logger.setLevel(logging.DEBUG)
+    log_stream = StringIO()
+    handler = logging.StreamHandler(log_stream)
+    handler.setFormatter(StructuredFormatter())
+    logger.addHandler(handler)
 
-        self.logger.handlers.clear()
+    try:
+        yield logger, log_stream
+    finally:
+        logger.removeHandler(handler)
 
-        self.log_stream = StringIO()
-        self.handler = logging.StreamHandler(self.log_stream)
-        self.handler.setFormatter(StructuredFormatter())
-        self.logger.addHandler(self.handler)
 
-    def teardown_method(self) -> None:
-        """Clean up after each test."""
-        self.logger.removeHandler(self.handler)
+def test_log_with_extra_fields(log_context_logger: tuple[logging.Logger, StringIO]) -> None:
+    """Test logging with extra context fields."""
+    logger, log_stream = log_context_logger
+    log_with_context(logger, logging.INFO, "Test message", user_id=123, action="login", duration=1.5)
 
-    def test_log_with_extra_fields(self) -> None:
-        """Test logging with extra context fields."""
-        log_with_context(self.logger, logging.INFO, "Test message", user_id=123, action="login", duration=1.5)
+    log_output = log_stream.getvalue()
+    parsed = json.loads(log_output.strip())
 
-        log_output = self.log_stream.getvalue()
-        parsed = json.loads(log_output.strip())
+    assert parsed["message"] == "Test message"
+    assert parsed["level"] == "INFO"
+    assert parsed["user_id"] == 123
+    assert parsed["action"] == "login"
+    assert parsed["duration"] == 1.5
 
-        assert parsed["message"] == "Test message"
-        assert parsed["level"] == "INFO"
-        assert parsed["user_id"] == 123
-        assert parsed["action"] == "login"
-        assert parsed["duration"] == 1.5
 
-    def test_log_with_correlation_id_and_extra(self) -> None:
-        """Test logging with both correlation ID and extra fields."""
-        set_correlation_id("context-test")
+def test_log_with_correlation_id_and_extra(log_context_logger: tuple[logging.Logger, StringIO]) -> None:
+    """Test logging with both correlation ID and extra fields."""
+    logger, log_stream = log_context_logger
+    set_correlation_id("context-test")
+
+    log_with_context(logger, logging.WARNING, "Warning with context", request_id="req-123", endpoint="/api/users")
+
+    log_output = log_stream.getvalue()
+    parsed = json.loads(log_output.strip())
+
+    assert parsed["message"] == "Warning with context"
+    assert parsed["level"] == "WARNING"
+    assert parsed["correlation_id"] == "context-test"
+    assert parsed["request_id"] == "req-123"
+    assert parsed["endpoint"] == "/api/users"
+
+
+def test_log_without_extra_fields(log_context_logger: tuple[logging.Logger, StringIO]) -> None:
+    """Test logging without extra fields."""
+    logger, log_stream = log_context_logger
+    log_with_context(logger, logging.ERROR, "Simple error message")
+
+    log_output = log_stream.getvalue()
+    parsed = json.loads(log_output.strip())
+
+    assert parsed["message"] == "Simple error message"
+    assert parsed["level"] == "ERROR"
+
+
+@pytest.mark.parametrize("log_level", [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL])
+def test_log_with_different_levels(log_context_logger: tuple[logging.Logger, StringIO], log_level: int) -> None:
+    """Test log_with_context with different log levels."""
+    logger, log_stream = log_context_logger
+    level_name = logging.getLevelName(log_level)
+
+    log_with_context(logger, log_level, f"Message at {level_name} level", level_test=True)
+
+    log_output = log_stream.getvalue()
+    parsed = json.loads(log_output.strip())
+
+    assert parsed["level"] == level_name
+    assert parsed["message"] == f"Message at {level_name} level"
+    assert parsed["level_test"] is True
+
+
+def test_complete_structured_logging_flow() -> None:
+    """Test complete structured logging workflow."""
+    correlation_id_var.set(None)
+
+    logger = logging.getLogger("integration_test")
+    logger.setLevel(logging.INFO)
+
+    log_stream = StringIO()
+    handler = logging.StreamHandler(log_stream)
+    handler.setFormatter(StructuredFormatter())
+    logger.addHandler(handler)
+
+    try:
+        set_correlation_id("integration-flow-123")
+
+        logger.info("Starting operation")
+
+        log_with_context(logger, logging.INFO, "Processing user data", user_id=456, operation="update")
+
+        try:
+            raise ValueError("Simulated error")
+        except ValueError:
+            logger.error("Operation failed", exc_info=True)
+
+        log_output = log_stream.getvalue()
+        log_lines = [line.strip() for line in log_output.strip().split("\n") if line.strip()]
+
+        assert len(log_lines) == 3
+
+        logs = [json.loads(line) for line in log_lines]
+
+        assert logs[0]["message"] == "Starting operation"
+        assert logs[0]["correlation_id"] == "integration-flow-123"
+
+        assert logs[1]["message"] == "Processing user data"
+        assert logs[1]["correlation_id"] == "integration-flow-123"
+        assert logs[1]["user_id"] == 456
+        assert logs[1]["operation"] == "update"
+
+        assert logs[2]["message"] == "Operation failed"
+        assert logs[2]["correlation_id"] == "integration-flow-123"
+        assert "exception" in logs[2]
+        assert "ValueError: Simulated error" in logs[2]["exception"]
+
+    finally:
+        logger.removeHandler(handler)
+
+
+def test_logger_hierarchy_and_filtering() -> None:
+    """Test logger hierarchy with correlation filtering."""
+    parent_logger = get_logger("parent")
+    child_logger = get_logger("parent.child")
+
+    parent_filters = [f for f in parent_logger.filters if isinstance(f, CorrelationIDFilter)]
+    child_filters = [f for f in child_logger.filters if isinstance(f, CorrelationIDFilter)]
+
+    assert len(parent_filters) >= 1
+    assert len(child_filters) >= 1
+
+
+def test_concurrent_logging_with_correlation_ids() -> None:
+    """Test concurrent logging maintains proper correlation context."""
+    import concurrent.futures
+
+    log_stream = StringIO()
+    logger = logging.getLogger("concurrent_test")
+    logger.setLevel(logging.INFO)
+
+    handler = logging.StreamHandler(log_stream)
+    handler.setFormatter(StructuredFormatter())
+    logger.addHandler(handler)
+
+    def worker_task(worker_id: int) -> None:
+        set_correlation_id(f"worker-{worker_id}")
 
         log_with_context(
-            self.logger, logging.WARNING, "Warning with context", request_id="req-123", endpoint="/api/users"
+            logger, logging.INFO, f"Worker {worker_id} processing", worker_id=worker_id, task="concurrent_test"
         )
 
-        log_output = self.log_stream.getvalue()
-        parsed = json.loads(log_output.strip())
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(worker_task, i) for i in range(10)]
 
-        assert parsed["message"] == "Warning with context"
-        assert parsed["level"] == "WARNING"
-        assert parsed["correlation_id"] == "context-test"
-        assert parsed["request_id"] == "req-123"
-        assert parsed["endpoint"] == "/api/users"
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
 
-    def test_log_without_extra_fields(self) -> None:
-        """Test logging without extra fields."""
-        log_with_context(self.logger, logging.ERROR, "Simple error message")
+        log_output = log_stream.getvalue()
+        log_lines = [line.strip() for line in log_output.strip().split("\n") if line.strip()]
+        logs = [json.loads(line) for line in log_lines if line]
 
-        log_output = self.log_stream.getvalue()
-        parsed = json.loads(log_output.strip())
+        assert len(logs) == 10
 
-        assert parsed["message"] == "Simple error message"
-        assert parsed["level"] == "ERROR"
+        for log_entry in logs:
+            worker_id = log_entry["worker_id"]
+            expected_correlation_id = f"worker-{worker_id}"
+            assert log_entry["correlation_id"] == expected_correlation_id
+            assert log_entry["message"] == f"Worker {worker_id} processing"
 
-    @pytest.mark.parametrize(
-        "log_level", [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL]
+    finally:
+        logger.removeHandler(handler)
+
+
+def test_formatter_with_none_values() -> None:
+    """Test formatter handles None values correctly."""
+    formatter = StructuredFormatter()
+    record = logging.LogRecord(
+        name="test",
+        level=logging.INFO,
+        pathname="/path/to/file.py",
+        lineno=10,
+        msg="Test message",
+        args=(),
+        exc_info=None,
     )
-    def test_log_with_different_levels(self, log_level: int) -> None:
-        """Test log_with_context with different log levels."""
-        level_name = logging.getLevelName(log_level)
+    setattr(record, "name", None)
+    setattr(record, "module", None)
+    setattr(record, "funcName", None)
 
-        log_with_context(self.logger, log_level, f"Message at {level_name} level", level_test=True)
+    result = formatter.format(record)
+    parsed = json.loads(result)
 
-        log_output = self.log_stream.getvalue()
-        parsed = json.loads(log_output.strip())
-
-        assert parsed["level"] == level_name
-        assert parsed["message"] == f"Message at {level_name} level"
-        assert parsed["level_test"] is True
+    assert parsed["logger"] is None
+    assert parsed["module"] is None
+    assert parsed["function"] is None
 
 
-class TestIntegrationScenarios:
-    """Integration test scenarios combining multiple logging features."""
+def test_filter_with_malformed_record() -> None:
+    """Test filter handles malformed log records."""
+    filter_obj = CorrelationIDFilter()
 
-    def setup_method(self) -> None:
-        """Set up integration test environment."""
-        correlation_id_var.set(None)
+    record = Mock()
 
-    def test_complete_structured_logging_flow(self) -> None:
-        """Test complete structured logging workflow."""
-
-        logger = logging.getLogger("integration_test")
-        logger.setLevel(logging.INFO)
-
-        log_stream = StringIO()
-        handler = logging.StreamHandler(log_stream)
-        handler.setFormatter(StructuredFormatter())
-        logger.addHandler(handler)
-
-        try:
-            set_correlation_id("integration-flow-123")
-
-            logger.info("Starting operation")
-
-            log_with_context(logger, logging.INFO, "Processing user data", user_id=456, operation="update")
-
-            try:
-                raise ValueError("Simulated error")
-            except ValueError:
-                logger.error("Operation failed", exc_info=True)
-
-            log_output = log_stream.getvalue()
-            log_lines = [line.strip() for line in log_output.strip().split("\n") if line.strip()]
-
-            assert len(log_lines) == 3
-
-            logs = [json.loads(line) for line in log_lines]
-
-            assert logs[0]["message"] == "Starting operation"
-            assert logs[0]["correlation_id"] == "integration-flow-123"
-
-            assert logs[1]["message"] == "Processing user data"
-            assert logs[1]["correlation_id"] == "integration-flow-123"
-            assert logs[1]["user_id"] == 456
-            assert logs[1]["operation"] == "update"
-
-            assert logs[2]["message"] == "Operation failed"
-            assert logs[2]["correlation_id"] == "integration-flow-123"
-            assert "exception" in logs[2]
-            assert "ValueError: Simulated error" in logs[2]["exception"]
-
-        finally:
-            logger.removeHandler(handler)
-
-    def test_logger_hierarchy_and_filtering(self) -> None:
-        """Test logger hierarchy with correlation filtering."""
-
-        parent_logger = get_logger("parent")
-        child_logger = get_logger("parent.child")
-
-        parent_filters = [f for f in parent_logger.filters if isinstance(f, CorrelationIDFilter)]
-        child_filters = [f for f in child_logger.filters if isinstance(f, CorrelationIDFilter)]
-
-        assert len(parent_filters) >= 1
-        assert len(child_filters) >= 1
-
-    def test_concurrent_logging_with_correlation_ids(self) -> None:
-        """Test concurrent logging maintains proper correlation context."""
-        import concurrent.futures
-
-        log_stream = StringIO()
-        logger = logging.getLogger("concurrent_test")
-        logger.setLevel(logging.INFO)
-
-        handler = logging.StreamHandler(log_stream)
-        handler.setFormatter(StructuredFormatter())
-        logger.addHandler(handler)
-
-        def worker_task(worker_id: int) -> None:
-            set_correlation_id(f"worker-{worker_id}")
-
-            log_with_context(
-                logger, logging.INFO, f"Worker {worker_id} processing", worker_id=worker_id, task="concurrent_test"
-            )
-
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                futures = [executor.submit(worker_task, i) for i in range(10)]
-
-                for future in concurrent.futures.as_completed(futures):
-                    future.result()
-
-            log_output = log_stream.getvalue()
-            log_lines = [line.strip() for line in log_output.strip().split("\n") if line.strip()]
-            logs = [json.loads(line) for line in log_lines if line]
-
-            assert len(logs) == 10
-
-            for log_entry in logs:
-                worker_id = log_entry["worker_id"]
-                expected_correlation_id = f"worker-{worker_id}"
-                assert log_entry["correlation_id"] == expected_correlation_id
-                assert log_entry["message"] == f"Worker {worker_id} processing"
-
-        finally:
-            logger.removeHandler(handler)
+    result = filter_obj.filter(record)
+    assert result is True
 
 
-class TestEdgeCases:
-    """Test edge cases and error conditions."""
+def test_get_logger_with_empty_name() -> None:
+    """Test get_logger with empty string name."""
+    logger = get_logger("")
+    assert logger.name == "sqlspec."
 
-    def test_formatter_with_none_values(self) -> None:
-        """Test formatter handles None values correctly."""
-        formatter = StructuredFormatter()
-        record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="/path/to/file.py",
-            lineno=10,
-            msg="Test message",
-            args=(),
-            exc_info=None,
-        )
-        record.name = None  # pyright: ignore
-        record.module = None  # pyright: ignore
-        record.funcName = None  # pyright: ignore
 
-        result = formatter.format(record)
-        parsed = json.loads(result)
+def test_correlation_id_with_special_characters() -> None:
+    """Test correlation ID with special characters."""
+    special_id = "test-id-with-special!@#$%"
+    set_correlation_id(special_id)
 
-        assert parsed["logger"] is None
-        assert parsed["module"] is None
-        assert parsed["function"] is None
+    formatter = StructuredFormatter()
+    record = logging.LogRecord("test", logging.INFO, "/path", 1, "msg", (), None)
+    record.module = "test"
+    record.funcName = "test"
 
-    def test_filter_with_malformed_record(self) -> None:
-        """Test filter handles malformed log records."""
-        filter_obj = CorrelationIDFilter()
+    result = formatter.format(record)
+    parsed = json.loads(result)
 
-        record = Mock()
+    assert parsed["correlation_id"] == special_id
 
-        result = filter_obj.filter(record)
-        assert result is True
 
-    def test_get_logger_with_empty_name(self) -> None:
-        """Test get_logger with empty string name."""
-        logger = get_logger("")
-        assert logger.name == "sqlspec."
+def test_unicode_in_log_messages() -> None:
+    """Test logging with Unicode characters."""
+    unicode_message = "Test message with unicode: cafe"
 
-    def test_correlation_id_with_special_characters(self) -> None:
-        """Test correlation ID with special characters."""
-        special_id = "test-id-with-special!@#$%"
-        set_correlation_id(special_id)
+    formatter = StructuredFormatter()
+    record = logging.LogRecord("test", logging.INFO, "/path", 1, unicode_message, (), None)
+    record.module = "test"
+    record.funcName = "test"
 
-        formatter = StructuredFormatter()
-        record = logging.LogRecord("test", logging.INFO, "/path", 1, "msg", (), None)
-        record.module = "test"
-        record.funcName = "test"
+    result = formatter.format(record)
+    parsed = json.loads(result)
 
-        result = formatter.format(record)
-        parsed = json.loads(result)
-
-        assert parsed["correlation_id"] == special_id
-
-    def test_unicode_in_log_messages(self) -> None:
-        """Test logging with Unicode characters."""
-        unicode_message = "Test message with unicode: 你好世界 🌍 café"
-
-        formatter = StructuredFormatter()
-        record = logging.LogRecord("test", logging.INFO, "/path", 1, unicode_message, (), None)
-        record.module = "test"
-        record.funcName = "test"
-
-        result = formatter.format(record)
-        parsed = json.loads(result)
-
-        assert parsed["message"] == unicode_message
+    assert parsed["message"] == unicode_message
 
 
 def test_module_exports() -> None:
@@ -660,3 +660,46 @@ def test_correlation_id_formats(correlation_id: str) -> None:
         assert parsed["correlation_id"] == correlation_id
     else:
         assert parsed.get("correlation_id") is None
+
+
+def test_structured_formatter_includes_logging_extra_fields() -> None:
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(StructuredFormatter())
+
+    logger = get_logger("tests.logging.extra")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.addHandler(handler)
+
+    try:
+        with CorrelationContext.context("cid-123"):
+            logger.info("hello", extra={"foo": "bar"})
+    finally:
+        logger.removeHandler(handler)
+
+    payload = json.loads(stream.getvalue().strip())
+    assert payload["message"] == "hello"
+    assert payload["foo"] == "bar"
+    assert payload["correlation_id"] == "cid-123"
+
+
+def test_log_with_context_preserves_source_location_and_fields() -> None:
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(StructuredFormatter())
+
+    logger = get_logger("tests.logging.context")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.addHandler(handler)
+
+    try:
+        log_with_context(logger, logging.INFO, "event.test", driver="Dummy")
+    finally:
+        logger.removeHandler(handler)
+
+    payload = json.loads(stream.getvalue().strip())
+    assert payload["message"] == "event.test"
+    assert payload["driver"] == "Dummy"
+    assert payload["line"] != 0

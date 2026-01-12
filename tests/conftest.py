@@ -93,10 +93,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip_adbc)
             continue
         if (
-            "tests/unit/test_adapters/" in item_path
-            or "tests/unit/test_driver/" in item_path
-            or item_path.endswith("tests/unit/test_config/test_storage_capabilities.py")
-            or item_path.endswith("tests/unit/test_observability.py")
+            "tests/unit/adapters/" in item_path
+            or "tests/unit/driver/" in item_path
+            or item_path.endswith("tests/unit/config/test_storage_capabilities.py")
+            or "tests/unit/observability/" in item_path
         ):
             item.add_marker(skip_compiled)
             continue

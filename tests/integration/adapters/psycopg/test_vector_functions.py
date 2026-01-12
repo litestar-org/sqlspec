@@ -25,8 +25,8 @@ def psycopg_vector_session(psycopg_sync_config: PsycopgSyncConfig) -> Generator[
     with psycopg_sync_config.provide_session() as session:
         try:
             session.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
-        except Exception as e:
-            pytest.skip(f"pgvector extension not available on server: {e}")
+        except Exception:
+            pytest.skip("pgvector extension unavailable")
 
         try:
             session.execute_script(

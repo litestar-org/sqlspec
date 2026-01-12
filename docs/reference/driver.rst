@@ -62,26 +62,6 @@ Asynchronous Driver
    - ``rollback_transaction()`` - Rollback a transaction (async)
    - ``close()`` - Close the connection (async)
 
-Driver Mixins
-=============
-
-.. currentmodule:: sqlspec.driver.mixins
-
-.. automodule:: sqlspec.driver.mixins.query
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: sqlspec.driver.mixins.result
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: sqlspec.driver.mixins.parameters
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Transaction Management
 ======================
 
@@ -92,16 +72,6 @@ Both sync and async drivers support transaction context managers:
    # Async transactions
           await driver.execute("INSERT INTO users VALUES (?, ?)", "Bob", 25)
        await driver.execute("UPDATE accounts SET balance = balance - 50 WHERE user = ?", "Bob")
-
-Connection Pooling
-==================
-
-.. currentmodule:: sqlspec.driver
-
-.. automodule:: sqlspec.driver
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 Data Dictionary
 ===============
@@ -121,21 +91,6 @@ The Data Dictionary API provides standardized introspection capabilities across 
    :show-inheritance:
 
 .. autoclass:: SyncDataDictionaryBase
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: ForeignKeyMetadata
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: ColumnMetadata
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: IndexMetadata
    :members:
    :undoc-members:
    :show-inheritance:
