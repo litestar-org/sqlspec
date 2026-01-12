@@ -1771,7 +1771,7 @@ def test_converted_parameters_processor_list_output(processor: ParameterProcesso
 
 def test_converted_parameters_transformers_null_pruning(processor: ParameterProcessor) -> None:
     """Test replace_null_parameters_with_literals returns ConvertedParameters."""
-    config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+    _config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
     sql = "SELECT * FROM table WHERE id = ? AND name = ?"
     parameters = [1, None]
 
@@ -1779,7 +1779,7 @@ def test_converted_parameters_transformers_null_pruning(processor: ParameterProc
     expression = sqlglot.parse_one(sql, dialect="postgres")
 
     # Test null pruning
-    transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, parameters)
+    _transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, parameters)
 
     # Should return concrete type - list or tuple
     assert transformed_params is not None
@@ -1818,7 +1818,7 @@ def test_converted_parameters_is_many_handling(converter: ParameterConverter) ->
     sql = "INSERT INTO table (id, name) VALUES (?, ?)"
     parameters = [[1, "test1"], [2, "test2"]]
 
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    _converted_sql, converted_params = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.QMARK, is_many=True
     )
 
