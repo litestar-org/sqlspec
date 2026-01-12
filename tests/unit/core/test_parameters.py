@@ -1581,3 +1581,307 @@ def test_parameter_processor_duplicate_handling(processor: ParameterProcessor) -
     assert len(processed_params) == 2
     assert "value1" in processed_params
     assert "value2" in processed_params
+
+
+# ============================================================================
+# Type Narrowing Tests - Testing new ConvertedParameters type aliases
+# ============================================================================
+
+
+def test_converted_parameters_type_narrowing_none(converter: ParameterConverter) -> None:
+    """Test that None parameters return None (ConvertedParameters type)."""
+    sql = "SELECT * FROM table"
+    parameters = None
+
+    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
+
+    # Should return None for None input
+    assert converted_params is None
+
+
+def test_converted_parameters_type_narrowing_empty_dict(converter: ParameterConverter) -> None:
+    """Test that empty dict parameters return empty dict (ConvertedParameters type)."""
+    sql = "SELECT * FROM table WHERE id = :id"
+    parameters: dict[str, object] = {}
+    param_info = converter.validator.extract_parameters(sql)
+
+    # Use _convert_parameter_format directly to test empty dict handling
+    converted_params = converter._convert_parameter_format(  # pyright: ignore
+        parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
+    )
+
+    # Should return empty dict for empty dict input
+    assert converted_params == {}
+    assert isinstance(converted_params, dict)
+
+
+def test_converted_parameters_type_narrowing_empty_list(converter: ParameterConverter) -> None:
+    """Test that empty list parameters return empty list (ConvertedParameters type)."""
+    sql = "SELECT * FROM table WHERE id = ?"
+    parameters: list[object] = []
+    param_info = converter.validator.extract_parameters(sql)
+
+    # Use _convert_parameter_format directly to test empty list handling
+    converted_params = converter._convert_parameter_format(  # pyright: ignore
+        parameters, param_info, ParameterStyle.QMARK, parameters, preserve_parameter_format=False
+    )
+
+    # Should return empty list for empty list input
+    assert converted_params == []
+    assert isinstance(converted_params, list)
+
+
+def test_converted_parameters_type_narrowing_dict_output(converter: ParameterConverter) -> None:
+    """Test that dict parameters return dict[str, Any] (NamedParameterOutput type)."""
+    sql = "SELECT * FROM table WHERE id = :id AND name = :name"
+    parameters = {"id": 1, "name": "test"}
+
+    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NAMED_COLON)
+
+    # Should return dict for named parameters
+    assert isinstance(converted_params, dict)
+    assert converted_params == {"id": 1, "name": "test"}
+    # Type should be exactly dict, not Mapping
+    assert type(converted_params) is dict
+
+
+def test_converted_parameters_type_narrowing_list_output(converter: ParameterConverter) -> None:
+    """Test that list parameters return list[Any] (PositionalParameterOutput type)."""
+    sql = "SELECT * FROM table WHERE id = ? AND name = ?"
+    parameters = [1, "test"]
+
+    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
+
+    # Should return list for positional parameters
+    assert isinstance(converted_params, list)
+    assert converted_params == [1, "test"]
+    # Type should be exactly list, not Sequence
+    assert type(converted_params) is list
+
+
+def test_converted_parameters_type_narrowing_tuple_output(converter: ParameterConverter) -> None:
+    """Test that tuple parameters return tuple[Any, ...] (PositionalParameterOutput type)."""
+    sql = "SELECT * FROM table WHERE id = ? AND name = ?"
+    parameters = (1, "test")
+
+    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
+
+    # Should return tuple for positional parameters when preserving format
+    assert isinstance(converted_params, tuple)
+    assert converted_params == (1, "test")
+    # Type should be exactly tuple, not Sequence
+    assert type(converted_params) is tuple
+
+
+def test_converted_parameters_type_narrowing_static_style(converter: ParameterConverter) -> None:
+    """Test that static style returns None (ConvertedParameters type)."""
+    sql = "SELECT * FROM table WHERE id = :id"
+    parameters = {"id": 1}
+
+    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
+
+    # Should return None for static style (parameters embedded in SQL)
+    assert converted_params is None
+    assert "1" in converted_sql  # Parameter should be embedded
+
+
+def test_positional_parameter_output_type_narrowing(converter: ParameterConverter) -> None:
+    """Test _preserve_original_format returns PositionalParameterOutput."""
+    param_values = [1, 2, 3]
+
+    # Test with tuple original
+    result_tuple = converter._preserve_original_format(param_values, (1, 2, 3))  # pyright: ignore
+    assert isinstance(result_tuple, tuple)
+    assert result_tuple == (1, 2, 3)
+
+    # Test with list original
+    result_list = converter._preserve_original_format(param_values, [1, 2, 3])  # pyright: ignore
+    assert isinstance(result_list, list)
+    assert result_list == [1, 2, 3]
+
+    # Test with dict original (should return tuple)
+    result_dict = converter._preserve_original_format(param_values, {"a": 1})  # pyright: ignore
+    assert isinstance(result_dict, tuple)
+    assert result_dict == (1, 2, 3)
+
+
+def test_named_parameter_output_type_narrowing(converter: ParameterConverter) -> None:
+    """Test _convert_sequence_to_dict returns NamedParameterOutput."""
+    sql = "SELECT * FROM table WHERE id = :id AND name = :name"
+    param_info = converter.validator.extract_parameters(sql)
+    parameters = [1, "test"]
+
+    result = converter._convert_sequence_to_dict(parameters, param_info)  # pyright: ignore
+
+    # Should return dict[str, Any]
+    assert isinstance(result, dict)
+    assert type(result) is dict
+    assert result == {"id": 1, "name": "test"}
+
+
+def test_converted_parameters_processor_none_handling(processor: ParameterProcessor) -> None:
+    """Test ParameterProcessor handles None parameters correctly."""
+    config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+    sql = "SELECT * FROM table"
+    parameters = None
+
+    result = processor.process(sql, parameters, config)
+
+    # Should return None for None parameters
+    assert result.parameters is None
+
+
+def test_converted_parameters_processor_empty_dict_handling(processor: ParameterProcessor) -> None:
+    """Test ParameterProcessor handles empty dict correctly."""
+    config = ParameterStyleConfig(default_parameter_style=ParameterStyle.NAMED_COLON)
+    sql = "SELECT * FROM table"
+    parameters: dict[str, object] = {}
+
+    result = processor.process(sql, parameters, config)
+
+    # Should return empty dict for empty dict
+    assert result.parameters == {}
+    assert isinstance(result.parameters, dict)
+
+
+def test_converted_parameters_processor_dict_output(processor: ParameterProcessor) -> None:
+    """Test ParameterProcessor returns dict[str, Any] for named parameters."""
+    config = ParameterStyleConfig(default_parameter_style=ParameterStyle.NAMED_COLON)
+    sql = "SELECT * FROM table WHERE id = :id"
+    parameters = {"id": 1}
+
+    result = processor.process(sql, parameters, config)
+
+    # Should return dict
+    assert isinstance(result.parameters, dict)
+    assert type(result.parameters) is dict
+
+
+def test_converted_parameters_processor_list_output(processor: ParameterProcessor) -> None:
+    """Test ParameterProcessor returns list[Any] for positional parameters."""
+    config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK, preserve_parameter_format=False)
+    sql = "SELECT * FROM table WHERE id = ?"
+    parameters = [1]
+
+    result = processor.process(sql, parameters, config)
+
+    # Should return list or tuple
+    assert isinstance(result.parameters, (list, tuple))
+
+
+def test_converted_parameters_transformers_null_pruning(processor: ParameterProcessor) -> None:
+    """Test replace_null_parameters_with_literals returns ConvertedParameters."""
+    config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+    sql = "SELECT * FROM table WHERE id = ? AND name = ?"
+    parameters = [1, None]
+
+    # Parse SQL to get expression
+    expression = sqlglot.parse_one(sql, dialect="postgres")
+
+    # Test null pruning
+    transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, parameters)
+
+    # Should return concrete type - list or tuple
+    assert transformed_params is not None
+    assert isinstance(transformed_params, (list, tuple))
+    # Should have removed the None parameter
+    assert len(transformed_params) == 1
+    assert transformed_params[0] == 1
+
+
+def test_converted_parameters_transformers_none_input(processor: ParameterProcessor) -> None:
+    """Test replace_null_parameters_with_literals handles None input."""
+    expression = sqlglot.parse_one("SELECT * FROM table", dialect="postgres")
+
+    # Test with None parameters
+    _transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, None)
+
+    # Should return None for None input
+    assert transformed_params is None
+
+
+def test_converted_parameters_transformers_empty_dict(processor: ParameterProcessor) -> None:
+    """Test replace_null_parameters_with_literals handles empty dict."""
+    expression = sqlglot.parse_one("SELECT * FROM table", dialect="postgres")
+    parameters: dict[str, object] = {}
+
+    # Test with empty dict
+    _transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, parameters)
+
+    # Should return dict for empty dict
+    assert transformed_params == {}
+    assert isinstance(transformed_params, dict)
+
+
+def test_converted_parameters_is_many_handling(converter: ParameterConverter) -> None:
+    """Test is_many parameter handling with type narrowing."""
+    sql = "INSERT INTO table (id, name) VALUES (?, ?)"
+    parameters = [[1, "test1"], [2, "test2"]]
+
+    converted_sql, converted_params = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.QMARK, is_many=True
+    )
+
+    # Should return list of parameters
+    assert isinstance(converted_params, list)
+    assert len(converted_params) == 2
+    assert all(isinstance(p, list) for p in converted_params)
+
+
+def test_converted_parameters_dict_to_positional_conversion(converter: ParameterConverter) -> None:
+    """Test conversion from dict to positional returns PositionalParameterOutput."""
+    sql = "SELECT * FROM table WHERE id = :id AND name = :name"
+    parameters = {"id": 1, "name": "test"}
+
+    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
+
+    # Should return list or tuple (PositionalParameterOutput)
+    assert isinstance(converted_params, (list, tuple))
+    assert len(converted_params) == 2
+
+
+def test_converted_parameters_sequence_to_named_conversion(converter: ParameterConverter) -> None:
+    """Test conversion from sequence to named returns NamedParameterOutput."""
+    sql = "SELECT * FROM table WHERE id = :id AND name = :name"
+    parameters = [1, "test"]
+
+    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NAMED_COLON)
+
+    # Should return dict (NamedParameterOutput)
+    assert isinstance(converted_params, dict)
+    assert type(converted_params) is dict
+
+
+def test_converted_parameters_fallback_to_none(converter: ParameterConverter) -> None:
+    """Test that non-standard parameters return None."""
+    sql = "SELECT * FROM table WHERE id = :id"
+    # Pass a non-standard parameter type
+    parameters = "invalid"
+    param_info = converter.validator.extract_parameters(sql)
+
+    # Use _convert_parameter_format directly
+    converted_params = converter._convert_parameter_format(
+        parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
+    )
+
+    # Should return None for non-standard parameters
+    assert converted_params is None
+
+
+def test_converted_parameters_processor_coercion(processor: ParameterProcessor) -> None:
+    """Test that type coercion preserves ConvertedParameters type."""
+
+    def custom_coercion(value: Any) -> str:
+        return f"coerced:{value}"
+
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK, type_coercion_map={int: custom_coercion}
+    )
+    sql = "SELECT * FROM table WHERE id = ?"
+    parameters = [42]
+
+    result = processor.process(sql, parameters, config)
+
+    # Should return list with coerced value
+    assert isinstance(result.parameters, (list, tuple))
+    assert result.parameters[0] == "coerced:42"

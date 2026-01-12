@@ -11,7 +11,9 @@ from typing import Any, Literal, TypeAlias
 from mypy_extensions import mypyc_attr
 
 __all__ = (
+    "ConvertedParameters",
     "DriverParameterProfile",
+    "NamedParameterOutput",
     "ParameterInfo",
     "ParameterMapping",
     "ParameterPayload",
@@ -20,6 +22,7 @@ __all__ = (
     "ParameterSequence",
     "ParameterStyle",
     "ParameterStyleConfig",
+    "PositionalParameterOutput",
     "TypedParameter",
     "is_iterable_parameters",
     "wrap_with_type",
@@ -36,6 +39,39 @@ ParameterSequence: TypeAlias = "Sequence[object]"
 
 ParameterPayload: TypeAlias = "ParameterMapping | ParameterSequence | object | None"
 """Type alias for parameter payloads accepted by the processing pipeline."""
+
+
+ConvertedParameters: TypeAlias = "dict[str, Any] | list[Any] | tuple[Any, ...] | None"
+"""Type alias for parameters after conversion to driver-consumable format.
+
+This type represents the concrete output of parameter conversion functions.
+Unlike :data:`ParameterPayload` (which represents inputs and can include abstract
+Mapping/Sequence types), :data:`ConvertedParameters` only includes concrete types
+that database drivers can directly consume.
+
+The union includes:
+
+- ``dict[str, Any]``: Named parameters (e.g., ``{"name": "Alice", "age": 30}``)
+- ``list[Any]``: Positional parameters as list (e.g., ``["Alice", 30]``)
+- ``tuple[Any, ...]``: Positional parameters as tuple (e.g., ``("Alice", 30)``)
+- ``None``: When parameters are statically embedded in SQL string
+"""
+
+
+PositionalParameterOutput: TypeAlias = "list[Any] | tuple[Any, ...]"
+"""Type alias for positional-only parameter outputs.
+
+Used when a function is known to return only positional (not named) parameters.
+This is narrower than :data:`ConvertedParameters` and excludes ``dict`` and ``None``.
+"""
+
+
+NamedParameterOutput: TypeAlias = "dict[str, Any]"
+"""Type alias for named-only parameter outputs.
+
+Used when a function is known to return only named (not positional) parameters.
+This is narrower than :data:`ConvertedParameters` and excludes ``list``, ``tuple``, and ``None``.
+"""
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

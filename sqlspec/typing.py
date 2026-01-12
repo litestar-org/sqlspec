@@ -240,6 +240,23 @@ class VersionInfo:
         return hash(self.version_tuple)
 
 
+VersionCacheResult: TypeAlias = "tuple[bool, VersionInfo | None]"
+"""Return type for version cache lookup methods.
+
+The tuple contains:
+
+- First element (``bool``): Whether a cache lookup was attempted
+
+  - ``True``: A lookup was attempted; check second element for result
+  - ``False``: No lookup was attempted yet; second element is always ``None``
+
+- Second element (``VersionInfo | None``): The cached version info
+
+  - ``VersionInfo``: Successfully detected and cached version
+  - ``None``: Version not yet fetched, or detection failed
+"""
+
+
 T = TypeVar("T")
 ConnectionT = TypeVar("ConnectionT")
 """Type variable for connection types.
@@ -362,6 +379,7 @@ __all__ = (
     "Tracer",
     "TypeAdapter",
     "UnsetType",
+    "VersionCacheResult",
     "VersionInfo",
     "attrs_asdict",
     "attrs_define",

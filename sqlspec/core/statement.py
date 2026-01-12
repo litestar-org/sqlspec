@@ -1094,6 +1094,12 @@ class SQL:
             stmt = SQL("SELECT * FROM users").paginate(3, 20)
             # Results in: SELECT * FROM users LIMIT 20 OFFSET 40
         """
+        if page < 1:
+            msg = "paginate page must be >= 1"
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if page_size < 1:
+            msg = "paginate page_size must be >= 1"
+            raise sqlspec.exceptions.SQLSpecError(msg)
         offset_value = (page - 1) * page_size
         return self.limit(page_size).offset(offset_value)
 
@@ -1112,9 +1118,6 @@ class SQL:
 
         Returns:
             New SQL instance with only the specified columns
-
-        Raises:
-            SQLSpecError: If statement is not a SELECT
 
         Example:
             stmt = SQL("SELECT * FROM users WHERE active = 1")

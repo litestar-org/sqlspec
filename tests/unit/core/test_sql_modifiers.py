@@ -7,6 +7,7 @@ and select_only functionality added to the SQL class.
 import pytest
 
 from sqlspec.core import SQL
+from sqlspec.exceptions import SQLSpecError
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -291,6 +292,26 @@ class TestSQLPaginate:
 
         assert "LIMIT 10" in modified.raw_sql
         assert "OFFSET 0" in modified.raw_sql
+
+    def test_paginate_rejects_zero_or_negative_page(self) -> None:
+        """Test paginate rejects page values less than 1."""
+        stmt = SQL("SELECT * FROM users")
+
+        with pytest.raises(SQLSpecError):
+            stmt.paginate(page=0, page_size=10)
+
+        with pytest.raises(SQLSpecError):
+            stmt.paginate(page=-1, page_size=10)
+
+    def test_paginate_rejects_non_positive_page_size(self) -> None:
+        """Test paginate rejects page_size values less than 1."""
+        stmt = SQL("SELECT * FROM users")
+
+        with pytest.raises(SQLSpecError):
+            stmt.paginate(page=1, page_size=0)
+
+        with pytest.raises(SQLSpecError):
+            stmt.paginate(page=1, page_size=-5)
 
 
 # =============================================================================

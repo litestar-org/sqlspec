@@ -6,11 +6,14 @@ from typing import Any
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import (
+    ConvertedParameters,
+    NamedParameterOutput,
     ParameterInfo,
     ParameterMapping,
     ParameterPayload,
     ParameterSequence,
     ParameterStyle,
+    PositionalParameterOutput,
 )
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.exceptions import SQLSpecError
@@ -125,7 +128,7 @@ class ParameterConverter:
         is_many: bool = False,
         *,
         strict_named_parameters: bool = True,
-    ) -> "tuple[str, object]":
+    ) -> "tuple[str, ConvertedParameters]":
         param_info = self.validator.extract_parameters(sql)
 
         if target_style == ParameterStyle.STATIC:
@@ -210,8 +213,8 @@ class ParameterConverter:
 
     def _convert_sequence_to_dict(
         self, parameters: "ParameterSequence", param_info: "list[ParameterInfo]"
-    ) -> "dict[str, object]":
-        param_dict: dict[str, object] = {}
+    ) -> "NamedParameterOutput":
+        param_dict: dict[str, Any] = {}
         for i, param in enumerate(param_info):
             if i < len(parameters):
                 name = param.name or f"param_{param.ordinal}"
@@ -296,7 +299,9 @@ class ParameterConverter:
             missing.append(param.name)
         return sorted(set(missing))
 
-    def _preserve_original_format(self, param_values: "list[object]", original_parameters: object) -> object:
+    def _preserve_original_format(
+        self, param_values: "list[Any]", original_parameters: object
+    ) -> "PositionalParameterOutput":
         if isinstance(original_parameters, tuple):
             return tuple(param_values)
         if isinstance(original_parameters, list):
@@ -315,9 +320,17 @@ class ParameterConverter:
         is_many: bool = False,
         *,
         strict_named_parameters: bool = True,
-    ) -> object:
+    ) -> "ConvertedParameters":
         if not parameters or not param_info:
-            return parameters
+            # When parameters is falsy, it's either None or empty - return None
+            if parameters is None:
+                return None
+            # For empty containers, convert to concrete type
+            if isinstance(parameters, Mapping):
+                return dict(parameters)
+            if isinstance(parameters, (list, tuple)):
+                return list(parameters) if isinstance(parameters, list) else tuple(parameters)
+            return None
 
         if (
             is_many
@@ -326,7 +339,7 @@ class ParameterConverter:
             and parameters
             and isinstance(parameters[0], Mapping)
         ):
-            normalized_sets = [
+            normalized_sets: list[Any] = [
                 self._convert_parameter_format(
                     param_set,
                     param_info,
@@ -353,12 +366,12 @@ class ParameterConverter:
 
         if is_named_style:
             if isinstance(parameters, Mapping):
-                return parameters
+                return dict(parameters)
             if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
                 return self._convert_sequence_to_dict(parameters, param_info)
 
         elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            return parameters
+            return list(parameters) if isinstance(parameters, list) else tuple(parameters)
 
         elif isinstance(parameters, Mapping):
             if strict_named_parameters:
@@ -366,11 +379,11 @@ class ParameterConverter:
                 if missing_names:
                     msg = f"Missing named parameter(s): {', '.join(missing_names)}"
                     raise SQLSpecError(msg)
-            param_values: list[object] = []
+            param_values: list[Any] = []
             parameter_styles = {p.style for p in param_info}
             has_mixed_styles = len(parameter_styles) > 1
 
-            unique_params: dict[str, object] = {}
+            unique_params: dict[str, Any] = {}
             param_order: list[str] = []
 
             if has_mixed_styles:
@@ -411,11 +424,12 @@ class ParameterConverter:
 
             return param_values
 
-        return parameters
+        # Fallback for non-standard parameters - return None
+        return None
 
     def _embed_static_parameters(
         self, sql: str, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> "tuple[str, object]":
+    ) -> "tuple[str, None]":
         if not param_info:
             return sql, None
 
@@ -496,25 +510,25 @@ class ParameterConverter:
 
     def _convert_to_positional_format(
         self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> object:
+    ) -> "ConvertedParameters":
         return self._convert_parameter_format(
             parameters, param_info, ParameterStyle.QMARK, parameters, preserve_parameter_format=False
         )
 
     def _convert_to_named_colon_format(
         self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> object:
+    ) -> "ConvertedParameters":
         return self._convert_parameter_format(
             parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
         )
 
     def _convert_to_positional_colon_format(
         self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> object:
+    ) -> "NamedParameterOutput":
         if isinstance(parameters, Mapping):
-            return parameters
+            return dict(parameters)
 
-        param_dict: dict[str, object] = {}
+        param_dict: dict[str, Any] = {}
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             for index, value in enumerate(parameters):
                 param_dict[str(index + 1)] = value
@@ -523,7 +537,7 @@ class ParameterConverter:
 
     def _convert_to_named_pyformat_format(
         self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> object:
+    ) -> "ConvertedParameters":
         return self._convert_parameter_format(
             parameters, param_info, ParameterStyle.NAMED_PYFORMAT, parameters, preserve_parameter_format=False
         )
