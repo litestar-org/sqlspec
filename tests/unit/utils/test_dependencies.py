@@ -297,6 +297,6 @@ def test_singleton_metaclass_edge_cases() -> None:
     instance1 = SingletonOne("first")
     instance2 = SingletonTwo("second")
 
-    assert type(instance1) is not type(instance2)
+    assert type(instance1) is not type(instance2)  # type: ignore[comparison-overlap,unused-ignore]
     assert instance1.value == "first"
     assert instance2.value == "second"
