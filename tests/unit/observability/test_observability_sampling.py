@@ -1,6 +1,12 @@
-"""Unit tests for ObservabilityConfig sampling integration."""
+"""Unit tests for ObservabilityConfig sampling and cloud formatter integration."""
 
-from sqlspec.observability import ObservabilityConfig, SamplingConfig, StatementEvent
+from sqlspec.observability import (
+    AWSLogFormatter,
+    GCPLogFormatter,
+    ObservabilityConfig,
+    SamplingConfig,
+    StatementEvent,
+)
 
 
 class TestObservabilityConfigSampling:
@@ -305,3 +311,114 @@ class TestStatementEventSampled:
         )
         repr_str = repr(event)
         assert "sampled=False" in repr_str
+
+
+class TestObservabilityConfigCloudFormatter:
+    """Tests for cloud_formatter field in ObservabilityConfig."""
+
+    def test_default_cloud_formatter_is_none(self) -> None:
+        """Default cloud_formatter should be None."""
+        config = ObservabilityConfig()
+        assert config.cloud_formatter is None
+
+    def test_accepts_gcp_formatter(self) -> None:
+        """Should accept GCPLogFormatter in constructor."""
+        formatter = GCPLogFormatter(project_id="test-project")
+        config = ObservabilityConfig(cloud_formatter=formatter)
+        assert config.cloud_formatter is formatter
+
+    def test_accepts_aws_formatter(self) -> None:
+        """Should accept AWSLogFormatter in constructor."""
+        formatter = AWSLogFormatter()
+        config = ObservabilityConfig(cloud_formatter=formatter)
+        assert config.cloud_formatter is formatter
+
+    def test_copy_preserves_cloud_formatter(self) -> None:
+        """Copy should preserve cloud_formatter."""
+        formatter = GCPLogFormatter(project_id="test-project")
+        config = ObservabilityConfig(cloud_formatter=formatter)
+        copied = config.copy()
+        assert copied.cloud_formatter is formatter
+
+    def test_copy_with_none_cloud_formatter(self) -> None:
+        """Copy should handle None cloud_formatter."""
+        config = ObservabilityConfig(cloud_formatter=None)
+        copied = config.copy()
+        assert copied.cloud_formatter is None
+
+
+class TestObservabilityConfigCloudFormatterMerge:
+    """Tests for cloud_formatter merge behavior."""
+
+    def test_merge_base_none_override_none(self) -> None:
+        """Merging two None cloud_formatter should produce None."""
+        base = ObservabilityConfig(cloud_formatter=None)
+        override = ObservabilityConfig(cloud_formatter=None)
+        merged = ObservabilityConfig.merge(base, override)
+        assert merged.cloud_formatter is None
+
+    def test_merge_base_formatter_override_none(self) -> None:
+        """Base cloud_formatter should be preserved when override is None."""
+        formatter = GCPLogFormatter(project_id="test-project")
+        base = ObservabilityConfig(cloud_formatter=formatter)
+        override = ObservabilityConfig(cloud_formatter=None)
+        merged = ObservabilityConfig.merge(base, override)
+        assert merged.cloud_formatter is formatter
+
+    def test_merge_base_none_override_formatter(self) -> None:
+        """Override cloud_formatter should be used when base is None."""
+        formatter = AWSLogFormatter()
+        base = ObservabilityConfig(cloud_formatter=None)
+        override = ObservabilityConfig(cloud_formatter=formatter)
+        merged = ObservabilityConfig.merge(base, override)
+        assert merged.cloud_formatter is formatter
+
+    def test_merge_override_replaces_base(self) -> None:
+        """Override cloud_formatter should replace base."""
+        base_formatter = GCPLogFormatter(project_id="base-project")
+        override_formatter = AWSLogFormatter()
+        base = ObservabilityConfig(cloud_formatter=base_formatter)
+        override = ObservabilityConfig(cloud_formatter=override_formatter)
+        merged = ObservabilityConfig.merge(base, override)
+        assert merged.cloud_formatter is override_formatter
+
+
+class TestObservabilityConfigCloudFormatterEquality:
+    """Tests for equality with cloud_formatter field."""
+
+    def test_equal_with_same_cloud_formatter(self) -> None:
+        """Configs with same cloud_formatter should be equal."""
+        formatter = GCPLogFormatter(project_id="test-project")
+        config1 = ObservabilityConfig(cloud_formatter=formatter)
+        config2 = ObservabilityConfig(cloud_formatter=formatter)
+        assert config1 == config2
+
+    def test_not_equal_with_different_cloud_formatter(self) -> None:
+        """Configs with different cloud_formatter should not be equal."""
+        config1 = ObservabilityConfig(cloud_formatter=GCPLogFormatter(project_id="project-1"))
+        config2 = ObservabilityConfig(cloud_formatter=GCPLogFormatter(project_id="project-2"))
+        assert config1 != config2
+
+    def test_equal_with_both_none_cloud_formatter(self) -> None:
+        """Configs with both None cloud_formatter should be equal."""
+        config1 = ObservabilityConfig(cloud_formatter=None)
+        config2 = ObservabilityConfig(cloud_formatter=None)
+        assert config1 == config2
+
+
+class TestObservabilityConfigCloudFormatterRepr:
+    """Tests for repr with cloud_formatter field."""
+
+    def test_repr_includes_cloud_formatter(self) -> None:
+        """Repr should include cloud_formatter information."""
+        formatter = GCPLogFormatter(project_id="test-project")
+        config = ObservabilityConfig(cloud_formatter=formatter)
+        repr_str = repr(config)
+        assert "cloud_formatter=" in repr_str
+        assert "GCPLogFormatter" in repr_str
+
+    def test_repr_with_none_cloud_formatter(self) -> None:
+        """Repr should handle None cloud_formatter."""
+        config = ObservabilityConfig(cloud_formatter=None)
+        repr_str = repr(config)
+        assert "cloud_formatter=None" in repr_str

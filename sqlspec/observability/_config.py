@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from sqlspec.config import LifecycleConfig
+    from sqlspec.observability._formatters._base import CloudLogFormatter
     from sqlspec.observability._observer import StatementEvent
     from sqlspec.observability._sampling import SamplingConfig
 
@@ -147,7 +148,7 @@ class LoggingConfig:
 class ObservabilityConfig:
     """Aggregates lifecycle hooks, observers, and telemetry toggles."""
 
-    __slots__ = ("lifecycle", "logging", "print_sql", "redaction", "sampling", "statement_observers", "telemetry")
+    __slots__ = ("cloud_formatter", "lifecycle", "logging", "print_sql", "redaction", "sampling", "statement_observers", "telemetry")
 
     def __init__(
         self,
@@ -159,6 +160,7 @@ class ObservabilityConfig:
         redaction: "RedactionConfig | None" = None,
         logging: "LoggingConfig | None" = None,
         sampling: "SamplingConfig | None" = None,
+        cloud_formatter: "CloudLogFormatter | None" = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.print_sql = print_sql
@@ -167,6 +169,7 @@ class ObservabilityConfig:
         self.redaction = redaction
         self.logging = logging
         self.sampling = sampling
+        self.cloud_formatter = cloud_formatter
 
     def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
         msg = "ObservabilityConfig objects are mutable and unhashable"
@@ -189,6 +192,7 @@ class ObservabilityConfig:
             redaction=redaction_copy,
             logging=logging_copy,
             sampling=sampling_copy,
+            cloud_formatter=self.cloud_formatter,
         )
 
     @classmethod
@@ -222,6 +226,7 @@ class ObservabilityConfig:
         redaction = _merge_redaction(base.redaction, override.redaction)
         logging = _merge_logging(base.logging, override.logging)
         sampling = _merge_sampling(base.sampling, override.sampling)
+        cloud_formatter = override.cloud_formatter if override.cloud_formatter is not None else base.cloud_formatter
 
         return ObservabilityConfig(
             lifecycle=lifecycle,
@@ -231,12 +236,13 @@ class ObservabilityConfig:
             redaction=redaction,
             logging=logging,
             sampling=sampling,
+            cloud_formatter=cloud_formatter,
         )
 
     def __repr__(self) -> str:
         return (
             f"ObservabilityConfig(lifecycle={self.lifecycle!r}, print_sql={self.print_sql!r}, statement_observers={self.statement_observers!r}, telemetry={self.telemetry!r}, "
-            f"redaction={self.redaction!r}, logging={self.logging!r}, sampling={self.sampling!r})"
+            f"redaction={self.redaction!r}, logging={self.logging!r}, sampling={self.sampling!r}, cloud_formatter={self.cloud_formatter!r})"
         )
 
     def __eq__(self, other: object) -> bool:
@@ -250,6 +256,7 @@ class ObservabilityConfig:
             and self.redaction == other.redaction
             and self.logging == other.logging
             and self.sampling == other.sampling
+            and self.cloud_formatter == other.cloud_formatter
         )
 
 
