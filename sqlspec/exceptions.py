@@ -57,6 +57,8 @@ class SQLSpecError(Exception):
         if not detail:
             detail = str_args[0] if str_args else self.detail
         self.detail = detail
+        if detail and detail not in str_args:
+            str_args = [detail, *str_args]
         super().__init__(*str_args)
 
     def __repr__(self) -> str:

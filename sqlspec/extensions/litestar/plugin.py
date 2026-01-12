@@ -19,6 +19,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
+from sqlspec.core.filters import OffsetPagination
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
@@ -84,6 +85,10 @@ __all__ = (
     "PluginConfigState",
     "SQLSpecPlugin",
 )
+
+
+def _encode_offset_pagination(value: OffsetPagination[Any]) -> dict[str, Any]:
+    return {"items": value.items, "limit": value.limit, "offset": value.offset, "total": value.total}
 
 
 def _normalize_header_list(headers: Any) -> list[str]:
@@ -400,6 +405,13 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)
+
+        if app_config.type_encoders is None:
+            app_config.type_encoders = {OffsetPagination: _encode_offset_pagination}
+        else:
+            encoders_dict = dict(app_config.type_encoders)
+            encoders_dict[OffsetPagination] = _encode_offset_pagination
+            app_config.type_encoders = encoders_dict
 
         if NUMPY_INSTALLED:
             import numpy as np

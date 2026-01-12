@@ -1,6 +1,6 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "sqlglot>=19.9.0", "mypy-extensions", "rich-click"]
+dependencies = ["typing-extensions", "sqlglot>=19.9.0", "mypy-extensions", "rich-click>=1.9.0"]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
@@ -24,7 +24,7 @@ asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
 attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery", "google-cloud-storage"]
-cli = ["rich-click", "tomli>=2.0.0; python_version < '3.11'"]
+cli = ["rich-click>=1.9.0", "tomli>=2.0.0; python_version < '3.11'"]
 cloud-sql = ["cloud-sql-python-connector"]
 cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
 duckdb = ["duckdb"]
@@ -53,7 +53,7 @@ spanner = ["google-cloud-spanner"]
 uuid = ["uuid-utils"]
 
 [dependency-groups]
-benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "rich", "rich-click", "duckdb"]
+benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "rich", "rich-click>=1.9.0", "duckdb"]
 build = ["bump-my-version", "hatch-mypyc", "pydantic-settings"]
 dev = [
   { include-group = "extras" },

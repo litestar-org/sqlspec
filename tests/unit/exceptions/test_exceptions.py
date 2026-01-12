@@ -81,14 +81,14 @@ def test_sqlspec_error_multiple_args_all_preserved() -> None:
 def test_sqlspec_error_explicit_detail_separate() -> None:
     """Test explicit detail kwarg is separate from args."""
     exc = SQLSpecError("arg1", detail="explicit detail")
-    assert exc.args == ("arg1",)
+    assert exc.args == ("explicit detail", "arg1")
     assert exc.detail == "explicit detail"
 
 
 def test_sqlspec_error_detail_only() -> None:
     """Test detail-only initialization."""
     exc = SQLSpecError(detail="detail only")
-    assert exc.args == ()
+    assert exc.args == ("detail only",)
     assert exc.detail == "detail only"
 
 
@@ -114,7 +114,7 @@ def test_sqlspec_error_str_multiple_args() -> None:
 def test_sqlspec_error_str_explicit_detail_appended() -> None:
     """Test str() appends explicit detail that differs from args."""
     exc = SQLSpecError("arg", detail="extra")
-    assert str(exc) == "arg extra"
+    assert str(exc) == "extra arg"
 
 
 def test_sqlspec_error_str_detail_only() -> None:
