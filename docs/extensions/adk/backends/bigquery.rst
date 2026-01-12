@@ -222,24 +222,6 @@ BigQuery is optimized for different workloads than traditional OLTP databases:
 - **Cost Model**: Pay-per-query model requires careful query optimization
 - **No Foreign Keys**: Implements cascade delete manually (two DELETE statements)
 
-When to Use BigQuery
-====================
-
-**Ideal For:**
-
-- Large-scale AI agent deployments with millions of users
-- Analytics and insights on agent interactions
-- Long-term storage of conversation history
-- Multi-region deployments requiring global scalability
-- Applications already using Google Cloud Platform
-
-**Consider Alternatives When:**
-
-- Need high-frequency transactional updates (use PostgreSQL/Oracle)
-- Require immediate consistency (use PostgreSQL/Oracle)
-- Running on-premises or other cloud providers (use PostgreSQL/DuckDB)
-- Development/testing with small data volumes (use SQLite/DuckDB)
-
 Example: Full Application
 ==========================
 

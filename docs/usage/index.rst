@@ -15,7 +15,7 @@ This section provides comprehensive guides on using SQLSpec for database operati
    cli
    migrations
    framework_integrations
-   ../guides/observability/index
+   observability
 
 Overview
 --------
@@ -49,6 +49,9 @@ SQLSpec provides a unified interface for database operations across multiple bac
 
 **Framework Integrations**
    Integrate SQLSpec with Litestar, FastAPI, and other Python web frameworks.
+
+**Observability**
+   Monitor and trace database operations with correlation tracking, sampling, and cloud-native logging.
 
 Quick Reference
 ---------------

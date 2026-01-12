@@ -24,13 +24,6 @@ The ADBC ADK store supports multiple database backends through ADBC drivers:
 - **Vendor Neutral** - Single API across multiple databases
 - **High Performance** - Optimized for large-scale data operations
 
-**Use Cases:**
-
-- Analytical AI agents processing large datasets
-- Multi-backend applications requiring database portability
-- Integration with Arrow ecosystem (Polars, PyArrow, etc.)
-- Bulk data operations and ETL pipelines
-
 Installation
 ============
 
@@ -299,7 +292,6 @@ SQLite
 - ADBC creates new connections per operation, so cascade deletes may not work reliably
 - No concurrent writes (single writer)
 
-**Recommendation:** Use SQLite for development/testing, PostgreSQL for production.
 
 PostgreSQL
 ----------
@@ -311,7 +303,6 @@ PostgreSQL
 - JSON/JSONB support for efficient queries
 - Production-grade reliability
 
-**Recommendation:** Best choice for production AI agents.
 
 DuckDB
 ------
@@ -323,7 +314,6 @@ DuckDB
 - Arrow-native with zero-copy integration
 - SQL analytics capabilities
 
-**Use Cases:** Agents performing data analysis, reporting, or aggregations.
 
 Performance Considerations
 ==========================

@@ -30,11 +30,13 @@ __all__ = (
     "SQLFileParseError",
     "SQLParsingError",
     "SQLSpecError",
+    "SerializationConflictError",
     "SerializationError",
     "StackExecutionError",
     "StorageCapabilityError",
     "StorageOperationFailedError",
     "TransactionError",
+    "TransactionRetryError",
     "UniqueViolationError",
 )
 
@@ -172,6 +174,14 @@ class DatabaseConnectionError(SQLSpecError):
 
 class TransactionError(SQLSpecError):
     """Transaction error (rollback, deadlock, serialization failure)."""
+
+
+class SerializationConflictError(TransactionError):
+    """Serialization conflict (SQLSTATE 40001) requiring retry."""
+
+
+class TransactionRetryError(TransactionError):
+    """Transaction failed after retries were exhausted."""
 
 
 class DataError(SQLSpecError):

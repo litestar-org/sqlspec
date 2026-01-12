@@ -88,6 +88,7 @@ Example Usage:
 """
 
 from sqlspec.core import filters
+from sqlspec.core._correlation import CorrelationExtractor
 from sqlspec.core.cache import (
     CacheConfig,
     CachedStatement,
@@ -226,6 +227,7 @@ __all__ = (
     "CachedOutputConverter",
     "CachedStatement",
     "CompiledSQL",
+    "CorrelationExtractor",
     "DriverParameterProfile",
     "ExplainFormat",
     "ExplainOptions",

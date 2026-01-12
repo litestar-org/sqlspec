@@ -26,6 +26,7 @@ attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery", "google-cloud-storage"]
 cli = ["rich-click", "tomli>=2.0.0; python_version < '3.11'"]
 cloud-sql = ["cloud-sql-python-connector"]
+cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
 duckdb = ["duckdb"]
 fastapi = ["fastapi"]
 flask = ["flask"]
@@ -47,6 +48,7 @@ psycopg = ["psycopg[binary,pool]"]
 pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
+mysql-connector = ["mysql-connector-python"]
 spanner = ["google-cloud-spanner"]
 uuid = ["uuid-utils"]
 
@@ -336,6 +338,7 @@ markers = [
   "oracledb: marks tests using oracledb",
   "psycopg: marks tests using psycopg",
   "pymssql: marks tests using pymssql",
+  "mysql_connector: marks tests using mysql-connector",
   "pymysql: marks tests using pymysql",
   "psqlpy: marks tests using psqlpy",
 ]

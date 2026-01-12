@@ -5,7 +5,7 @@ AsyncMy Backend
 Overview
 ========
 
-AsyncMy is an async MySQL/MariaDB driver optimized for Python's asyncio ecosystem. It provides high-performance, non-blocking database operations with native connection pooling support, making it ideal for production web applications and async AI agents.
+AsyncMy is an async MySQL/MariaDB driver optimized for Python's asyncio ecosystem. It provides high-performance, non-blocking database operations with native connection pooling support.
 
 **Key Features:**
 
@@ -15,14 +15,6 @@ AsyncMy is an async MySQL/MariaDB driver optimized for Python's asyncio ecosyste
 - **Microsecond Timestamps**: TIMESTAMP(6) for microsecond-precision event tracking
 - **InnoDB Engine**: Full ACID compliance with foreign key constraints and cascade deletes
 - **PyMySQL Compatibility**: Familiar API for developers coming from PyMySQL
-
-**Ideal Use Cases:**
-
-- Production async web applications (FastAPI, Litestar, Starlette)
-- High-concurrency AI agent deployments
-- Existing MySQL/MariaDB infrastructure
-- Multi-tenant applications requiring connection pooling
-- Real-time conversation systems with sub-millisecond latency requirements
 
 .. warning::
 
@@ -509,101 +501,6 @@ Enable SSL for production:
        }
    )
 
-Use Cases
-=========
-
-High-Concurrency Web Applications
-----------------------------------
-
-AsyncMy excels in async web frameworks:
-
-.. code-block:: python
-
-   # FastAPI / Litestar / Starlette integration
-   from contextlib import asynccontextmanager
-   from fastapi import FastAPI
-
-   @asynccontextmanager
-   async def lifespan(app: FastAPI):
-       # Startup
-       config = AsyncmyConfig(connection_config={...})
-       await config.create_pool()
-       yield
-       # Shutdown
-       await config.close_pool()
-
-   app = FastAPI(lifespan=lifespan)
-
-   @app.post("/sessions")
-   async def create_session(app_name: str, user_id: str):
-       store = AsyncmyADKStore(config)
-       service = SQLSpecSessionService(store)
-       session = await service.create_session(app_name, user_id, {})
-       return {"session_id": session.id}
-
-Multi-Tenant SaaS Applications
--------------------------------
-
-Connection pooling with tenant isolation:
-
-.. code-block:: python
-
-   # Separate databases per tenant
-   async def get_tenant_config(tenant_id: str) -> AsyncmyConfig:
-       return AsyncmyConfig(
-           connection_config={
-               "host": "mysql.example.com",
-               "database": f"tenant_{tenant_id}",
-               "minsize": 5,
-               "maxsize": 20,
-           }
-       )
-
-   # Use tenant-specific store
-   config = await get_tenant_config("acme_corp")
-   store = AsyncmyADKStore(config)
-
-Real-Time Conversation Systems
--------------------------------
-
-Microsecond precision for event ordering:
-
-.. code-block:: python
-
-   from datetime import datetime, timezone
-
-   # Events are stored with microsecond timestamps
-   event_time = datetime.now(timezone.utc)  # Includes microseconds
-
-   # Retrieve events with precise time filtering
-   events = await store.get_events(
-       session_id=session.id,
-       after_timestamp=event_time,
-       limit=100
-   )
-
-Existing MySQL Infrastructure
-------------------------------
-
-Leverage existing MySQL deployments:
-
-.. code-block:: python
-
-   # Connect to existing MySQL instance
-   config = AsyncmyConfig(
-       connection_config={
-           "host": "existing-mysql.company.com",
-           "port": 3306,
-           "user": "agent_app",
-           "password": "secure_password",
-           "database": "ai_agents",
-       }
-   )
-
-   # Use existing database, create tables if needed
-   store = AsyncmyADKStore(config)
-   await store.create_tables()  # Idempotent
-
 Troubleshooting
 ===============
 
@@ -733,37 +630,6 @@ UTF-8 Encoding Issues
            for row in await cursor.fetchall():
                print(row)
 
-When to Use AsyncMy
-===================
-
-**Ideal For:**
-
-✅ Production async web applications (FastAPI, Litestar, Starlette)
-
-✅ High-concurrency AI agent deployments
-
-✅ Existing MySQL/MariaDB infrastructure
-
-✅ Multi-tenant SaaS applications
-
-✅ Real-time conversation systems
-
-✅ Applications requiring connection pooling
-
-✅ Teams familiar with MySQL ecosystem
-
-**Consider Alternatives When:**
-
-❌ Need PostgreSQL-specific features (JSONB indexing, advanced types)
-
-❌ Development/testing only (use DuckDB or SQLite)
-
-❌ Analytics-heavy workloads (use DuckDB or BigQuery)
-
-❌ Oracle-specific requirements (use OracleDB adapter)
-
-❌ Require synchronous driver (use mysqlclient or PyMySQL)
-
 Comparison: AsyncMy vs Other Adapters
 --------------------------------------
 
@@ -795,10 +661,6 @@ Comparison: AsyncMy vs Other Adapters
      - Client-server
      - Client-server
      - Embedded
-   * - Best For
-     - MySQL infrastructure
-     - New projects, JSONB
-     - Development, analytics
 
 Example: Full Application
 ==========================

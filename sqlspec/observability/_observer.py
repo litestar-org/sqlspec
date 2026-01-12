@@ -42,6 +42,7 @@ class StatementEvent:
         "parameters",
         "prepared_statement",
         "rows_affected",
+        "sampled",
         "span_id",
         "sql",
         "sql_hash",
@@ -78,6 +79,7 @@ class StatementEvent:
         prepared_statement: "bool | None",
         trace_id: "str | None",
         span_id: "str | None",
+        sampled: bool = True,
     ) -> None:
         self.sql = sql
         self.parameters = parameters
@@ -101,6 +103,7 @@ class StatementEvent:
         self.prepared_statement = prepared_statement
         self.trace_id = trace_id
         self.span_id = span_id
+        self.sampled = sampled
 
     def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
         msg = "StatementEvent objects are mutable and unhashable"
@@ -132,6 +135,7 @@ class StatementEvent:
             "prepared_statement": self.prepared_statement,
             "trace_id": self.trace_id,
             "span_id": self.span_id,
+            "sampled": self.sampled,
         }
 
     def __repr__(self) -> str:
@@ -139,7 +143,7 @@ class StatementEvent:
             f"StatementEvent(sql={self.sql!r}, parameters={self.parameters!r}, driver={self.driver!r}, adapter={self.adapter!r}, bind_key={self.bind_key!r}, db_system={self.db_system!r}, "
             f"operation={self.operation!r}, execution_mode={self.execution_mode!r}, is_many={self.is_many!r}, is_script={self.is_script!r}, rows_affected={self.rows_affected!r}, duration_s={self.duration_s!r}, "
             f"started_at={self.started_at!r}, correlation_id={self.correlation_id!r}, storage_backend={self.storage_backend!r}, sql_hash={self.sql_hash!r}, sql_truncated={self.sql_truncated!r}, "
-            f"sql_original_length={self.sql_original_length!r}, transaction_state={self.transaction_state!r}, prepared_statement={self.prepared_statement!r}, trace_id={self.trace_id!r}, span_id={self.span_id!r})"
+            f"sql_original_length={self.sql_original_length!r}, transaction_state={self.transaction_state!r}, prepared_statement={self.prepared_statement!r}, trace_id={self.trace_id!r}, span_id={self.span_id!r}, sampled={self.sampled!r})"
         )
 
     def __eq__(self, other: object) -> bool:
@@ -168,6 +172,7 @@ class StatementEvent:
             and self.prepared_statement == other.prepared_statement
             and self.trace_id == other.trace_id
             and self.span_id == other.span_id
+            and self.sampled == other.sampled
         )
 
 
@@ -321,6 +326,7 @@ def create_event(
     prepared_statement: "bool | None" = None,
     trace_id: "str | None" = None,
     span_id: "str | None" = None,
+    sampled: bool = True,
 ) -> StatementEvent:
     """Factory helper used by runtime to build statement events."""
 
@@ -347,4 +353,5 @@ def create_event(
         prepared_statement=prepared_statement,
         trace_id=trace_id,
         span_id=span_id,
+        sampled=sampled,
     )

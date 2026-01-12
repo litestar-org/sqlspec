@@ -6,7 +6,11 @@ from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value
-from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
+from sqlspec.extensions.starlette.middleware import (
+    CorrelationMiddleware,
+    SQLSpecAutocommitMiddleware,
+    SQLSpecManualMiddleware,
+)
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -59,7 +63,7 @@ class SQLSpecPlugin:
             return JSONResponse({"users": result.all()})
     """
 
-    __slots__ = ("_config_states", "_sqlspec")
+    __slots__ = ("_config_states", "_correlation_middleware_added", "_sqlspec")
 
     def __init__(self, sqlspec: SQLSpec, app: "Starlette | None" = None) -> None:
         """Initialize SQLSpec Starlette extension.
@@ -70,6 +74,7 @@ class SQLSpecPlugin:
         """
         self._sqlspec = sqlspec
         self._config_states: list[SQLSpecConfigState] = []
+        self._correlation_middleware_added = False
 
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_starlette_settings(cfg)
@@ -106,6 +111,13 @@ class SQLSpecPlugin:
         if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
             pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
 
+        enable_correlation = starlette_config.get("enable_correlation_middleware", False)
+        correlation_header = starlette_config.get("correlation_header", "x-request-id")
+        correlation_headers = starlette_config.get("correlation_headers")
+        if correlation_headers is not None:
+            correlation_headers = tuple(correlation_headers)
+        auto_trace_headers = starlette_config.get("auto_trace_headers", True)
+
         return {
             "connection_key": connection_key,
             "pool_key": pool_key,
@@ -114,6 +126,10 @@ class SQLSpecPlugin:
             "extra_commit_statuses": starlette_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": starlette_config.get("extra_rollback_statuses"),
             "disable_di": starlette_config.get("disable_di", False),
+            "enable_correlation_middleware": enable_correlation,
+            "correlation_header": correlation_header,
+            "correlation_headers": correlation_headers,
+            "auto_trace_headers": auto_trace_headers,
         }
 
     def _create_config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
@@ -135,6 +151,10 @@ class SQLSpecPlugin:
             extra_commit_statuses=settings["extra_commit_statuses"],
             extra_rollback_statuses=settings["extra_rollback_statuses"],
             disable_di=settings["disable_di"],
+            enable_correlation_middleware=settings["enable_correlation_middleware"],
+            correlation_header=settings["correlation_header"],
+            correlation_headers=settings["correlation_headers"],
+            auto_trace_headers=settings["auto_trace_headers"],
         )
 
     def init_app(self, app: "Starlette") -> None:
@@ -159,6 +179,10 @@ class SQLSpecPlugin:
         for config_state in self._config_states:
             if not config_state.disable_di:
                 self._add_middleware(app, config_state)
+
+        # Add correlation middleware if any config enables it (only add once)
+        self._add_correlation_middleware(app)
+
         log_with_context(
             logger,
             logging.DEBUG,
@@ -199,6 +223,38 @@ class SQLSpecPlugin:
             app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state, include_redirect=False)
         elif config_state.commit_mode == "autocommit_include_redirect":
             app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state, include_redirect=True)
+
+    def _add_correlation_middleware(self, app: "Starlette") -> None:
+        """Add correlation middleware if any config enables it.
+
+        Only adds the middleware once, using settings from the first config
+        that enables it.
+
+        Args:
+            app: Starlette application instance.
+        """
+        if self._correlation_middleware_added:
+            return
+
+        # Find first config that enables correlation middleware
+        for config_state in self._config_states:
+            if config_state.enable_correlation_middleware:
+                app.add_middleware(
+                    CorrelationMiddleware,
+                    primary_header=config_state.correlation_header,
+                    additional_headers=config_state.correlation_headers,
+                    auto_trace_headers=config_state.auto_trace_headers,
+                )
+                self._correlation_middleware_added = True
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "extension.init",
+                    framework="starlette",
+                    stage="correlation_middleware",
+                    primary_header=config_state.correlation_header,
+                )
+                break
 
     @asynccontextmanager
     async def lifespan(self, app: "Starlette") -> "AsyncGenerator[None, None]":

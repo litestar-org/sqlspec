@@ -5,7 +5,7 @@ AIOSQLite Backend
 Overview
 ========
 
-AIOSQLite is an asynchronous wrapper for SQLite that runs operations in a thread pool executor, providing native async/await support for Python's built-in SQLite database. This makes it ideal for async web applications, testing, and lightweight async data pipelines that need embedded database capabilities.
+AIOSQLite is an asynchronous wrapper for SQLite that runs operations in a thread pool executor, providing native async/await support for Python's built-in SQLite database.
 
 **Key Features:**
 
@@ -17,20 +17,10 @@ AIOSQLite is an asynchronous wrapper for SQLite that runs operations in a thread
 - **ACID Transactions**: Reliable transaction support
 - **WAL Mode**: Better concurrency with Write-Ahead Logging
 
-**Ideal Use Cases:**
-
-- Async web applications (FastAPI, Litestar, Starlette)
-- Async testing and development environments
-- Async data pipelines with moderate write frequency
-- Embedded async applications
-- Prototyping async AI agent applications
-
 .. warning::
 
    **SQLite has single-writer limitations**. While aiosqlite provides async access,
-   SQLite itself only supports one write transaction at a time. For production AI agents
-   with high-concurrency writes, consider PostgreSQL (asyncpg) or MySQL (asyncmy).
-   AIOSQLite is best suited for async development, testing, and moderate-concurrency scenarios.
+   SQLite itself only supports one write transaction at a time.
 
 Installation
 ============
@@ -382,35 +372,6 @@ Performance Tuning PRAGMAs
    ``PRAGMA synchronous=NORMAL`` trades durability for performance.
    Only use in development or with acceptable data loss risk.
 
-When to Use AIOSQLite
-======================
-
-**Ideal For:**
-
-✅ Async web applications (FastAPI, Litestar, Starlette)
-
-✅ Async testing and development environments
-
-✅ Embedded async applications (desktop, CLI tools)
-
-✅ Prototyping async AI agent applications
-
-✅ Moderate-concurrency async workloads
-
-✅ Async data pipelines with moderate write frequency
-
-**Consider Alternatives When:**
-
-❌ High-concurrency production AI agent (many simultaneous writers)
-
-❌ Need true async database parallelism (use asyncpg/asyncmy)
-
-❌ Require server-based deployment with connection pooling
-
-❌ Need advanced JSON indexing (use PostgreSQL JSONB)
-
-❌ High-frequency write workloads across many connections
-
 Comparison: AIOSQLite vs Other Backends
 ----------------------------------------
 
@@ -446,27 +407,6 @@ Comparison: AIOSQLite vs Other Backends
      - Single file
      - Single file
      - Client-server
-   * - Best Use Case
-     - Async dev/testing
-     - Sync applications
-     - Production async apps
-
-When to Use AIOSQLite vs Sync SQLite
--------------------------------------
-
-**Use AIOSQLite When:**
-
-- Your application is already async (FastAPI, Litestar, etc.)
-- You want to avoid blocking the event loop
-- Integration with other async libraries
-- Async testing frameworks (pytest-asyncio)
-
-**Use Sync SQLite When:**
-
-- Your application is entirely synchronous
-- Lower overhead is critical (no thread pool switching)
-- Simpler deployment without async complexity
-- Legacy codebase without async support
 
 Example: Full Application
 ==========================

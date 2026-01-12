@@ -6,8 +6,7 @@ Overview
 ========
 
 DuckDB is an embedded analytical database (OLAP) optimized for complex queries and aggregations.
-While not designed for high-concurrency transactional workloads, DuckDB excels at session analytics,
-reporting, and embedded use cases with zero-configuration setup.
+It provides zero-configuration setup for local or embedded deployments.
 
 **Key Features:**
 
@@ -18,19 +17,9 @@ reporting, and embedded use cases with zero-configuration setup.
 - **SQL Analytics**: Advanced SQL features for session analysis
 - **Zero Configuration**: Perfect for development and testing
 
-**Ideal Use Cases:**
-
-- Development and testing environments
-- Session analytics and reporting dashboards
-- Embedded applications requiring local data storage
-- Offline analysis of exported session logs
-- Prototyping AI agent applications
-
 .. warning::
 
    **DuckDB is optimized for OLAP workloads**, not high-frequency transactional operations.
-   For production AI agents with concurrent user sessions and frequent writes, use
-   PostgreSQL or MySQL. DuckDB is best suited for analytics, development, and embedded scenarios.
 
 Installation
 ============
@@ -258,70 +247,6 @@ Time-Series Analysis
    GROUP BY hour
    ORDER BY hour;
 
-Use Cases
-=========
-
-Development & Testing
----------------------
-
-DuckDB's zero-configuration setup makes it ideal for development:
-
-.. code-block:: python
-
-   # Quick setup for development
-   config = DuckDBConfig(database=":memory:")
-   store = DuckdbADKStore(config)
-   store.create_tables()
-
-   # No database server needed!
-   service = SQLSpecSessionService(store)
-   session = service.create_session("dev_app", "dev_user", {})
-
-Session Analytics Dashboard
-----------------------------
-
-Build analytics on top of session data:
-
-.. code-block:: python
-
-   import duckdb
-
-   # Connect to existing DuckDB database
-   conn = duckdb.connect("agent_sessions.duckdb")
-
-   # Run analytical query
-   result = conn.execute("""
-       SELECT
-           DATE_TRUNC('day', create_time) as day,
-           COUNT(*) as sessions_created,
-           COUNT(DISTINCT user_id) as unique_users
-       FROM adk_sessions
-       WHERE app_name = 'my_agent'
-       GROUP BY day
-       ORDER BY day DESC
-       LIMIT 30
-   """).fetchall()
-
-   for day, sessions, users in result:
-       print(f"{day}: {sessions} sessions, {users} unique users")
-
-Embedded Applications
----------------------
-
-Embed DuckDB in desktop applications:
-
-.. code-block:: python
-
-   from pathlib import Path
-
-   # Store database in application data directory
-   app_data = Path.home() / ".my_agent" / "sessions.duckdb"
-   app_data.parent.mkdir(parents=True, exist_ok=True)
-
-   config = DuckDBConfig(database=str(app_data))
-   store = DuckdbADKStore(config)
-   store.create_tables()
-
 Performance Characteristics
 ===========================
 
@@ -341,26 +266,6 @@ Limitations
 - **No CASCADE Deletes**: Must manually handle cascading deletes
 - **Transaction Model**: Optimized for read-heavy workloads
 - **Single Writer**: Only one write transaction at a time
-
-When to Use DuckDB
-==================
-
-**Ideal For:**
-
-✅ Development and testing environments
-✅ Session analytics and reporting
-✅ Embedded applications (desktop, mobile)
-✅ Offline analysis of session logs
-✅ Prototyping and demos
-✅ Data science workflows on session data
-
-**Consider PostgreSQL Instead When:**
-
-❌ High-concurrency production AI agent (many simultaneous users)
-❌ Frequent transactional updates required
-❌ Need server-based deployment with connection pooling
-❌ Require JSONB indexing for performance
-❌ Need CASCADE deletes and full referential integrity
 
 Comparison: DuckDB vs PostgreSQL
 ---------------------------------
@@ -387,9 +292,6 @@ Comparison: DuckDB vs PostgreSQL
    * - Deployment
      - Single file
      - Client-server
-   * - Best Use Case
-     - Analytics, development
-     - Production AI agents
 
 Example: Full Application
 ==========================

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
+from sqlspec.core import CorrelationExtractor
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask._utils import (
@@ -15,6 +16,7 @@ from sqlspec.extensions.flask._utils import (
     pop_context_value,
     set_context_value,
 )
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
 
@@ -76,6 +78,8 @@ class SQLSpecPlugin:
         self._has_async_configs = False
         self._cleanup_registered = False
         self._shutdown_complete = False
+        self._enable_correlation = False
+        self._extractor: CorrelationExtractor | None = None
 
         for cfg in self._sqlspec.configs.values():
             state = self._create_config_state(cfg)
@@ -83,6 +87,14 @@ class SQLSpecPlugin:
 
             if state.is_async:
                 self._has_async_configs = True
+
+            if state.enable_correlation_middleware and not self._enable_correlation:
+                self._enable_correlation = True
+                self._extractor = CorrelationExtractor(
+                    primary_header=state.correlation_header,
+                    additional_headers=state.correlation_headers,
+                    auto_trace_headers=state.auto_trace_headers,
+                )
 
         if app is not None:
             self.init_app(app)
@@ -105,6 +117,13 @@ class SQLSpecPlugin:
         extra_rollback_statuses = flask_config.get("extra_rollback_statuses")
         disable_di = flask_config.get("disable_di", False)
 
+        enable_correlation = flask_config.get("enable_correlation_middleware", False)
+        correlation_header = flask_config.get("correlation_header", "x-request-id")
+        correlation_headers = flask_config.get("correlation_headers")
+        if correlation_headers is not None:
+            correlation_headers = tuple(correlation_headers)
+        auto_trace_headers = flask_config.get("auto_trace_headers", True)
+
         is_async = isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig))
 
         return FlaskConfigState(
@@ -116,6 +135,10 @@ class SQLSpecPlugin:
             extra_rollback_statuses=extra_rollback_statuses,
             is_async=is_async,
             disable_di=disable_di,
+            enable_correlation_middleware=enable_correlation,
+            correlation_header=correlation_header,
+            correlation_headers=correlation_headers,
+            auto_trace_headers=auto_trace_headers,
         )
 
     def init_app(self, app: "Flask") -> None:
@@ -204,8 +227,14 @@ class SQLSpecPlugin:
 
         Stores connection in Flask g object for each configured database.
         Also stores context managers for proper cleanup.
+        Extracts correlation ID if correlation middleware is enabled.
         """
-        from flask import current_app, g
+        from flask import current_app, g, request
+
+        if self._enable_correlation and self._extractor is not None:
+            correlation_id = self._extractor.extract(lambda h: request.headers.get(h))
+            set_context_value(g, "correlation_id", correlation_id)
+            CorrelationContext.set(correlation_id)
 
         for config_state in self._config_states:
             if config_state.disable_di:
@@ -235,9 +264,14 @@ class SQLSpecPlugin:
             response: Flask response object.
 
         Returns:
-            Response object (unchanged).
+            Response object with correlation ID header if enabled.
         """
         from flask import g
+
+        if self._enable_correlation:
+            correlation_id = get_context_value(g, "correlation_id", None)
+            if correlation_id:
+                response.headers["X-Correlation-ID"] = correlation_id
 
         for config_state in self._config_states:
             if config_state.disable_di:
@@ -262,12 +296,17 @@ class SQLSpecPlugin:
     def _teardown_appcontext_handler(self, _exc: "BaseException | None" = None) -> None:
         """Clean up connections when request context ends.
 
-        Closes all connections and cleans up g object.
+        Closes all connections, cleans up g object, and clears correlation context.
 
         Args:
             _exc: Exception that occurred (if any).
         """
         from flask import g
+
+        if self._enable_correlation:
+            CorrelationContext.clear()
+            if has_context_value(g, "correlation_id"):
+                pop_context_value(g, "correlation_id")
 
         for config_state in self._config_states:
             if config_state.disable_di:

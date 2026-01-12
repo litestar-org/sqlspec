@@ -110,6 +110,12 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             return DIALECT_POSTGRESQL
         if "duckdb" in driver_lower or uri_lower.startswith("duckdb://"):
             return DIALECT_DUCKDB
+        if (
+            "gizmosql" in driver_lower
+            or "gizmo" in driver_lower
+            or uri_lower.startswith(("gizmosql://", "gizmo://", "grpc+tls://"))
+        ):
+            return DIALECT_DUCKDB
         if "bigquery" in driver_lower or uri_lower.startswith("bigquery://"):
             return DIALECT_BIGQUERY
         if "snowflake" in driver_lower or uri_lower.startswith("snowflake://"):

@@ -5,7 +5,7 @@ SQLite Backend
 Overview
 ========
 
-SQLite is a zero-configuration, embedded SQL database engine that runs in the same process as your application. It's ideal for development, testing, embedded applications, and single-user scenarios where simplicity and portability are priorities.
+SQLite is a zero-configuration, embedded SQL database engine that runs in the same process as your application.
 
 **Key Features:**
 
@@ -16,20 +16,10 @@ SQLite is a zero-configuration, embedded SQL database engine that runs in the sa
 - **Small Footprint**: Minimal resource usage
 - **Cross-Platform**: Works identically on all platforms
 
-**Ideal Use Cases:**
-
-- Development and testing environments
-- Embedded desktop applications
-- Single-user AI agents
-- Prototyping and demos
-- Offline-first applications
-- Local data storage with zero infrastructure
-
 .. warning::
 
    **SQLite is optimized for embedded and single-user scenarios**, not high-concurrency
-   production deployments. For production AI agents with many simultaneous users, use
-   PostgreSQL or MySQL. SQLite excels at development, testing, and embedded use cases.
+   production deployments.
 
 Installation
 ============
@@ -386,29 +376,6 @@ Best Practices
    config.close()
    shutil.copy2(db_path, backup_path)
 
-When to Use SQLite
-==================
-
-**Ideal For:**
-
-✅ Development and testing environments
-✅ Embedded desktop applications
-✅ Single-user AI agents
-✅ Prototyping and demos
-✅ Offline-first applications
-✅ Learning and experimentation
-✅ CI/CD test suites
-✅ Local-first tools
-
-**Graduate to PostgreSQL When:**
-
-❌ Need high-concurrency production deployment
-❌ Multiple simultaneous users writing data
-❌ Require server-based architecture
-❌ Need advanced indexing (GIN/GiST for JSON)
-❌ Require full-text search capabilities
-❌ Need replication or clustering
-
 Comparison: SQLite vs Other Databases
 --------------------------------------
 
@@ -440,60 +407,6 @@ Comparison: SQLite vs Other Databases
      - Single file
      - Single file
      - Client-server
-   * - Best Use Case
-     - Development, embedded
-     - Async apps, testing
-     - Production agents
-
-Use Cases
-=========
-
-Development Environment
------------------------
-
-SQLite's zero-configuration makes it perfect for rapid development:
-
-.. code-block:: python
-
-   # Quick setup - no database server needed!
-   config = SqliteConfig(connection_config={"database": ":memory:"})
-   store = SqliteADKStore(config)
-   await store.create_tables()
-
-   service = SQLSpecSessionService(store)
-   session = await service.create_session("dev_app", "dev_user", {})
-
-Embedded Desktop Application
------------------------------
-
-Store agent sessions locally in desktop apps:
-
-.. code-block:: python
-
-   from pathlib import Path
-
-   # Store in user's application data directory
-   app_data = Path.home() / ".my_agent" / "sessions.db"
-   app_data.parent.mkdir(parents=True, exist_ok=True)
-
-   config = SqliteConfig(connection_config={"database": str(app_data)})
-   store = SqliteADKStore(config)
-   await store.create_tables()
-
-   # Enable WAL for better UI responsiveness
-   with config.provide_connection() as conn:
-       conn.execute("PRAGMA journal_mode=WAL")
-
-Unit Testing
-------------
-
-In-memory databases for fast, isolated tests:
-
-.. code-block:: python
-
-   import pytest
-   from sqlspec.adapters.sqlite import SqliteConfig
-   from sqlspec.adapters.sqlite.adk import SqliteADKStore
 
    @pytest.fixture
    async def test_store():

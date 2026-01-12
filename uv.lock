@@ -6217,6 +6217,10 @@ cli = [
 cloud-sql = [
     { name = "cloud-sql-python-connector" },
 ]
+cockroachdb = [
+    { name = "asyncpg" },
+    { name = "psycopg", extra = ["binary", "pool"] },
+]
 duckdb = [
     { name = "duckdb" },
 ]
@@ -6234,6 +6238,9 @@ litestar = [
 ]
 msgspec = [
     { name = "msgspec" },
+]
+mysql-connector = [
+    { name = "mysql-connector-python" },
 ]
 nanoid = [
     { name = "fastnanoid" },
@@ -6445,6 +6452,7 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'aiosqlite'" },
     { name = "asyncmy", marker = "extra == 'asyncmy'" },
     { name = "asyncpg", marker = "extra == 'asyncpg'" },
+    { name = "asyncpg", marker = "extra == 'cockroachdb'" },
     { name = "attrs", marker = "extra == 'attrs'" },
     { name = "cattrs", marker = "extra == 'attrs'" },
     { name = "cloud-sql-python-connector", marker = "extra == 'cloud-sql'" },
@@ -6462,6 +6470,7 @@ requires-dist = [
     { name = "msgspec", marker = "extra == 'msgspec'" },
     { name = "msgspec", marker = "extra == 'performance'" },
     { name = "mypy-extensions" },
+    { name = "mysql-connector-python", marker = "extra == 'mysql-connector'" },
     { name = "obstore", marker = "extra == 'obstore'" },
     { name = "opentelemetry-instrumentation", marker = "extra == 'opentelemetry'" },
     { name = "oracledb", marker = "extra == 'oracledb'" },
@@ -6470,6 +6479,7 @@ requires-dist = [
     { name = "polars", marker = "extra == 'polars'" },
     { name = "prometheus-client", marker = "extra == 'prometheus'" },
     { name = "psqlpy", marker = "extra == 'psqlpy'" },
+    { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'cockroachdb'" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'psycopg'" },
     { name = "pyarrow", marker = "extra == 'adbc'" },
     { name = "pyarrow", marker = "extra == 'pandas'" },
@@ -6486,7 +6496,7 @@ requires-dist = [
     { name = "typing-extensions" },
     { name = "uuid-utils", marker = "extra == 'uuid'" },
 ]
-provides-extras = ["adbc", "adk", "aioodbc", "aiosqlite", "alloydb", "asyncmy", "asyncpg", "attrs", "bigquery", "cli", "cloud-sql", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mypyc", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "uuid"]
+provides-extras = ["adbc", "adk", "aioodbc", "aiosqlite", "alloydb", "asyncmy", "asyncpg", "attrs", "bigquery", "cli", "cloud-sql", "cockroachdb", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mypyc", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "mysql-connector", "spanner", "uuid"]
 
 [package.metadata.requires-dev]
 benchmarks = [
