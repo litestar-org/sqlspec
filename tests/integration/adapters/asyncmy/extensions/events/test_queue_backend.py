@@ -28,7 +28,11 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService,
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"script_location": str(migrations), "include_extensions": ["events"], "version_table_name": "ddl_migrations_asyncmy"},
+        migration_config={
+            "script_location": str(migrations),
+            "include_extensions": ["events"],
+            "version_table_name": "ddl_migrations_asyncmy",
+        },
         extension_config={"events": {"queue_table": "asyncmy_event_queue"}},
     )
 
@@ -69,7 +73,11 @@ async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLServi
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"script_location": str(migrations), "include_extensions": ["events"], "version_table_name": "ddl_migrations_asyncmy"},
+        migration_config={
+            "script_location": str(migrations),
+            "include_extensions": ["events"],
+            "version_table_name": "ddl_migrations_asyncmy",
+        },
         extension_config={"events": {"queue_table": "asyncmy_event_queue"}},
     )
 
@@ -111,7 +119,11 @@ async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"script_location": str(migrations), "include_extensions": ["events"], "version_table_name": "ddl_migrations_asyncmy"},
+        migration_config={
+            "script_location": str(migrations),
+            "include_extensions": ["events"],
+            "version_table_name": "ddl_migrations_asyncmy",
+        },
         extension_config={"events": {"queue_table": "asyncmy_event_queue"}},
     )
 

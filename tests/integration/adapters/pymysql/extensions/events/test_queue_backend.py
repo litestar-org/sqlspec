@@ -26,7 +26,11 @@ def test_pymysql_event_channel_queue_fallback(mysql_service: MySQLService, tmp_p
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"script_location": str(migrations), "include_extensions": ["events"], "version_table_name": "ddl_migrations_pymysql"},
+        migration_config={
+            "script_location": str(migrations),
+            "include_extensions": ["events"],
+            "version_table_name": "ddl_migrations_pymysql",
+        },
         extension_config={"events": {"queue_table": "pymysql_event_queue"}},
     )
 
