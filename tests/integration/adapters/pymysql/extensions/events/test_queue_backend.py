@@ -26,8 +26,8 @@ def test_pymysql_event_channel_queue_fallback(mysql_service: MySQLService, tmp_p
             "database": mysql_service.db,
             "autocommit": True,
         },
-        migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        extension_config={"events": {}},
+        migration_config={"script_location": str(migrations), "include_extensions": ["events"], "version_table_name": "ddl_migrations_pymysql"},
+        extension_config={"events": {"queue_table": "pymysql_event_queue"}},
     )
 
     _spec, channel = setup_sync_event_channel(config)
@@ -41,7 +41,7 @@ def test_pymysql_event_channel_queue_fallback(mysql_service: MySQLService, tmp_p
 
     with config.provide_session() as driver:
         row = driver.select_one(
-            "SELECT status FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
+            "SELECT status FROM pymysql_event_queue WHERE event_id = :event_id", {"event_id": event_id}
         )
 
     assert message.payload["action"] == "mysql"
