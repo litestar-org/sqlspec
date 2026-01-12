@@ -83,6 +83,49 @@ html.dark .only-light {
   display: none;
 }
 
+/* Code blocks: neutral background, softer borders, wrapped lines */
+:root {
+  --sqlspec-code-bg: #f8fafc;
+  --sqlspec-code-border: #e2e8f0;
+  --sqlspec-code-text: #0f172a;
+}
+
+html.dark {
+  --sqlspec-code-bg: #0b1220;
+  --sqlspec-code-border: #1f2937;
+  --sqlspec-code-text: #e2e8f0;
+}
+
+div.highlight {
+  background: var(--sqlspec-code-bg);
+  border: 1px solid var(--sqlspec-code-border);
+  border-radius: 12px;
+  overflow: visible;
+}
+
+div.highlight pre {
+  background: transparent;
+  color: var(--sqlspec-code-text);
+  white-space: pre-wrap;
+  overflow-x: visible;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+div.highlight pre code {
+  white-space: inherit;
+}
+
+.playground-full {
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.playground-full .sqlspec-playground {
+  width: 100%;
+}
+
 /* Button container wrapping */
 .buttons.wrap {
   display: flex;

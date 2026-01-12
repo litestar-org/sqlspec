@@ -91,4 +91,4 @@ Related References
 ------------------
 
 - :doc:`../reference/adapters` for full adapter configuration reference.
-- :doc:`../examples/index` for additional adapter and query examples.
+- :doc:`/reference/adapters` for adapter capabilities and connection profiles.

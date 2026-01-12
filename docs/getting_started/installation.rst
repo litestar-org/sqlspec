@@ -2,280 +2,223 @@
 Installation
 ============
 
-Installing SQLSpec
-------------------
+Install SQLSpec with the extras that match your databases and tooling.
 
-SQLSpec can be installed using pip or uv. The base package includes support for SQLite and the core query processing infrastructure.
-
-Using pip
-^^^^^^^^^
-
-.. code-block:: bash
-
-    pip install sqlspec
-
-Using uv (recommended)
-^^^^^^^^^^^^^^^^^^^^^^
-
-`uv <https://docs.astral.sh/uv/>`_ is a fast Python package installer and resolver written in Rust. It's significantly faster than pip and provides better dependency resolution.
-
-.. code-block:: bash
-
-    uv pip install sqlspec
-
-Database-Specific Dependencies
--------------------------------
-
-SQLSpec uses optional dependencies to keep the base installation lightweight. Install only the drivers you need for your databases.
-
-PostgreSQL
-^^^^^^^^^^
-
-SQLSpec supports multiple PostgreSQL drivers. Choose the one that best fits your needs:
+Install bundles
+---------------
 
 .. tab-set::
 
-    .. tab-item:: asyncpg (recommended for async)
+   .. tab-item:: Core
 
-        Fast, async-native PostgreSQL driver with connection pooling.
+      .. code-block:: bash
 
-        .. code-block:: bash
+         uv pip install sqlspec
+         # or
+         pip install sqlspec
 
-            pip install sqlspec[asyncpg]
-            # or
-            uv pip install sqlspec[asyncpg]
+   .. tab-item:: PostgreSQL
 
-    .. tab-item:: psycopg (sync and async)
+      .. code-block:: bash
 
-        Modern PostgreSQL adapter with both sync and async support.
+         uv pip install "sqlspec[asyncpg]"
+         uv pip install "sqlspec[psycopg]"
+         uv pip install "sqlspec[psqlpy]"
 
-        .. code-block:: bash
+   .. tab-item:: SQLite
 
-            pip install sqlspec[psycopg]
-            # or
-            uv pip install sqlspec[psycopg]
+      .. code-block:: bash
 
-    .. tab-item:: psqlpy (high-performance async)
+         uv pip install "sqlspec[aiosqlite]"
 
-        High-performance async PostgreSQL driver built with Rust.
+   .. tab-item:: MySQL
 
-        .. code-block:: bash
+      .. code-block:: bash
 
-            pip install sqlspec[psqlpy]
-            # or
-            uv pip install sqlspec[psqlpy]
+         uv pip install "sqlspec[asyncmy]"
+         uv pip install "sqlspec[mysql-connector]"
+         uv pip install "sqlspec[pymysql]"
 
-SQLite
-^^^^^^
+   .. tab-item:: Oracle
 
-SQLite is included in Python's standard library. For async support:
+      .. code-block:: bash
+
+         uv pip install "sqlspec[oracledb]"
+
+   .. tab-item:: Analytics
+
+      .. code-block:: bash
+
+         uv pip install "sqlspec[duckdb]"
+         uv pip install "sqlspec[bigquery]"
+         uv pip install "sqlspec[spanner]"
+         uv pip install "sqlspec[adbc]"
+
+   .. tab-item:: Frameworks
+
+      .. code-block:: bash
+
+         uv pip install "sqlspec[litestar]"
+         uv pip install "sqlspec[fastapi]"
+         uv pip install "sqlspec[flask]"
+
+   .. tab-item:: Observability
+
+      .. code-block:: bash
+
+         uv pip install "sqlspec[opentelemetry]"
+         uv pip install "sqlspec[prometheus]"
+
+   .. tab-item:: Data Export
+
+      .. code-block:: bash
+
+         uv pip install "sqlspec[pandas]"
+         uv pip install "sqlspec[polars]"
+         uv pip install "sqlspec[fsspec]"
+         uv pip install "sqlspec[obstore]"
+
+   .. tab-item:: Types & Serialization
+
+      .. code-block:: bash
+
+         uv pip install "sqlspec[msgspec]"
+         uv pip install "sqlspec[pydantic]"
+         uv pip install "sqlspec[attrs]"
+         uv pip install "sqlspec[orjson]"
+
+   .. tab-item:: Performance
+
+      .. code-block:: bash
+
+         uv pip install "sqlspec[performance]"
+
+Package groups
+--------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 42 40
+
+   * - Extra
+     - Includes
+     - What it is for
+   * - ``adbc``
+     - ``adbc_driver_manager``, ``pyarrow``
+     - Arrow Database Connectivity drivers.
+   * - ``adk``
+     - ``google-adk``
+     - Google ADK storage extension.
+   * - ``aioodbc``
+     - ``aioodbc``
+     - Async ODBC connections.
+   * - ``aiosqlite``
+     - ``aiosqlite``
+     - Async SQLite driver.
+   * - ``alloydb``
+     - ``google-cloud-alloydb-connector``
+     - AlloyDB connector.
+   * - ``asyncmy``
+     - ``asyncmy``
+     - Async MySQL driver.
+   * - ``asyncpg``
+     - ``asyncpg``
+     - Async PostgreSQL driver.
+   * - ``attrs``
+     - ``attrs``, ``cattrs``
+     - Result mapping with attrs models.
+   * - ``bigquery``
+     - ``google-cloud-bigquery``, ``google-cloud-storage``
+     - BigQuery adapter dependencies.
+   * - ``cli``
+     - ``rich-click``, ``tomli`` (Py<3.11)
+     - CLI enhancements.
+   * - ``cloud-sql``
+     - ``cloud-sql-python-connector``
+     - Google Cloud SQL connector.
+   * - ``cockroachdb``
+     - ``psycopg[binary,pool]``, ``asyncpg``
+     - CockroachDB drivers.
+   * - ``duckdb``
+     - ``duckdb``
+     - DuckDB adapter.
+   * - ``fastapi``
+     - ``fastapi``
+     - FastAPI integration helpers.
+   * - ``flask``
+     - ``flask``
+     - Flask integration helpers.
+   * - ``fsspec``
+     - ``fsspec``
+     - Storage helpers using fsspec.
+   * - ``litestar``
+     - ``litestar``
+     - Litestar integration helpers.
+   * - ``msgspec``
+     - ``msgspec``
+     - High-performance result mapping.
+   * - ``mysql-connector``
+     - ``mysql-connector-python``
+     - MySQL connector driver.
+   * - ``nanoid``
+     - ``fastnanoid``
+     - NanoID utilities.
+   * - ``obstore``
+     - ``obstore``
+     - Object storage helpers.
+   * - ``opentelemetry``
+     - ``opentelemetry-instrumentation``
+     - OpenTelemetry instrumentation.
+   * - ``oracledb``
+     - ``oracledb``
+     - Oracle Database adapter.
+   * - ``orjson``
+     - ``orjson``
+     - Fast JSON serialization.
+   * - ``pandas``
+     - ``pandas``, ``pyarrow``
+     - Pandas data export.
+   * - ``performance``
+     - ``sqlglot[rs]``, ``msgspec``
+     - Rust-based SQL parsing + msgspec.
+   * - ``polars``
+     - ``polars``, ``pyarrow``
+     - Polars data export.
+   * - ``prometheus``
+     - ``prometheus-client``
+     - Prometheus metrics.
+   * - ``psqlpy``
+     - ``psqlpy``
+     - Async PostgreSQL (Rust).
+   * - ``psycopg``
+     - ``psycopg[binary,pool]``
+     - Sync/async PostgreSQL driver.
+   * - ``pydantic``
+     - ``pydantic``, ``pydantic-extra-types``
+     - Result mapping with Pydantic models.
+   * - ``pymssql``
+     - ``pymssql``
+     - MSSQL driver.
+   * - ``pymysql``
+     - ``pymysql``
+     - MySQL driver.
+   * - ``spanner``
+     - ``google-cloud-spanner``
+     - Cloud Spanner adapter.
+   * - ``uuid``
+     - ``uuid-utils``
+     - UUID helpers.
+
+Multiple extras
+---------------
 
 .. code-block:: bash
 
-    pip install sqlspec[aiosqlite]
-    # or
-    uv pip install sqlspec[aiosqlite]
-
-DuckDB
-^^^^^^
-
-DuckDB is an embedded analytical database perfect for OLAP workloads:
-
-.. code-block:: bash
-
-    pip install sqlspec[duckdb]
-    # or
-    uv pip install sqlspec[duckdb]
-
-MySQL
-^^^^^
-
-For async MySQL support:
-
-.. code-block:: bash
-
-    pip install sqlspec[asyncmy]
-    # or
-    uv pip install sqlspec[asyncmy]
-
-Oracle
-^^^^^^
-
-For Oracle Database support (both sync and async):
-
-.. code-block:: bash
-
-    pip install sqlspec[oracledb]
-    # or
-    uv pip install sqlspec[oracledb]
-
-BigQuery
-^^^^^^^^
-
-For Google BigQuery support:
-
-.. code-block:: bash
-
-    pip install sqlspec[bigquery]
-    # or
-    uv pip install sqlspec[bigquery]
-
-ADBC (Arrow Database Connectivity)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-ADBC provides Arrow-native database access for multiple databases:
-
-.. code-block:: bash
-
-    pip install sqlspec[adbc]
-    # or
-    uv pip install sqlspec[adbc]
-
-Type-Safe Result Mapping
--------------------------
-
-SQLSpec supports automatic mapping to typed models. Install the library you prefer:
-
-Pydantic
-^^^^^^^^
-
-.. code-block:: bash
-
-    pip install sqlspec[pydantic]
-    # or
-    uv pip install sqlspec[pydantic]
-
-msgspec (recommended for performance)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: bash
-
-    pip install sqlspec[msgspec]
-    # or
-    uv pip install sqlspec[msgspec]
-
-attrs
-^^^^^
-
-.. code-block:: bash
-
-    pip install sqlspec[attrs]
-    # or
-    uv pip install sqlspec[attrs]
-
-Framework Integrations
-----------------------
-
-Litestar
-^^^^^^^^
-
-For Litestar web framework integration:
-
-.. code-block:: bash
-
-    pip install sqlspec[litestar]
-    # or
-    uv pip install sqlspec[litestar]
-
-FastAPI
-^^^^^^^
-
-For FastAPI integration:
-
-.. code-block:: bash
-
-    pip install sqlspec[fastapi]
-    # or
-    uv pip install sqlspec[fastapi]
-
-Flask
-^^^^^
-
-For Flask integration:
-
-.. code-block:: bash
-
-    pip install sqlspec[flask]
-    # or
-    uv pip install sqlspec[flask]
-
-Additional Features
--------------------
-
-Observability
-^^^^^^^^^^^^^
-
-For OpenTelemetry instrumentation:
-
-.. code-block:: bash
-
-    pip install sqlspec[opentelemetry]
-    # or
-    uv pip install sqlspec[opentelemetry]
-
-For Prometheus metrics:
-
-.. code-block:: bash
-
-    pip install sqlspec[prometheus]
-    # or
-    uv pip install sqlspec[prometheus]
-
-Data Export
-^^^^^^^^^^^
-
-For Pandas and Polars support:
-
-.. code-block:: bash
-
-    pip install sqlspec[pandas]
-    # or
-    uv pip install sqlspec[polars]
-
-For storage operations with fsspec or obstore:
-
-.. code-block:: bash
-
-    pip install sqlspec[fsspec]
-    # or
-    uv pip install sqlspec[obstore]
-
-Performance Optimizations
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-For maximum performance with Rust-based SQL parsing and msgspec:
-
-.. code-block:: bash
-
-    pip install sqlspec[performance]
-    # or
-    uv pip install sqlspec[performance]
-
-Installing Multiple Extras
----------------------------
-
-You can install multiple optional dependencies at once:
-
-.. code-block:: bash
-
-    pip install sqlspec[asyncpg,pydantic,litestar]
-    # or
-    uv pip install sqlspec[asyncpg,pydantic,litestar]
-
-Development Installation
-------------------------
-
-If you want to contribute to SQLSpec or run the examples:
-
-.. code-block:: bash
-
-    git clone https://github.com/litestar-org/sqlspec.git
-    cd sqlspec
-    make install
-    # or
-    uv sync --all-extras --dev
-
-Next Steps
+   uv pip install "sqlspec[asyncpg,msgspec,litestar]"
+   # or
+   pip install "sqlspec[asyncpg,msgspec,litestar]"
+
+Next steps
 ----------
 
-Now that SQLSpec is installed, head over to the :doc:`quickstart` to run your first query!
+Head to :doc:`quickstart` to run your first query.

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 import rich_click as click
-from litestar.cli._utils import LitestarGroup  # noqa: PLC2701
+from litestar.cli._utils import LitestarGroup
 
 from sqlspec.cli import add_migration_commands
 from sqlspec.exceptions import ImproperConfigurationError

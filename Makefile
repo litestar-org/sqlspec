@@ -250,7 +250,7 @@ docs-clean:                                        ## Clean documentation build
 .PHONY: docs-serve
 docs-serve: docs-clean                             ## Serve documentation locally
 	@echo "${INFO} Starting documentation server... 📚"
-	@uv run sphinx-autobuild docs docs/_build/ -j auto --watch sqlspec --watch docs --watch tests --watch CONTRIBUTING.rst --port 8002
+	@uv run sphinx-autobuild docs docs/_build/ -j 1 --watch sqlspec --watch docs --watch tests --watch CONTRIBUTING.rst --port 8002
 
 .PHONY: docs
 docs: docs-clean                                   ## Build documentation

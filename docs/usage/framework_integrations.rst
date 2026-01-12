@@ -4,15 +4,15 @@ Framework Integrations
 SQLSpec provides framework integrations that connect configs, sessions, and
 lifecycle hooks into your application.
 
-Choose a framework
-==================
+Supported frameworks
+====================
 
 .. grid:: 1 1 2 4
    :gutter: 2
    :padding: 0
 
    .. grid-item-card:: Litestar
-      :link: frameworks/litestar
+      :link: frameworks/litestar/index
       :link-type: doc
 
       .. image:: /_static/logos/litestar.png
@@ -62,7 +62,7 @@ Choose a framework
 .. toctree::
    :hidden:
 
-   frameworks/litestar
+   frameworks/litestar/index
    frameworks/fastapi
    frameworks/flask
    frameworks/starlette

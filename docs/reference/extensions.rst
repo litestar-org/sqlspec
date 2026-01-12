@@ -60,5 +60,5 @@ See Also
 ========
 
 - :doc:`/extensions/adk/index`
-- :doc:`/extensions/litestar/index`
+- :doc:`/usage/frameworks/litestar/index`
 - :doc:`/usage/framework_integrations`

@@ -45,4 +45,4 @@ Next Steps
 - :doc:`../usage/query_builder` if you want the fluent SQL builder.
 - :doc:`../usage/sql_files` to load named SQL queries from files.
 - :doc:`../usage/framework_integrations` to plug into Litestar, FastAPI, Flask, or Starlette.
-- :doc:`../examples/index` for the full example catalog.
+- :doc:`/usage/index` for deeper configuration and driver guidance.

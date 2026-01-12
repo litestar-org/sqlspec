@@ -193,6 +193,7 @@ exclude_patterns = [
     "VOICE_AUDIT_REPORT.md",
     "autoapi/sqlspec/index.rst",
     "examples/README.md",
+    "examples/index.rst",
 ]
 html_show_sourcelink = True
 html_copy_source = True
@@ -204,6 +205,8 @@ html_context = {
     "current_version": "latest",
     "version": release,
 }
+
+html_sidebars = {"**": []}
 
 
 # Mermaid configuration
@@ -223,7 +226,7 @@ mermaid.initialize({
 
 html_theme_options = {
     "logo_target": "/",
-    "accent_color": "amber",
+    "accent_color": "indigo",
     "github_url": "https://github.com/litestar-org/sqlspec",
     "discord_url": "https://discord.gg/dSDXd4mKhp",
     "navigation_with_keys": True,
@@ -235,8 +238,8 @@ html_theme_options = {
         {"title": "Home", "url": "index"},
         {"title": "Get Started", "url": "getting_started/index"},
         {"title": "Usage", "url": "usage/index"},
-        {"title": "Examples", "url": "examples/index"},
         {"title": "API", "url": "reference/index"},
+        {"title": "Playground", "url": "playground"},
         {
             "title": "About",
             "children": [
@@ -293,6 +296,9 @@ html_theme_options = {
         },
     ],
 }
+
+pygments_style = "friendly"
+pygments_dark_style = "monokai"
 
 
 def update_html_context(

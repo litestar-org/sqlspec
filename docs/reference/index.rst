@@ -116,7 +116,7 @@ Available API References
 ========================
 
 .. toctree::
-   :titlesonly:
+   :hidden:
 
    base
    adapters
@@ -156,7 +156,6 @@ See Also
 
 - :doc:`/getting_started/index` - Getting started guide
 - :doc:`/usage/index` - Usage documentation
-- :doc:`/examples/index` - Code examples
 - :doc:`/contributing/index` - Contributing guide
 
 Type Hints and Protocols

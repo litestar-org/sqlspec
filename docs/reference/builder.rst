@@ -40,5 +40,5 @@ Select Builder
 More Examples
 =============
 
-- :doc:`/examples/index` for query modifiers and joins.
+- :doc:`/usage/query_builder` for query modifiers and joins.
 - :doc:`/usage/query_builder` for focused workflows.

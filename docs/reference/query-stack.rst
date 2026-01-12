@@ -4,10 +4,6 @@ Query Stack
 
 The Query Stack APIs let you compose multiple SQL operations into an immutable ``StatementStack`` and execute them in a single driver call. Each operation preserves the underlying ``SQLResult``/``ArrowResult`` so downstream helpers continue to work without copying data.
 
-.. contents:: Table of Contents
-   :local:
-   :depth: 2
-
 Overview
 ========
 

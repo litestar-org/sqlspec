@@ -1,7 +1,6 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/sql/sql.js"></script>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
 
 <style>
@@ -20,6 +19,13 @@
     align-items: flex-start;
     justify-content: space-between;
     margin-bottom: 1.25rem;
+  }
+
+  .sqlspec-playground__header-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
   }
 
   .sqlspec-playground__header h2 {
@@ -43,7 +49,7 @@
 
   .sqlspec-playground__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
   }
 
@@ -98,13 +104,42 @@
 
   .sqlspec-playground__output pre {
     margin: 0.5rem 0 0 0;
-    max-height: 220px;
+    max-height: 280px;
     overflow-y: auto;
     padding: 0.75rem;
     background: #0f172a;
     color: #e2e8f0;
     border-radius: 10px;
     font-size: 0.85rem;
+  }
+
+  .sqlspec-playground__tip-dialog {
+    border: none;
+    border-radius: 16px;
+    padding: 1.25rem;
+    max-width: 520px;
+    width: min(92vw, 520px);
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.2);
+  }
+
+  .sqlspec-playground__tip-dialog::backdrop {
+    background: rgba(15, 23, 42, 0.45);
+  }
+
+  .sqlspec-playground__tip-dialog h3 {
+    margin-top: 0;
+  }
+
+  .sqlspec-playground__tip-dialog ul {
+    margin: 0.75rem 0 1rem;
+    padding-left: 1.25rem;
+  }
+
+  .sqlspec-playground__tip-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
   }
 
   .sqlspec-playground__output pre:focus {
@@ -115,7 +150,7 @@
   .sqlspec-playground .CodeMirror {
     border: 1px solid var(--sl-color-gray-3);
     border-radius: 12px;
-    height: 220px;
+    height: 320px;
     font-family: var(--sl-font-mono);
     font-size: 0.85rem;
     background: #f8fafc;
@@ -147,10 +182,13 @@
 <section class="sqlspec-playground" id="sqlspec-playground-{{ id }}">
   <div class="sqlspec-playground__header">
     <div>
-      <h2>SQL Playground</h2>
-      <p>Run SQLSpec inside your browser. Execute Python or run SQL against a seeded, in-memory SQLite database.</p>
+      <h2>SQLSpec Playground</h2>
+      <p>Run SQLSpec inside your browser. Execute Python and inspect the output.</p>
     </div>
-    <div class="sqlspec-playground__status" data-status>Loading runtime</div>
+    <div class="sqlspec-playground__header-actions">
+      <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
+      <div class="sqlspec-playground__status" data-status>Loading runtime</div>
+    </div>
   </div>
 
   <div class="sqlspec-playground__grid">
@@ -177,18 +215,7 @@ with spec.provide_session(config) as session:
       </textarea>
     </div>
 
-    <div class="sqlspec-playground__panel">
-      <div class="sqlspec-playground__panel-header">
-        <span>SQL</span>
-        <div class="sqlspec-playground__panel-actions">
-          <button class="sqlspec-playground__button" data-run-sql>Run SQL</button>
-          <button class="sqlspec-playground__button" data-reset-sql>Reset</button>
-        </div>
-      </div>
-      <textarea data-sql-editor>
-select id, name from teams order by id;
-      </textarea>
-    </div>
+
   </div>
 
   <div class="sqlspec-playground__output">
@@ -198,6 +225,18 @@ select id, name from teams order by id;
     </div>
     <pre data-output tabindex="0" aria-live="polite"></pre>
   </div>
+
+  <dialog class="sqlspec-playground__tip-dialog" data-tips-dialog>
+    <h3>Usage tips</h3>
+    <ul>
+      <li>Run the default snippet to seed a SQLite in-memory database.</li>
+      <li>Edit the Python block to try SQLSpec helpers and adapters.</li>
+      <li>Reset restores the default snippet and clears output.</li>
+    </ul>
+    <div class="sqlspec-playground__tip-dialog-actions">
+      <button class="sqlspec-playground__button" data-close-tips>Close</button>
+    </div>
+  </dialog>
 </section>
 
 <script>
@@ -206,27 +245,19 @@ select id, name from teams order by id;
     const statusEl = root.querySelector("[data-status]");
     const outputEl = root.querySelector("[data-output]");
     const pythonTextarea = root.querySelector("[data-python-editor]");
-    const sqlTextarea = root.querySelector("[data-sql-editor]");
     const runPythonButton = root.querySelector("[data-run-python]");
-    const runSqlButton = root.querySelector("[data-run-sql]");
     const resetPythonButton = root.querySelector("[data-reset-python]");
-    const resetSqlButton = root.querySelector("[data-reset-sql]");
     const clearOutputButton = root.querySelector("[data-clear-output]");
+    const tipsDialog = root.querySelector("[data-tips-dialog]");
+    const openTipsButton = root.querySelector("[data-open-tips]");
+    const closeTipsButton = root.querySelector("[data-close-tips]");
 
     const pythonDefault = pythonTextarea.value.trim();
-    const sqlDefault = sqlTextarea.value.trim();
 
     const pythonEditor = CodeMirror.fromTextArea(pythonTextarea, {
       mode: "python",
       lineNumbers: true,
       indentUnit: 4,
-      viewportMargin: Infinity
-    });
-
-    const sqlEditor = CodeMirror.fromTextArea(sqlTextarea, {
-      mode: "text/x-sql",
-      lineNumbers: true,
-      indentUnit: 2,
       viewportMargin: Infinity
     });
 
@@ -255,6 +286,9 @@ select id, name from teams order by id;
         pyodide.setStdout({ batched: writeOutput });
         pyodide.setStderr({ batched: writeOutput });
 
+        writeOutput("Loading sqlite3...");
+        await pyodide.loadPackage("sqlite3");
+
         writeOutput("Loading micropip...");
         await pyodide.loadPackage("micropip");
         const micropip = pyodide.pyimport("micropip");
@@ -262,29 +296,8 @@ select id, name from teams order by id;
         writeOutput("Installing sqlspec...");
         await micropip.install("sqlspec");
 
-        await pyodide.runPythonAsync(`
-from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
-
-_playground_spec = SQLSpec()
-_playground_config = _playground_spec.add_config(
-    SqliteConfig(connection_config={"database": ":memory:"})
-)
-with _playground_spec.provide_session(_playground_config) as session:
-    session.execute("create table if not exists teams (id integer primary key, name text)")
-    session.execute("insert into teams (name) values ('Litestar'), ('SQLSpec')")
-
-def run_sql(query: str):
-    with _playground_spec.provide_session(_playground_config) as session:
-        result = session.execute(query)
-        rows = result.all()
-        rows_affected = result.rows_affected
-    return rows, rows_affected
-        `);
-
         setStatus("Ready");
         runPythonButton.disabled = false;
-        runSqlButton.disabled = false;
       } catch (err) {
         setStatus("Failed to load");
         writeOutput(`Error: ${err}`);
@@ -293,7 +306,6 @@ def run_sql(query: str):
     };
 
     runPythonButton.disabled = true;
-    runSqlButton.disabled = true;
 
     runPythonButton.addEventListener("click", async () => {
       if (!pyodide) {
@@ -311,39 +323,24 @@ def run_sql(query: str):
       }
     });
 
-    runSqlButton.addEventListener("click", async () => {
-      if (!pyodide) {
-        writeOutput("Pyodide is not ready yet.");
-        return;
-      }
-
-      clearOutput();
-      writeOutput("Running SQL...");
-      try {
-        pyodide.globals.set("sqlspec_sql", sqlEditor.getValue());
-        await pyodide.runPythonAsync(`
-rows, rows_affected = run_sql(sqlspec_sql)
-if rows:
-    print(rows)
-else:
-    print(f"Rows affected: {rows_affected}")
-        `);
-      } catch (err) {
-        writeOutput(`SQL error: ${err}`);
-        console.error(err);
-      }
-    });
-
     resetPythonButton.addEventListener("click", () => {
       pythonEditor.setValue(pythonDefault);
     });
 
-    resetSqlButton.addEventListener("click", () => {
-      sqlEditor.setValue(sqlDefault);
-    });
-
     clearOutputButton.addEventListener("click", () => {
       clearOutput();
+    });
+
+    openTipsButton.addEventListener("click", () => {
+      if (tipsDialog) {
+        tipsDialog.showModal();
+      }
+    });
+
+    closeTipsButton.addEventListener("click", () => {
+      if (tipsDialog) {
+        tipsDialog.close();
+      }
     });
 
     initializePlayground();

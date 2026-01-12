@@ -77,5 +77,5 @@ Find each config in ``sqlspec.adapters.<adapter>`` (for example,
 Example Library
 ===============
 
-- :doc:`/examples/index` for per-adapter configuration examples.
+- :doc:`/usage/drivers_and_querying` for per-adapter configuration examples.
 - :doc:`/usage/drivers_and_querying` for execution patterns.
