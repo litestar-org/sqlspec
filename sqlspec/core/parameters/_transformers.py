@@ -12,7 +12,7 @@ from sqlspec.core.parameters._alignment import (
     normalize_parameter_key,
     validate_parameter_alignment,
 )
-from sqlspec.core.parameters._types import ParameterMapping, ParameterPayload, ParameterProfile
+from sqlspec.core.parameters._types import ConvertedParameters, ParameterMapping, ParameterPayload, ParameterProfile
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.type_guards import get_value_attribute
 
@@ -35,7 +35,7 @@ class _NullPruningTransform:
 
     def __call__(
         self, expression: Any, parameters: "ParameterPayload", parameter_profile: "ParameterProfile"
-    ) -> "tuple[Any, object]":
+    ) -> "tuple[Any, ConvertedParameters]":
         return replace_null_parameters_with_literals(
             expression,
             parameters,
@@ -164,7 +164,7 @@ class _PlaceholderLiteralTransformer:
 
 def build_null_pruning_transform(
     *, dialect: str = "postgres", validator: "ParameterValidator | None" = None
-) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, object]]":
+) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, ConvertedParameters]]":
     """Return a callable that prunes NULL placeholders from an expression."""
     return _NullPruningTransform(dialect, validator)
 
@@ -183,7 +183,7 @@ def replace_null_parameters_with_literals(
     dialect: str = "postgres",
     validator: "ParameterValidator | None" = None,
     parameter_profile: "ParameterProfile | None" = None,
-) -> "tuple[Any, object]":
+) -> "tuple[Any, ConvertedParameters]":
     """Rewrite placeholders representing ``NULL`` values and prune parameters.
 
     Args:
@@ -197,10 +197,21 @@ def replace_null_parameters_with_literals(
         Tuple containing the transformed expression and updated parameters.
     """
     if not parameters:
-        return expression, parameters
+        if parameters is None:
+            return expression, None
+        if isinstance(parameters, dict):
+            return expression, parameters
+        if isinstance(parameters, (list, tuple)):
+            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
+        return expression, None
 
     if looks_like_execute_many(parameters):
-        return expression, parameters
+        # For execute_many, convert to concrete type
+        if isinstance(parameters, dict):
+            return expression, parameters
+        if isinstance(parameters, (list, tuple)):
+            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
+        return expression, None
 
     validator_instance = validator or _AST_TRANSFORMER_VALIDATOR
     profile = parameter_profile
@@ -211,19 +222,28 @@ def replace_null_parameters_with_literals(
 
     null_positions = collect_null_parameter_ordinals(parameters, profile)
     if not null_positions:
-        return expression, parameters
+        # Convert to concrete type for return
+        if isinstance(parameters, dict):
+            return expression, parameters
+        if isinstance(parameters, (list, tuple)):
+            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
+        if isinstance(parameters, Mapping):
+            return expression, dict(parameters)
+        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+            return expression, list(parameters)
+        return expression, None
 
     sorted_null_positions = sorted(null_positions)
 
     transformer = _NullPlaceholderTransformer(null_positions, sorted_null_positions)
     transformed_expression = expression.transform(transformer)
 
-    cleaned_parameters: object
+    cleaned_parameters: ConvertedParameters
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
         cleaned_list = [value for index, value in enumerate(parameters) if index not in null_positions]
         cleaned_parameters = tuple(cleaned_list) if isinstance(parameters, tuple) else cleaned_list
     elif isinstance(parameters, Mapping):
-        cleaned_dict: dict[str, object] = {}
+        cleaned_dict: dict[str, Any] = {}
         next_numeric_index = 1
 
         for key, value in parameters.items():
@@ -237,7 +257,7 @@ def replace_null_parameters_with_literals(
                 cleaned_dict[str(normalized_key)] = value
         cleaned_parameters = cleaned_dict
     else:
-        cleaned_parameters = parameters
+        cleaned_parameters = None
 
     return transformed_expression, cleaned_parameters
 

@@ -32,7 +32,7 @@ from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
-from sqlspec.typing import VersionInfo
+from sqlspec.typing import VersionCacheResult, VersionInfo
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.type_guards import (
@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
+    from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.storage import AsyncStoragePipeline, StorageCapabilities, SyncStoragePipeline
@@ -461,7 +462,7 @@ class DataDictionaryMixin:
         self._version_cache = {}
         self._version_fetch_attempted = set()
 
-    def get_cached_version(self, driver_id: int) -> object:
+    def get_cached_version(self, driver_id: int) -> "VersionCacheResult":
         """Get cached version info for a driver.
 
         Args:
@@ -488,7 +489,7 @@ class DataDictionaryMixin:
         if version is not None:
             self._version_cache[driver_id] = version
 
-    def get_cached_version_for_driver(self, driver: Any) -> object:
+    def get_cached_version_for_driver(self, driver: Any) -> "VersionCacheResult":
         """Get cached version info for a driver instance.
 
         Args:
@@ -1135,7 +1136,7 @@ class CommonDriverAttributesMixin:
         statement_config: "StatementConfig",
         is_many: bool = False,
         prepared_statement: Any | None = None,  # pyright: ignore[reportUnusedParameter]
-    ) -> object:
+    ) -> "ConvertedParameters":
         """Prepare parameters for database driver consumption.
 
         Normalizes parameter structure and unwraps TypedParameter objects
@@ -1183,7 +1184,7 @@ class CommonDriverAttributesMixin:
 
     def _format_parameter_set_for_many(
         self, parameters: "StatementParameters", statement_config: "StatementConfig"
-    ) -> object:
+    ) -> "ConvertedParameters":
         """Prepare a single parameter set for execute_many operations.
 
         Handles parameter sets without converting the structure to array format,
@@ -1204,7 +1205,7 @@ class CommonDriverAttributesMixin:
         coerce_value = self._apply_coercion
 
         if not isinstance(parameters, (dict, list, tuple)):
-            return coerce_value(parameters, type_coercion_map)
+            return [coerce_value(parameters, type_coercion_map)]
 
         if isinstance(parameters, dict):
             return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
@@ -1212,7 +1213,9 @@ class CommonDriverAttributesMixin:
         coerced_params = [coerce_value(p, type_coercion_map) for p in parameters]
         return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
 
-    def _format_parameter_set(self, parameters: "StatementParameters", statement_config: "StatementConfig") -> object:
+    def _format_parameter_set(
+        self, parameters: "StatementParameters", statement_config: "StatementConfig"
+    ) -> "ConvertedParameters":
         """Prepare a single parameter set for database driver consumption.
 
         Args:
@@ -1302,9 +1305,7 @@ class CommonDriverAttributesMixin:
 
         cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
         cached_statement = CachedStatement(
-            compiled_sql=compiled_sql,
-            parameters=cast("tuple[Any, ...] | dict[str, Any] | None", cached_parameters),
-            expression=prepared_statement.expression,
+            compiled_sql=compiled_sql, parameters=cached_parameters, expression=prepared_statement.expression
         )
 
         if cache_key is not None and cache is not None:

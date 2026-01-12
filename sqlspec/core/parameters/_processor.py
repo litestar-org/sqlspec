@@ -10,6 +10,7 @@ from mypy_extensions import mypyc_attr
 from sqlspec.core.parameters._alignment import looks_like_execute_many
 from sqlspec.core.parameters._converter import ParameterConverter
 from sqlspec.core.parameters._types import (
+    ConvertedParameters,
     ParameterInfo,
     ParameterPayload,
     ParameterProcessingResult,
@@ -211,20 +212,30 @@ class ParameterProcessor:
                 return original_style
         return config.default_execution_parameter_style or config.default_parameter_style
 
-    def _wrap_parameter_types(self, parameters: "ParameterPayload") -> object:
+    def _wrap_parameter_types(self, parameters: "ParameterPayload") -> "ConvertedParameters":
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             return [wrap_with_type(p) for p in parameters]
         if isinstance(parameters, Mapping):
             return {k: wrap_with_type(v) for k, v in parameters.items()}
-        return wrap_with_type(parameters)
+        return None
 
     def _coerce_parameter_types(
         self,
         parameters: "ParameterPayload",
         type_coercion_map: "dict[type, Callable[[Any], Any]]",
         is_many: bool = False,
-    ) -> object:
-        return _coerce_parameters_payload(parameters, type_coercion_map, is_many)
+    ) -> "ConvertedParameters":
+        result = _coerce_parameters_payload(parameters, type_coercion_map, is_many)
+        # Type narrow the result - _coerce_parameters_payload returns object but we know it produces concrete types
+        if result is None:
+            return None
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, list):
+            return result
+        if isinstance(result, tuple):
+            return result
+        return None
 
     def _store_cached_result(self, cache_key: str, result: "ParameterProcessingResult") -> "ParameterProcessingResult":
         if self._cache_max_size <= 0:
@@ -464,9 +475,22 @@ class ParameterProcessor:
         original_styles: "set[ParameterStyle]",
         needs_execution_conversion: bool,
         is_many: bool,
-    ) -> "tuple[str, object]":
+    ) -> "tuple[str, ConvertedParameters]":
         if not needs_execution_conversion:
-            return sql, parameters
+            # Convert parameters to concrete type for return
+            if parameters is None:
+                return sql, None
+            if isinstance(parameters, dict):
+                return sql, parameters
+            if isinstance(parameters, list):
+                return sql, parameters
+            if isinstance(parameters, tuple):
+                return sql, parameters
+            if isinstance(parameters, Mapping):
+                return sql, dict(parameters)
+            if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+                return sql, list(parameters)
+            return sql, None
 
         if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
             target_style = self._select_execution_style(original_styles, config)
