@@ -1860,7 +1860,7 @@ def test_converted_parameters_fallback_to_none(converter: ParameterConverter) ->
     param_info = converter.validator.extract_parameters(sql)
 
     # Use _convert_parameter_format directly
-    converted_params = converter._convert_parameter_format(
+    converted_params = converter._convert_parameter_format(  # pyright: ignore
         parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
     )
 
