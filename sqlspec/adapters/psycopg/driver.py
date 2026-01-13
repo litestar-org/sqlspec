@@ -20,6 +20,7 @@ from sqlspec.adapters.psycopg.core import (
     build_pipeline_execution_result,
     build_truncate_command,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     driver_profile,
     execute_with_optional_parameters,
@@ -27,7 +28,6 @@ from sqlspec.adapters.psycopg.core import (
     executemany_or_skip,
     executemany_or_skip_async,
     pipeline_supported,
-    raise_exception,
     resolve_rowcount,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
@@ -153,11 +153,8 @@ class PsycopgSyncExceptionHandler:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 
@@ -581,11 +578,8 @@ class PsycopgAsyncExceptionHandler:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 

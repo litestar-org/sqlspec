@@ -32,10 +32,10 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "collect_rows",
+    "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "normalize_execute_parameters",
-    "raise_exception",
     "resolve_rowcount",
 )
 
@@ -189,39 +189,60 @@ def apply_driver_features(
     return statement_config.replace(parameter_config=param_config)
 
 
-def _raise_duckdb_error(error: Any, error_class: type[SQLSpecError], description: str) -> None:
+def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
+    """Create a SQLSpec exception from a DuckDB error.
+
+    Args:
+        error: The original DuckDB exception
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
     msg = f"DuckDB {description}: {error}"
-    raise error_class(msg) from error
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
 
 
-def raise_exception(exc_type: Any, error: Any) -> None:
-    """Raise SQLSpec exceptions for DuckDB errors."""
+def create_mapped_exception(exc_type: Any, error: Any) -> SQLSpecError:
+    """Map DuckDB exceptions to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __exit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        exc_type: The exception type (class)
+        error: The DuckDB exception to map
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
     error_msg = str(error).lower()
     exc_name = exc_type.__name__.lower()
 
     if "constraintexception" in exc_name:
         if "unique" in error_msg or "duplicate" in error_msg:
-            _raise_duckdb_error(error, UniqueViolationError, "unique constraint violation")
-        elif "foreign key" in error_msg or "violates foreign key" in error_msg:
-            _raise_duckdb_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-        elif "not null" in error_msg or "null value" in error_msg:
-            _raise_duckdb_error(error, NotNullViolationError, "not-null constraint violation")
-        elif "check constraint" in error_msg or "check condition" in error_msg:
-            _raise_duckdb_error(error, CheckViolationError, "check constraint violation")
-        else:
-            _raise_duckdb_error(error, IntegrityError, "integrity constraint violation")
-        return
+            return _create_duckdb_error(error, UniqueViolationError, "unique constraint violation")
+        if "foreign key" in error_msg or "violates foreign key" in error_msg:
+            return _create_duckdb_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+        if "not null" in error_msg or "null value" in error_msg:
+            return _create_duckdb_error(error, NotNullViolationError, "not-null constraint violation")
+        if "check constraint" in error_msg or "check condition" in error_msg:
+            return _create_duckdb_error(error, CheckViolationError, "check constraint violation")
+        return _create_duckdb_error(error, IntegrityError, "integrity constraint violation")
 
     if "catalogexception" in exc_name:
-        _raise_duckdb_error(error, NotFoundError, "catalog error")
-    elif "parserexception" in exc_name or "binderexception" in exc_name:
-        _raise_duckdb_error(error, SQLParsingError, "SQL parsing error")
-    elif "ioexception" in exc_name:
-        _raise_duckdb_error(error, OperationalError, "operational error")
-    elif "conversionexception" in exc_name or "type mismatch" in error_msg:
-        _raise_duckdb_error(error, DataError, "data error")
-    else:
-        _raise_duckdb_error(error, SQLSpecError, "database error")
+        return _create_duckdb_error(error, NotFoundError, "catalog error")
+    if "parserexception" in exc_name or "binderexception" in exc_name:
+        return _create_duckdb_error(error, SQLParsingError, "SQL parsing error")
+    if "ioexception" in exc_name:
+        return _create_duckdb_error(error, OperationalError, "operational error")
+    if "conversionexception" in exc_name or "type mismatch" in error_msg:
+        return _create_duckdb_error(error, DataError, "data error")
+    return _create_duckdb_error(error, SQLSpecError, "database error")
 
 
 def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:

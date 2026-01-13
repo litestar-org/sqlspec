@@ -8,12 +8,12 @@ from sqlspec.adapters.sqlite._typing import SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
     build_insert_statement,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     driver_profile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
-    raise_exception,
     resolve_rowcount,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
@@ -92,11 +92,8 @@ class SqliteExceptionHandler:
         if exc_type is None:
             return False
         if issubclass(exc_type, sqlite3.Error):
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 

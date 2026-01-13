@@ -11,12 +11,12 @@ import aiosqlite
 from sqlspec.adapters.aiosqlite.core import (
     build_insert_statement,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     driver_profile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
-    raise_exception,
     resolve_rowcount,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
@@ -88,12 +88,8 @@ class AiosqliteExceptionHandler:
         if exc_val is None:
             return False
         if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
-            return False
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 

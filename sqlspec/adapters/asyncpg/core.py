@@ -39,11 +39,11 @@ __all__ = (
     "build_statement_config",
     "collect_rows",
     "configure_parameter_serializers",
+    "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "invoke_prepared_statement",
     "parse_status",
-    "raise_exception",
     "register_json_codecs",
     "register_pgvector_support",
 )
@@ -278,56 +278,77 @@ def parse_status(status: Any) -> int:
     return 0
 
 
-def _raise_postgres_error(error: Any, code: "str | None", error_class: type[SQLSpecError], description: str) -> None:
+def _create_postgres_error(
+    error: Any, code: "str | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception from an asyncpg error.
+
+    Args:
+        error: The original asyncpg exception
+        code: PostgreSQL SQLSTATE error code
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
     msg = f"PostgreSQL {description} [{code}]: {error}" if code else f"PostgreSQL {description}: {error}"
-    raise error_class(msg) from error
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
 
 
-def raise_exception(error: Any) -> None:
-    """Raise SQLSpec exceptions for asyncpg errors."""
+def create_mapped_exception(error: Any) -> SQLSpecError:
+    """Map asyncpg exceptions to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __aexit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        error: The asyncpg exception to map
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
+    # Check specific exception types first
     if isinstance(error, asyncpg.exceptions.UniqueViolationError):
-        _raise_postgres_error(error, "23505", UniqueViolationError, "unique constraint violation")
-        return
+        return _create_postgres_error(error, "23505", UniqueViolationError, "unique constraint violation")
     if isinstance(error, asyncpg.exceptions.ForeignKeyViolationError):
-        _raise_postgres_error(error, "23503", ForeignKeyViolationError, "foreign key constraint violation")
-        return
+        return _create_postgres_error(error, "23503", ForeignKeyViolationError, "foreign key constraint violation")
     if isinstance(error, asyncpg.exceptions.NotNullViolationError):
-        _raise_postgres_error(error, "23502", NotNullViolationError, "not-null constraint violation")
-        return
+        return _create_postgres_error(error, "23502", NotNullViolationError, "not-null constraint violation")
     if isinstance(error, asyncpg.exceptions.CheckViolationError):
-        _raise_postgres_error(error, "23514", CheckViolationError, "check constraint violation")
-        return
+        return _create_postgres_error(error, "23514", CheckViolationError, "check constraint violation")
     if isinstance(error, asyncpg.exceptions.PostgresSyntaxError):
-        _raise_postgres_error(error, "42601", SQLParsingError, "SQL syntax error")
-        return
+        return _create_postgres_error(error, "42601", SQLParsingError, "SQL syntax error")
 
+    # Fall back to SQLSTATE code mapping
     error_code = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
     if not error_code:
-        _raise_postgres_error(error, None, SQLSpecError, "database error")
-        return
+        return _create_postgres_error(error, None, SQLSpecError, "database error")
 
     if error_code == "23505":
-        _raise_postgres_error(error, error_code, UniqueViolationError, "unique constraint violation")
-    elif error_code == "23503":
-        _raise_postgres_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
-    elif error_code == "23502":
-        _raise_postgres_error(error, error_code, NotNullViolationError, "not-null constraint violation")
-    elif error_code == "23514":
-        _raise_postgres_error(error, error_code, CheckViolationError, "check constraint violation")
-    elif error_code.startswith("23"):
-        _raise_postgres_error(error, error_code, IntegrityError, "integrity constraint violation")
-    elif error_code.startswith("42"):
-        _raise_postgres_error(error, error_code, SQLParsingError, "SQL syntax error")
-    elif error_code.startswith("08"):
-        _raise_postgres_error(error, error_code, DatabaseConnectionError, "connection error")
-    elif error_code.startswith("40"):
-        _raise_postgres_error(error, error_code, TransactionError, "transaction error")
-    elif error_code.startswith("22"):
-        _raise_postgres_error(error, error_code, DataError, "data error")
-    elif error_code.startswith(("53", "54", "55", "57", "58")):
-        _raise_postgres_error(error, error_code, OperationalError, "operational error")
-    else:
-        _raise_postgres_error(error, error_code, SQLSpecError, "database error")
+        return _create_postgres_error(error, error_code, UniqueViolationError, "unique constraint violation")
+    if error_code == "23503":
+        return _create_postgres_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
+    if error_code == "23502":
+        return _create_postgres_error(error, error_code, NotNullViolationError, "not-null constraint violation")
+    if error_code == "23514":
+        return _create_postgres_error(error, error_code, CheckViolationError, "check constraint violation")
+    if error_code.startswith("23"):
+        return _create_postgres_error(error, error_code, IntegrityError, "integrity constraint violation")
+    if error_code.startswith("42"):
+        return _create_postgres_error(error, error_code, SQLParsingError, "SQL syntax error")
+    if error_code.startswith("08"):
+        return _create_postgres_error(error, error_code, DatabaseConnectionError, "connection error")
+    if error_code.startswith("40"):
+        return _create_postgres_error(error, error_code, TransactionError, "transaction error")
+    if error_code.startswith("22"):
+        return _create_postgres_error(error, error_code, DataError, "data error")
+    if error_code.startswith(("53", "54", "55", "57", "58")):
+        return _create_postgres_error(error, error_code, OperationalError, "operational error")
+    return _create_postgres_error(error, error_code, SQLSpecError, "database error")
 
 
 def collect_rows(records: "list[Any] | None") -> "tuple[list[dict[str, Any]], list[str]]":

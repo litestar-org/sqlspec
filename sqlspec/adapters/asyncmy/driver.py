@@ -13,11 +13,11 @@ from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 from sqlspec.adapters.asyncmy.core import (
     build_insert_statement,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     detect_json_columns,
     driver_profile,
     format_identifier,
-    map_exception,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     normalize_lastrowid,
@@ -95,13 +95,11 @@ class AsyncmyExceptionHandler:
         if exc_type is None:
             return False
         if issubclass(exc_type, asyncmy.errors.Error):
-            try:
-                result = map_exception(exc_val, logger=logger)
-                if result is True:
-                    return True
-            except Exception as mapped:
-                self.pending_exception = mapped
+            result = create_mapped_exception(exc_val, logger=logger)
+            if result is True:
                 return True
+            self.pending_exception = cast("Exception", result)
+            return True
         return False
 
 

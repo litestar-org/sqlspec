@@ -10,11 +10,11 @@ from sqlspec.adapters.asyncpg.core import (
     PREPARED_STATEMENT_CACHE_SIZE,
     NormalizedStackOperation,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     driver_profile,
     invoke_prepared_statement,
     parse_status,
-    raise_exception,
 )
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.core import (
@@ -84,12 +84,8 @@ class AsyncpgExceptionHandler:
         if exc_val is None:
             return False
         if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
-            return False
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 

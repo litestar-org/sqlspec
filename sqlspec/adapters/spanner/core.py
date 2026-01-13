@@ -29,10 +29,10 @@ __all__ = (
     "coerce_params",
     "collect_rows",
     "create_arrow_data",
+    "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "infer_param_types",
-    "raise_exception",
     "supports_batch_update",
     "supports_write",
 )
@@ -154,23 +154,35 @@ def create_arrow_data(
     return convert_dict_to_arrow(data, return_format=return_format)
 
 
-def raise_exception(error: Any) -> None:
-    """Raise SQLSpec exceptions for Spanner errors."""
-    if isinstance(error, api_exceptions.AlreadyExists):
-        msg = f"Spanner resource already exists: {error}"
-        raise UniqueViolationError(msg) from error
-    if isinstance(error, api_exceptions.NotFound):
-        msg = f"Spanner resource not found: {error}"
-        raise NotFoundError(msg) from error
-    if isinstance(error, api_exceptions.InvalidArgument):
-        msg = f"Invalid Spanner query or argument: {error}"
-        raise SQLParsingError(msg) from error
-    if isinstance(error, api_exceptions.PermissionDenied):
-        msg = f"Spanner permission denied: {error}"
-        raise DatabaseConnectionError(msg) from error
-    if isinstance(error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests)):
-        msg = f"Spanner service unavailable or rate limited: {error}"
-        raise OperationalError(msg) from error
+def _create_spanner_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
+    """Create a Spanner error instance without raising it."""
+    msg = f"Spanner {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
 
-    msg = f"Spanner error: {error}"
-    raise SQLSpecError(msg) from error
+
+def create_mapped_exception(error: Any) -> SQLSpecError:
+    """Map Spanner exceptions to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __exit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        error: The Spanner exception to map
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
+    if isinstance(error, api_exceptions.AlreadyExists):
+        return _create_spanner_error(error, UniqueViolationError, "resource already exists")
+    if isinstance(error, api_exceptions.NotFound):
+        return _create_spanner_error(error, NotFoundError, "resource not found")
+    if isinstance(error, api_exceptions.InvalidArgument):
+        return _create_spanner_error(error, SQLParsingError, "invalid query or argument")
+    if isinstance(error, api_exceptions.PermissionDenied):
+        return _create_spanner_error(error, DatabaseConnectionError, "permission denied")
+    if isinstance(error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests)):
+        return _create_spanner_error(error, OperationalError, "service unavailable or rate limited")
+    return _create_spanner_error(error, SQLSpecError, "error")

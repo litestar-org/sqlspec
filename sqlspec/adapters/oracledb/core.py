@@ -46,12 +46,12 @@ __all__ = (
     "coerce_large_string_parameters_sync",
     "collect_async_rows",
     "collect_sync_rows",
+    "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
-    "raise_exception",
     "requires_session_callback",
     "resolve_rowcount",
 )
@@ -452,38 +452,62 @@ async def collect_async_rows(
     return data, column_names
 
 
-def _raise_oracle_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:
+def _create_oracle_error(
+    error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception from an Oracle error.
+
+    Args:
+        error: The original Oracle exception
+        code: Oracle error code
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
     msg = f"Oracle {description} [ORA-{code:05d}]: {error}" if code else f"Oracle {description}: {error}"
-    raise error_class(msg) from error
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
 
 
-def raise_exception(error: Any) -> None:
-    """Raise SQLSpec exceptions for Oracle errors."""
+def create_mapped_exception(error: Any) -> SQLSpecError:
+    """Map Oracle exceptions to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __exit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        error: The Oracle exception to map
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
     error_obj = error.args[0] if getattr(error, "args", None) else None
     if not error_obj:
-        _raise_oracle_error(error, None, SQLSpecError, "database error")
-        return
+        return _create_oracle_error(error, None, SQLSpecError, "database error")
 
     try:
         error_code = error_obj.code
     except AttributeError:
         error_code = None
     if not error_code:
-        _raise_oracle_error(error, None, SQLSpecError, "database error")
-        return
+        return _create_oracle_error(error, None, SQLSpecError, "database error")
 
     mapping = _ERROR_CODE_MAPPING.get(error_code)
     if mapping:
         error_class, error_desc = mapping
-        _raise_oracle_error(error, error_code, error_class, error_desc)
+        return _create_oracle_error(error, error_code, error_class, error_desc)
 
     if ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
-        _raise_oracle_error(error, error_code, IntegrityError, "integrity constraint violation")
+        return _create_oracle_error(error, error_code, IntegrityError, "integrity constraint violation")
 
     if ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
-        _raise_oracle_error(error, error_code, SQLParsingError, "SQL syntax error")
+        return _create_oracle_error(error, error_code, SQLParsingError, "SQL syntax error")
 
-    _raise_oracle_error(error, error_code, SQLSpecError, "database error")
+    return _create_oracle_error(error, error_code, SQLSpecError, "database error")
 
 
 def build_profile() -> "DriverParameterProfile":
