@@ -400,6 +400,63 @@
       height: 250px;
     }
   }
+
+  /* Table Output */
+  .sqlspec-playground__table-wrapper {
+    overflow-x: auto;
+    margin-top: 1rem;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+  }
+  html.dark .sqlspec-playground__table-wrapper {
+    border-color: #334155;
+  }
+
+  .sqlspec-playground__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    font-family: var(--sl-font-mono);
+  }
+
+  .sqlspec-playground__table th,
+  .sqlspec-playground__table td {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+    color: #202235;
+  }
+  html.dark .sqlspec-playground__table th,
+  html.dark .sqlspec-playground__table td {
+    border-bottom-color: #334155;
+    color: #e6edf3;
+  }
+
+  .sqlspec-playground__table th {
+    background: #f1f5f9;
+    font-weight: 600;
+  }
+  html.dark .sqlspec-playground__table th {
+    background: #1e293b;
+  }
+
+  /* Error Output */
+  .sqlspec-playground__error {
+    margin-top: 1rem;
+    padding: 1rem;
+    border-radius: 8px;
+    background: #FEF2F2;
+    border: 1px solid #FCA5A5;
+    color: #991B1B;
+    font-family: var(--sl-font-mono);
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+  }
+  html.dark .sqlspec-playground__error {
+    background: #450a0a;
+    border-color: #7f1d1d;
+    color: #fca5a5;
+  }
 </style>
 
 <section class="sqlspec-playground" id="sqlspec-playground-{{ id }}">
@@ -424,7 +481,8 @@ with spec.provide_session(config) as session:
     session.execute("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, name TEXT)")
     session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
     result = session.execute("SELECT * FROM teams")
-    print(result.all())
+    # Return list of dictionaries for table rendering
+    [dict(row) for row in result.all()]
       </textarea>
     </div>
   </div>
@@ -434,7 +492,11 @@ with spec.provide_session(config) as session:
       <span>Output</span>
       <button class="sqlspec-playground__button" data-clear-output>Clear</button>
     </div>
-    <pre data-output tabindex="0" aria-live="polite"></pre>
+    <div data-output-container>
+        <pre data-output tabindex="0" aria-live="polite"></pre>
+        <div data-table-output class="sqlspec-playground__table-wrapper"></div>
+        <div data-error-output class="sqlspec-playground__error" hidden></div>
+    </div>
   </div>
 
   <dialog class="sqlspec-playground__tip-dialog" data-tips-dialog>
@@ -443,6 +505,7 @@ with spec.provide_session(config) as session:
       <li>Run the default snippet to seed a SQLite in-memory database.</li>
       <li>Edit the Python code to try different SQLSpec features.</li>
       <li>SQL keywords are highlighted in the code editor.</li>
+      <li>Return a list of dictionaries to see a results table.</li>
       <li>Reset restores the default snippet.</li>
     </ul>
     <div class="sqlspec-playground__tip-dialog-actions">
@@ -455,6 +518,8 @@ with spec.provide_session(config) as session:
   (function() {
     const root = document.getElementById("sqlspec-playground-{{ id }}");
     const outputEl = root.querySelector("[data-output]");
+    const tableOutputEl = root.querySelector("[data-table-output]");
+    const errorOutputEl = root.querySelector("[data-error-output]");
     const pythonTextarea = root.querySelector("[data-python-editor]");
     const runPythonButton = root.querySelector("[data-run-python]");
     const resetPythonButton = root.querySelector("[data-reset-python]");
@@ -488,6 +553,49 @@ with spec.provide_session(config) as session:
 
     const clearOutput = () => {
       outputEl.textContent = "";
+      tableOutputEl.innerHTML = "";
+      errorOutputEl.textContent = "";
+      errorOutputEl.hidden = true;
+    };
+
+    const renderTable = (data) => {
+      if (!Array.isArray(data) || data.length === 0 || typeof data[0] !== 'object') {
+        return; // Not tabular data
+      }
+
+      const headers = Object.keys(data[0]);
+      const table = document.createElement('table');
+      table.className = 'sqlspec-playground__table';
+
+      // Header
+      const thead = document.createElement('thead');
+      const trHead = document.createElement('tr');
+      headers.forEach(header => {
+        const th = document.createElement('th');
+        th.textContent = header;
+        trHead.appendChild(th);
+      });
+      thead.appendChild(trHead);
+      table.appendChild(thead);
+
+      // Body
+      const tbody = document.createElement('tbody');
+      data.forEach(row => {
+        const tr = document.createElement('tr');
+        headers.forEach(header => {
+          const td = document.createElement('td');
+          td.textContent = row[header];
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      tableOutputEl.appendChild(table);
+    };
+
+    const showError = (error) => {
+      errorOutputEl.textContent = error;
+      errorOutputEl.hidden = false;
     };
 
     const initializePlayground = async () => {
@@ -516,7 +624,7 @@ with spec.provide_session(config) as session:
         runPythonButton.disabled = false;
       } catch (err) {
         setStatus("Failed to load");
-        writeOutput(`Error: ${err}`);
+        showError(`Failed to initialize: ${err}`);
         console.error(err);
       }
     };
@@ -532,9 +640,20 @@ with spec.provide_session(config) as session:
       clearOutput();
       writeOutput("Running...\n");
       try {
-        await pyodide.runPythonAsync(pythonEditor.getValue());
+        const result = await pyodide.runPythonAsync(pythonEditor.getValue());
+        if (result && typeof result.toJs === 'function') {
+             const jsResult = result.toJs({dict_converter: Object.fromEntries});
+             if (Array.isArray(jsResult)) {
+                 renderTable(jsResult);
+             } else {
+                 writeOutput(String(result));
+             }
+        } else if (result !== undefined) {
+             writeOutput(String(result));
+        }
+
       } catch (err) {
-        writeOutput(`\nError: ${err}`);
+        showError(String(err));
         console.error(err);
       }
     });
