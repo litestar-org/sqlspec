@@ -42,16 +42,16 @@
   - Add `padding-bottom` to `.sy-content` to prevent content obscuration.
   - Style the bar with background/border/shadow.
 
-- [ ] **Top Bar Submenu** `task-topbar-submenu` <!-- id: 7 -->
+- [x] **Top Bar Submenu** `task-topbar-submenu` <!-- id: 7 --> [dc516bfe]
   - Modify `docs/conf.py`.
   - Update `html_theme_options['nav_links']` to group "Get Started", "Usage", "API", "Playground" into a "Docs" submenu.
 
-- [ ] **Fix External Links** `task-fix-links` <!-- id: 8 -->
+- [x] **Fix External Links** `task-fix-links` <!-- id: 8 --> [dc516bfe]
   - Investigate and fix broken "View Source", "Open in Claude" links.
   - Add "Open in Gemini" link.
   - Likely locations: `docs/_static/theme.js` or `tools/sphinx_ext/`.
 
-- [ ] **Fix Footer Overlap** `task-footer-overlap` <!-- id: 9 -->
+- [x] **Fix Footer Overlap** `task-footer-overlap` <!-- id: 9 --> [dc516bfe]
   - Modify `docs/_static/custom.css`.
   - Add padding to `.sy-foot` or `body` to ensure footer content is not covered by the fixed navigation bar.
 
