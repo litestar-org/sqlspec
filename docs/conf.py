@@ -297,12 +297,6 @@ html_theme_options = {
                     "url": "https://github.com/litestar-org/sqlspec/discussions",
                     "icon": "coc",
                 },
-                {
-                    "title": "Open in Gemini",
-                    "summary": "Ask Gemini about SQLSpec",
-                    "url": "https://gemini.google.com/app",
-                    "icon": "coc",
-                },
             ],
         },
     ],
