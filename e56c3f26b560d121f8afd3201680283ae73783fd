@@ -1,0 +1,7 @@
+{
+  "workflow": "unified-dev-flow",
+  "spec": "docs-review-theming",
+  "task": "task-topbar-submenu",
+  "phase": "implementation",
+  "files": ["docs/conf.py"]
+}
