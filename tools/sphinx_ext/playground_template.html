@@ -350,9 +350,15 @@
     padding: 1.5rem;
     max-width: 520px;
     width: min(92vw, 520px);
-    background: var(--sl-color-bg);
-    color: var(--sl-color-text);
+    background: #ffffff; /* Explicit background */
+    color: #202235;
     box-shadow: 0 20px 60px rgba(32, 34, 53, 0.2);
+    margin: auto; /* Ensure centering */
+  }
+
+  html.dark .sqlspec-playground__tip-dialog {
+    background: #0f172a; /* Explicit dark background */
+    color: #e6edf3;
   }
 
   .sqlspec-playground__tip-dialog::backdrop {
@@ -398,10 +404,6 @@
 
 <section class="sqlspec-playground" id="sqlspec-playground-{{ id }}">
   <div class="sqlspec-playground__header">
-    <div>
-      <h2>SQLSpec Playground</h2>
-      <p>Run SQLSpec in your browser. Edit the Python code and execute to see the output.</p>
-    </div>
     <div class="sqlspec-playground__header-actions">
       <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
       <div class="sqlspec-playground__status" data-status>Loading runtime</div>
