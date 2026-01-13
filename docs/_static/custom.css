@@ -240,12 +240,14 @@ html.dark .sy-sidebar a:hover {
   box-shadow: 0 4px 12px rgba(var(--litestar-gold-rgb), 0.15);
 }
 
-html.dark .sd-card {
-  background: var(--litestar-gray-800);
+html.dark .sd-card,
+html[data-theme="dark"] .sd-card {
+  background: var(--sy-c-surface);
   border-color: var(--litestar-gray-700);
 }
 
-html.dark .sd-card:hover {
+html.dark .sd-card:hover,
+html[data-theme="dark"] .sd-card:hover {
   border-color: var(--litestar-gold);
   box-shadow: 0 4px 12px rgba(var(--litestar-gold-rgb), 0.2);
 }
