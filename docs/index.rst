@@ -30,17 +30,17 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
 
       In-depth guides on configuration, drivers, the query builder, and more.
 
-    .. grid-item-card:: :octicon:`beaker` Examples
-      :link: examples/index
-      :link-type: doc
-
-      A gallery of practical, runnable examples for various databases and frameworks.
-
     .. grid-item-card:: :octicon:`package` API Reference
       :link: reference/index
       :link-type: doc
 
       The complete, auto-generated API documentation for the ``sqlspec`` library.
+
+    .. grid-item-card:: :octicon:`play` Playground
+      :link: playground
+      :link-type: doc
+
+      Run SQLSpec in your browser with an interactive SQL playground.
 
 .. toctree::
     :hidden:
@@ -49,8 +49,8 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
 
     getting_started/index
     usage/index
-    examples/index
     reference/index
+    playground
 
 .. toctree::
     :hidden:

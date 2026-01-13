@@ -2,40 +2,65 @@
 Introduction
 ============
 
-What is SQLSpec?
-----------------
+.. grid:: 1
+   :padding: 0
+   :gutter: 2
 
-SQLSpec is a modern Python library for database interaction that prioritizes **raw SQL**, **type safety**, and a **unified data access layer**. It is designed for developers who want to work directly with SQL while benefiting from modern Python features like type hinting and asynchronous programming, without the overhead of a traditional Object-Relational Mapper (ORM).
+   .. grid-item-card::
 
-At its core, SQLSpec provides a consistent and extensible interface for a wide array of database systems, including PostgreSQL, SQLite, DuckDB, MySQL, Oracle, BigQuery, and many others.
+      **SQLSpec is a SQL first data access layer.**
+      It keeps you close to SQL while adding type-safe results, consistent driver APIs, and optional
+      tooling for query construction and observability.
 
-Why Not an ORM?
----------------
+What SQLSpec does
+-----------------
 
-While both SQLSpec and ORMs like SQLAlchemy facilitate database interaction, they operate on fundamentally different philosophies. SQLAlchemy is best known for its powerful ORM, which abstracts away SQL in favor of a high-level, object-oriented domain model. It excels at managing complex object graphs and database sessions.
+.. grid:: 1 1 2 2
+   :gutter: 2
+   :padding: 0
 
-SQLSpec, by contrast, is **not an ORM** and is designed for developers who prefer to work directly with SQL. Its primary goal is to enhance the experience of writing raw SQL, not to hide it. The key differentiators are:
+   .. grid-item-card:: First-class SQL
 
-1.  **Level of Abstraction**: SQLSpec provides a minimal, lightweight abstraction layer. It keeps you close to the database, focusing on query validation, type-safe result mapping, and a unified I/O layer.
-2.  **Core Use Case**: SQLSpec is a "query mapper" and data integration tool. It is ideal for data-centric applications, APIs, and data engineering workflows where you write optimized SQL and need to move data efficiently.
-3.  **Performance & Data Engineering Focus**: SQLSpec's architecture is designed for efficient data workflows. The ability to handle data formats like Apache Arrow is a core feature.
+      Write the SQL you want. SQLSpec validates and normalizes statements before execution.
 
-Core Features
+   .. grid-item-card:: Type-safe results
+
+      Map rows into typed objects like msgspec, Pydantic, or dataclasses.
+
+   .. grid-item-card:: Unified connectivity
+
+      One API for sync/async drivers across PostgreSQL, SQLite, DuckDB, MySQL, Oracle, and more.
+
+   .. grid-item-card:: Optional builder + observability
+
+      Use the fluent SQL builder and instrument queries with OpenTelemetry or Prometheus.
+
+Not an ORM
+----------
+
+SQLSpec is intentionally **not** an ORM. It optimizes for SQL-first workflows.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 38 38
+
+   * - Focus
+     - SQLSpec
+     - Traditional ORM
+   * - Abstraction
+     - Minimal, SQL-centric
+     - Model-centric, hides SQL
+   * - Core use case
+     - Query mapper + data integration
+     - Object graphs + unit-of-work
+   * - Data workflows
+     - Fast, explicit, Arrow-friendly
+     - Heavier mapping and state tracking
+
+Good fit when
 -------------
 
--   **First-Class SQL with Validation**: Write the SQL you want. SQLSpec's processing pipeline parses, transforms, and validates your queries for security and performance before they ever hit the database.
--   **Type-Safe Results**: Automatically map query results to typed data objects like Pydantic Basemodel, msgspec Struct, or dataclasses. This eliminates guesswork and runtime errors.
--   **Unified Connectivity**: A single, consistent API for database operations across more than 10 supported database backends, both synchronous and asynchronous.
--   **Comprehensive Query Builder**: An optional, fluent API for programmatically constructing everything from simple ``SELECT`` statements to complex DDL and DML queries.
--   **Built-in Instrumentation**: Observability is a first-class citizen with configurable support for OpenTelemetry and Prometheus.
-
-Who is SQLSpec for?
--------------------
-
-SQLSpec is for you if:
-
--   You like writing SQL and want to maintain full control over your queries.
--   You value type safety and want your database interactions to be as predictable as the rest of your Python code.
--   You are building data-intensive applications, APIs, or data engineering pipelines.
--   You want to avoid the complexity and overhead of a full-featured ORM.
--   You need to work with multiple different database backends without changing your application logic.
+- You prefer writing SQL and want predictable behavior.
+- You need consistent APIs across multiple databases.
+- You care about performance, type safety, and data‑engineering workflows.
+- You want optional tools rather than a full ORM stack.

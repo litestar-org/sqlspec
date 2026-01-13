@@ -250,12 +250,12 @@ docs-clean:                                        ## Clean documentation build
 .PHONY: docs-serve
 docs-serve: docs-clean                             ## Serve documentation locally
 	@echo "${INFO} Starting documentation server... 📚"
-	@uv run sphinx-autobuild docs docs/_build/ -j auto --watch sqlspec --watch docs --watch tests --watch CONTRIBUTING.rst --port 8002
+	@uv run sphinx-autobuild docs docs/_build/ -j 1 --watch sqlspec --watch docs --watch tests --watch CONTRIBUTING.rst --port 8002
 
 .PHONY: docs
 docs: docs-clean                                   ## Build documentation
 	@echo "${INFO} Building documentation... 📝"
-	@uv run sphinx-build -M html docs docs/_build/ -E -a -j auto -W --keep-going
+	@PYTHONWARNINGS="ignore::FutureWarning" uv run sphinx-build -M html docs docs/_build/ -E -a -j 1 -W --keep-going
 	@echo "${OK} Documentation built successfully"
 
 .PHONY: docs-linkcheck

@@ -96,7 +96,6 @@ Query Stack Documentation Suite
 --------------------------------
 
 - Expanded the :doc:`/reference/query-stack` API reference (``StatementStack``, ``StackResult``, driver hooks, and ``StackExecutionError``) with the high-level workflow, execution modes, telemetry, and troubleshooting tips.
-- Added :doc:`/examples/patterns/stacks/query_stack_example` that runs the same stack against SQLite and AioSQLite.
 - Captured the detailed architecture and performance guidance inside the internal specs workspace for future agent runs.
 - Updated every adapter reference with a **Query Stack Support** section so behavior is documented per database.
 
@@ -171,7 +170,7 @@ SQL Loader Graceful Error Handling
 
 **Breaking Change**: Files without named statements (``-- name:``) are now gracefully skipped instead of raising ``SQLFileParseError``.
 
-This allows loading directories containing both aiosql-style named queries and raw DDL/DML scripts without errors.
+This allows loading directories containing named SQL queries and raw DDL/DML scripts without errors.
 
 **What Changed:**
 

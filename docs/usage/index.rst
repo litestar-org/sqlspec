@@ -2,10 +2,88 @@
 Usage
 =====
 
-This section provides comprehensive guides on using SQLSpec for database operations. Whether you're new to SQLSpec or looking to leverage advanced features, these guides will help you get the most out of the library.
+This section provides focused guides on core SQLSpec workflows. Each page highlights the
+minimum you need to move fast, with links to deeper examples when you want more detail.
+
+Choose a topic
+==============
+
+.. grid:: 1 1 2 3
+   :gutter: 2
+   :padding: 0
+
+   .. grid-item-card:: Data Flow
+      :link: data_flow
+      :link-type: doc
+
+      How SQLSpec sessions, drivers, and results flow together.
+
+   .. grid-item-card:: Configuration
+      :link: configuration
+      :link-type: doc
+
+      Configure adapters, sessions, and registry options.
+
+   .. grid-item-card:: Drivers & Querying
+      :link: drivers_and_querying
+      :link-type: doc
+
+      Execute statements, bind parameters, and batch work.
+
+   .. grid-item-card:: Query Builder
+      :link: query_builder
+      :link-type: doc
+
+      Build safe SQL using the fluent builder.
+
+   .. grid-item-card:: SQL Files
+      :link: sql_files
+      :link-type: doc
+
+      Load, organize, and reuse SQL from files.
+
+   .. grid-item-card:: CLI
+      :link: cli
+      :link-type: doc
+
+      Manage migrations and automation from the terminal.
+
+   .. grid-item-card:: Migrations
+      :link: migrations
+      :link-type: doc
+
+      Apply schema changes with consistent workflows.
+
+   .. grid-item-card:: Framework Integrations
+      :link: framework_integrations
+      :link-type: doc
+
+      Plug SQLSpec into Litestar, FastAPI, Flask, or Starlette.
+
+   .. grid-item-card:: Observability
+      :link: observability
+      :link-type: doc
+
+      Trace queries, sample traffic, and log structured events.
+
+   .. grid-item-card:: Extensions
+      :link: ../extensions/index
+      :link-type: doc
+
+      Add service-specific helpers like the ADK extension.
+
+Recommended Path
+----------------
+
+1. **Start with** :doc:`data_flow` to understand how sessions, drivers, and results connect.
+2. **Configure your database** in :doc:`configuration` with adapter-specific settings.
+3. **Execute queries** using :doc:`drivers_and_querying` for transaction and parameter patterns.
+4. **Build queries safely** with the :doc:`query_builder` for programmatic SQL construction.
+5. **Organize SQL** in files using :doc:`sql_files` when your project grows.
+6. **Integrate with your framework** via :doc:`framework_integrations` for Litestar, FastAPI, Flask, or Starlette.
 
 .. toctree::
-   :maxdepth: 2
+   :hidden:
 
    data_flow
    configuration
@@ -16,77 +94,4 @@ This section provides comprehensive guides on using SQLSpec for database operati
    migrations
    framework_integrations
    observability
-
-Overview
---------
-
-SQLSpec provides a unified interface for database operations across multiple backends while maintaining a direct connection to SQL. The key concepts are:
-
-**Data Flow**
-   Understand how SQLSpec processes queries from input to result using its sophisticated pipeline architecture.
-
-**Configuration**
-   Learn how to configure database connections, connection pools, and statement processing options.
-
-**Drivers and Querying**
-   Discover the available database drivers and how to execute queries effectively.
-
-**Query Builder**
-   Explore the experimental fluent API for programmatically constructing SQL queries.
-
-**Query Stack**
-   Learn how to batch heterogeneous SQL statements with immutable stacks, choose between fail-fast and continue-on-error execution, and monitor native vs. sequential paths in :doc:`/reference/query-stack`.
-
-**SQL Files**
-   Manage SQL statements from files using the SQL file loader.
-
-**Command Line Interface**
-   Use the SQLSpec CLI for migrations, with shell completion support for bash, zsh, and fish.
-
-**Database Migrations**
-   Manage database schema changes with support for hybrid versioning, automatic schema migration,
-   and extension migrations.
-
-**Framework Integrations**
-   Integrate SQLSpec with Litestar, FastAPI, and other Python web frameworks.
-
-**Observability**
-   Monitor and trace database operations with correlation tracking, sampling, and cloud-native logging.
-
-Quick Reference
----------------
-
-**Basic Query Execution**
-
-.. literalinclude:: /examples/usage/usage_index_1.py
-   :language: python
-   :caption: ``basic query execution``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
-**Using the Query Builder**
-
-.. literalinclude:: /examples/usage/usage_index_2.py
-   :language: python
-   :caption: ``using the query builder``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
-**Loading from SQL Files**
-
-.. literalinclude:: /examples/usage/usage_index_3.py
-   :language: python
-   :caption: ``loading from sql files``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
-Next Steps
-----------
-
-Start with :doc:`data_flow` to understand SQLSpec's execution pipeline, then move on to :doc:`configuration` to set up your database connections.
+   ../extensions/index

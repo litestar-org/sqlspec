@@ -1,1 +1,0 @@
-"""Psycopg integration snippets."""

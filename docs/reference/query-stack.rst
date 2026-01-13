@@ -4,10 +4,6 @@ Query Stack
 
 The Query Stack APIs let you compose multiple SQL operations into an immutable ``StatementStack`` and execute them in a single driver call. Each operation preserves the underlying ``SQLResult``/``ArrowResult`` so downstream helpers continue to work without copying data.
 
-.. contents:: Table of Contents
-   :local:
-   :depth: 2
-
 Overview
 ========
 
@@ -17,6 +13,31 @@ The stack system is composed of:
 - ``StackOperation`` – the tuple-like value object stored inside the stack (method, statement, arguments, keyword arguments)
 - ``StackResult`` – wraps the driver’s raw result while surfacing stack metadata (rows_affected, warning, error)
 - ``AsyncDriverAdapterBase.execute_stack`` / ``SyncDriverAdapterBase.execute_stack`` – adapter hooks that select native pipelines or the sequential fallback
+
+Execute a Stack
+==============
+
+.. literalinclude:: /examples/querying/statement_stack.py
+   :language: python
+   :caption: ``statement stack``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+Native Pipelines and Round Trips
+================================
+
+``StatementStack`` always runs in order. When a driver supports native pipelines,
+the stack can be sent as a single pipeline or batch, reducing round trips. Drivers
+without native support fall back to sequential execution while preserving results
+per operation.
+
+Native stack execution is available in:
+
+- AsyncPG
+- Psycopg (pipeline mode)
+- OracleDB
 
 StatementStack
 ==============
