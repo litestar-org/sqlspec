@@ -33,7 +33,7 @@
   - Update `tools/sphinx_ext/playground_template.html` to use `#202235`.
   - Removed playground status badge and moved Usage Tips to the primary actions row.
 
-- [ ] **Enhanced Playground Output** `task-playground-table` <!-- id: 10 -->
+- [x] **Enhanced Playground Output** `task-playground-table` <!-- id: 10 --> [56fd79d6]
   - Modify `tools/sphinx_ext/playground_template.html`.
   - Add CSS/HTML for a results table container.
   - Update JavaScript to capture the return value of the Python script.
