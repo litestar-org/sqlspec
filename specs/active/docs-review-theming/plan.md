@@ -33,6 +33,14 @@
   - Update `tools/sphinx_ext/playground_template.html` to use `#202235`.
   - Removed playground status badge and moved Usage Tips to the primary actions row.
 
+- [ ] **Enhanced Playground Output** `task-playground-table` <!-- id: 10 -->
+  - Modify `tools/sphinx_ext/playground_template.html`.
+  - Add CSS/HTML for a results table container.
+  - Update JavaScript to capture the return value of the Python script.
+  - Detect if the return value is a list of records and render it as a table.
+  - Improve error display (friendly error screen).
+  - Update the default Python script to return data instead of printing.
+
 - [x] **Fix Card Colors** `task-fix-cards` <!-- id: 5 --> [7072ea1d]
   - Update `docs/_static/custom.css` to use `var(--sy-c-surface)` for `.sd-card` background in dark mode.
 
