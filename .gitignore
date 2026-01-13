@@ -58,3 +58,4 @@ docs-build
 .gh-cache
 .gemini/
 specs/
+.playwright-mcp
