@@ -25,7 +25,7 @@
   - Fix broken links in `docs/` files.
   - Commit fixes.
 
-- [ ] **Fix Footer & Branding Alignment** `task-fix-branding` <!-- id: 4 -->
+- [x] **Fix Footer & Branding Alignment** `task-fix-branding` <!-- id: 4 --> [a87005d1]
   - Update `docs/_static/custom.css`:
     - Ensure `html[data-theme="dark"]` selector is used for specificity.
     - Set `--sy-c-background` and `--sy-c-foot-background` to `#202235`.
