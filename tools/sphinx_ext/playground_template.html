@@ -403,18 +403,12 @@
 </style>
 
 <section class="sqlspec-playground" id="sqlspec-playground-{{ id }}">
-  <div class="sqlspec-playground__header">
-    <div class="sqlspec-playground__header-actions">
-      <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
-      <div class="sqlspec-playground__status" data-status>Loading runtime</div>
-    </div>
-  </div>
-
   <div class="sqlspec-playground__grid">
     <div class="sqlspec-playground__panel">
       <div class="sqlspec-playground__panel-header">
         <span>Python</span>
         <div class="sqlspec-playground__panel-actions">
+          <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
           <button class="sqlspec-playground__button sqlspec-playground__button--primary" data-run-python>Run</button>
           <button class="sqlspec-playground__button" data-reset-python>Reset</button>
         </div>
@@ -460,7 +454,6 @@ with spec.provide_session(config) as session:
 <script>
   (function() {
     const root = document.getElementById("sqlspec-playground-{{ id }}");
-    const statusEl = root.querySelector("[data-status]");
     const outputEl = root.querySelector("[data-output]");
     const pythonTextarea = root.querySelector("[data-python-editor]");
     const runPythonButton = root.querySelector("[data-run-python]");
@@ -490,7 +483,7 @@ with spec.provide_session(config) as session:
     };
 
     const setStatus = (text) => {
-      statusEl.textContent = text;
+      console.log(`Playground Status: ${text}`);
     };
 
     const clearOutput = () => {
