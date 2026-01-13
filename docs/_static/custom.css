@@ -506,3 +506,35 @@ html[data-theme="dark"] .mermaid svg {
 .sd-container-fluid {
   gap: 1.5rem;
 }
+
+/* -----------------------------------------------------------------------------
+   Sticky Navigation Bar
+   ----------------------------------------------------------------------------- */
+.navigation {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background-color: var(--sy-c-background);
+  border-top: 1px solid var(--sy-c-divider);
+  margin: 0 !important; /* Reset any margins */
+  padding: 1rem 1.5rem;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.05);
+}
+
+html.dark .navigation {
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.2);
+}
+
+/* Adjust for sidebar on larger screens */
+@media (min-width: 768px) {
+  .navigation {
+    left: 18rem; /* Matches left sidebar width */
+  }
+}
+
+/* Add spacing to content so nav doesn't cover footer text or bottom of content */
+.sy-content {
+  padding-bottom: 5rem;
+}
