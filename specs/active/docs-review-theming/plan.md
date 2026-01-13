@@ -8,12 +8,12 @@
   - Add rules to expand `.sy-content` / `.sy-layout`.
   - Add rules for `.sd-card` spacing (gap/margin).
 
-- [ ] **Global Theme Update** `task-theme-navy` <!-- id: 2 -->
+- [x] **Global Theme Update** `task-theme-navy` <!-- id: 2 --> [bbe8593f]
   - Modify `docs/_static/custom.css`.
   - Change `html.dark` background variables (`--sy-c-bg`, `--sy-c-foot-background`, etc.) to `var(--litestar-navy)`.
   - Adjust code block backgrounds if necessary to ensure contrast.
 
-- [ ] **Observability Docs** `task-docs-observability` <!-- id: 3 -->
+- [x] **Observability Docs** `task-docs-observability` <!-- id: 3 --> [bbe8593f]
   - Update `docs/usage/observability.rst`.
   - Add detailed explanation of Observability features.
   - Add "OpenTelemetry Integration" section using `sqlspec.extensions.otel.enable_tracing`.
