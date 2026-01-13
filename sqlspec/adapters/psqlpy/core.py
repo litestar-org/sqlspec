@@ -39,6 +39,7 @@ __all__ = (
     "coerce_numeric_for_write",
     "coerce_records_for_execute_many",
     "collect_rows",
+    "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "encode_records_for_binary_copy",
@@ -47,7 +48,6 @@ __all__ = (
     "get_parameter_casts",
     "normalize_scalar_parameter",
     "prepare_parameters_with_casts",
-    "raise_exception",
     "split_schema_and_table",
 )
 
@@ -398,33 +398,55 @@ def prepare_parameters_with_casts(
     return parameters
 
 
-def _raise_postgres_error(error: Any, error_class: type[SQLSpecError], description: str) -> None:
+def _create_postgres_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
+    """Create a SQLSpec exception from a psqlpy error.
+
+    Args:
+        error: The original psqlpy exception
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
     msg = f"PostgreSQL {description}: {error}"
-    raise error_class(msg) from error
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
 
 
-def raise_exception(error: Any) -> None:
-    """Raise SQLSpec exceptions for psqlpy errors."""
+def create_mapped_exception(error: Any) -> SQLSpecError:
+    """Map psqlpy exceptions to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __exit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        error: The psqlpy exception to map
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
     error_msg = str(error).lower()
 
     if "unique" in error_msg or "duplicate key" in error_msg:
-        _raise_postgres_error(error, UniqueViolationError, "unique constraint violation")
-    elif "foreign key" in error_msg or "violates foreign key" in error_msg:
-        _raise_postgres_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-    elif "not null" in error_msg or ("null value" in error_msg and "violates not-null" in error_msg):
-        _raise_postgres_error(error, NotNullViolationError, "not-null constraint violation")
-    elif "check constraint" in error_msg or "violates check constraint" in error_msg:
-        _raise_postgres_error(error, CheckViolationError, "check constraint violation")
-    elif "constraint" in error_msg:
-        _raise_postgres_error(error, IntegrityError, "integrity constraint violation")
-    elif "syntax error" in error_msg or "parse" in error_msg:
-        _raise_postgres_error(error, SQLParsingError, "SQL syntax error")
-    elif "connection" in error_msg or "could not connect" in error_msg:
-        _raise_postgres_error(error, DatabaseConnectionError, "connection error")
-    elif "deadlock" in error_msg or "serialization failure" in error_msg:
-        _raise_postgres_error(error, TransactionError, "transaction error")
-    else:
-        _raise_postgres_error(error, SQLSpecError, "database error")
+        return _create_postgres_error(error, UniqueViolationError, "unique constraint violation")
+    if "foreign key" in error_msg or "violates foreign key" in error_msg:
+        return _create_postgres_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    if "not null" in error_msg or ("null value" in error_msg and "violates not-null" in error_msg):
+        return _create_postgres_error(error, NotNullViolationError, "not-null constraint violation")
+    if "check constraint" in error_msg or "violates check constraint" in error_msg:
+        return _create_postgres_error(error, CheckViolationError, "check constraint violation")
+    if "constraint" in error_msg:
+        return _create_postgres_error(error, IntegrityError, "integrity constraint violation")
+    if "syntax error" in error_msg or "parse" in error_msg:
+        return _create_postgres_error(error, SQLParsingError, "SQL syntax error")
+    if "connection" in error_msg or "could not connect" in error_msg:
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
+    if "deadlock" in error_msg or "serialization failure" in error_msg:
+        return _create_postgres_error(error, TransactionError, "transaction error")
+    return _create_postgres_error(error, SQLSpecError, "database error")
 
 
 def _quote_identifier(identifier: str) -> str:

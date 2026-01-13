@@ -1,13 +1,19 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "sqlglot>=19.9.0", "mypy-extensions"]
+dependencies = [
+  "typing-extensions",
+  "sqlglot>=19.9.0",
+  "mypy-extensions",
+  "rich-click>=1.9.0",
+  "tomli>=2.0.0; python_version < '3.11'",
+]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.35.0"
+version = "0.36.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -24,7 +30,6 @@ asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
 attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery", "google-cloud-storage"]
-cli = ["rich-click>=1.9.0", "tomli>=2.0.0; python_version < '3.11'"]
 cloud-sql = ["cloud-sql-python-connector"]
 cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
 duckdb = ["duckdb"]
@@ -217,7 +222,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.35.0"
+current_version = "0.36.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"

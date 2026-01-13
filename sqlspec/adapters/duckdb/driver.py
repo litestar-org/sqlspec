@@ -9,10 +9,10 @@ import duckdb
 from sqlspec.adapters.duckdb.core import (
     apply_driver_features,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     driver_profile,
     normalize_execute_parameters,
-    raise_exception,
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
@@ -81,12 +81,8 @@ class DuckDBExceptionHandler:
         _ = exc_tb
         if exc_type is None:
             return False
-        try:
-            raise_exception(exc_type, exc_val)
-        except Exception as mapped:
-            self.pending_exception = mapped
-            return True
-        return False
+        self.pending_exception = create_mapped_exception(exc_type, exc_val)
+        return True
 
 
 class DuckDBDriver(SyncDriverAdapterBase):

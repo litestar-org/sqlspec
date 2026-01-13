@@ -51,6 +51,7 @@ __all__ = (
     "build_statement_config",
     "collect_rows",
     "copy_job_config",
+    "create_mapped_exception",
     "create_parameters",
     "default_statement_config",
     "detect_emulator",
@@ -58,7 +59,6 @@ __all__ = (
     "extract_insert_table",
     "is_simple_insert",
     "normalize_script_rowcount",
-    "raise_exception",
     "run_query_job",
     "storage_api_available",
     "try_bulk_insert",
@@ -658,14 +658,40 @@ def apply_driver_features(
     return _normalize_bigquery_driver_features(driver_features)
 
 
-def _raise_bigquery_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:
+def _create_bigquery_error(
+    error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception from a BigQuery error.
+
+    Args:
+        error: The original BigQuery exception
+        code: HTTP status code
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
     code_str = f"[HTTP {code}]" if code else ""
     msg = f"BigQuery {description} {code_str}: {error}" if code_str else f"BigQuery {description}: {error}"
-    raise error_class(msg) from error
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
 
 
-def raise_exception(error: Any) -> None:
-    """Raise SQLSpec exceptions for BigQuery errors."""
+def create_mapped_exception(error: Any) -> SQLSpecError:
+    """Map BigQuery exceptions to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __exit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        error: The BigQuery exception to map
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
     try:
         status_code = error.code
     except AttributeError:
@@ -673,19 +699,17 @@ def raise_exception(error: Any) -> None:
     error_msg = str(error).lower()
 
     if status_code == HTTP_CONFLICT or "already exists" in error_msg:
-        _raise_bigquery_error(error, status_code, UniqueViolationError, "resource already exists")
-    elif status_code == HTTP_NOT_FOUND or "not found" in error_msg:
-        _raise_bigquery_error(error, status_code, NotFoundError, "resource not found")
-    elif status_code == HTTP_BAD_REQUEST:
+        return _create_bigquery_error(error, status_code, UniqueViolationError, "resource already exists")
+    if status_code == HTTP_NOT_FOUND or "not found" in error_msg:
+        return _create_bigquery_error(error, status_code, NotFoundError, "resource not found")
+    if status_code == HTTP_BAD_REQUEST:
         if "syntax" in error_msg or "invalid query" in error_msg:
-            _raise_bigquery_error(error, status_code, SQLParsingError, "query syntax error")
-        elif "type" in error_msg or "format" in error_msg:
-            _raise_bigquery_error(error, status_code, DataError, "data error")
-        else:
-            _raise_bigquery_error(error, status_code, SQLSpecError, "error")
-    elif status_code == HTTP_FORBIDDEN:
-        _raise_bigquery_error(error, status_code, DatabaseConnectionError, "permission denied")
-    elif status_code and status_code >= HTTP_SERVER_ERROR:
-        _raise_bigquery_error(error, status_code, OperationalError, "operational error")
-    else:
-        _raise_bigquery_error(error, status_code, SQLSpecError, "error")
+            return _create_bigquery_error(error, status_code, SQLParsingError, "query syntax error")
+        if "type" in error_msg or "format" in error_msg:
+            return _create_bigquery_error(error, status_code, DataError, "data error")
+        return _create_bigquery_error(error, status_code, SQLSpecError, "error")
+    if status_code == HTTP_FORBIDDEN:
+        return _create_bigquery_error(error, status_code, DatabaseConnectionError, "permission denied")
+    if status_code and status_code >= HTTP_SERVER_ERROR:
+        return _create_bigquery_error(error, status_code, OperationalError, "operational error")
+    return _create_bigquery_error(error, status_code, SQLSpecError, "error")

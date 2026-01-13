@@ -10,12 +10,12 @@ from sqlspec.adapters.mock.core import (
     apply_driver_features,
     build_insert_statement,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     driver_profile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
-    raise_exception,
     resolve_rowcount,
 )
 from sqlspec.core import ParameterStyle, StatementConfig
@@ -208,22 +208,22 @@ def test_normalize_execute_many_parameters_empty_raises() -> None:
         normalize_execute_many_parameters([])
 
 
-def test_raise_exception_unique_constraint_code() -> None:
-    """Test raising exception for unique constraint violation with error code."""
+def test_create_mapped_exception_unique_constraint_code() -> None:
+    """Test creating exception for unique constraint violation with error code."""
     conn = sqlite3.connect(":memory:")
     try:
         conn.execute("CREATE TABLE test (id INTEGER UNIQUE)")
         conn.execute("INSERT INTO test VALUES (1)")
         conn.execute("INSERT INTO test VALUES (1)")
     except sqlite3.Error as e:
-        with pytest.raises(UniqueViolationError):
-            raise_exception(e)
+        result = create_mapped_exception(e)
+        assert isinstance(result, UniqueViolationError)
     finally:
         conn.close()
 
 
-def test_raise_exception_foreign_key_constraint() -> None:
-    """Test raising exception for foreign key constraint violation."""
+def test_create_mapped_exception_foreign_key_constraint() -> None:
+    """Test creating exception for foreign key constraint violation."""
     conn = sqlite3.connect(":memory:")
     try:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -231,59 +231,60 @@ def test_raise_exception_foreign_key_constraint() -> None:
         conn.execute("CREATE TABLE child (id INTEGER, parent_id INTEGER, FOREIGN KEY(parent_id) REFERENCES parent(id))")
         conn.execute("INSERT INTO child VALUES (1, 999)")
     except sqlite3.Error as e:
-        with pytest.raises(ForeignKeyViolationError):
-            raise_exception(e)
+        result = create_mapped_exception(e)
+        assert isinstance(result, ForeignKeyViolationError)
     finally:
         conn.close()
 
 
-def test_raise_exception_not_null_constraint() -> None:
-    """Test raising exception for not null constraint violation."""
+def test_create_mapped_exception_not_null_constraint() -> None:
+    """Test creating exception for not null constraint violation."""
     conn = sqlite3.connect(":memory:")
     try:
         conn.execute("CREATE TABLE test (id INTEGER NOT NULL)")
         conn.execute("INSERT INTO test VALUES (NULL)")
     except sqlite3.Error as e:
-        with pytest.raises(NotNullViolationError):
-            raise_exception(e)
+        result = create_mapped_exception(e)
+        assert isinstance(result, NotNullViolationError)
     finally:
         conn.close()
 
 
-def test_raise_exception_check_constraint() -> None:
-    """Test raising exception for check constraint violation."""
+def test_create_mapped_exception_check_constraint() -> None:
+    """Test creating exception for check constraint violation."""
     conn = sqlite3.connect(":memory:")
     try:
         conn.execute("CREATE TABLE test (id INTEGER CHECK(id > 0))")
         conn.execute("INSERT INTO test VALUES (-1)")
     except sqlite3.Error as e:
-        with pytest.raises(CheckViolationError):
-            raise_exception(e)
+        result = create_mapped_exception(e)
+        assert isinstance(result, CheckViolationError)
     finally:
         conn.close()
 
 
-def test_raise_exception_syntax_error() -> None:
-    """Test raising exception for SQL syntax error."""
+def test_create_mapped_exception_syntax_error() -> None:
+    """Test creating exception for SQL syntax error."""
     conn = sqlite3.connect(":memory:")
     try:
         conn.execute("INVALID SQL SYNTAX")
     except sqlite3.Error as e:
-        with pytest.raises(SQLParsingError):
-            raise_exception(e)
+        result = create_mapped_exception(e)
+        assert isinstance(result, SQLParsingError)
     finally:
         conn.close()
 
 
-def test_raise_exception_generic_error() -> None:
-    """Test raising exception for generic database error."""
+def test_create_mapped_exception_generic_error() -> None:
+    """Test creating exception for generic database error."""
 
     class CustomSQLiteError(sqlite3.Error):
         pass
 
     error = CustomSQLiteError("Generic error")
-    with pytest.raises(SQLSpecError, match="Generic error"):
-        raise_exception(error)
+    result = create_mapped_exception(error)
+    assert isinstance(result, SQLSpecError)
+    assert "Generic error" in str(result)
 
 
 def test_apply_driver_features_defaults() -> None:

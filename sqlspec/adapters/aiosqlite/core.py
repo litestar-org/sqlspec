@@ -31,12 +31,12 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "collect_rows",
+    "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
-    "raise_exception",
     "resolve_rowcount",
 )
 
@@ -172,63 +172,86 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     return {key: value for key, value in connection_config.items() if key not in excluded_keys}
 
 
-def _raise_aiosqlite_error(error: Any, code: "int | None", error_class: type[SQLSpecError], description: str) -> None:
+def _create_aiosqlite_error(
+    error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception from an aiosqlite error.
+
+    Args:
+        error: The original aiosqlite exception
+        code: SQLite extended error code
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
     code_str = f"[code {code}]" if code else ""
     msg = f"AIOSQLite {description} {code_str}: {error}" if code_str else f"AIOSQLite {description}: {error}"
-    raise error_class(msg) from cast("BaseException", error)
+    exc = error_class(msg)
+    exc.__cause__ = cast("BaseException", error)
+    return exc
 
 
-def raise_exception(error: BaseException) -> None:
-    """Raise SQLSpec exceptions for aiosqlite errors."""
+def create_mapped_exception(error: BaseException) -> SQLSpecError:
+    """Map aiosqlite exceptions to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __aexit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        error: The aiosqlite exception to map
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
     if has_sqlite_error(error):
         error_code = error.sqlite_errorcode
         error_name = error.sqlite_errorname
-        error_exc = cast("BaseException", error)
     else:
         error_code = None
         error_name = None
-        error_exc = error
     error_msg = str(error).lower()
 
     if "locked" in error_msg:
         msg = f"AIOSQLite database locked: {error}. Consider enabling WAL mode or reducing concurrency."
-        raise SQLSpecError(msg) from error_exc
+        exc = SQLSpecError(msg)
+        exc.__cause__ = error  # pyright: ignore[reportAttributeAccessIssue]
+        return exc
 
     if not error_code:
         if "unique constraint" in error_msg:
-            _raise_aiosqlite_error(error, 0, UniqueViolationError, "unique constraint violation")
-        elif "foreign key constraint" in error_msg:
-            _raise_aiosqlite_error(error, 0, ForeignKeyViolationError, "foreign key constraint violation")
-        elif "not null constraint" in error_msg:
-            _raise_aiosqlite_error(error, 0, NotNullViolationError, "not-null constraint violation")
-        elif "check constraint" in error_msg:
-            _raise_aiosqlite_error(error, 0, CheckViolationError, "check constraint violation")
-        elif "syntax" in error_msg:
-            _raise_aiosqlite_error(error, None, SQLParsingError, "SQL syntax error")
-        else:
-            _raise_aiosqlite_error(error, None, SQLSpecError, "database error")
-        return
+            return _create_aiosqlite_error(error, 0, UniqueViolationError, "unique constraint violation")
+        if "foreign key constraint" in error_msg:
+            return _create_aiosqlite_error(error, 0, ForeignKeyViolationError, "foreign key constraint violation")
+        if "not null constraint" in error_msg:
+            return _create_aiosqlite_error(error, 0, NotNullViolationError, "not-null constraint violation")
+        if "check constraint" in error_msg:
+            return _create_aiosqlite_error(error, 0, CheckViolationError, "check constraint violation")
+        if "syntax" in error_msg:
+            return _create_aiosqlite_error(error, None, SQLParsingError, "SQL syntax error")
+        return _create_aiosqlite_error(error, None, SQLSpecError, "database error")
 
     if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
-        _raise_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
-    elif error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
-        _raise_aiosqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
-    elif error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
-        _raise_aiosqlite_error(error, error_code, NotNullViolationError, "not-null constraint violation")
-    elif error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
-        _raise_aiosqlite_error(error, error_code, CheckViolationError, "check constraint violation")
-    elif error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
-        _raise_aiosqlite_error(error, error_code, IntegrityError, "integrity constraint violation")
-    elif error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
-        _raise_aiosqlite_error(error, error_code, DatabaseConnectionError, "connection error")
-    elif error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
-        _raise_aiosqlite_error(error, error_code, OperationalError, "operational error")
-    elif error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
-        _raise_aiosqlite_error(error, error_code, DataError, "data error")
-    elif error_code == 1 or "syntax" in error_msg:
-        _raise_aiosqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
-    else:
-        _raise_aiosqlite_error(error, error_code, SQLSpecError, "database error")
+        return _create_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
+    if error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
+        return _create_aiosqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
+    if error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
+        return _create_aiosqlite_error(error, error_code, NotNullViolationError, "not-null constraint violation")
+    if error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
+        return _create_aiosqlite_error(error, error_code, CheckViolationError, "check constraint violation")
+    if error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
+        return _create_aiosqlite_error(error, error_code, IntegrityError, "integrity constraint violation")
+    if error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
+        return _create_aiosqlite_error(error, error_code, DatabaseConnectionError, "connection error")
+    if error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
+        return _create_aiosqlite_error(error, error_code, OperationalError, "operational error")
+    if error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
+        return _create_aiosqlite_error(error, error_code, DataError, "data error")
+    if error_code == 1 or "syntax" in error_msg:
+        return _create_aiosqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
+    return _create_aiosqlite_error(error, error_code, SQLSpecError, "database error")
 
 
 def build_profile() -> "DriverParameterProfile":

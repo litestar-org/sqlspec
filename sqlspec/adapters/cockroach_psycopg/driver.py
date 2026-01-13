@@ -25,7 +25,7 @@ from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
     CockroachPsycopgAsyncDataDictionary,
     CockroachPsycopgSyncDataDictionary,
 )
-from sqlspec.adapters.psycopg.core import raise_exception
+from sqlspec.adapters.psycopg.core import create_mapped_exception
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.exceptions import SerializationConflictError, TransactionRetryError
@@ -67,11 +67,8 @@ class CockroachPsycopgSyncExceptionHandler:
             if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
                 self.pending_exception = SerializationConflictError(str(exc_val))
                 return True
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 
@@ -93,11 +90,8 @@ class CockroachPsycopgAsyncExceptionHandler:
             if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
                 self.pending_exception = SerializationConflictError(str(exc_val))
                 return True
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 

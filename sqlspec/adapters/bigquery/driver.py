@@ -18,12 +18,12 @@ from sqlspec.adapters.bigquery.core import (
     build_load_job_telemetry,
     build_retry,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     detect_emulator,
     driver_profile,
     is_simple_insert,
     normalize_script_rowcount,
-    raise_exception,
     run_query_job,
     storage_api_available,
     try_bulk_insert,
@@ -114,11 +114,8 @@ class BigQueryExceptionHandler:
         if exc_type is None:
             return False
         if issubclass(exc_type, GoogleCloudError):
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 

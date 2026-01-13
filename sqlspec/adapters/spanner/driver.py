@@ -11,10 +11,10 @@ from sqlspec.adapters.spanner.core import (
     coerce_params,
     collect_rows,
     create_arrow_data,
+    create_mapped_exception,
     default_statement_config,
     driver_profile,
     infer_param_types,
-    raise_exception,
     supports_batch_update,
     supports_write,
 )
@@ -95,11 +95,8 @@ class SpannerExceptionHandler:
             return False
 
         if isinstance(exc_val, api_exceptions.GoogleAPICallError):
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 

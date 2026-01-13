@@ -55,6 +55,6 @@ AGENTS.md
 docs-build
 .envs/
 .claude/*
-specs/
-.pre-commit-cache
 .gh-cache
+.gemini/
+specs/

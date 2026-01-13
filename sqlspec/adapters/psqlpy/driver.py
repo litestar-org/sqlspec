@@ -15,6 +15,7 @@ from sqlspec.adapters.psqlpy.core import (
     coerce_numeric_for_write,
     coerce_records_for_execute_many,
     collect_rows,
+    create_mapped_exception,
     default_statement_config,
     driver_profile,
     encode_records_for_binary_copy,
@@ -23,7 +24,6 @@ from sqlspec.adapters.psqlpy.core import (
     get_parameter_casts,
     normalize_scalar_parameter,
     prepare_parameters_with_casts,
-    raise_exception,
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
@@ -108,11 +108,8 @@ class PsqlpyExceptionHandler:
         if exc_type is None:
             return False
         if issubclass(exc_type, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error)):
-            try:
-                raise_exception(exc_val)
-            except Exception as mapped:
-                self.pending_exception = mapped
-                return True
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
         return False
 
 

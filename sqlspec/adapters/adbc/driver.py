@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     collect_rows,
+    create_mapped_exception,
     detect_dialect,
     driver_profile,
     get_statement_config,
@@ -18,7 +19,6 @@ from sqlspec.adapters.adbc.core import (
     normalize_postgres_empty_parameters,
     normalize_script_rowcount,
     prepare_postgres_parameters,
-    raise_exception,
     resolve_dialect_name,
     resolve_parameter_casts,
     resolve_rowcount,
@@ -90,12 +90,8 @@ class AdbcExceptionHandler:
         _ = exc_tb
         if exc_type is None:
             return False
-        try:
-            raise_exception(exc_val)
-        except Exception as mapped:
-            self.pending_exception = mapped
-            return True
-        return False
+        self.pending_exception = create_mapped_exception(exc_val)
+        return True
 
 
 class AdbcDriver(SyncDriverAdapterBase):

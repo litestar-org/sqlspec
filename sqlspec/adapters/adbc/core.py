@@ -40,6 +40,7 @@ __all__ = (
     "build_connection_config",
     "build_profile",
     "collect_rows",
+    "create_mapped_exception",
     "detect_dialect",
     "driver_from_uri",
     "driver_kind_from_driver_name",
@@ -53,7 +54,6 @@ __all__ = (
     "normalize_script_rowcount",
     "prepare_parameters_with_casts",
     "prepare_postgres_parameters",
-    "raise_exception",
     "resolve_dialect_from_config",
     "resolve_dialect_from_driver_path",
     "resolve_dialect_name",
@@ -409,56 +409,67 @@ def prepare_postgres_parameters(
     )
 
 
-def _raise_adbc_error(error: Any, error_class: type[SQLSpecError], description: str) -> None:
+def _create_adbc_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
+    """Create an ADBC error instance without raising it."""
     msg = f"ADBC {description}: {error}"
-    raise error_class(msg) from error
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
 
 
-def raise_exception(error: Any) -> None:
-    """Raise SQLSpec exceptions for ADBC errors."""
+def create_mapped_exception(error: Any) -> SQLSpecError:
+    """Map ADBC errors to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __exit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        error: The ADBC exception to map
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
     sqlstate = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
 
     if sqlstate:
         if sqlstate == "23505":
-            _raise_adbc_error(error, UniqueViolationError, "unique constraint violation")
-        elif sqlstate == "23503":
-            _raise_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-        elif sqlstate == "23502":
-            _raise_adbc_error(error, NotNullViolationError, "not-null constraint violation")
-        elif sqlstate == "23514":
-            _raise_adbc_error(error, CheckViolationError, "check constraint violation")
-        elif sqlstate.startswith("23"):
-            _raise_adbc_error(error, IntegrityError, "integrity constraint violation")
-        elif sqlstate.startswith("42"):
-            _raise_adbc_error(error, SQLParsingError, "SQL parsing error")
-        elif sqlstate.startswith("08"):
-            _raise_adbc_error(error, DatabaseConnectionError, "connection error")
-        elif sqlstate.startswith("40"):
-            _raise_adbc_error(error, TransactionError, "transaction error")
-        elif sqlstate.startswith("22"):
-            _raise_adbc_error(error, DataError, "data error")
-        else:
-            _raise_adbc_error(error, SQLSpecError, "database error")
-        return
+            return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
+        if sqlstate == "23503":
+            return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+        if sqlstate == "23502":
+            return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
+        if sqlstate == "23514":
+            return _create_adbc_error(error, CheckViolationError, "check constraint violation")
+        if sqlstate.startswith("23"):
+            return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
+        if sqlstate.startswith("42"):
+            return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
+        if sqlstate.startswith("08"):
+            return _create_adbc_error(error, DatabaseConnectionError, "connection error")
+        if sqlstate.startswith("40"):
+            return _create_adbc_error(error, TransactionError, "transaction error")
+        if sqlstate.startswith("22"):
+            return _create_adbc_error(error, DataError, "data error")
+        return _create_adbc_error(error, SQLSpecError, "database error")
 
     error_msg = str(error).lower()
 
     if "unique" in error_msg or "duplicate" in error_msg:
-        _raise_adbc_error(error, UniqueViolationError, "unique constraint violation")
-    elif "foreign key" in error_msg:
-        _raise_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-    elif "not null" in error_msg or "null value" in error_msg:
-        _raise_adbc_error(error, NotNullViolationError, "not-null constraint violation")
-    elif "check constraint" in error_msg:
-        _raise_adbc_error(error, CheckViolationError, "check constraint violation")
-    elif "constraint" in error_msg:
-        _raise_adbc_error(error, IntegrityError, "integrity constraint violation")
-    elif "syntax" in error_msg:
-        _raise_adbc_error(error, SQLParsingError, "SQL parsing error")
-    elif "connection" in error_msg or "connect" in error_msg:
-        _raise_adbc_error(error, DatabaseConnectionError, "connection error")
-    else:
-        _raise_adbc_error(error, SQLSpecError, "database error")
+        return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
+    if "foreign key" in error_msg:
+        return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    if "not null" in error_msg or "null value" in error_msg:
+        return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
+    if "check constraint" in error_msg:
+        return _create_adbc_error(error, CheckViolationError, "check constraint violation")
+    if "constraint" in error_msg:
+        return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
+    if "syntax" in error_msg:
+        return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
+    if "connection" in error_msg or "connect" in error_msg:
+        return _create_adbc_error(error, DatabaseConnectionError, "connection error")
+    return _create_adbc_error(error, SQLSpecError, "database error")
 
 
 def _identity(value: Any) -> Any:

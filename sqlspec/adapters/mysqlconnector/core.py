@@ -27,11 +27,11 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "collect_rows",
+    "create_mapped_exception",
     "default_statement_config",
     "detect_json_columns",
     "driver_profile",
     "format_identifier",
-    "map_exception",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
@@ -136,18 +136,30 @@ def apply_driver_features(
     return statement_config, features
 
 
-def _raise_mysql_error(
+def _create_mysql_error(
     error: Any, sqlstate: "str | None", code: "int | None", error_class: type[SQLSpecError], description: str
-) -> None:
+) -> SQLSpecError:
+    """Create a MySQL error instance without raising it."""
     code_str = f"[{sqlstate or code}]" if sqlstate or code else ""
     msg = f"MySQL {description} {code_str}: {error}" if code_str else f"MySQL {description}: {error}"
-    raise error_class(msg) from error
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
 
 
-def map_exception(error: Any, *, logger: Any | None = None) -> "bool | None":
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpecError | bool":
     """Map mysql-connector exceptions to SQLSpec errors.
 
-    Returns True to suppress expected migration errors.
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __exit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Args:
+        error: The mysql-connector exception to map
+        logger: Optional logger for migration warnings
+
+    Returns:
+        True to suppress expected migration errors, or a SQLSpec exception
     """
     error_code = getattr(error, "errno", None)
     if error_code is None and hasattr(error, "args") and error.args:
@@ -162,32 +174,32 @@ def map_exception(error: Any, *, logger: Any | None = None) -> "bool | None":
         return True
 
     if sqlstate == "23505" or error_code == MYSQL_ER_DUP_ENTRY:
-        _raise_mysql_error(error, sqlstate, error_code, UniqueViolationError, "unique constraint violation")
-    elif sqlstate == "23503" or error_code in {1216, 1217, 1451, 1452}:
-        _raise_mysql_error(error, sqlstate, error_code, ForeignKeyViolationError, "foreign key constraint violation")
-    elif sqlstate == "23502" or error_code in {1048, MYSQL_ER_NO_DEFAULT_FOR_FIELD}:
-        _raise_mysql_error(error, sqlstate, error_code, NotNullViolationError, "not-null constraint violation")
-    elif sqlstate == "23514" or error_code == MYSQL_ER_CHECK_CONSTRAINT_VIOLATED:
-        _raise_mysql_error(error, sqlstate, error_code, CheckViolationError, "check constraint violation")
-    elif sqlstate and sqlstate.startswith("23"):
-        _raise_mysql_error(error, sqlstate, error_code, IntegrityError, "integrity constraint violation")
-    elif sqlstate and sqlstate.startswith("42"):
-        _raise_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
-    elif sqlstate and sqlstate.startswith("08"):
-        _raise_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
-    elif sqlstate and sqlstate.startswith("40"):
-        _raise_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
-    elif sqlstate and sqlstate.startswith("22"):
-        _raise_mysql_error(error, sqlstate, error_code, DataError, "data error")
-    elif error_code in {2002, 2003, 2005, 2006, 2013}:
-        _raise_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
-    elif error_code in {1205, 1213}:
-        _raise_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
-    elif error_code in range(1064, 1100):
-        _raise_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
-    else:
-        _raise_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
-    return None
+        return _create_mysql_error(error, sqlstate, error_code, UniqueViolationError, "unique constraint violation")
+    if sqlstate == "23503" or error_code in {1216, 1217, 1451, 1452}:
+        return _create_mysql_error(
+            error, sqlstate, error_code, ForeignKeyViolationError, "foreign key constraint violation"
+        )
+    if sqlstate == "23502" or error_code in {1048, MYSQL_ER_NO_DEFAULT_FOR_FIELD}:
+        return _create_mysql_error(error, sqlstate, error_code, NotNullViolationError, "not-null constraint violation")
+    if sqlstate == "23514" or error_code == MYSQL_ER_CHECK_CONSTRAINT_VIOLATED:
+        return _create_mysql_error(error, sqlstate, error_code, CheckViolationError, "check constraint violation")
+    if sqlstate and sqlstate.startswith("23"):
+        return _create_mysql_error(error, sqlstate, error_code, IntegrityError, "integrity constraint violation")
+    if sqlstate and sqlstate.startswith("42"):
+        return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
+    if sqlstate and sqlstate.startswith("08"):
+        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
+    if sqlstate and sqlstate.startswith("40"):
+        return _create_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
+    if sqlstate and sqlstate.startswith("22"):
+        return _create_mysql_error(error, sqlstate, error_code, DataError, "data error")
+    if error_code in {2002, 2003, 2005, 2006, 2013}:
+        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
+    if error_code in {1205, 1213}:
+        return _create_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
+    if error_code in range(1064, 1100):
+        return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
+    return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
 
 
 def detect_json_columns(cursor: Any, json_type_codes: "set[int]") -> "list[int]":
