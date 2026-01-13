@@ -1,0 +1,7 @@
+{
+  "workflow": "unified-dev-flow",
+  "spec": "docs-review-theming",
+  "task": "task-playground-table",
+  "phase": "implementation",
+  "files": ["tools/sphinx_ext/playground_template.html"]
+}
