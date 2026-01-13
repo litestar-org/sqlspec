@@ -9,7 +9,7 @@
   - Add rules for `.sd-card` spacing (gap/margin).
   - verify layout with screenshot tools (optional) or visual confirm.
 
-- [ ] **Content Integrity Check** `task-content-check` <!-- id: 1 -->
+- [x] **Content Integrity Check** `task-content-check` <!-- id: 1 --> [0e2e2a0]
   - Run `uv run sphinx-build -b linkcheck docs docs/_build/linkcheck`.
   - Review output.
   - Fix broken links in `docs/` files.
