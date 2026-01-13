@@ -25,12 +25,13 @@
   - Fix broken links in `docs/` files.
   - Commit fixes.
 
-- [x] **Fix Footer & Branding Alignment** `task-fix-branding` <!-- id: 4 --> [a87005d1]
+- [x] **Fix Footer & Branding Alignment** `task-fix-branding` <!-- id: 4 --> [28072835]
   - Update `docs/_static/custom.css`:
     - Ensure `html[data-theme="dark"]` selector is used for specificity.
     - Set `--sy-c-background` and `--sy-c-foot-background` to `#202235`.
     - Adjust surface colors for contrast.
   - Update `tools/sphinx_ext/playground_template.html` to use `#202235`.
+  - Removed playground status badge and moved Usage Tips to the primary actions row.
 
 - [x] **Fix Card Colors** `task-fix-cards` <!-- id: 5 --> [7072ea1d]
   - Update `docs/_static/custom.css` to use `var(--sy-c-surface)` for `.sd-card` background in dark mode.
