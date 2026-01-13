@@ -452,3 +452,37 @@ html[data-theme="dark"] .mermaid svg {
     letter-spacing: var(--brand-letter-spacing-xs);
   }
 }
+
+/* -----------------------------------------------------------------------------
+   Layout Overrides (Hide Right Sidebar & Expand Content)
+   ----------------------------------------------------------------------------- */
+/* Hide the secondary sidebar (TOC) globally */
+.sy-sidebar-secondary {
+  display: none !important;
+}
+
+/* Adjust the main grid layout to remove the third column reserved for the sidebar */
+@media (min-width: 1200px) {
+  .sy-layout {
+    grid-template-columns: 20rem minmax(0, 1fr) !important;
+  }
+}
+
+/* Ensure content takes available width */
+.sy-content {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+
+/* -----------------------------------------------------------------------------
+   Component Spacing (Quick Navigation)
+   ----------------------------------------------------------------------------- */
+/* Add spacing to sphinx-design cards to prevent visual overlap */
+.sd-card {
+  margin-bottom: 1rem;
+}
+
+/* Ensure grid containers have gaps if they don't already */
+.sd-container-fluid {
+  gap: 1.5rem;
+}
