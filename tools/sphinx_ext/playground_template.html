@@ -460,6 +460,8 @@
 </style>
 
 <section class="sqlspec-playground" id="sqlspec-playground-{{ id }}">
+
+
   <div class="sqlspec-playground__grid">
     <div class="sqlspec-playground__panel">
       <div class="sqlspec-playground__panel-header">
@@ -482,7 +484,7 @@ with spec.provide_session(config) as session:
     session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
     result = session.execute("SELECT * FROM teams")
     # Return list of dictionaries for table rendering
-    [dict(row) for row in result.all()]
+    print([dict(row) for row in result.all()])
       </textarea>
     </div>
   </div>
@@ -528,6 +530,8 @@ with spec.provide_session(config) as session:
     const openTipsButton = root.querySelector("[data-open-tips]");
     const closeTipsButton = root.querySelector("[data-close-tips]");
 
+    const statusEl = root.querySelector("[data-status]");
+
     const pythonDefault = pythonTextarea.value.trim();
 
     const pythonEditor = CodeMirror.fromTextArea(pythonTextarea, {
@@ -547,13 +551,20 @@ with spec.provide_session(config) as session:
       outputEl.scrollTop = outputEl.scrollHeight;
     };
 
-    const setStatus = (text) => {
-      console.log(`Playground Status: ${text}`);
+    const setStatus = (text, type = "default") => {
+      if (statusEl) {
+        statusEl.textContent = text;
+        statusEl.className = "sqlspec-playground__status";
+        if (type === "ready") {
+          statusEl.classList.add("sqlspec-playground__status--ready");
+        }
+      }
     };
 
     const clearOutput = () => {
       outputEl.textContent = "";
       tableOutputEl.innerHTML = "";
+      tableOutputEl.hidden = true;
       errorOutputEl.textContent = "";
       errorOutputEl.hidden = true;
     };
@@ -591,6 +602,7 @@ with spec.provide_session(config) as session:
       });
       table.appendChild(tbody);
       tableOutputEl.appendChild(table);
+      tableOutputEl.hidden = false;
     };
 
     const showError = (error) => {
@@ -600,7 +612,7 @@ with spec.provide_session(config) as session:
 
     const initializePlayground = async () => {
       try {
-        setStatus("Initializing Pyodide");
+        setStatus("Loading Pyodide...");
         pyodide = await loadPyodide({
           indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/"
         });
@@ -608,17 +620,13 @@ with spec.provide_session(config) as session:
         pyodide.setStdout({ batched: writeOutput });
         pyodide.setStderr({ batched: writeOutput });
 
-        writeOutput("Loading sqlite3...");
-        await pyodide.loadPackage("sqlite3");
-
-        writeOutput("Loading micropip...");
-        await pyodide.loadPackage("micropip");
+        setStatus("Loading libraries...");
+        await pyodide.loadPackage(["sqlite3", "micropip"]);
         const micropip = pyodide.pyimport("micropip");
 
-        writeOutput("Installing sqlspec...");
         await micropip.install("sqlspec");
 
-        setStatus("Ready");
+        setStatus("Ready", "ready");
         clearOutput();
         writeOutput("Ready! Click 'Run' to execute the code.");
         runPythonButton.disabled = false;

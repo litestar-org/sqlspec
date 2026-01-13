@@ -196,7 +196,24 @@ html.dark code:not([class]) {
   font-size: 0.875em;
 }
 
-/* Let Pygments github styles handle syntax highlighting */
+  html.dark .sqlspec-playground .CodeMirror .cm-property {
+    color: #FFCC80;
+  }
+
+  /* CodeMirror Selection - Dark Mode Highlighting Fix */
+  html.dark .CodeMirror-selected {
+    background-color: rgba(237, 182, 65, 0.2) !important;
+  }
+  html.dark .CodeMirror-focused .CodeMirror-selected {
+    background-color: rgba(237, 182, 65, 0.3) !important;
+  }
+  html.dark .CodeMirror-line::selection,
+  html.dark .CodeMirror-line > span::selection,
+  html.dark .CodeMirror-line > span > span::selection {
+    background-color: rgba(237, 182, 65, 0.3) !important;
+  }
+
+  /* CodeMirror - Active line */
 
 /* -----------------------------------------------------------------------------
    Navigation / Header
