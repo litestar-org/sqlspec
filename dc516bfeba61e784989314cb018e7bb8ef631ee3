@@ -1,0 +1,7 @@
+{
+  "workflow": "unified-dev-flow",
+  "spec": "docs-review-theming",
+  "task": "task-topbar-submenu,task-fix-links,task-footer-overlap",
+  "phase": "implementation",
+  "files": ["docs/conf.py", "docs/_static/custom.css"]
+}
