@@ -42,9 +42,10 @@
   - Add `padding-bottom` to `.sy-content` to prevent content obscuration.
   - Style the bar with background/border/shadow.
 
-- [x] **Top Bar Submenu** `task-topbar-submenu` <!-- id: 7 --> [dc516bfe]
+- [x] **Top Bar Submenu** `task-topbar-submenu` <!-- id: 7 --> [12a14b98]
   - Modify `docs/conf.py`.
   - Update `html_theme_options['nav_links']` to group "Get Started", "Usage", "API", "Playground" into a "Docs" submenu.
+  - Removed "Home" button from top nav.
 
 - [x] **Fix External Links** `task-fix-links` <!-- id: 8 --> [3ea01240]
   - Investigate and fix broken "View Source", "Open in Claude" links.
