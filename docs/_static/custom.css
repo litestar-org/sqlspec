@@ -80,20 +80,25 @@ html.light {
 /* -----------------------------------------------------------------------------
    Dark Mode Theme
    ----------------------------------------------------------------------------- */
-html.dark {
+html.dark,
+html[data-theme="dark"] {
   --sl-color-text-1: var(--litestar-gray-100);
   /* Global background - Litestar Navy */
-  --sy-c-bg: var(--litestar-navy);
+  --sy-c-background: var(--litestar-navy);
   --sy-c-foot-background: var(--litestar-navy);
-  --sy-c-bg-weak: #1a1c2e; /* Slightly darker/lighter variant for sidebars if needed, or just same */
+  --sy-c-background-dropback: rgba(32, 34, 53, 0.8); /* Navy with opacity */
+  --sy-c-surface: #2a2d40; /* Slightly lighter navy for cards/sidebars to distinguish from bg */
   
+  --sy-c-foot-text: var(--litestar-gray-300);
+  --sy-c-foot-divider: var(--litestar-gray-700);
+
   --yue-c-text: var(--litestar-gray-100);
   --brand-text-glow:
     0 0 10px rgba(var(--litestar-gold-rgb), 0.4),
     0 0 20px rgba(var(--litestar-gold-rgb), 0.2);
 
   /* Code block colors - dark mode */
-  --sqlspec-code-bg: #1a1c2e; /* Slightly different to stand out on navy bg */
+  --sqlspec-code-bg: #1a1c2e; /* Slightly darker than navy */
   --sqlspec-code-border: var(--litestar-gray-700);
   --sqlspec-code-text: var(--litestar-gray-100);
 }

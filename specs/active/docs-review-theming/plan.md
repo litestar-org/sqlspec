@@ -25,6 +25,13 @@
   - Fix broken links in `docs/` files.
   - Commit fixes.
 
+- [ ] **Fix Footer & Branding Alignment** `task-fix-branding` <!-- id: 4 -->
+  - Update `docs/_static/custom.css`:
+    - Ensure `html[data-theme="dark"]` selector is used for specificity.
+    - Set `--sy-c-background` and `--sy-c-foot-background` to `#202235`.
+    - Adjust surface colors for contrast.
+  - Update `tools/sphinx_ext/playground_template.html` to use `#202235`.
+
 ## Recovery Plan
 - If CSS grid changes break the mobile layout, wrap the overrides in a `@media (min-width: ...)` query.
 - If `linkcheck` fails on flaky URLs (e.g., GitHub anchors), add them to `linkcheck_ignore` in `conf.py`.
