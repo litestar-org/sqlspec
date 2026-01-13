@@ -6,9 +6,6 @@ Try SQLSpec directly in your browser. The playground runs a sandboxed Python run
 using WebAssembly and an in-memory SQLite database. Use the **Usage tips** button in
 the playground for a quick checklist.
 
-Playground
-----------
-
 .. container:: playground-full
 
    .. wasm-playground::

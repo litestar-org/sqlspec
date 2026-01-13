@@ -1,17 +1,29 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/sql/sql.js"></script>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
 
 <style>
+  /* ==========================================================================
+     SQLSpec Playground - Litestar Branded
+     ========================================================================== */
+
   .sqlspec-playground {
-    border: 1px solid var(--sl-color-gray-4);
-    border-radius: 16px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
     padding: 1.5rem;
     background: var(--sl-color-bg);
-    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 4px 20px rgba(32, 34, 53, 0.08);
   }
 
+  html.dark .sqlspec-playground {
+    background: #0f172a;
+    border-color: #334155;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Header */
   .sqlspec-playground__header {
     display: flex;
     flex-wrap: wrap;
@@ -19,6 +31,30 @@
     align-items: flex-start;
     justify-content: space-between;
     margin-bottom: 1.25rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  html.dark .sqlspec-playground__header {
+    border-bottom-color: #334155;
+  }
+
+  .sqlspec-playground__header h2 {
+    margin: 0 0 0.35rem 0;
+    color: #202235;
+    font-size: 1.25rem;
+    font-weight: 600;
+  }
+
+  html.dark .sqlspec-playground__header h2 {
+    color: #f1f5f9;
+  }
+
+  .sqlspec-playground__header p {
+    margin: 0;
+    color: var(--sl-color-gray-6);
+    max-width: 46rem;
+    font-size: 0.9rem;
   }
 
   .sqlspec-playground__header-actions {
@@ -28,31 +64,39 @@
     align-items: center;
   }
 
-  .sqlspec-playground__header h2 {
-    margin: 0 0 0.35rem 0;
-  }
-
-  .sqlspec-playground__header p {
-    margin: 0;
-    color: var(--sl-color-gray-6);
-    max-width: 46rem;
-  }
-
+  /* Status badge */
   .sqlspec-playground__status {
-    padding: 0.35rem 0.75rem;
+    padding: 0.4rem 0.85rem;
     border-radius: 999px;
-    background: var(--sl-color-gray-2);
-    color: var(--sl-color-gray-7);
-    font-size: 0.85rem;
+    background: #f1f5f9;
+    color: #64748b;
+    font-size: 0.8rem;
     font-weight: 600;
   }
 
+  html.dark .sqlspec-playground__status {
+    background: #1e293b;
+    color: #94a3b8;
+  }
+
+  .sqlspec-playground__status--ready {
+    background: rgba(237, 182, 65, 0.15);
+    color: #8B6914;
+  }
+
+  html.dark .sqlspec-playground__status--ready {
+    background: rgba(237, 182, 65, 0.2);
+    color: #EDB641;
+  }
+
+  /* Grid layout */
   .sqlspec-playground__grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 1fr;
     gap: 1rem;
   }
 
+  /* Panel */
   .sqlspec-playground__panel {
     display: flex;
     flex-direction: column;
@@ -65,6 +109,12 @@
     justify-content: space-between;
     gap: 0.75rem;
     font-weight: 600;
+    color: #202235;
+    font-size: 0.9rem;
+  }
+
+  html.dark .sqlspec-playground__panel-header {
+    color: #e6edf3;
   }
 
   .sqlspec-playground__panel-actions {
@@ -73,63 +123,250 @@
     flex-wrap: wrap;
   }
 
+  /* Buttons */
   .sqlspec-playground__button {
-    border: 1px solid var(--sl-color-gray-4);
-    background: var(--sl-color-gray-1);
-    color: var(--sl-color-text);
-    border-radius: 8px;
-    padding: 0.35rem 0.75rem;
-    font-size: 0.85rem;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #475569;
+    border-radius: 6px;
+    padding: 0.4rem 0.85rem;
+    font-size: 0.8rem;
+    font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease;
   }
 
+  html.dark .sqlspec-playground__button {
+    background: #1e293b;
+    color: #cbd5e1;
+    border-color: #334155;
+  }
+
   .sqlspec-playground__button:hover:not(:disabled) {
-    border-color: var(--sl-color-accent);
-    color: var(--sl-color-primary);
+    background: #e2e8f0;
+    border-color: #cbd5e1;
+    color: #202235;
+  }
+
+  html.dark .sqlspec-playground__button:hover:not(:disabled) {
+    background: #334155;
+    border-color: #475569;
+    color: #f1f5f9;
   }
 
   .sqlspec-playground__button:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: not-allowed;
   }
 
+  /* Primary button (Run) */
+  .sqlspec-playground__button--primary {
+    background: #EDB641;
+    color: #202235;
+    border-color: #EDB641;
+    font-weight: 600;
+  }
+
+  .sqlspec-playground__button--primary:hover:not(:disabled) {
+    background: #FFD480;
+    border-color: #FFD480;
+  }
+
+  html.dark .sqlspec-playground__button--primary {
+    background: #EDB641;
+    color: #202235;
+    border-color: #EDB641;
+  }
+
+  html.dark .sqlspec-playground__button--primary:hover:not(:disabled) {
+    background: #FFD480;
+    border-color: #FFD480;
+  }
+
+  /* Output panel */
   .sqlspec-playground__output {
     margin-top: 1rem;
-    border: 1px solid var(--sl-color-gray-3);
-    border-radius: 12px;
-    background: var(--sl-color-gray-1);
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
     padding: 0.75rem;
+  }
+
+  html.dark .sqlspec-playground__output {
+    background: #0f172a;
+    border-color: #334155;
   }
 
   .sqlspec-playground__output pre {
     margin: 0.5rem 0 0 0;
     max-height: 280px;
     overflow-y: auto;
-    padding: 0.75rem;
-    background: #0f172a;
-    color: #e2e8f0;
-    border-radius: 10px;
-    font-size: 0.85rem;
+    padding: 0.85rem;
+    background: #202235;
+    color: #e6edf3;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    font-family: var(--sl-font-mono);
   }
 
+  .sqlspec-playground__output pre:focus {
+    outline: 2px solid #EDB641;
+    outline-offset: 2px;
+  }
+
+  /* CodeMirror - Base */
+  .sqlspec-playground .CodeMirror {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    height: 320px;
+    font-family: var(--sl-font-mono);
+    font-size: 0.85rem;
+    background: #f8fafc;
+    color: #202235;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror {
+    background: #0f172a;
+    color: #e6edf3;
+    border-color: #334155;
+  }
+
+  /* CodeMirror - Gutters */
+  .sqlspec-playground .CodeMirror-gutters {
+    background: transparent;
+    border-right: 1px solid #e2e8f0;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror-gutters {
+    border-right-color: #334155;
+  }
+
+  .sqlspec-playground .CodeMirror-linenumber {
+    color: #9CA3AF;
+  }
+
+  /* CodeMirror Syntax - Light Mode */
+  .sqlspec-playground .CodeMirror .cm-keyword {
+    color: #0369a1;
+    font-weight: 600;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-string,
+  .sqlspec-playground .CodeMirror .cm-string-2 {
+    color: #2E7D32;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-number {
+    color: #1565C0;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-comment {
+    color: #6B7280;
+    font-style: italic;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-def {
+    color: #7B1FA2;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-variable {
+    color: #202235;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-variable-2 {
+    color: #0277BD;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-builtin {
+    color: #00838F;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-operator {
+    color: #546E7A;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-property {
+    color: #5D4037;
+  }
+
+  /* CodeMirror Syntax - Dark Mode */
+  html.dark .sqlspec-playground .CodeMirror .cm-keyword {
+    color: #7dd3fc;
+    font-weight: 600;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-string,
+  html.dark .sqlspec-playground .CodeMirror .cm-string-2 {
+    color: #A5D6A7;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-number {
+    color: #90CAF9;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-comment {
+    color: #9CA3AF;
+    font-style: italic;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-def {
+    color: #CE93D8;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-variable {
+    color: #e6edf3;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-variable-2 {
+    color: #81D4FA;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-builtin {
+    color: #4DD0E1;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-operator {
+    color: #B0BEC5;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-property {
+    color: #FFCC80;
+  }
+
+  /* CodeMirror - Active line */
+  .sqlspec-playground .CodeMirror-activeline-background {
+    background: rgba(237, 182, 65, 0.05);
+  }
+
+  html.dark .sqlspec-playground .CodeMirror-activeline-background {
+    background: rgba(237, 182, 65, 0.08);
+  }
+
+  /* Dialog */
   .sqlspec-playground__tip-dialog {
-    border: none;
-    border-radius: 16px;
-    padding: 1.25rem;
+    border: 1px solid rgba(237, 182, 65, 0.3);
+    border-radius: 12px;
+    padding: 1.5rem;
     max-width: 520px;
     width: min(92vw, 520px);
     background: var(--sl-color-bg);
     color: var(--sl-color-text);
-    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.2);
+    box-shadow: 0 20px 60px rgba(32, 34, 53, 0.2);
   }
 
   .sqlspec-playground__tip-dialog::backdrop {
-    background: rgba(15, 23, 42, 0.45);
+    background: rgba(32, 34, 53, 0.6);
   }
 
   .sqlspec-playground__tip-dialog h3 {
     margin-top: 0;
+    color: #202235;
+    font-size: 1.1rem;
+  }
+
+  html.dark .sqlspec-playground__tip-dialog h3 {
+    color: #EDB641;
   }
 
   .sqlspec-playground__tip-dialog ul {
@@ -142,31 +379,7 @@
     justify-content: flex-end;
   }
 
-  .sqlspec-playground__output pre:focus {
-    outline: 2px solid var(--sl-color-accent);
-    outline-offset: 2px;
-  }
-
-  .sqlspec-playground .CodeMirror {
-    border: 1px solid var(--sl-color-gray-3);
-    border-radius: 12px;
-    height: 320px;
-    font-family: var(--sl-font-mono);
-    font-size: 0.85rem;
-    background: #f8fafc;
-    color: #0f172a;
-  }
-
-  html.dark .sqlspec-playground .CodeMirror {
-    background: #0b1220;
-    color: #e2e8f0;
-    border-color: #334155;
-  }
-
-  html.dark .sqlspec-playground__output pre {
-    background: #020617;
-  }
-
+  /* Responsive */
   @media (max-width: 700px) {
     .sqlspec-playground {
       padding: 1rem;
@@ -176,6 +389,10 @@
       flex-direction: column;
       align-items: flex-start;
     }
+
+    .sqlspec-playground .CodeMirror {
+      height: 250px;
+    }
   }
 </style>
 
@@ -183,7 +400,7 @@
   <div class="sqlspec-playground__header">
     <div>
       <h2>SQLSpec Playground</h2>
-      <p>Run SQLSpec inside your browser. Execute Python and inspect the output.</p>
+      <p>Run SQLSpec in your browser. Edit the Python code and execute to see the output.</p>
     </div>
     <div class="sqlspec-playground__header-actions">
       <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
@@ -196,7 +413,7 @@
       <div class="sqlspec-playground__panel-header">
         <span>Python</span>
         <div class="sqlspec-playground__panel-actions">
-          <button class="sqlspec-playground__button" data-run-python>Run Python</button>
+          <button class="sqlspec-playground__button sqlspec-playground__button--primary" data-run-python>Run</button>
           <button class="sqlspec-playground__button" data-reset-python>Reset</button>
         </div>
       </div>
@@ -208,14 +425,12 @@ spec = SQLSpec()
 config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(config) as session:
-    session.execute("create table if not exists teams (id integer primary key, name text)")
-    session.execute("insert into teams (name) values ('Litestar'), ('SQLSpec')")
-    result = session.execute("select * from teams")
+    session.execute("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, name TEXT)")
+    session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
+    result = session.execute("SELECT * FROM teams")
     print(result.all())
       </textarea>
     </div>
-
-
   </div>
 
   <div class="sqlspec-playground__output">
@@ -227,11 +442,12 @@ with spec.provide_session(config) as session:
   </div>
 
   <dialog class="sqlspec-playground__tip-dialog" data-tips-dialog>
-    <h3>Usage tips</h3>
+    <h3>Usage Tips</h3>
     <ul>
       <li>Run the default snippet to seed a SQLite in-memory database.</li>
-      <li>Edit the Python block to try SQLSpec helpers and adapters.</li>
-      <li>Reset restores the default snippet and clears output.</li>
+      <li>Edit the Python code to try different SQLSpec features.</li>
+      <li>SQL keywords are highlighted in the code editor.</li>
+      <li>Reset restores the default snippet.</li>
     </ul>
     <div class="sqlspec-playground__tip-dialog-actions">
       <button class="sqlspec-playground__button" data-close-tips>Close</button>
@@ -258,7 +474,10 @@ with spec.provide_session(config) as session:
       mode: "python",
       lineNumbers: true,
       indentUnit: 4,
-      viewportMargin: Infinity
+      tabSize: 4,
+      indentWithTabs: false,
+      viewportMargin: Infinity,
+      styleActiveLine: true
     });
 
     let pyodide = null;
@@ -297,6 +516,8 @@ with spec.provide_session(config) as session:
         await micropip.install("sqlspec");
 
         setStatus("Ready");
+        clearOutput();
+        writeOutput("Ready! Click 'Run' to execute the code.");
         runPythonButton.disabled = false;
       } catch (err) {
         setStatus("Failed to load");
@@ -314,11 +535,11 @@ with spec.provide_session(config) as session:
       }
 
       clearOutput();
-      writeOutput("Running Python...");
+      writeOutput("Running...\n");
       try {
         await pyodide.runPythonAsync(pythonEditor.getValue());
       } catch (err) {
-        writeOutput(`Python error: ${err}`);
+        writeOutput(`\nError: ${err}`);
         console.error(err);
       }
     });

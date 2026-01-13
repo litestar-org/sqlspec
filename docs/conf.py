@@ -183,7 +183,7 @@ html_static_path = ["_static"]
 html_favicon = "_static/favicon.png"
 templates_path = ["_templates"]
 html_js_files = ["versioning.js"]
-html_css_files = ["custom.css"]
+html_css_files = ["custom.css", "style.css"]
 exclude_patterns = [
     "_build",
     "Thumbs.db",
@@ -226,7 +226,7 @@ mermaid.initialize({
 
 html_theme_options = {
     "logo_target": "/",
-    "accent_color": "indigo",
+    "accent_color": "amber",
     "github_url": "https://github.com/litestar-org/sqlspec",
     "discord_url": "https://discord.gg/dSDXd4mKhp",
     "navigation_with_keys": True,
@@ -297,8 +297,8 @@ html_theme_options = {
     ],
 }
 
-pygments_style = "friendly"
-pygments_dark_style = "monokai"
+pygments_style = "github-light-default"
+pygments_dark_style = "github-dark"
 
 
 def update_html_context(

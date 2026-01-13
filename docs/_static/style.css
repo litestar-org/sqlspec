@@ -1,3 +1,4 @@
+/* Version warning banner */
 #version-warning {
   top: 0;
   position: sticky;
@@ -9,27 +10,18 @@
   justify-content: center;
   justify-items: center;
   align-items: center;
-  background-color: #eee;
-  border-bottom: 2px solid #ae2828;
+  background-color: rgba(237, 182, 65, 0.1);
+  border-bottom: 2px solid #EDB641;
 }
 
-@media (prefers-color-scheme: dark) {
-  body:not([data-theme="light"]) #version-warning {
-    background-color: black;
-  }
+html.dark #version-warning,
+body:not([data-theme="light"]) #version-warning {
+  background-color: rgba(237, 182, 65, 0.15);
 }
 
+/* Breaking change badge */
 .breaking-change {
   font-variant: all-small-caps;
   margin-left: 0.4rem;
-  color: #f55353;
-}
-
-p {
-  font-size: 1.1em;
-}
-
-html[data-theme="dark"] .mermaid svg {
-  background-color: white;
-  padding: 1em;
+  color: #D4A438;
 }

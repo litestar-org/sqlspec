@@ -7,9 +7,6 @@ filters, and dialect-aware SQL compilation.
 
 .. currentmodule:: sqlspec.builder
 
-.. warning::
-   The builder API is **experimental** and subject to breaking changes.
-
 Example
 =======
 
