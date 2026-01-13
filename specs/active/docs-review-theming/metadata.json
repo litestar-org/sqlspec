@@ -1,9 +1,0 @@
-{
-  "version": "1.0",
-  "slug": "docs-review-theming",
-  "status": "planning",
-  "model_config": {
-    "thinking": "gemini-3-pro-preview",
-    "worker": "gemini-3-flash-preview"
-  }
-}
