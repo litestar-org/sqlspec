@@ -7,7 +7,17 @@
   - Add rules to hide `.sy-sidebar-secondary`.
   - Add rules to expand `.sy-content` / `.sy-layout`.
   - Add rules for `.sd-card` spacing (gap/margin).
-  - verify layout with screenshot tools (optional) or visual confirm.
+
+- [ ] **Global Theme Update** `task-theme-navy` <!-- id: 2 -->
+  - Modify `docs/_static/custom.css`.
+  - Change `html.dark` background variables (`--sy-c-bg`, `--sy-c-foot-background`, etc.) to `var(--litestar-navy)`.
+  - Adjust code block backgrounds if necessary to ensure contrast.
+
+- [ ] **Observability Docs** `task-docs-observability` <!-- id: 3 -->
+  - Update `docs/usage/observability.rst`.
+  - Add detailed explanation of Observability features.
+  - Add "OpenTelemetry Integration" section using `sqlspec.extensions.otel.enable_tracing`.
+  - Add "Prometheus Integration" section using `sqlspec.extensions.prometheus.enable_metrics`.
 
 - [x] **Content Integrity Check** `task-content-check` <!-- id: 1 --> [0e2e2a0]
   - Run `uv run sphinx-build -b linkcheck docs docs/_build/linkcheck`.
