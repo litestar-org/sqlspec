@@ -23,7 +23,7 @@ from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, reg
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -195,8 +195,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             **kwargs: Additional keyword arguments
         """
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
@@ -426,8 +424,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
             **kwargs: Additional keyword arguments
         """
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config

@@ -12,7 +12,7 @@ from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDr
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
@@ -180,8 +180,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        reject_pool_aliases(kwargs)
-
         self.connection_config = normalize_connection_config(connection_config)
 
         self.connection_config.setdefault("min_sessions", 1)

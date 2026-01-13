@@ -37,7 +37,6 @@ __all__ = (
     "find_pyproject_toml",
     "normalize_connection_config",
     "parse_pyproject_config",
-    "reject_pool_aliases",
     "resolve_config_async",
     "resolve_config_sync",
 )
@@ -282,23 +281,6 @@ def _is_valid_config(config: Any) -> bool:
 # =============================================================================
 # Connection Config Normalization
 # =============================================================================
-
-
-def reject_pool_aliases(kwargs: "dict[str, Any]") -> None:
-    """Reject legacy pool_config/pool_instance aliases.
-
-    Args:
-        kwargs: Keyword arguments passed to the adapter config constructor.
-
-    Raises:
-        ImproperConfigurationError: If deprecated pool aliases are supplied.
-    """
-    if "pool_config" in kwargs or "pool_instance" in kwargs:
-        msg = (
-            "pool_config and pool_instance are no longer supported. "
-            "Use connection_config and connection_instance instead."
-        )
-        raise ImproperConfigurationError(msg)
 
 
 def normalize_connection_config(

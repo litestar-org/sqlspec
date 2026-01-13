@@ -27,7 +27,7 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -205,8 +205,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
             **kwargs: Additional keyword arguments.
         """
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
 
@@ -420,8 +418,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
             **kwargs: Additional keyword arguments.
         """
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
 
         driver_features = apply_driver_features(driver_features)

@@ -24,7 +24,7 @@ from sqlspec.adapters.mysqlconnector.driver import (
 )
 from sqlspec.config import ExtensionConfigs, NoPoolAsyncConfig, SyncDatabaseConfig
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -231,8 +231,6 @@ class MysqlConnectorSyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)

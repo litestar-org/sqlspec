@@ -18,7 +18,7 @@
   }
 
   html.dark .sqlspec-playground {
-    background: #0f172a;
+    background: #202235;
     border-color: #334155;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   }
@@ -350,9 +350,15 @@
     padding: 1.5rem;
     max-width: 520px;
     width: min(92vw, 520px);
-    background: var(--sl-color-bg);
-    color: var(--sl-color-text);
+    background: #ffffff; /* Explicit background */
+    color: #202235;
     box-shadow: 0 20px 60px rgba(32, 34, 53, 0.2);
+    margin: auto; /* Ensure centering */
+  }
+
+  html.dark .sqlspec-playground__tip-dialog {
+    background: #0f172a; /* Explicit dark background */
+    color: #e6edf3;
   }
 
   .sqlspec-playground__tip-dialog::backdrop {
@@ -394,25 +400,74 @@
       height: 250px;
     }
   }
+
+  /* Table Output */
+  .sqlspec-playground__table-wrapper {
+    overflow-x: auto;
+    margin-top: 1rem;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+  }
+  html.dark .sqlspec-playground__table-wrapper {
+    border-color: #334155;
+  }
+
+  .sqlspec-playground__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    font-family: var(--sl-font-mono);
+  }
+
+  .sqlspec-playground__table th,
+  .sqlspec-playground__table td {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+    color: #202235;
+  }
+  html.dark .sqlspec-playground__table th,
+  html.dark .sqlspec-playground__table td {
+    border-bottom-color: #334155;
+    color: #e6edf3;
+  }
+
+  .sqlspec-playground__table th {
+    background: #f1f5f9;
+    font-weight: 600;
+  }
+  html.dark .sqlspec-playground__table th {
+    background: #1e293b;
+  }
+
+  /* Error Output */
+  .sqlspec-playground__error {
+    margin-top: 1rem;
+    padding: 1rem;
+    border-radius: 8px;
+    background: #FEF2F2;
+    border: 1px solid #FCA5A5;
+    color: #991B1B;
+    font-family: var(--sl-font-mono);
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+  }
+  html.dark .sqlspec-playground__error {
+    background: #450a0a;
+    border-color: #7f1d1d;
+    color: #fca5a5;
+  }
 </style>
 
 <section class="sqlspec-playground" id="sqlspec-playground-{{ id }}">
-  <div class="sqlspec-playground__header">
-    <div>
-      <h2>SQLSpec Playground</h2>
-      <p>Run SQLSpec in your browser. Edit the Python code and execute to see the output.</p>
-    </div>
-    <div class="sqlspec-playground__header-actions">
-      <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
-      <div class="sqlspec-playground__status" data-status>Loading runtime</div>
-    </div>
-  </div>
+
 
   <div class="sqlspec-playground__grid">
     <div class="sqlspec-playground__panel">
       <div class="sqlspec-playground__panel-header">
         <span>Python</span>
         <div class="sqlspec-playground__panel-actions">
+          <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
           <button class="sqlspec-playground__button sqlspec-playground__button--primary" data-run-python>Run</button>
           <button class="sqlspec-playground__button" data-reset-python>Reset</button>
         </div>
@@ -427,8 +482,9 @@ config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}
 with spec.provide_session(config) as session:
     session.execute("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, name TEXT)")
     session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
-    result = session.execute("SELECT * FROM teams")
-    print(result.all())
+    result = session.select("SELECT * FROM teams")
+    # Return list of dictionaries for table rendering
+    print(result)
       </textarea>
     </div>
   </div>
@@ -438,7 +494,11 @@ with spec.provide_session(config) as session:
       <span>Output</span>
       <button class="sqlspec-playground__button" data-clear-output>Clear</button>
     </div>
-    <pre data-output tabindex="0" aria-live="polite"></pre>
+    <div data-output-container>
+        <pre data-output tabindex="0" aria-live="polite"></pre>
+        <div data-table-output class="sqlspec-playground__table-wrapper"></div>
+        <div data-error-output class="sqlspec-playground__error" hidden></div>
+    </div>
   </div>
 
   <dialog class="sqlspec-playground__tip-dialog" data-tips-dialog>
@@ -447,6 +507,7 @@ with spec.provide_session(config) as session:
       <li>Run the default snippet to seed a SQLite in-memory database.</li>
       <li>Edit the Python code to try different SQLSpec features.</li>
       <li>SQL keywords are highlighted in the code editor.</li>
+      <li>Return a list of dictionaries to see a results table.</li>
       <li>Reset restores the default snippet.</li>
     </ul>
     <div class="sqlspec-playground__tip-dialog-actions">
@@ -458,8 +519,9 @@ with spec.provide_session(config) as session:
 <script>
   (function() {
     const root = document.getElementById("sqlspec-playground-{{ id }}");
-    const statusEl = root.querySelector("[data-status]");
     const outputEl = root.querySelector("[data-output]");
+    const tableOutputEl = root.querySelector("[data-table-output]");
+    const errorOutputEl = root.querySelector("[data-error-output]");
     const pythonTextarea = root.querySelector("[data-python-editor]");
     const runPythonButton = root.querySelector("[data-run-python]");
     const resetPythonButton = root.querySelector("[data-reset-python]");
@@ -467,6 +529,8 @@ with spec.provide_session(config) as session:
     const tipsDialog = root.querySelector("[data-tips-dialog]");
     const openTipsButton = root.querySelector("[data-open-tips]");
     const closeTipsButton = root.querySelector("[data-close-tips]");
+
+    const statusEl = root.querySelector("[data-status]");
 
     const pythonDefault = pythonTextarea.value.trim();
 
@@ -487,17 +551,68 @@ with spec.provide_session(config) as session:
       outputEl.scrollTop = outputEl.scrollHeight;
     };
 
-    const setStatus = (text) => {
-      statusEl.textContent = text;
+    const setStatus = (text, type = "default") => {
+      if (statusEl) {
+        statusEl.textContent = text;
+        statusEl.className = "sqlspec-playground__status";
+        if (type === "ready") {
+          statusEl.classList.add("sqlspec-playground__status--ready");
+        }
+      }
     };
 
     const clearOutput = () => {
       outputEl.textContent = "";
+      tableOutputEl.innerHTML = "";
+      tableOutputEl.hidden = true;
+      errorOutputEl.textContent = "";
+      errorOutputEl.hidden = true;
+    };
+
+    const renderTable = (data) => {
+      if (!Array.isArray(data) || data.length === 0 || typeof data[0] !== 'object') {
+        return; // Not tabular data
+      }
+
+      const headers = Object.keys(data[0]);
+      const table = document.createElement('table');
+      table.className = 'sqlspec-playground__table';
+
+      // Header
+      const thead = document.createElement('thead');
+      const trHead = document.createElement('tr');
+      headers.forEach(header => {
+        const th = document.createElement('th');
+        th.textContent = header;
+        trHead.appendChild(th);
+      });
+      thead.appendChild(trHead);
+      table.appendChild(thead);
+
+      // Body
+      const tbody = document.createElement('tbody');
+      data.forEach(row => {
+        const tr = document.createElement('tr');
+        headers.forEach(header => {
+          const td = document.createElement('td');
+          td.textContent = row[header];
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      tableOutputEl.appendChild(table);
+      tableOutputEl.hidden = false;
+    };
+
+    const showError = (error) => {
+      errorOutputEl.textContent = error;
+      errorOutputEl.hidden = false;
     };
 
     const initializePlayground = async () => {
       try {
-        setStatus("Initializing Pyodide");
+        setStatus("Loading Pyodide...");
         pyodide = await loadPyodide({
           indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/"
         });
@@ -505,23 +620,19 @@ with spec.provide_session(config) as session:
         pyodide.setStdout({ batched: writeOutput });
         pyodide.setStderr({ batched: writeOutput });
 
-        writeOutput("Loading sqlite3...");
-        await pyodide.loadPackage("sqlite3");
-
-        writeOutput("Loading micropip...");
-        await pyodide.loadPackage("micropip");
+        setStatus("Loading libraries...");
+        await pyodide.loadPackage(["sqlite3", "micropip"]);
         const micropip = pyodide.pyimport("micropip");
 
-        writeOutput("Installing sqlspec...");
         await micropip.install("sqlspec");
 
-        setStatus("Ready");
+        setStatus("Ready", "ready");
         clearOutput();
         writeOutput("Ready! Click 'Run' to execute the code.");
         runPythonButton.disabled = false;
       } catch (err) {
         setStatus("Failed to load");
-        writeOutput(`Error: ${err}`);
+        showError(`Failed to initialize: ${err}`);
         console.error(err);
       }
     };
@@ -537,9 +648,20 @@ with spec.provide_session(config) as session:
       clearOutput();
       writeOutput("Running...\n");
       try {
-        await pyodide.runPythonAsync(pythonEditor.getValue());
+        const result = await pyodide.runPythonAsync(pythonEditor.getValue());
+        if (result && typeof result.toJs === 'function') {
+             const jsResult = result.toJs({dict_converter: Object.fromEntries});
+             if (Array.isArray(jsResult)) {
+                 renderTable(jsResult);
+             } else {
+                 writeOutput(String(result));
+             }
+        } else if (result !== undefined) {
+             writeOutput(String(result));
+        }
+
       } catch (err) {
-        writeOutput(`\nError: ${err}`);
+        showError(String(err));
         console.error(err);
       }
     });

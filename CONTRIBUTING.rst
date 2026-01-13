@@ -36,7 +36,7 @@ Guidelines for writing code
 - All code should be fully `typed <https://peps.python.org/pep-0484/>`_. This is enforced via
   `mypy <https://mypy.readthedocs.io/en/stable/>`_.
 - All code should be tested. This is enforced via `pytest <https://docs.pytest.org/en/stable/>`_.
-- All code should be properly formatted. This is enforced via `black <https://black.readthedocs.io/en/stable/>`_ and `Ruff <https://beta.ruff.rs/docs/>`_.
+- All code should be properly formatted. This is enforced via `black <https://black.readthedocs.io/en/stable/>`_ and `Ruff <https://docs.astral.sh/ruff/>`_.
 
 Logging
 ++++++++
@@ -55,8 +55,8 @@ Project documentation
 
 The documentation is located in the ``/docs`` directory and is `ReST <https://docutils.sourceforge.io/rst.html>`_ and
 `Sphinx <https://www.sphinx-doc.org/en/master/>`_. If you're unfamiliar with any of those,
-`ReStructuredText primer <https://www.sphinx-doc.org/en/master/lib/usage/restructuredtext/basics.html>`_ and
-`Sphinx quickstart <https://www.sphinx-doc.org/en/master/lib/usage/quickstart.html>`_ are recommended reads.
+`ReStructuredText primer <https://www.sphinx-doc.org/en/master/usage/restructuredtext/basics.html>`_ and
+`Sphinx quickstart <https://www.sphinx-doc.org/en/master/usage/quickstart.html>`_ are recommended reads.
 
 Running the docs locally
 ++++++++++++++++++++++++
@@ -67,7 +67,7 @@ Creating a new release
 ----------------------
 
 1. Increment the version in `pyproject.toml <https://github.com/litestar-org/sqlspec/blob/main/pyproject.toml>`_.
-    .. note:: The version should follow `semantic versioning <https://semver.org/>`_ and `PEP 440 <https://www.python.org/dev/peps/pep-0440/>`_.
+    .. note:: The version should follow `semantic versioning <https://semver.org/>`_ and `PEP 440 <https://peps.python.org/pep-0440/>`_.
 2. `Draft a new release <https://github.com/litestar-org/sqlspec/releases/new>`_ on GitHub
 
    * Use ``vMAJOR.MINOR.PATCH`` (e.g. ``v1.2.3``) as both the tag and release title

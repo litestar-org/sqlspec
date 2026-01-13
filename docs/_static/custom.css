@@ -80,16 +80,25 @@ html.light {
 /* -----------------------------------------------------------------------------
    Dark Mode Theme
    ----------------------------------------------------------------------------- */
-html.dark {
+html.dark,
+html[data-theme="dark"] {
   --sl-color-text-1: var(--litestar-gray-100);
-  --sy-c-foot-background: var(--litestar-gray-900);
+  /* Global background - Litestar Navy */
+  --sy-c-background: var(--litestar-navy);
+  --sy-c-foot-background: var(--litestar-navy);
+  --sy-c-background-dropback: rgba(32, 34, 53, 0.8); /* Navy with opacity */
+  --sy-c-surface: #2a2d40; /* Slightly lighter navy for cards/sidebars to distinguish from bg */
+
+  --sy-c-foot-text: var(--litestar-gray-300);
+  --sy-c-foot-divider: var(--litestar-gray-700);
+
   --yue-c-text: var(--litestar-gray-100);
   --brand-text-glow:
     0 0 10px rgba(var(--litestar-gold-rgb), 0.4),
     0 0 20px rgba(var(--litestar-gold-rgb), 0.2);
 
   /* Code block colors - dark mode */
-  --sqlspec-code-bg: var(--litestar-gray-900);
+  --sqlspec-code-bg: #1a1c2e; /* Slightly darker than navy */
   --sqlspec-code-border: var(--litestar-gray-700);
   --sqlspec-code-text: var(--litestar-gray-100);
 }
@@ -187,7 +196,24 @@ html.dark code:not([class]) {
   font-size: 0.875em;
 }
 
-/* Let Pygments github styles handle syntax highlighting */
+  html.dark .sqlspec-playground .CodeMirror .cm-property {
+    color: #FFCC80;
+  }
+
+  /* CodeMirror Selection - Dark Mode Highlighting Fix */
+  html.dark .CodeMirror-selected {
+    background-color: rgba(237, 182, 65, 0.2) !important;
+  }
+  html.dark .CodeMirror-focused .CodeMirror-selected {
+    background-color: rgba(237, 182, 65, 0.3) !important;
+  }
+  html.dark .CodeMirror-line::selection,
+  html.dark .CodeMirror-line > span::selection,
+  html.dark .CodeMirror-line > span > span::selection {
+    background-color: rgba(237, 182, 65, 0.3) !important;
+  }
+
+  /* CodeMirror - Active line */
 
 /* -----------------------------------------------------------------------------
    Navigation / Header
@@ -231,12 +257,14 @@ html.dark .sy-sidebar a:hover {
   box-shadow: 0 4px 12px rgba(var(--litestar-gold-rgb), 0.15);
 }
 
-html.dark .sd-card {
-  background: var(--litestar-gray-800);
+html.dark .sd-card,
+html[data-theme="dark"] .sd-card {
+  background: var(--sy-c-surface);
   border-color: var(--litestar-gray-700);
 }
 
-html.dark .sd-card:hover {
+html.dark .sd-card:hover,
+html[data-theme="dark"] .sd-card:hover {
   border-color: var(--litestar-gold);
   box-shadow: 0 4px 12px rgba(var(--litestar-gold-rgb), 0.2);
 }
@@ -451,4 +479,67 @@ html[data-theme="dark"] .mermaid svg {
     font-size: var(--brand-font-size-xxs);
     letter-spacing: var(--brand-letter-spacing-xs);
   }
+}
+
+/* -----------------------------------------------------------------------------
+   Layout Overrides (Hide Right Sidebar & Expand Content)
+   ----------------------------------------------------------------------------- */
+/* Hide the secondary sidebar (TOC) globally */
+.sy-rside {
+  display: none !important;
+}
+
+/* Adjust the main container width to reclaim right sidebar space */
+@media (min-width: 768px) {
+  .sy-main {
+    /* Default is calc(100% - 18rem) on medium screens, which is fine (no right sidebar there usually) */
+    max-width: none !important; /* Remove 52rem cap to allow full expansion */
+  }
+}
+
+@media (min-width: 1280px) {
+  .sy-main {
+    /* Override Shibuya's default of calc(100% - 34rem) which reserves space for right sidebar */
+    width: calc(100% - 18rem) !important;
+    padding-right: 2rem; /* Ensure right edge padding */
+  }
+}
+
+/* Ensure content takes full available width */
+.sy-content {
+  max-width: none !important;
+  width: 100% !important;
+}
+
+/* -----------------------------------------------------------------------------
+   Component Spacing (Quick Navigation)
+   ----------------------------------------------------------------------------- */
+/* Add spacing to sphinx-design cards to prevent visual overlap */
+.sd-card {
+  margin-bottom: 1rem;
+}
+
+/* Ensure grid containers have gaps if they don't already */
+.sd-container-fluid {
+  gap: 1.5rem;
+}
+
+/* -----------------------------------------------------------------------------
+   Navigation Bar (Next/Prev)
+   ----------------------------------------------------------------------------- */
+.navigation {
+  position: relative;
+  margin-top: 4rem !important;
+  margin-bottom: 2rem !important;
+  padding-top: 2rem;
+  border-top: 1px solid var(--sy-c-divider);
+}
+
+/* Remove extra padding from content/footer since nav is no longer fixed */
+.sy-content {
+  padding-bottom: 2rem;
+}
+
+.sy-foot {
+  padding-bottom: 2rem;
 }
