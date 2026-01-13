@@ -1,0 +1,7 @@
+{
+  "workflow": "unified-dev-flow",
+  "spec": "docs-review-theming",
+  "task": "task-theme-navy",
+  "phase": "implementation",
+  "files": ["docs/_static/custom.css", "docs/usage/observability.rst"]
+}
