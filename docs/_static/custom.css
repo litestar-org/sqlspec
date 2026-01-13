@@ -535,6 +535,17 @@ html.dark .navigation {
 }
 
 /* Add spacing to content so nav doesn't cover footer text or bottom of content */
+
 .sy-content {
+
   padding-bottom: 5rem;
+
+}
+
+
+
+.sy-foot {
+
+  padding-bottom: 6rem;
+
 }

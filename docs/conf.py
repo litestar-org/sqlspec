@@ -236,10 +236,15 @@ html_theme_options = {
     "discussion_url": "https://discord.gg/dSDXd4mKhp",
     "nav_links": [
         {"title": "Home", "url": "index"},
-        {"title": "Get Started", "url": "getting_started/index"},
-        {"title": "Usage", "url": "usage/index"},
-        {"title": "API", "url": "reference/index"},
-        {"title": "Playground", "url": "playground"},
+        {
+            "title": "Docs",
+            "children": [
+                {"title": "Get Started", "url": "getting_started/index", "summary": "Installation and quickstart guide"},
+                {"title": "Usage", "url": "usage/index", "summary": "Detailed usage guides and tutorials"},
+                {"title": "API Reference", "url": "reference/index", "summary": "Comprehensive API documentation"},
+                {"title": "Playground", "url": "playground", "summary": "Interactive SQLSpec playground"},
+            ],
+        },
         {
             "title": "About",
             "children": [
@@ -290,6 +295,12 @@ html_theme_options = {
                     "title": "GitHub Discussions",
                     "summary": "GitHub Discussions",
                     "url": "https://github.com/litestar-org/sqlspec/discussions",
+                    "icon": "coc",
+                },
+                {
+                    "title": "Open in Gemini",
+                    "summary": "Ask Gemini about SQLSpec",
+                    "url": "https://gemini.google.com/app",
                     "icon": "coc",
                 },
             ],
