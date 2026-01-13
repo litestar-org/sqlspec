@@ -235,7 +235,6 @@ html_theme_options = {
     "dark_logo": "_static/logo-default.png",
     "discussion_url": "https://discord.gg/dSDXd4mKhp",
     "nav_links": [
-        {"title": "Home", "url": "index"},
         {
             "title": "Docs",
             "children": [
