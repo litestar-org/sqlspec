@@ -32,6 +32,16 @@
     - Adjust surface colors for contrast.
   - Update `tools/sphinx_ext/playground_template.html` to use `#202235`.
 
+- [x] **Fix Card Colors** `task-fix-cards` <!-- id: 5 --> [7072ea1d]
+  - Update `docs/_static/custom.css` to use `var(--sy-c-surface)` for `.sd-card` background in dark mode.
+
+- [x] **Sticky Navigation Bar** `task-sticky-nav` <!-- id: 6 --> [b4d76813]
+  - Modify `docs/_static/custom.css`.
+  - Set `.navigation` to `position: fixed; bottom: 0`.
+  - Adjust `left` offset for sidebars (0 on mobile, 18rem on tablet+).
+  - Add `padding-bottom` to `.sy-content` to prevent content obscuration.
+  - Style the bar with background/border/shadow.
+
 ## Recovery Plan
 - If CSS grid changes break the mobile layout, wrap the overrides in a `@media (min-width: ...)` query.
 - If `linkcheck` fails on flaky URLs (e.g., GitHub anchors), add them to `linkcheck_ignore` in `conf.py`.
