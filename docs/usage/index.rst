@@ -72,52 +72,15 @@ Choose a topic
 
       Add service-specific helpers like the ADK extension.
 
-Overview
---------
+Recommended Path
+----------------
 
-SQLSpec provides a unified interface for database operations across multiple backends while
-keeping SQL at the center. Start with configuration and drivers, then move into query
-construction, migration tooling, and framework integrations. Extensions live here as part of
-the usage flow so you can layer in the Litestar and ADK integrations when you are ready.
-
-Quick Reference
----------------
-
-**Connect and run a query**
-
-.. literalinclude:: /examples/quickstart/basic_connection.py
-   :language: python
-   :caption: ``basic connection``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
-**Build a query programmatically**
-
-.. literalinclude:: /examples/builder/select_query.py
-   :language: python
-   :caption: ``select query``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
-**Load SQL from files**
-
-.. literalinclude:: /examples/sql_files/load_sql_files.py
-   :language: python
-   :caption: ``load sql files``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
-Next Steps
-----------
-
-Start with :doc:`configuration` for connection options, then review :doc:`drivers_and_querying`
-for driver-specific guidance and execution patterns.
+1. **Start with** :doc:`data_flow` to understand how sessions, drivers, and results connect.
+2. **Configure your database** in :doc:`configuration` with adapter-specific settings.
+3. **Execute queries** using :doc:`drivers_and_querying` for transaction and parameter patterns.
+4. **Build queries safely** with the :doc:`query_builder` for programmatic SQL construction.
+5. **Organize SQL** in files using :doc:`sql_files` when your project grows.
+6. **Integrate with your framework** via :doc:`framework_integrations` for Litestar, FastAPI, Flask, or Starlette.
 
 .. toctree::
    :hidden:
