@@ -42,6 +42,19 @@
   - Add `padding-bottom` to `.sy-content` to prevent content obscuration.
   - Style the bar with background/border/shadow.
 
+- [ ] **Top Bar Submenu** `task-topbar-submenu` <!-- id: 7 -->
+  - Modify `docs/conf.py`.
+  - Update `html_theme_options['nav_links']` to group "Get Started", "Usage", "API", "Playground" into a "Docs" submenu.
+
+- [ ] **Fix External Links** `task-fix-links` <!-- id: 8 -->
+  - Investigate and fix broken "View Source", "Open in Claude" links.
+  - Add "Open in Gemini" link.
+  - Likely locations: `docs/_static/theme.js` or `tools/sphinx_ext/`.
+
+- [ ] **Fix Footer Overlap** `task-footer-overlap` <!-- id: 9 -->
+  - Modify `docs/_static/custom.css`.
+  - Add padding to `.sy-foot` or `body` to ensure footer content is not covered by the fixed navigation bar.
+
 ## Recovery Plan
 - If CSS grid changes break the mobile layout, wrap the overrides in a `@media (min-width: ...)` query.
 - If `linkcheck` fails on flaky URLs (e.g., GitHub anchors), add them to `linkcheck_ignore` in `conf.py`.
