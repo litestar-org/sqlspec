@@ -46,10 +46,11 @@
   - Modify `docs/conf.py`.
   - Update `html_theme_options['nav_links']` to group "Get Started", "Usage", "API", "Playground" into a "Docs" submenu.
 
-- [x] **Fix External Links** `task-fix-links` <!-- id: 8 --> [dc516bfe]
+- [x] **Fix External Links** `task-fix-links` <!-- id: 8 --> [3ea01240]
   - Investigate and fix broken "View Source", "Open in Claude" links.
   - Add "Open in Gemini" link.
   - Likely locations: `docs/_static/theme.js` or `tools/sphinx_ext/`.
+  - Resolution: Overrode `copy-page-button.html` template from Shibuya theme.
 
 - [x] **Fix Footer Overlap** `task-footer-overlap` <!-- id: 9 --> [dc516bfe]
   - Modify `docs/_static/custom.css`.
