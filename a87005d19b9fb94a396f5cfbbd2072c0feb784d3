@@ -1,0 +1,7 @@
+{
+  "workflow": "unified-dev-flow",
+  "spec": "docs-review-theming",
+  "task": "task-fix-branding",
+  "phase": "implementation",
+  "files": ["docs/_static/custom.css", "tools/sphinx_ext/playground_template.html"]
+}
