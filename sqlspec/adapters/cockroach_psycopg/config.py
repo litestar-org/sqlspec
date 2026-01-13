@@ -27,7 +27,7 @@ from sqlspec.adapters.cockroach_psycopg.driver import (
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -175,8 +175,6 @@ class CockroachPsycopgSyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or build_statement_config()
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -364,8 +362,6 @@ class CockroachPsycopgAsyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or build_statement_config()
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

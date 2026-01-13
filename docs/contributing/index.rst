@@ -1,6 +1,6 @@
-============
-Contributing
-============
+==========
+Developers
+==========
 
 Thank you for your interest in contributing to SQLSpec! This section provides guidance for developers who want to extend SQLSpec, create new adapters, or contribute to the project.
 
@@ -25,3 +25,6 @@ Thank you for your interest in contributing to SQLSpec! This section provides gu
     :hidden:
 
     creating_adapters
+    ../changelog
+    ../contribution-guide
+    ../releases

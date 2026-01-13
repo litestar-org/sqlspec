@@ -13,7 +13,7 @@ from sqlspec.adapters.asyncmy.core import apply_driver_features, default_stateme
 from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, AsyncmyExceptionHandler, AsyncmySessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -173,8 +173,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
 
         connection_config.setdefault("host", "localhost")

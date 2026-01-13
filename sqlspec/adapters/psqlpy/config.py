@@ -11,7 +11,7 @@ from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection
 from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, PsqlpyExceptionHandler, PsqlpySessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config, reject_pool_aliases
+from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -187,8 +187,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
             **kwargs: Additional keyword arguments.
         """
-        reject_pool_aliases(kwargs)
-
         connection_config = normalize_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config

@@ -88,7 +88,7 @@ html[data-theme="dark"] {
   --sy-c-foot-background: var(--litestar-navy);
   --sy-c-background-dropback: rgba(32, 34, 53, 0.8); /* Navy with opacity */
   --sy-c-surface: #2a2d40; /* Slightly lighter navy for cards/sidebars to distinguish from bg */
-  
+
   --sy-c-foot-text: var(--litestar-gray-300);
   --sy-c-foot-divider: var(--litestar-gray-700);
 

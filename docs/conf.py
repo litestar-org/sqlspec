@@ -238,7 +238,11 @@ html_theme_options = {
         {
             "title": "Docs",
             "children": [
-                {"title": "Get Started", "url": "getting_started/index", "summary": "Installation and quickstart guide"},
+                {
+                    "title": "Get Started",
+                    "url": "getting_started/index",
+                    "summary": "Installation and quickstart guide",
+                },
                 {"title": "Usage", "url": "usage/index", "summary": "Detailed usage guides and tutorials"},
                 {"title": "API Reference", "url": "reference/index", "summary": "Comprehensive API documentation"},
                 {"title": "Playground", "url": "playground", "summary": "Interactive SQLSpec playground"},
@@ -247,24 +251,11 @@ html_theme_options = {
         {
             "title": "About",
             "children": [
-                {"title": "Changelog", "url": "changelog", "summary": "All changes for SQLSpec"},
                 {
                     "title": "Litestar Organization",
                     "summary": "Details about the Litestar organization, the team behind SQLSpec",
                     "url": "https://litestar.dev/about/organization",
                     "icon": "org",
-                },
-                {
-                    "title": "Releases",
-                    "summary": "Explore the release process, versioning, and deprecation policy for SQLSpec",
-                    "url": "releases",
-                    "icon": "releases",
-                },
-                {
-                    "title": "Contributing",
-                    "summary": "Learn how to contribute to the SQLSpec project",
-                    "url": "contributing/index",
-                    "icon": "contributing",
                 },
                 {
                     "title": "Code of Conduct",
@@ -279,6 +270,24 @@ html_theme_options = {
                     "icon": "coc",
                 },
                 {"title": "Sponsor", "url": "https://github.com/sponsors/Litestar-Org", "icon": "heart"},
+            ],
+        },
+        {
+            "title": "Developers",
+            "children": [
+                {"title": "Changelog", "url": "changelog", "summary": "All changes for SQLSpec"},
+                {
+                    "title": "Releases",
+                    "summary": "Explore the release process, versioning, and deprecation policy for SQLSpec",
+                    "url": "releases",
+                    "icon": "releases",
+                },
+                {
+                    "title": "Contribution Guide",
+                    "summary": "Learn how to contribute to the SQLSpec project",
+                    "url": "contributing/index",
+                    "icon": "contributing",
+                },
             ],
         },
         {
