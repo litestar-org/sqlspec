@@ -82,14 +82,18 @@ html.light {
    ----------------------------------------------------------------------------- */
 html.dark {
   --sl-color-text-1: var(--litestar-gray-100);
-  --sy-c-foot-background: var(--litestar-gray-900);
+  /* Global background - Litestar Navy */
+  --sy-c-bg: var(--litestar-navy);
+  --sy-c-foot-background: var(--litestar-navy);
+  --sy-c-bg-weak: #1a1c2e; /* Slightly darker/lighter variant for sidebars if needed, or just same */
+  
   --yue-c-text: var(--litestar-gray-100);
   --brand-text-glow:
     0 0 10px rgba(var(--litestar-gold-rgb), 0.4),
     0 0 20px rgba(var(--litestar-gold-rgb), 0.2);
 
   /* Code block colors - dark mode */
-  --sqlspec-code-bg: var(--litestar-gray-900);
+  --sqlspec-code-bg: #1a1c2e; /* Slightly different to stand out on navy bg */
   --sqlspec-code-border: var(--litestar-gray-700);
   --sqlspec-code-text: var(--litestar-gray-100);
 }
@@ -457,7 +461,7 @@ html[data-theme="dark"] .mermaid svg {
    Layout Overrides (Hide Right Sidebar & Expand Content)
    ----------------------------------------------------------------------------- */
 /* Hide the secondary sidebar (TOC) globally */
-.sy-sidebar-secondary {
+.sy-rside {
   display: none !important;
 }
 
@@ -465,14 +469,13 @@ html[data-theme="dark"] .mermaid svg {
 @media (min-width: 768px) {
   .sy-main {
     /* Default is calc(100% - 18rem) on medium screens, which is fine (no right sidebar there usually) */
-    max-width: none !important; /* Remove 52rem cap */
+    max-width: none !important; /* Remove 52rem cap to allow full expansion */
   }
 }
 
 @media (min-width: 1280px) {
   .sy-main {
-    /* Default subtracts 34rem (Left+Right). We only want to subtract Left (~18-20rem). */
-    /* Adjusting to flex-grow or specific calculation */
+    /* Override Shibuya's default of calc(100% - 34rem) which reserves space for right sidebar */
     width: calc(100% - 18rem) !important;
     padding-right: 2rem; /* Ensure right edge padding */
   }
