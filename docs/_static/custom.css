@@ -508,37 +508,21 @@ html[data-theme="dark"] .mermaid svg {
 }
 
 /* -----------------------------------------------------------------------------
-   Sticky Navigation Bar
+   Navigation Bar (Next/Prev)
    ----------------------------------------------------------------------------- */
 .navigation {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 40;
-  background-color: var(--sy-c-background);
+  position: relative;
+  margin-top: 4rem !important;
+  margin-bottom: 2rem !important;
+  padding-top: 2rem;
   border-top: 1px solid var(--sy-c-divider);
-  margin: 0 !important; /* Reset any margins */
-  padding: 1rem 1.5rem;
-  box-shadow: 0 -4px 20px rgba(0,0,0,0.05);
 }
 
-html.dark .navigation {
-  box-shadow: 0 -4px 20px rgba(0,0,0,0.2);
-}
-
-/* Adjust for sidebar on larger screens */
-@media (min-width: 768px) {
-  .navigation {
-    left: 18rem; /* Matches left sidebar width */
-  }
-}
-
-/* Add spacing to content so nav doesn't cover footer text or bottom of content */
+/* Remove extra padding from content/footer since nav is no longer fixed */
 .sy-content {
-  padding-bottom: 8rem;
+  padding-bottom: 2rem;
 }
 
 .sy-foot {
-  padding-bottom: 10rem;
+  padding-bottom: 2rem;
 }
