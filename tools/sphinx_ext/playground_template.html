@@ -482,9 +482,9 @@ config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}
 with spec.provide_session(config) as session:
     session.execute("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, name TEXT)")
     session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
-    result = session.execute("SELECT * FROM teams")
+    result = session.select("SELECT * FROM teams")
     # Return list of dictionaries for table rendering
-    print([dict(row) for row in result.all()])
+    print(result)
       </textarea>
     </div>
   </div>
