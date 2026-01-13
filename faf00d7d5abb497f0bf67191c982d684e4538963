@@ -1,0 +1,7 @@
+{
+  "workflow": "unified-dev-flow",
+  "spec": "docs-review-theming",
+  "task": "task-content-check",
+  "phase": "implementation",
+  "files": ["CONTRIBUTING.rst"]
+}
