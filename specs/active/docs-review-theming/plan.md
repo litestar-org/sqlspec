@@ -52,7 +52,7 @@
   - Likely locations: `docs/_static/theme.js` or `tools/sphinx_ext/`.
   - Resolution: Overrode `copy-page-button.html` template from Shibuya theme.
 
-- [x] **Fix Footer Overlap** `task-footer-overlap` <!-- id: 9 --> [dc516bfe]
+- [x] **Fix Footer Overlap** `task-footer-overlap` <!-- id: 9 --> [1b730edd]
   - Modify `docs/_static/custom.css`.
   - Add padding to `.sy-foot` or `body` to ensure footer content is not covered by the fixed navigation bar.
 
