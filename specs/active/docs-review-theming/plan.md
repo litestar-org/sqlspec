@@ -2,7 +2,7 @@
 
 ## Tasks
 
-- [ ] **Fix Layout & Styling** `task-layout-css` <!-- id: 0 -->
+- [x] **Fix Layout & Styling** `task-layout-css` <!-- id: 0 --> [1365b91]
   - Modify `docs/_static/custom.css`.
   - Add rules to hide `.sy-sidebar-secondary`.
   - Add rules to expand `.sy-content` / `.sy-layout`.
