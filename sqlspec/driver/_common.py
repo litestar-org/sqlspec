@@ -1476,7 +1476,7 @@ class CommonDriverAttributesMixin:
                 # Copy JOIN clauses
                 joins = expr.args.get("joins")
                 if joins:
-                     count_expr.set("joins", [join.copy() for join in joins])
+                    count_expr.set("joins", [join.copy() for join in joins])
 
                 if expr.args.get("where"):
                     count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")).copy(), copy=False)

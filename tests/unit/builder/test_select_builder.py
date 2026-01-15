@@ -19,6 +19,7 @@ def test_select_only_replaces_columns() -> None:
     assert "name" not in sql_str
     assert "email" in sql_str
 
+
 def test_select_only_multiple_columns() -> None:
     """Test select_only() handles multiple columns."""
     query = sql.select("id").from_("users")
@@ -30,6 +31,7 @@ def test_select_only_multiple_columns() -> None:
     assert "name" in sql_str
     assert "email" in sql_str
 
+
 def test_select_only_on_new_query() -> None:
     """Test select_only() works on fresh query."""
     query = sql.select("id").from_("users")
@@ -37,6 +39,7 @@ def test_select_only_on_new_query() -> None:
     # so we just test basic functionality again to be sure
     query.select_only("active")
     assert "active" in query.to_sql()
+
 
 def test_select_only_with_expressions() -> None:
     """Test select_only() works with SQL expressions (strings)."""
@@ -48,6 +51,7 @@ def test_select_only_with_expressions() -> None:
     sql_str = query.to_sql().upper()
     assert "COUNT" in sql_str
     assert "ID" in sql_str
+
 
 def test_select_only_not_available_on_update() -> None:
     """Test select_only() is not available on UPDATE statements."""

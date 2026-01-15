@@ -300,8 +300,7 @@ def test_create_count_query_with_sqlglot_from_key_bug(mock_driver: "MockSyncDriv
     # Create a statement that sqlglot might optimize/store weirdly, or just a standard one
     # The bug was that even standard statements have 'from_' in args, not 'from'
     sql = mock_driver.prepare_statement(
-        SQL("SELECT id, name FROM users WHERE active = true"),
-        statement_config=mock_driver.statement_config
+        SQL("SELECT id, name FROM users WHERE active = true"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
@@ -319,8 +318,7 @@ def test_create_count_query_with_sqlglot_from_key_bug(mock_driver: "MockSyncDriv
 def test_create_count_query_with_explicit_columns_no_star(mock_driver: "MockSyncDriver") -> None:
     """Test regression: select(col1, col2) without * shouldn't break count query generation."""
     sql = mock_driver.prepare_statement(
-        SQL("SELECT id, name FROM users"),
-        statement_config=mock_driver.statement_config
+        SQL("SELECT id, name FROM users"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
