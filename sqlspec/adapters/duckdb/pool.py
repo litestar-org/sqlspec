@@ -43,6 +43,7 @@ class DuckDBConnectionPool:
         "_extension_flags",
         "_extensions",
         "_health_check_interval",
+        "_is_memory_db",
         "_lock",
         "_on_connection_create",
         "_recycle",
@@ -82,6 +83,10 @@ class DuckDBConnectionPool:
         self._lock = threading.RLock()
         self._created_connections = 0
         self._connection_times: dict[int, float] = {}
+        # Track if this pool uses an in-memory database
+        # In-memory databases require connections to stay alive to preserve data
+        database = connection_config.get("database", "")
+        self._is_memory_db = database.startswith(":memory:") or database == ""
 
     def _create_connection(self) -> DuckDBConnection:
         """Create a new DuckDB connection with extensions and secrets."""
@@ -252,6 +257,13 @@ class DuckDBConnectionPool:
         Each thread gets its own dedicated DuckDB connection to prevent
         thread-safety issues with concurrent cursor operations.
 
+        For file-based databases, the connection is closed when the context
+        manager exits to release DuckDB's file lock, allowing subsequent
+        connections with different configurations.
+
+        For in-memory databases, connections are kept alive to preserve data,
+        as in-memory data is lost when the last connection closes.
+
         Yields:
             DuckDBConnection: A thread-local connection.
         """
@@ -261,6 +273,11 @@ class DuckDBConnectionPool:
         except Exception:
             self._close_thread_connection()
             raise
+        else:
+            # Only close connection for file-based databases to release file locks
+            # In-memory databases need connections to stay alive to preserve data
+            if not self._is_memory_db:
+                self._close_thread_connection()
 
     def close(self) -> None:
         """Close the thread-local connection if it exists."""
