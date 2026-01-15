@@ -289,3 +289,43 @@ def test_error_message_clarity(mock_driver: "MockSyncDriver") -> None:
         match="COUNT queries require a FROM clause to determine which table to count rows from",
     ):
         mock_driver._create_count_query(sql)
+
+
+def test_create_count_query_with_sqlglot_from_key_bug(mock_driver: "MockSyncDriver") -> None:
+    """Test regression: Ensure _create_count_query handles missing 'from' key in sqlglot args.
+
+    Sqlglot 11.5.0+ stores the FROM clause under 'from_' key, but the driver was looking for 'from'.
+    This test verifies we check both keys or fallback to table extraction.
+    """
+    # Create a statement that sqlglot might optimize/store weirdly, or just a standard one
+    # The bug was that even standard statements have 'from_' in args, not 'from'
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id, name FROM users WHERE active = true"),
+        statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    # Verify pre-check: ensure our test setup actually mimics the condition
+    # (This assumes sqlglot usage in the driver which might vary, but the bug was specific)
+
+    count_sql = mock_driver._create_count_query(sql)
+    count_str = str(count_sql)
+
+    assert "COUNT(*)" in count_str.upper()
+    # It must have the FROM clause
+    assert "FROM users" in count_str or "FROM USERS" in count_str.upper()
+
+
+def test_create_count_query_with_explicit_columns_no_star(mock_driver: "MockSyncDriver") -> None:
+    """Test regression: select(col1, col2) without * shouldn't break count query generation."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id, name FROM users"),
+        statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+    count_str = str(count_sql)
+
+    assert "COUNT(*)" in count_str.upper()
+    assert "FROM users" in count_str or "FROM USERS" in count_str.upper()

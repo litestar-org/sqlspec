@@ -60,3 +60,4 @@ docs-build
 specs/
 .playwright-mcp
 .geminiignore
+uv.toml

@@ -1456,16 +1456,32 @@ class CommonDriverAttributesMixin:
                 subquery = subquery_expr.subquery(alias="grouped_data")
                 count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
             else:
-                source_from = cast("exp.Expression", from_clause)
-                count_expr = exp.select(exp.Count(this=exp.Star())).from_(source_from, copy=False)
-                if expr.args.get("where"):
-                    count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")), copy=False)
-                if expr.args.get("having"):
-                    count_expr = count_expr.having(cast("exp.Expression", expr.args.get("having")), copy=False)
+                # Direct count from source
+                count_expr = exp.select(exp.Count(this=exp.Star()))
 
-            count_expr.set("order", None)
-            count_expr.set("limit", None)
-            count_expr.set("offset", None)
+                # Copy FROM clause(s)
+                # handle both 'from' (single) and 'froms' (list) which sqlglot might use
+                from_arg = expr.args.get("from") or expr.args.get("from_")
+                if from_arg:
+                    count_expr.set("from_", from_arg.copy())
+                else:
+                    # Fallback: extract table from expression if FROM arg is missing
+                    # This happens if sqlglot structure differs or builder used implicit FROM
+                    tables = list(expr.find_all(exp.Table))
+                    if tables:
+                        first_table = tables[0]
+                        # Create new FROM clause with the found table
+                        count_expr = count_expr.from_(first_table.copy())
+
+                # Copy JOIN clauses
+                joins = expr.args.get("joins")
+                if joins:
+                     count_expr.set("joins", [join.copy() for join in joins])
+
+                if expr.args.get("where"):
+                    count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")).copy(), copy=False)
+                if expr.args.get("having"):
+                    count_expr = count_expr.having(cast("exp.Expression", expr.args.get("having")).copy(), copy=False)
 
             if cte is not None:
                 count_expr.set("with_", cte.copy())
