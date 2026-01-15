@@ -296,6 +296,18 @@ class SelectClauseMixin:
         self.set_expression(select_expr)
         return cast("Self", builder)
 
+    def select_only(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn", SQL, Case]) -> Self:
+        """Replace currently selected columns with new ones."""
+        builder = cast("SQLBuilderProtocol", self)
+        select_expr = _ensure_select_expression(builder, error_message="Cannot add columns to non-SELECT expression.")
+        # Clear existing expressions
+        select_expr.set("expressions", [])
+        for column in columns:
+            column_expr = column.expression if isinstance(column, Case) else parse_column_expression(column, builder)
+            select_expr = select_expr.select(column_expr, copy=False)
+        self.set_expression(select_expr)
+        return cast("Self", builder)
+
     def distinct(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn", SQL]) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="Cannot add DISTINCT to non-SELECT expression.")
