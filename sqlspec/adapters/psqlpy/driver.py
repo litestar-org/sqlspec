@@ -333,13 +333,17 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             qualified = format_table_identifier(table)
-            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
                 await cursor.execute(f"TRUNCATE TABLE {qualified}")
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             schema_name, table_name = split_schema_and_table(table)
-            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
@@ -355,6 +359,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                     insert_operation = cursor.execute_many(insert_sql, formatted_records)
                     if inspect.isawaitable(insert_operation):
                         await insert_operation
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table

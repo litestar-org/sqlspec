@@ -298,8 +298,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
 
+        exc_handler = self.handle_database_exceptions()
+        arrow_result: ArrowResult | None = None
+
         # Execute query and get native Arrow
-        with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+        with self.with_cursor(self.connection) as cursor, exc_handler:
             if cursor is None:
                 msg = "Failed to create cursor"
                 raise DatabaseConnectionError(msg)
@@ -314,15 +317,22 @@ class DuckDBDriver(SyncDriverAdapterBase):
             arrow_reader = cursor.arrow()
             arrow_table = arrow_reader.read_all()
 
-            return build_arrow_result_from_table(
+            arrow_result = build_arrow_result_from_table(
                 prepared_statement,
                 arrow_table,
                 return_format=return_format,
                 batch_size=batch_size,
                 arrow_schema=arrow_schema,
             )
-        msg = "Unreachable"
-        raise RuntimeError(msg)  # pragma: no cover
+
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+        if arrow_result is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)  # pragma: no cover
+
+        return arrow_result
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS

@@ -13,6 +13,8 @@ from sqlspec.exceptions import (
     SQLParsingError,
     UniqueViolationError,
 )
+from sqlspec.typing import PYARROW_INSTALLED
+from tests.integration.adapters.adbc.conftest import xfail_if_driver_missing
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -116,3 +118,11 @@ def test_sql_parsing_error(adbc_exception_session: AdbcDriver) -> None:
         adbc_exception_session.execute("SELCT * FROM nonexistent_table")
 
     assert "syntax" in str(exc_info.value).lower() or "pars" in str(exc_info.value).lower()
+
+
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow missing")
+@xfail_if_driver_missing
+def test_select_to_arrow_raises_mapped_exception(adbc_exception_session: AdbcDriver) -> None:
+    """Test select_to_arrow re-raises mapped database errors."""
+    with pytest.raises(SQLParsingError):
+        adbc_exception_session.select_to_arrow("SELECT * FROM missing_arrow_table")

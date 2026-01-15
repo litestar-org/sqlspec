@@ -320,14 +320,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             statement = f"TRUNCATE TABLE {format_identifier(table)}"
-            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
                 await cursor.execute(statement)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             insert_sql = build_insert_statement(table, columns)
-            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
                 await cursor.executemany(insert_sql, records)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
