@@ -384,6 +384,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def _execute_stack_pipeline(
         self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
     ) -> "tuple[StackResult, ...]":
+        def _raise_pending_exception(exception_ctx: "PsycopgSyncExceptionHandler") -> None:
+            if exception_ctx.pending_exception is not None:
+                raise exception_ctx.pending_exception from None
+
         results: list[StackResult] = []
         started_transaction = False
 
@@ -393,12 +397,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                     self.begin()
                     started_transaction = True
 
+                exception_handlers = []
                 with ExitStack() as resource_stack:
                     pipeline = resource_stack.enter_context(self.connection.pipeline())
                     pending: list[PipelineCursorEntry] = []
 
                     for prepared in prepared_ops:
                         exception_ctx = self.handle_database_exceptions()
+                        exception_handlers.append(exception_ctx)
                         resource_stack.enter_context(exception_ctx)
                         cursor = resource_stack.enter_context(self.with_cursor(self.connection))
 
@@ -427,6 +433,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                         execution_result = build_pipeline_execution_result(statement, cursor)
                         sql_result = self.build_statement_result(statement, execution_result)
                         results.append(StackResult.from_sql_result(sql_result))
+
+                for exception_ctx in exception_handlers:
+                    _raise_pending_exception(exception_ctx)
 
                 if started_transaction:
                     self.commit()
@@ -482,17 +491,23 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             truncate_sql = build_truncate_command(table)
-            with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            exc_handler = self.handle_database_exceptions()
+            with self.with_cursor(self.connection) as cursor, exc_handler:
                 cursor.execute(truncate_sql)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             copy_sql = build_copy_from_command(table, columns)
+            exc_handler = self.handle_database_exceptions()
             with ExitStack() as stack:
-                stack.enter_context(self.handle_database_exceptions())
+                stack.enter_context(exc_handler)
                 cursor = stack.enter_context(self.with_cursor(self.connection))
                 copy_ctx = stack.enter_context(cursor.copy(copy_sql))
                 for record in records:
                     copy_ctx.write_row(record)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -818,6 +833,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def _execute_stack_pipeline(
         self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
     ) -> "tuple[StackResult, ...]":
+        def _raise_pending_exception(exception_ctx: "PsycopgAsyncExceptionHandler") -> None:
+            if exception_ctx.pending_exception is not None:
+                raise exception_ctx.pending_exception from None
+
         results: list[StackResult] = []
         started_transaction = False
 
@@ -827,12 +846,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                     await self.begin()
                     started_transaction = True
 
+                exception_handlers = []
                 async with AsyncExitStack() as resource_stack:
                     pipeline = await resource_stack.enter_async_context(self.connection.pipeline())
                     pending: list[PipelineCursorEntry] = []
 
                     for prepared in prepared_ops:
                         exception_ctx = self.handle_database_exceptions()
+                        exception_handlers.append(exception_ctx)
                         await resource_stack.enter_async_context(exception_ctx)
                         cursor = await resource_stack.enter_async_context(self.with_cursor(self.connection))
 
@@ -861,6 +882,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                         execution_result = await build_async_pipeline_execution_result(statement, cursor)
                         sql_result = self.build_statement_result(statement, execution_result)
                         results.append(StackResult.from_sql_result(sql_result))
+
+                for exception_ctx in exception_handlers:
+                    _raise_pending_exception(exception_ctx)
 
                 if started_transaction:
                     await self.commit()
@@ -916,17 +940,23 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             truncate_sql = build_truncate_command(table)
-            async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            exc_handler = self.handle_database_exceptions()
+            async with self.with_cursor(self.connection) as cursor, exc_handler:
                 await cursor.execute(truncate_sql)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             copy_sql = build_copy_from_command(table, columns)
+            exc_handler = self.handle_database_exceptions()
             async with AsyncExitStack() as stack:
-                await stack.enter_async_context(self.handle_database_exceptions())
+                await stack.enter_async_context(exc_handler)
                 cursor = await stack.enter_async_context(self.with_cursor(self.connection))
                 copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
                 for record in records:
                     await copy_ctx.write_row(record)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)

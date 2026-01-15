@@ -413,7 +413,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
         # Get compiled SQL and parameters
         sql, driver_params = self._get_compiled_sql(prepared_statement, config)
 
-        with self.handle_database_exceptions():
+        exc_handler = self.handle_database_exceptions()
+        arrow_result: ArrowResult | None = None
+
+        with exc_handler:
             query_job = run_query_job(
                 self.connection,
                 sql,
@@ -427,15 +430,22 @@ class BigQueryDriver(SyncDriverAdapterBase):
             # Native Arrow via Storage API
             arrow_table = query_job.to_arrow()
 
-            return build_arrow_result_from_table(
+            arrow_result = build_arrow_result_from_table(
                 prepared_statement,
                 arrow_table,
                 return_format=return_format,
                 batch_size=batch_size,
                 arrow_schema=arrow_schema,
             )
-        msg = "Unreachable"
-        raise RuntimeError(msg)  # pragma: no cover
+
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+        if arrow_result is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)  # pragma: no cover
+
+        return arrow_result
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS

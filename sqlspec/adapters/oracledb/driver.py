@@ -634,13 +634,19 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             statement = build_truncate_statement(table)
-            with self.handle_database_exceptions():
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler:
                 self.connection.execute(statement)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             statement = build_insert_statement(table, columns)
-            with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            exc_handler = self.handle_database_exceptions()
+            with self.with_cursor(self.connection) as cursor, exc_handler:
                 cursor.executemany(statement, records)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -1087,13 +1093,19 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             statement = build_truncate_statement(table)
-            async with self.handle_database_exceptions():
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler:
                 await self.connection.execute(statement)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             statement = build_insert_statement(table, columns)
-            async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            exc_handler = self.handle_database_exceptions()
+            async with self.with_cursor(self.connection) as cursor, exc_handler:
                 await cursor.executemany(statement, records)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)

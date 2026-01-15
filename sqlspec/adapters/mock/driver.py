@@ -364,14 +364,20 @@ class MockSyncDriver(SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             delete_statement = f"DELETE FROM {format_identifier(table)}"
-            with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler, self.with_cursor(self.connection) as cursor:
                 cursor.execute(delete_statement)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             insert_sql = build_insert_statement(table, columns)
-            with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler, self.with_cursor(self.connection) as cursor:
                 cursor.executemany(insert_sql, records)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -645,16 +651,22 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             delete_statement = f"DELETE FROM {format_identifier(table)}"
-            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
                 execute_async = async_(cursor.execute)
                 await execute_async(delete_statement)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             insert_sql = build_insert_statement(table, columns)
-            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
                 executemany_async = async_(cursor.executemany)
                 await executemany_async(insert_sql, records)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
