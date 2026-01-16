@@ -30,6 +30,7 @@ from sqlglot import exp
 from sqlspec.exceptions import SQLSpecError
 
 __all__ = (
+    "apply_column_pruning",
     "apply_limit",
     "apply_offset",
     "apply_or_where",
@@ -435,3 +436,74 @@ def safe_modify_with_cte(
         result.set("with_", cte)
 
     return result
+
+
+# =============================================================================
+# Column Pruning
+# =============================================================================
+
+
+def apply_column_pruning(
+    expression: exp.Expression, dialect: str | None = None, cache_key: str | None = None
+) -> exp.Expression:
+    """Apply column pruning optimization to remove unused columns from subqueries.
+
+    Uses SQLGlot's `qualify()` to resolve column references and table aliases,
+    then `pushdown_projections()` to remove columns from subqueries that aren't
+    needed by outer queries.
+
+    This optimization can improve query performance by:
+    - Reducing I/O by selecting fewer columns from disk
+    - Reducing network transfer when fetching results
+    - Enabling better query plans in some databases
+
+    Args:
+        expression: Base expression (must be SELECT)
+        dialect: SQL dialect for qualification
+        cache_key: Optional cache key for looking up/storing optimized result
+
+    Returns:
+        Optimized expression with unused columns removed from subqueries
+
+    Example:
+        Before pruning:
+            SELECT id, name FROM (SELECT id, name, email, created_at FROM users)
+
+        After pruning:
+            SELECT id, name FROM (SELECT id, name FROM users)
+    """
+    from sqlglot import optimizer
+
+    from sqlspec.core.cache import get_cache
+
+    if not isinstance(expression, exp.Select):
+        return expression
+
+    # Check cache first if key provided
+    if cache_key is not None:
+        cache = get_cache()
+        cached = cache.get_optimized(cache_key, dialect)
+        if cached is not None and isinstance(cached, exp.Expression):
+            cached_expr: exp.Expression = cached
+            return cached_expr.copy()
+
+    # Apply qualification to resolve column references
+    try:
+        qualified = optimizer.qualify.qualify(expression.copy(), dialect=dialect, validate_qualify_columns=False)
+    except Exception:
+        # If qualification fails, return unchanged expression
+        return expression
+
+    # Apply pushdown_projections to remove unused columns
+    try:
+        pruned = optimizer.pushdown_projections.pushdown_projections(qualified, dialect=dialect)
+    except Exception:
+        # If pushdown fails, return the qualified expression
+        pruned = qualified
+
+    # Cache the result
+    if cache_key is not None:
+        cache = get_cache()
+        cache.put_optimized(cache_key, pruned, dialect)
+
+    return pruned

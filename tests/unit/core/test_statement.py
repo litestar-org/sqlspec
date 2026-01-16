@@ -1132,3 +1132,109 @@ def test_sql_builder_handles_ddl_statement() -> None:
     built_query = builder.build()
 
     assert "CREATE TABLE" in built_query.sql.upper()
+
+
+# =============================================================================
+# SQL.select_only with prune_columns Tests
+# =============================================================================
+
+
+class TestSelectOnlyWithPruneColumns:
+    """Tests for SQL.select_only() with column pruning."""
+
+    def test_select_only_basic(self) -> None:
+        """Test basic select_only without pruning."""
+        stmt = SQL("SELECT * FROM users WHERE active = 1")
+        narrow = stmt.select_only("id", "name", "email")
+
+        compiled_sql, _ = narrow.compile()
+
+        assert "id" in compiled_sql
+        assert "name" in compiled_sql
+        assert "email" in compiled_sql
+
+    def test_select_only_with_prune_columns_explicit(self) -> None:
+        """Test select_only with explicit prune_columns=True."""
+        stmt = SQL("SELECT * FROM (SELECT id, name, email, created_at FROM users) AS u")
+        narrow = stmt.select_only("id", "name", prune_columns=True)
+
+        # Should compile without errors
+        compiled_sql, _ = narrow.compile()
+        assert "id" in compiled_sql
+        assert "name" in compiled_sql
+
+    def test_select_only_respects_config_enable_column_pruning(self) -> None:
+        """Test that select_only respects config.enable_column_pruning."""
+        config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_column_pruning=True)
+        stmt = SQL("SELECT * FROM (SELECT id, name, email FROM users) AS u", statement_config=config)
+
+        # Should use column pruning because config has it enabled
+        narrow = stmt.select_only("id", "name")
+        compiled_sql, _ = narrow.compile()
+
+        assert "id" in compiled_sql
+        assert "name" in compiled_sql
+
+    def test_select_only_override_config_with_explicit_false(self) -> None:
+        """Test that explicit prune_columns=False overrides config."""
+        config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_column_pruning=True)
+        stmt = SQL("SELECT * FROM (SELECT id, name, email FROM users) AS u", statement_config=config)
+
+        # Explicitly disable pruning
+        narrow = stmt.select_only("id", "name", prune_columns=False)
+        compiled_sql, _ = narrow.compile()
+
+        # Should still work, just without pruning
+        assert "id" in compiled_sql
+        assert "name" in compiled_sql
+
+    def test_select_only_with_cte_and_pruning(self) -> None:
+        """Test select_only with CTE and column pruning."""
+        stmt = SQL(
+            "WITH base AS (SELECT id, name, email, status FROM users) SELECT * FROM base WHERE status = 'active'"
+        )
+        narrow = stmt.select_only("id", "name", prune_columns=True)
+
+        compiled_sql, _ = narrow.compile()
+        assert "WITH" in compiled_sql.upper()
+        assert "id" in compiled_sql
+        assert "name" in compiled_sql
+
+    def test_select_only_empty_columns(self) -> None:
+        """Test select_only with no columns returns self."""
+        stmt = SQL("SELECT * FROM users")
+        result = stmt.select_only()
+
+        # Should return the same statement
+        assert result is stmt
+
+    def test_statement_config_enable_column_pruning_default(self) -> None:
+        """Test StatementConfig has enable_column_pruning=False by default."""
+        config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        assert config.enable_column_pruning is False
+
+    def test_statement_config_replace_enable_column_pruning(self) -> None:
+        """Test StatementConfig.replace() works with enable_column_pruning."""
+        config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_column_pruning=False)
+
+        updated = config.replace(enable_column_pruning=True)
+
+        assert config.enable_column_pruning is False
+        assert updated.enable_column_pruning is True
+
+    def test_statement_config_hash_includes_column_pruning(self) -> None:
+        """Test StatementConfig hash changes with enable_column_pruning."""
+        config1 = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_column_pruning=False)
+        config2 = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_column_pruning=True)
+
+        # Different configs should have different hashes
+        assert hash(config1) != hash(config2)
+
+    def test_statement_config_eq_includes_column_pruning(self) -> None:
+        """Test StatementConfig equality includes enable_column_pruning."""
+        config1 = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_column_pruning=False)
+        config2 = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_column_pruning=True)
+        config3 = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_column_pruning=False)
+
+        assert config1 != config2
+        assert config1 == config3

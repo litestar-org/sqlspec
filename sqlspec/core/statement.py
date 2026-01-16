@@ -22,6 +22,7 @@ from sqlspec.core.parameters import (
     ParameterValidator,
 )
 from sqlspec.core.query_modifiers import (
+    apply_column_pruning,
     apply_limit,
     apply_offset,
     apply_select_only,
@@ -76,6 +77,7 @@ SQL_CONFIG_SLOTS: Final = (
     "dialect",
     "enable_analysis",
     "enable_caching",
+    "enable_column_pruning",
     "enable_expression_simplification",
     "enable_parameter_type_wrapping",
     "enable_parsing",
@@ -1107,7 +1109,7 @@ class SQL:
     # Column Projection Methods
     # ==========================================================================
 
-    def select_only(self, *columns: "str | exp.Expression") -> "SQL":
+    def select_only(self, *columns: "str | exp.Expression", prune_columns: bool | None = None) -> "SQL":
         """Replace SELECT columns with only the specified columns.
 
         This is useful for narrowing down the columns returned by a query
@@ -1115,6 +1117,9 @@ class SQL:
 
         Args:
             *columns: Column names or expressions to select
+            prune_columns: Remove unused columns from subqueries. When True,
+                applies SQLGlot's qualify and pushdown_projections optimizations.
+                Defaults to the config's enable_column_pruning setting.
 
         Returns:
             New SQL instance with only the specified columns
@@ -1123,12 +1128,26 @@ class SQL:
             stmt = SQL("SELECT * FROM users WHERE active = 1")
             narrow = stmt.select_only("id", "name", "email")
             # Results in: SELECT id, name, email FROM users WHERE active = 1
+
+            # With column pruning on a subquery:
+            stmt = SQL("SELECT * FROM (SELECT id, name, email, created_at FROM users) AS u")
+            narrow = stmt.select_only("id", "name", prune_columns=True)
+            # Results in: SELECT id, name FROM (SELECT id, name FROM users) AS u
         """
         if not columns:
             return self
 
         expression = self._get_or_parse_expression()
         new_expr = safe_modify_with_cte(expression, lambda e: apply_select_only(e, columns))
+
+        # Determine whether to apply column pruning
+        should_prune = prune_columns if prune_columns is not None else self._statement_config.enable_column_pruning
+
+        if should_prune:
+            # Generate cache key from expression SQL representation
+            cache_key = f"prune:{new_expr.sql()}" if self._statement_config.enable_caching else None
+            new_expr = apply_column_pruning(new_expr, dialect=self._dialect, cache_key=cache_key)
+
         return self._create_modified_copy_with_expression(new_expr)
 
     def explain(self, analyze: bool = False, verbose: bool = False, format: "str | None" = None) -> "SQL":
@@ -1315,6 +1334,7 @@ class StatementConfig:
         enable_transformations: bool = True,
         enable_analysis: bool = False,
         enable_expression_simplification: bool = False,
+        enable_column_pruning: bool = False,
         enable_parameter_type_wrapping: bool = True,
         enable_caching: bool = True,
         parameter_converter: "ParameterConverter | None" = None,
@@ -1334,6 +1354,7 @@ class StatementConfig:
             enable_transformations: Apply SQL transformers
             enable_analysis: Run SQL analyzers
             enable_expression_simplification: Apply expression simplification
+            enable_column_pruning: Remove unused columns from subqueries during select_only
             enable_parameter_type_wrapping: Wrap parameters with type information
             enable_caching: Cache processed SQL statements
             parameter_converter: Handles parameter style conversions
@@ -1349,6 +1370,7 @@ class StatementConfig:
         self.enable_transformations = enable_transformations
         self.enable_analysis = enable_analysis
         self.enable_expression_simplification = enable_expression_simplification
+        self.enable_column_pruning = enable_column_pruning
         self.enable_parameter_type_wrapping = enable_parameter_type_wrapping
         self.enable_caching = enable_caching
         if parameter_converter is None:
@@ -1397,6 +1419,7 @@ class StatementConfig:
             "enable_transformations": self.enable_transformations,
             "enable_analysis": self.enable_analysis,
             "enable_expression_simplification": self.enable_expression_simplification,
+            "enable_column_pruning": self.enable_column_pruning,
             "enable_parameter_type_wrapping": self.enable_parameter_type_wrapping,
             "enable_caching": self.enable_caching,
             "parameter_converter": self.parameter_converter,
@@ -1418,6 +1441,7 @@ class StatementConfig:
             self.enable_transformations,
             self.enable_analysis,
             self.enable_expression_simplification,
+            self.enable_column_pruning,
             self.enable_parameter_type_wrapping,
             self.enable_caching,
             str(self.dialect),
@@ -1436,6 +1460,7 @@ class StatementConfig:
             f"enable_transformations={self.enable_transformations!r}",
             f"enable_analysis={self.enable_analysis!r}",
             f"enable_expression_simplification={self.enable_expression_simplification!r}",
+            f"enable_column_pruning={self.enable_column_pruning!r}",
             f"enable_parameter_type_wrapping={self.enable_parameter_type_wrapping!r}",
             f"enable_caching={self.enable_caching!r}",
             f"parameter_converter={self.parameter_converter!r}",
@@ -1462,6 +1487,7 @@ class StatementConfig:
             and self.enable_transformations == other.enable_transformations
             and self.enable_analysis == other.enable_analysis
             and self.enable_expression_simplification == other.enable_expression_simplification
+            and self.enable_column_pruning == other.enable_column_pruning
             and self.enable_parameter_type_wrapping == other.enable_parameter_type_wrapping
             and self.enable_caching == other.enable_caching
             and self.dialect == other.dialect
