@@ -739,6 +739,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT], int]": ...
 
@@ -750,6 +751,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
 
@@ -760,6 +762,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT] | None" = None,
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT] | list[dict[str, Any]], int]":
         """Execute a select statement and return both the data and total count.
@@ -772,6 +775,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             *parameters: Parameters for the SQL statement
             schema_type: Optional schema type for data transformation
             statement_config: Optional SQL configuration
+            count_with_window: If True, use a single query with COUNT(*) OVER() window
+                function instead of two separate queries. This can be more efficient
+                for some databases but adds a column to each row. Default False.
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -779,10 +785,49 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             - List of data rows (transformed by schema_type if provided)
             - Total count of rows matching the query (ignoring LIMIT/OFFSET)
 
+        Example:
+            >>> # Two-query approach (default):
+            >>> data, total = await driver.select_with_total(
+            ...     sql
+            ...     .select("*")
+            ...     .from_("users")
+            ...     .where_eq("status", "active")
+            ...     .limit(10)
+            ... )
+
+            >>> # Single-query with window function:
+            >>> data, total = await driver.select_with_total(
+            ...     sql
+            ...     .select("*")
+            ...     .from_("users")
+            ...     .where_eq("status", "active")
+            ...     .limit(10),
+            ...     count_with_window=True,
+            ... )
+
         """
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
+
+        if count_with_window:
+            modified_sql = self._add_count_over_column(sql_statement)
+            result = await self.execute(modified_sql)
+            rows = result.all()
+            total = 0
+            data: list[Any] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    total = row.pop("_total_count", 0)
+                    data.append(row)
+                else:
+                    data.append(row)
+                    total = getattr(row, "_total_count", 0)
+
+            if schema_type is not None:
+                return ([schema_type(**r) if isinstance(r, dict) else r for r in data], total)
+            return (data, total)
+
         count_result = await self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
         select_result = await self.execute(sql_statement)
 
@@ -796,6 +841,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT], int]": ...
 
@@ -807,6 +853,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
 
@@ -817,6 +864,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT] | None" = None,
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT] | list[dict[str, Any]], int]":
         """Execute a select statement and return both the data and total count.
@@ -832,7 +880,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
         return await self.select_with_total(
-            statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+            statement,
+            *parameters,
+            schema_type=schema_type,
+            statement_config=statement_config,
+            count_with_window=count_with_window,
+            **kwargs,
         )
 
     # ─────────────────────────────────────────────────────────────────────────────

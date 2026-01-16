@@ -327,3 +327,152 @@ def test_create_count_query_with_explicit_columns_no_star(mock_driver: "MockSync
 
     assert "COUNT(*)" in count_str.upper()
     assert "FROM users" in count_str or "FROM USERS" in count_str.upper()
+
+
+# =============================================================================
+# Bug 3 Fix: Named Parameter Preservation Tests
+# =============================================================================
+
+
+def test_create_count_query_preserves_named_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that _create_count_query preserves named parameters from original SQL."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT * FROM users WHERE status = :status", status="active"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    assert count_sql.named_parameters == {"status": "active"}
+
+
+def test_create_count_query_preserves_multiple_named_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that multiple named parameters are preserved in count query."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT * FROM users WHERE status = :status AND role = :role", status="active", role="admin"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    assert count_sql.named_parameters == {"status": "active", "role": "admin"}
+
+
+def test_create_count_query_preserves_positional_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that positional parameters are preserved in count query."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT * FROM users WHERE id = ?", 123), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    assert count_sql.positional_parameters == [123]
+
+
+def test_create_count_query_preserves_mixed_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that both positional and named parameters are preserved."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT * FROM users WHERE id = ?", 123, status="active"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    assert count_sql.positional_parameters == [123]
+    assert count_sql.named_parameters == {"status": "active"}
+
+
+def test_create_count_query_preserves_named_params_with_group_by(mock_driver: "MockSyncDriver") -> None:
+    """Test named params preserved when GROUP BY triggers subquery wrapping."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT status, COUNT(*) FROM users WHERE role = :role GROUP BY status", role="admin"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    assert count_sql.named_parameters == {"role": "admin"}
+
+
+# =============================================================================
+# COUNT(*) OVER() Window Function Tests
+# =============================================================================
+
+
+def test_add_count_over_column_adds_window_function(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column adds COUNT(*) OVER() to SELECT."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id, name FROM users WHERE active = true"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    count_str = str(modified_sql)
+    assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
+    assert "_total_count" in count_str.lower()
+
+
+def test_add_count_over_column_preserves_named_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column preserves named parameters."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users WHERE status = :status", status="active"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    assert modified_sql.named_parameters == {"status": "active"}
+
+
+def test_add_count_over_column_preserves_positional_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column preserves positional parameters."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users WHERE id = ?", 123), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    assert modified_sql.positional_parameters == [123]
+
+
+def test_add_count_over_column_preserves_limit_offset(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column preserves LIMIT/OFFSET unlike count query."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users LIMIT 10 OFFSET 20"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    count_str = str(modified_sql)
+    assert "LIMIT" in count_str.upper()
+    assert "OFFSET" in count_str.upper()
+
+
+def test_add_count_over_column_custom_alias(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column accepts custom alias."""
+    sql = mock_driver.prepare_statement(SQL("SELECT id FROM users"), statement_config=mock_driver.statement_config)
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql, alias="row_total")
+
+    count_str = str(modified_sql)
+    assert "row_total" in count_str.lower()
+
+
+def test_add_count_over_column_fails_on_non_select(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column raises error for non-SELECT statements."""
+    sql = mock_driver.prepare_statement(
+        SQL("INSERT INTO users (name) VALUES ('test')"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    with pytest.raises(ImproperConfigurationError, match="SELECT"):
+        mock_driver._add_count_over_column(sql)

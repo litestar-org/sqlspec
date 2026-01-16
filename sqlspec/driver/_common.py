@@ -1485,10 +1485,65 @@ class CommonDriverAttributesMixin:
 
             if cte is not None:
                 count_expr.set("with_", cte.copy())
-            return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)
+            return SQL(
+                count_expr,
+                *original_sql.positional_parameters,
+                statement_config=original_sql.statement_config,
+                **original_sql.named_parameters,
+            )
 
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
         if cte is not None:
             count_expr.set("with_", cte.copy())
-        return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)
+        return SQL(
+            count_expr,
+            *original_sql.positional_parameters,
+            statement_config=original_sql.statement_config,
+            **original_sql.named_parameters,
+        )
+
+    def _add_count_over_column(self, original_sql: "SQL", alias: str = "_total_count") -> "SQL":
+        """Add a COUNT(*) OVER() column to the SELECT statement for inline total counts.
+
+        This method modifies the SELECT to include a window function that returns
+        the total count of rows matching the WHERE clause, before LIMIT/OFFSET is applied.
+        Useful for pagination where both data and total count are needed in a single query.
+
+        Args:
+            original_sql: The original SQL statement (must be a SELECT).
+            alias: Column alias for the count (default "_total_count").
+
+        Returns:
+            New SQL object with the COUNT(*) OVER() column added.
+
+        Raises:
+            ImproperConfigurationError: If the SQL is not a SELECT statement.
+
+        Example:
+            Original: SELECT id, name FROM users WHERE status = :status LIMIT 10
+            Result: SELECT id, name, COUNT(*) OVER() AS _total_count FROM users WHERE status = :status LIMIT 10
+        """
+        if not original_sql.expression:
+            original_sql.compile()
+
+        if not original_sql.expression:
+            msg = "Cannot add COUNT OVER to empty SQL expression"
+            raise ImproperConfigurationError(msg)
+
+        expr = original_sql.expression
+        if not isinstance(expr, exp.Select):
+            msg = "COUNT(*) OVER() can only be added to SELECT statements"
+            raise ImproperConfigurationError(msg)
+
+        modified_expr = expr.copy()
+        count_window = exp.Window(this=exp.Count(this=exp.Star()))
+        aliased_count = exp.alias_(count_window, alias)
+        modified_expr = modified_expr.select(aliased_count, copy=False)
+
+        return SQL(
+            modified_expr,
+            *original_sql.positional_parameters,
+            statement_config=original_sql.statement_config,
+            **original_sql.named_parameters,
+        )

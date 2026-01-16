@@ -34,6 +34,7 @@ __all__ = (
     "CreateView",
     "DDLBuilder",
     "DropIndex",
+    "DropMaterializedView",
     "DropSchema",
     "DropTable",
     "DropView",
@@ -760,6 +761,54 @@ class DropSchema(DDLBuilder):
             self._raise_sql_builder_error("Schema name must be set for DROP SCHEMA.")
         return exp.Drop(
             kind="SCHEMA", this=exp.to_identifier(self._schema_name), exists=self._if_exists, cascade=self._cascade
+        )
+
+
+class DropMaterializedView(DDLBuilder):
+    """Builder for DROP MATERIALIZED VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
+
+    __slots__ = ("_cascade", "_if_exists", "_view_name")
+
+    def __init__(self, view_name: str, dialect: "DialectType" = None) -> None:
+        """Initialize DROP MATERIALIZED VIEW with view name.
+
+        Args:
+            view_name: Name of the materialized view to drop
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._view_name = view_name
+        self._if_exists = False
+        self._cascade: bool | None = None
+
+    def name(self, view_name: str) -> Self:
+        """Set the materialized view name."""
+        self._view_name = view_name
+        return self
+
+    def if_exists(self) -> Self:
+        """Add IF EXISTS clause."""
+        self._if_exists = True
+        return self
+
+    def cascade(self) -> Self:
+        """Add CASCADE to drop dependent objects."""
+        self._cascade = True
+        return self
+
+    def restrict(self) -> Self:
+        """Add RESTRICT to prevent dropping if dependencies exist."""
+        self._cascade = False
+        return self
+
+    def _create_base_expression(self) -> exp.Expression:
+        if not self._view_name:
+            self._raise_sql_builder_error("View name must be set for DROP MATERIALIZED VIEW.")
+        return exp.Drop(
+            kind="MATERIALIZED VIEW",
+            this=exp.to_identifier(self._view_name),
+            exists=self._if_exists,
+            cascade=self._cascade,
         )
 
 

@@ -341,7 +341,7 @@ def test_sync_fetch_with_total_delegates_to_select_with_total() -> None:
     )
 
     mock_driver.select_with_total.assert_called_once_with(
-        "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None
+        "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None, count_with_window=False
     )
     assert result == ([{"id": 1}, {"id": 2}], 100)
 
@@ -466,7 +466,7 @@ async def test_async_fetch_with_total_delegates_to_select_with_total() -> None:
     )
 
     mock_driver.select_with_total.assert_called_once_with(
-        "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None
+        "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None, count_with_window=False
     )
     assert result == ([{"id": 1}, {"id": 2}], 100)
 
