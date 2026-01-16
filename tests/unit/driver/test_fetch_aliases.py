@@ -284,7 +284,9 @@ def test_sync_fetch_value_delegates_to_select_value() -> None:
 
     result = SyncDriverAdapterBase.fetch_value(mock_driver, "SELECT COUNT(*) FROM users", statement_config=None)
 
-    mock_driver.select_value.assert_called_once_with("SELECT COUNT(*) FROM users", statement_config=None)
+    mock_driver.select_value.assert_called_once_with(
+        "SELECT COUNT(*) FROM users", value_type=None, statement_config=None
+    )
     assert result == 42
 
 
@@ -298,7 +300,9 @@ def test_sync_fetch_value_or_none_delegates_to_select_value_or_none() -> None:
         mock_driver, "SELECT MAX(id) FROM empty_table", statement_config=None
     )
 
-    mock_driver.select_value_or_none.assert_called_once_with("SELECT MAX(id) FROM empty_table", statement_config=None)
+    mock_driver.select_value_or_none.assert_called_once_with(
+        "SELECT MAX(id) FROM empty_table", value_type=None, statement_config=None
+    )
     assert result is None
 
 
@@ -406,7 +410,9 @@ async def test_async_fetch_value_delegates_to_select_value() -> None:
 
     result = await AsyncDriverAdapterBase.fetch_value(mock_driver, "SELECT COUNT(*) FROM users", statement_config=None)
 
-    mock_driver.select_value.assert_called_once_with("SELECT COUNT(*) FROM users", statement_config=None)
+    mock_driver.select_value.assert_called_once_with(
+        "SELECT COUNT(*) FROM users", value_type=None, statement_config=None
+    )
     assert result == 42
 
 
@@ -421,7 +427,9 @@ async def test_async_fetch_value_or_none_delegates_to_select_value_or_none() -> 
         mock_driver, "SELECT MAX(id) FROM empty_table", statement_config=None
     )
 
-    mock_driver.select_value_or_none.assert_called_once_with("SELECT MAX(id) FROM empty_table", statement_config=None)
+    mock_driver.select_value_or_none.assert_called_once_with(
+        "SELECT MAX(id) FROM empty_table", value_type=None, statement_config=None
+    )
     assert result is None
 
 

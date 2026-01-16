@@ -61,7 +61,7 @@ async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -
         received.append(message)
 
     listener = channel.listen("notifications", _handler, poll_interval=0.2)
-    await asyncio.sleep(0.3)  # Allow listener to subscribe before publishing
+    await asyncio.sleep(0.5)  # Allow listener to subscribe before publishing (increased for CI)
     event_id = await channel.publish("notifications", {"action": "async_delivery"})
 
     for _ in range(200):
@@ -109,7 +109,7 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
         received.append(message)
 
     listener = channel.listen("alerts", _handler, poll_interval=0.2)
-    await asyncio.sleep(0.3)  # Allow listener to subscribe before publishing
+    await asyncio.sleep(0.5)  # Allow listener to subscribe before publishing (increased for CI)
     event_id = await channel.publish("alerts", {"action": "hybrid_async"})
 
     for _ in range(200):
@@ -148,7 +148,7 @@ async def test_asyncpg_listen_notify_metadata(postgres_service: "Any") -> None:
         received.append(message)
 
     listener = channel.listen("meta_channel", _handler, poll_interval=0.2)
-    await asyncio.sleep(0.3)  # Allow listener to subscribe before publishing
+    await asyncio.sleep(0.5)  # Allow listener to subscribe before publishing (increased for CI)
     event_id = await channel.publish(
         "meta_channel", {"action": "with_metadata"}, metadata={"source": "test", "priority": 1}
     )

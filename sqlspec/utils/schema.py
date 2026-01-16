@@ -2,6 +2,7 @@
 
 import datetime
 from collections.abc import Callable, Sequence
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from functools import lru_cache, partial
 from pathlib import Path, PurePath
@@ -22,6 +23,7 @@ from sqlspec.typing import (
     get_type_adapter,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
     get_msgspec_rename_config,
@@ -37,15 +39,18 @@ from sqlspec.utils.type_guards import (
 __all__ = (
     "_DEFAULT_TYPE_DECODERS",
     "DataT",
+    "ValueT",
     "_convert_numpy_recursive",
     "_convert_numpy_to_list",
     "_default_msgspec_deserializer",
     "_is_list_type_target",
     "to_schema",
+    "to_value_type",
     "transform_dict_keys",
 )
 
 DataT = TypeVar("DataT", default=dict[str, Any])
+ValueT = TypeVar("ValueT")
 
 logger = get_logger(__name__)
 
@@ -229,6 +234,17 @@ def _is_foreign_key_metadata_type(schema_type: type) -> bool:
 
 
 def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
+    """Convert data to ForeignKeyMetadata schema type.
+
+    Handles both single items and lists for consistency with other converters.
+    """
+    if isinstance(data, list):
+        return [_convert_single_foreign_key_metadata(item, schema_type) for item in data]
+    return _convert_single_foreign_key_metadata(data, schema_type)
+
+
+def _convert_single_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
+    """Convert a single item to ForeignKeyMetadata."""
     if not is_dict(data):
         return data
     payload = {
@@ -431,13 +447,43 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
     return schema_type(**dict(data)) if is_dict(data) else data
 
 
-_SCHEMA_CONVERTERS: "dict[str, Callable[[Any, Any], Any]]" = {
-    "typed_dict": _convert_typed_dict,
-    "dataclass": _convert_dataclass,
-    "msgspec": _convert_msgspec,
-    "pydantic": _convert_pydantic,
-    "attrs": _convert_attrs,
-}
+# Cache for schema converters - maps type directly to converter callable (or None if unsupported)
+# Manual dict cache is faster than lru_cache for mypyc: direct dict[type] lookup vs decorated call
+_SCHEMA_CONVERTER_CACHE: "dict[type, Callable[[Any, Any], Any] | None]" = {}
+
+
+def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | None":
+    """Get the converter function for a schema type with caching.
+
+    This is optimized for mypyc: uses a plain dict cache instead of lru_cache,
+    and caches the callable directly instead of a string key.
+
+    Args:
+        schema_type: The schema type to get a converter for.
+
+    Returns:
+        Converter function if schema_type is a supported schema, None otherwise.
+    """
+    try:
+        return _SCHEMA_CONVERTER_CACHE[schema_type]
+    except KeyError:
+        # Determine converter - order by expected frequency
+        if is_typed_dict(schema_type):
+            conv: Callable[[Any, Any], Any] | None = _convert_typed_dict
+        elif is_dataclass(schema_type):
+            conv = _convert_dataclass
+        elif is_msgspec_struct(schema_type):
+            conv = _convert_msgspec
+        elif is_pydantic_model(schema_type):
+            conv = _convert_pydantic
+        elif is_attrs_schema(schema_type):
+            conv = _convert_attrs
+        elif _is_foreign_key_metadata_type(schema_type):
+            conv = _convert_foreign_key_metadata
+        else:
+            conv = None
+        _SCHEMA_CONVERTER_CACHE[schema_type] = conv  # pyright: ignore[reportArgumentType]
+        return conv
 
 
 @overload
@@ -473,13 +519,468 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
     if schema_type is None:
         return data
 
-    schema_type_key = _detect_schema_type(schema_type)
-    if schema_type_key is None:
-        if _is_foreign_key_metadata_type(schema_type):
-            if isinstance(data, list):
-                return [_convert_foreign_key_metadata(item, schema_type) for item in data]
-            return _convert_foreign_key_metadata(data, schema_type)
+    # Get cached converter - single dict lookup, no string indirection
+    conv = _get_schema_converter(schema_type)
+    if conv is None:
         msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
         raise SQLSpecError(msg)
 
-    return _SCHEMA_CONVERTERS[schema_type_key](data, schema_type)
+    return conv(data, schema_type)
+
+
+# =============================================================================
+# Scalar Type Conversion
+# =============================================================================
+
+
+def _ensure_json_parsed(value: Any) -> Any:
+    """Parse JSON string if needed, otherwise return as-is.
+
+    This helper is used when converting database values (potentially JSON strings
+    from JSONB columns) to schema types like Pydantic models or dataclasses.
+
+    Args:
+        value: The value to potentially parse. If it's a string, attempts JSON parsing.
+
+    Returns:
+        Parsed JSON object if value was a valid JSON string, otherwise the original value.
+    """
+    if isinstance(value, str):
+        try:
+            return from_json(value)
+        except Exception:
+            return value
+    return value
+
+
+def _try_parse_json(value: str) -> Any:
+    """Attempt to parse a JSON string, returning None on failure.
+
+    Args:
+        value: JSON string to parse.
+
+    Returns:
+        Parsed JSON value, or None if parsing fails.
+    """
+    try:
+        return from_json(value)
+    except Exception:
+        return None
+
+
+# Boolean true values for string conversion
+_BOOL_TRUE_VALUES: Final[frozenset[str]] = frozenset({"true", "1", "yes", "y", "t", "on"})
+
+# Types requiring strict type() identity check due to subclass gotchas:
+# - bool is subclass of int (isinstance(True, int) is True)
+# - datetime is subclass of date (isinstance(datetime(...), date) is True)
+_STRICT_IDENTITY_TYPES: Final[tuple[type, ...]] = (int, bool, datetime.date, datetime.time)
+
+
+def _convert_to_int(value: Any) -> int:
+    """Convert a value to int.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted integer value.
+
+    Raises:
+        TypeError: If value cannot be converted to int.
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float, Decimal)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            # Try parsing as float first for values like "42.0"
+            try:
+                return int(float(value))
+            except ValueError:
+                pass
+    msg = f"Cannot convert {type(value).__name__} to int"
+    raise TypeError(msg)
+
+
+def _convert_to_float(value: Any) -> float:
+    """Convert a value to float.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted float value.
+
+    Raises:
+        TypeError: If value cannot be converted to float.
+    """
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float, Decimal)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            pass
+    msg = f"Cannot convert {type(value).__name__} to float"
+    raise TypeError(msg)
+
+
+def _convert_to_bool(value: Any) -> bool:
+    """Convert a value to bool.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted boolean value.
+
+    Raises:
+        TypeError: If value cannot be converted to bool.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.lower() in _BOOL_TRUE_VALUES
+    msg = f"Cannot convert {type(value).__name__} to bool"
+    raise TypeError(msg)
+
+
+def _convert_to_datetime(value: Any) -> datetime.datetime:
+    """Convert a value to datetime.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted datetime value.
+
+    Raises:
+        TypeError: If value cannot be converted to datetime.
+    """
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
+        return datetime.datetime.combine(value, datetime.time.min)
+    msg = f"Cannot convert {type(value).__name__} to datetime"
+    raise TypeError(msg)
+
+
+def _convert_to_date(value: Any) -> datetime.date:
+    """Convert a value to date.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted date value.
+
+    Raises:
+        TypeError: If value cannot be converted to date.
+    """
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    if isinstance(value, str):
+        try:
+            # Try ISO format first
+            return datetime.date.fromisoformat(value)
+        except ValueError:
+            # Try parsing as datetime and extracting date
+            try:
+                return datetime.datetime.fromisoformat(value).date()
+            except ValueError:
+                pass
+    msg = f"Cannot convert {type(value).__name__} to date"
+    raise TypeError(msg)
+
+
+def _convert_to_time(value: Any) -> datetime.time:
+    """Convert a value to time.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted time value.
+
+    Raises:
+        TypeError: If value cannot be converted to time.
+    """
+    if isinstance(value, datetime.datetime):
+        return value.time()
+    if isinstance(value, datetime.time):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.time.fromisoformat(value)
+        except ValueError:
+            pass
+    msg = f"Cannot convert {type(value).__name__} to time"
+    raise TypeError(msg)
+
+
+def _convert_to_decimal(value: Any) -> Decimal:
+    """Convert a value to Decimal.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted Decimal value.
+
+    Raises:
+        TypeError: If value cannot be converted to Decimal.
+    """
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float, str)):
+        try:
+            return Decimal(str(value))
+        except InvalidOperation:
+            pass
+    msg = f"Cannot convert {type(value).__name__} to Decimal"
+    raise TypeError(msg)
+
+
+def _convert_to_uuid(value: Any) -> UUID:
+    """Convert a value to UUID.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted UUID value.
+
+    Raises:
+        TypeError: If value cannot be converted to UUID.
+    """
+    if isinstance(value, UUID):
+        return value
+    if isinstance(value, str):
+        try:
+            return UUID(value)
+        except ValueError:
+            pass
+    if isinstance(value, bytes):
+        try:
+            return UUID(bytes=value)
+        except ValueError:
+            pass
+    msg = f"Cannot convert {type(value).__name__} to UUID"
+    raise TypeError(msg)
+
+
+def _convert_to_path(value: Any) -> Path:
+    """Convert a value to Path.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted Path value.
+
+    Raises:
+        TypeError: If value cannot be converted to Path.
+    """
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, (str, PurePath)):
+        return Path(value)
+    msg = f"Cannot convert {type(value).__name__} to Path"
+    raise TypeError(msg)
+
+
+def _convert_to_dict(value: Any) -> dict[str, Any]:
+    """Convert a value to dict.
+
+    This is useful for JSON/JSONB database columns where the driver may return
+    either a dict (already parsed) or a string (needs parsing).
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted dict value.
+
+    Raises:
+        TypeError: If value cannot be converted to dict.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        parsed = _try_parse_json(value)
+        if parsed is not None:
+            if isinstance(parsed, dict):
+                return parsed
+            msg = f"JSON string did not parse to dict, got {type(parsed).__name__}"
+            raise TypeError(msg)
+    msg = f"Cannot convert {type(value).__name__} to dict"
+    raise TypeError(msg)
+
+
+def _convert_to_list(value: Any) -> list[Any]:
+    """Convert a value to list.
+
+    This is useful for JSON array database columns where the driver may return
+    either a list (already parsed) or a string (needs parsing).
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        Converted list value.
+
+    Raises:
+        TypeError: If value cannot be converted to list.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        parsed = _try_parse_json(value)
+        if parsed is not None:
+            if isinstance(parsed, list):
+                return parsed
+            msg = f"JSON string did not parse to list, got {type(parsed).__name__}"
+            raise TypeError(msg)
+    if isinstance(value, (tuple, set, frozenset)):
+        return list(value)
+    msg = f"Cannot convert {type(value).__name__} to list"
+    raise TypeError(msg)
+
+
+def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
+    """Convert a database value to the specified Python type.
+
+    This function handles type conversion for common database return values,
+    providing runtime type safety for scalar queries. When the value is already
+    the correct type, it is returned as-is without conversion overhead.
+
+    Also supports schema types (Pydantic models, dataclasses, msgspec Structs,
+    attrs classes, and TypedDict). For schema types, JSON strings are automatically
+    parsed before conversion.
+
+    Args:
+        value: The value to convert.
+        value_type: The target Python type. Supported types include:
+            - Primitives: int, float, str, bool
+            - Temporal: datetime, date, time
+            - Numeric: Decimal
+            - Identifiers: UUID, Path
+            - Collections: dict, list (for JSON/JSONB columns)
+            - Schema types: Pydantic models, dataclasses, msgspec Structs,
+              attrs classes, TypedDict (for JSONB columns)
+
+    Returns:
+        The converted value of the specified type.
+
+    Raises:
+        TypeError: If the value cannot be converted to the specified type.
+
+    Examples:
+        Convert string to int:
+
+        >>> to_value_type("42", int)
+        42
+
+        Convert Decimal to float:
+
+        >>> from decimal import Decimal
+        >>> to_value_type(Decimal("3.14"), float)
+        3.14
+
+        Convert string to UUID:
+
+        >>> from uuid import UUID
+        >>> to_value_type("550e8400-e29b-41d4-a716-446655440000", UUID)
+        UUID('550e8400-e29b-41d4-a716-446655440000')
+
+        Convert JSON string to dict:
+
+        >>> to_value_type('{"key": "value"}', dict)
+        {'key': 'value'}
+
+        Convert JSONB to Pydantic model:
+
+        >>> from pydantic import BaseModel
+        >>> class User(BaseModel):
+        ...     name: str
+        ...     email: str
+        >>> to_value_type(
+        ...     '{"name": "Alice", "email": "alice@example.com"}', User
+        ... )
+        User(name='Alice', email='alice@example.com')
+
+        Identity conversion (no overhead when type matches exactly):
+
+        >>> value = 42
+        >>> result = to_value_type(value, int)
+        >>> result is value
+        True
+
+        Bool to int conversion (bool is a subclass of int, but converts correctly):
+
+        >>> to_value_type(True, int)
+        1
+        >>> to_value_type(False, int)
+        0
+    """
+    # Fast path: already correct type (handles ~90% of cases)
+    # Uses strict type() identity which correctly handles subclass gotchas:
+    # - type(True) is int → False (bool is subclass of int)
+    # - type(datetime(...)) is date → False (datetime is subclass of date)
+    if type(value) is value_type:
+        return value
+
+    # Scalar type conversions - most common cases, fast pointer comparisons under mypyc
+    if value_type is int:
+        return cast("ValueT", _convert_to_int(value))
+    if value_type is str:
+        return cast("ValueT", str(value))
+    if value_type is float:
+        return cast("ValueT", _convert_to_float(value))
+    if value_type is bool:
+        return cast("ValueT", _convert_to_bool(value))
+    if value_type is datetime.datetime:
+        return cast("ValueT", _convert_to_datetime(value))
+    if value_type is datetime.date:
+        return cast("ValueT", _convert_to_date(value))
+    if value_type is datetime.time:
+        return cast("ValueT", _convert_to_time(value))
+    if value_type is Decimal:
+        return cast("ValueT", _convert_to_decimal(value))
+    if value_type is UUID:
+        return cast("ValueT", _convert_to_uuid(value))
+    if value_type is Path:
+        return cast("ValueT", _convert_to_path(value))
+    if value_type is dict:
+        return cast("ValueT", _convert_to_dict(value))
+    if value_type is list:
+        return cast("ValueT", _convert_to_list(value))
+
+    # Schema types (Pydantic, dataclass, msgspec, attrs, TypedDict)
+    # Deferred after scalar checks to avoid overhead for common scalar queries
+    schema_type_key = _detect_schema_type(value_type)  # type: ignore[arg-type]
+    if schema_type_key is not None:
+        parsed = _ensure_json_parsed(value)
+        return cast("ValueT", to_schema(parsed, schema_type=value_type))
+
+    # Fallback: try direct construction for custom types
+    try:
+        return value_type(value)  # type: ignore[call-arg]
+    except (TypeError, ValueError) as e:
+        msg = f"Cannot convert {type(value).__name__} to {value_type.__name__}"
+        raise TypeError(msg) from e
