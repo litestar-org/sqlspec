@@ -798,7 +798,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 elif is_mapping_like(row):
                     data.append({k: v for k, v in dict(row).items() if k != "_total_count"})
                 elif has_asdict_method(row):
-                    data.append({k: v for k, v in row._asdict().items() if k != "_total_count"})
+                    data.append({k: v for k, v in row._asdict().items() if k != "_total_count"})  # pyright: ignore[reportPrivateUsage]
                 else:
                     data.append({})
 
