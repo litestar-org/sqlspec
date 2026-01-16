@@ -40,6 +40,7 @@ from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDesti
 from sqlspec.typing import VersionInfo
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.type_guards import has_asdict_method, is_dict_row, is_mapping_like
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -739,6 +740,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT], int]": ...
 
@@ -750,6 +752,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
 
@@ -760,6 +763,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT] | None" = None,
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT] | list[dict[str, Any]], int]":
         """Execute a select statement and return both the data and total count.
@@ -772,6 +776,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             *parameters: Parameters for the SQL statement
             schema_type: Optional schema type for data transformation
             statement_config: Optional SQL configuration
+            count_with_window: If True, use a single query with COUNT(*) OVER() window
+                function instead of two separate queries. This can be more efficient
+                for some databases but adds a column to each row. Default False.
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -779,12 +786,61 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             - List of data rows (transformed by schema_type if provided)
             - Total count of rows matching the query (ignoring LIMIT/OFFSET)
 
+        Example:
+            >>> # Two-query approach (default):
+            >>> data, total = await driver.select_with_total(
+            ...     sql
+            ...     .select("*")
+            ...     .from_("users")
+            ...     .where_eq("status", "active")
+            ...     .limit(10)
+            ... )
+
+            >>> # Single-query with window function:
+            >>> data, total = await driver.select_with_total(
+            ...     sql
+            ...     .select("*")
+            ...     .from_("users")
+            ...     .where_eq("status", "active")
+            ...     .limit(10),
+            ...     count_with_window=True,
+            ... )
+
         """
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
+
+        if count_with_window:
+            modified_sql = self._add_count_over_column(sql_statement)
+            result = await self.dispatch_statement_execution(modified_sql, self.connection)
+            rows = result.all()
+
+            total = 0
+            if rows:
+                first_row = rows[0]
+                if is_dict_row(first_row):
+                    total = first_row.get("_total_count", 0)
+                else:
+                    total = getattr(first_row, "_total_count", 0)
+
+            data: list[dict[str, Any]] = []
+            for row in rows:
+                if is_dict_row(row):
+                    data.append({k: v for k, v in row.items() if k != "_total_count"})
+                elif is_mapping_like(row):
+                    data.append({k: v for k, v in dict(row).items() if k != "_total_count"})
+                elif has_asdict_method(row):
+                    data.append({k: v for k, v in row._asdict().items() if k != "_total_count"})  # pyright: ignore[reportPrivateUsage]
+                else:
+                    data.append({})
+
+            if schema_type is not None:
+                return ([schema_type(**r) for r in data], total)
+            return (data, total)
+
         count_result = await self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
-        select_result = await self.execute(sql_statement)
+        select_result = await self.dispatch_statement_execution(sql_statement, self.connection)
 
         return (select_result.get_data(schema_type=schema_type), count_result.scalar())
 
@@ -796,6 +852,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT], int]": ...
 
@@ -807,6 +864,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
 
@@ -817,6 +875,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT] | None" = None,
         statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT] | list[dict[str, Any]], int]":
         """Execute a select statement and return both the data and total count.
@@ -832,7 +891,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
         return await self.select_with_total(
-            statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+            statement,
+            *parameters,
+            schema_type=schema_type,
+            statement_config=statement_config,
+            count_with_window=count_with_window,
+            **kwargs,
         )
 
     # ─────────────────────────────────────────────────────────────────────────────

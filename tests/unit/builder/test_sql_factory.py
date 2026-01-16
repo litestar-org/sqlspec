@@ -1838,3 +1838,225 @@ def test_sql_factory_copy_helpers() -> None:
     assert isinstance(to_statement, SQL)
     parsed = parse_one(to_statement.sql, read="postgres")
     assert parsed.args["kind"] is False
+
+
+# =============================================================================
+# COUNT(*) OVER() Window Function Tests
+# =============================================================================
+
+
+def test_count_over_method_basic() -> None:
+    """Test count_over() method generates COUNT(*) OVER()."""
+    count_expr = sql.count_over()
+    built = str(count_expr)
+
+    assert "COUNT(*)" in built.upper()
+    assert "OVER" in built.upper()
+
+
+def test_count_over_method_with_partition() -> None:
+    """Test count_over() with partition_by parameter."""
+    count_expr = sql.count_over(partition_by="department")
+    built = str(count_expr)
+
+    assert "COUNT(*)" in built.upper()
+    assert "PARTITION BY" in built.upper()
+    assert "department" in built.lower()
+
+
+def test_count_over_method_with_multiple_partition_columns() -> None:
+    """Test count_over() with multiple partition columns."""
+    count_expr = sql.count_over(partition_by=["department", "status"])
+    built = str(count_expr)
+
+    assert "COUNT(*)" in built.upper()
+    assert "PARTITION BY" in built.upper()
+    assert "department" in built.lower()
+    assert "status" in built.lower()
+
+
+def test_count_over_property_basic() -> None:
+    """Test count_over_ property returns WindowFunctionBuilder."""
+    builder = sql.count_over_
+    assert isinstance(builder, WindowFunctionBuilder)
+
+
+def test_count_over_property_fluent_api() -> None:
+    """Test count_over_ property supports fluent chaining."""
+    alias_expr = sql.count_over_.as_("total")
+    built = str(alias_expr)
+
+    assert "COUNT(*)" in built.upper()
+    assert "OVER" in built.upper()
+    assert "total" in built.lower()
+
+
+def test_count_over_property_with_partition() -> None:
+    """Test count_over_ property with partition_by()."""
+    alias_expr = sql.count_over_.partition_by("department").as_("dept_count")
+    built = str(alias_expr)
+
+    assert "COUNT(*)" in built.upper()
+    assert "PARTITION BY" in built.upper()
+    assert "department" in built.lower()
+    assert "dept_count" in built.lower()
+
+
+def test_count_over_in_select() -> None:
+    """Test using count_over() in a SELECT statement."""
+    query = sql.select("id", "name", sql.count_over().as_("total")).from_("users")
+    stmt = query.build()
+
+    assert "COUNT(*)" in stmt.sql.upper()
+    assert "OVER" in stmt.sql.upper()
+    assert "total" in stmt.sql.lower()
+
+
+def test_sum_over_method() -> None:
+    """Test sum_over() method generates SUM() OVER()."""
+    sum_expr = sql.sum_over("amount", partition_by="department")
+    built = str(sum_expr)
+
+    assert "SUM" in built.upper()
+    assert "amount" in built.lower()
+    assert "PARTITION BY" in built.upper()
+
+
+def test_avg_over_method() -> None:
+    """Test avg_over() method generates AVG() OVER()."""
+    avg_expr = sql.avg_over("salary", partition_by="department")
+    built = str(avg_expr)
+
+    assert "AVG" in built.upper()
+    assert "salary" in built.lower()
+    assert "PARTITION BY" in built.upper()
+
+
+def test_max_over_method() -> None:
+    """Test max_over() method generates MAX() OVER()."""
+    max_expr = sql.max_over("price", partition_by="category")
+    built = str(max_expr)
+
+    assert "MAX" in built.upper()
+    assert "price" in built.lower()
+    assert "PARTITION BY" in built.upper()
+
+
+def test_min_over_method() -> None:
+    """Test min_over() method generates MIN() OVER()."""
+    min_expr = sql.min_over("score", partition_by="team")
+    built = str(min_expr)
+
+    assert "MIN" in built.upper()
+    assert "score" in built.lower()
+    assert "PARTITION BY" in built.upper()
+
+
+def test_aggregate_over_properties() -> None:
+    """Test that all aggregate _over properties exist and return WindowFunctionBuilder."""
+    assert isinstance(sql.count_over_, WindowFunctionBuilder)
+    assert isinstance(sql.sum_over_, WindowFunctionBuilder)
+    assert isinstance(sql.avg_over_, WindowFunctionBuilder)
+    assert isinstance(sql.max_over_, WindowFunctionBuilder)
+    assert isinstance(sql.min_over_, WindowFunctionBuilder)
+
+
+# =============================================================================
+# LAG() and LEAD() Window Function Tests
+# =============================================================================
+
+
+def test_lag_method_basic() -> None:
+    """Test lag() method generates LAG() OVER()."""
+    lag_expr = sql.lag("salary", order_by="hire_date")
+    built = str(lag_expr)
+
+    assert "LAG" in built.upper()
+    assert "salary" in built.lower()
+    assert "OVER" in built.upper()
+
+
+def test_lag_method_with_offset() -> None:
+    """Test lag() method with custom offset."""
+    lag_expr = sql.lag("price", offset=3, order_by="date")
+    built = str(lag_expr)
+
+    assert "LAG" in built.upper()
+    assert "price" in built.lower()
+    assert "3" in built
+
+
+def test_lag_method_with_default() -> None:
+    """Test lag() method with default value."""
+    lag_expr = sql.lag("value", default=0, order_by="id")
+    built = str(lag_expr)
+
+    assert "LAG" in built.upper()
+    assert "value" in built.lower()
+    assert "0" in built
+
+
+def test_lag_method_with_partition() -> None:
+    """Test lag() method with partition_by."""
+    lag_expr = sql.lag("amount", partition_by="department", order_by="date")
+    built = str(lag_expr)
+
+    assert "LAG" in built.upper()
+    assert "PARTITION BY" in built.upper()
+    assert "department" in built.lower()
+
+
+def test_lead_method_basic() -> None:
+    """Test lead() method generates LEAD() OVER()."""
+    lead_expr = sql.lead("salary", order_by="hire_date")
+    built = str(lead_expr)
+
+    assert "LEAD" in built.upper()
+    assert "salary" in built.lower()
+    assert "OVER" in built.upper()
+
+
+def test_lead_method_with_offset() -> None:
+    """Test lead() method with custom offset."""
+    lead_expr = sql.lead("price", offset=2, order_by="date")
+    built = str(lead_expr)
+
+    assert "LEAD" in built.upper()
+    assert "price" in built.lower()
+    assert "2" in built
+
+
+def test_lead_method_with_default() -> None:
+    """Test lead() method with default value."""
+    lead_expr = sql.lead("value", default=0, order_by="id")
+    built = str(lead_expr)
+
+    assert "LEAD" in built.upper()
+    assert "value" in built.lower()
+    assert "0" in built
+
+
+def test_lead_method_with_partition() -> None:
+    """Test lead() method with partition_by."""
+    lead_expr = sql.lead("amount", partition_by="category", order_by="timestamp")
+    built = str(lead_expr)
+
+    assert "LEAD" in built.upper()
+    assert "PARTITION BY" in built.upper()
+    assert "category" in built.lower()
+
+
+def test_lag_lead_in_select() -> None:
+    """Test using lag() and lead() in a SELECT statement."""
+    query = sql.select(
+        "date",
+        "price",
+        sql.lag("price", order_by="date").as_("prev_price"),
+        sql.lead("price", order_by="date").as_("next_price"),
+    ).from_("stocks")
+    stmt = query.build()
+
+    assert "LAG" in stmt.sql.upper()
+    assert "LEAD" in stmt.sql.upper()
+    assert "prev_price" in stmt.sql.lower()
+    assert "next_price" in stmt.sql.lower()

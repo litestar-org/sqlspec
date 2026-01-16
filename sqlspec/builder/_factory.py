@@ -24,6 +24,7 @@ from sqlspec.builder._ddl import (
     CreateTableAsSelect,
     CreateView,
     DropIndex,
+    DropMaterializedView,
     DropSchema,
     DropTable,
     DropView,
@@ -70,6 +71,7 @@ __all__ = (
     "CreateView",
     "Delete",
     "DropIndex",
+    "DropMaterializedView",
     "DropSchema",
     "DropTable",
     "DropView",
@@ -610,6 +612,18 @@ class SQLFactory:
         """
         return DropView(view_name, dialect=dialect or self.dialect)
 
+    def drop_materialized_view(self, view_name: str, dialect: DialectType = None) -> "DropMaterializedView":
+        """Create a DROP MATERIALIZED VIEW builder.
+
+        Args:
+            view_name: Name of the materialized view to drop
+            dialect: Optional SQL dialect
+
+        Returns:
+            DropMaterializedView builder instance
+        """
+        return DropMaterializedView(view_name, dialect=dialect or self.dialect)
+
     def drop_index(self, index_name: str, dialect: DialectType = None) -> "DropIndex":
         """Create a DROP INDEX builder.
 
@@ -943,6 +957,56 @@ class SQLFactory:
         return WindowFunctionBuilder("lead")
 
     @property
+    def count_over_(self) -> "WindowFunctionBuilder":
+        """Create a COUNT(*) OVER() window function builder.
+
+        Returns a WindowFunctionBuilder pre-configured with COUNT(*) for fluent chaining.
+        Useful for pagination queries where you want to get the total count in the same query.
+
+        Returns:
+            WindowFunctionBuilder configured for COUNT(*) OVER()
+
+        Example:
+            >>> query = (
+            ...     sql
+            ...     .select("*", sql.count_over_.as_("total"))
+            ...     .from_("users")
+            ...     .where_eq("status", "active")
+            ...     .limit(10)
+            ... )
+            # Produces: SELECT *, COUNT(*) OVER() AS total FROM users WHERE status = :status LIMIT 10
+
+            >>> # With partition:
+            >>> query = sql.select(
+            ...     "*",
+            ...     sql.count_over_.partition_by("department").as_(
+            ...         "dept_count"
+            ...     ),
+            ... )
+        """
+        return WindowFunctionBuilder("count", exp.Star())
+
+    @property
+    def sum_over_(self) -> "WindowFunctionBuilder":
+        """Create a SUM() OVER() window function builder."""
+        return WindowFunctionBuilder("sum")
+
+    @property
+    def avg_over_(self) -> "WindowFunctionBuilder":
+        """Create an AVG() OVER() window function builder."""
+        return WindowFunctionBuilder("avg")
+
+    @property
+    def max_over_(self) -> "WindowFunctionBuilder":
+        """Create a MAX() OVER() window function builder."""
+        return WindowFunctionBuilder("max")
+
+    @property
+    def min_over_(self) -> "WindowFunctionBuilder":
+        """Create a MIN() OVER() window function builder."""
+        return WindowFunctionBuilder("min")
+
+    @property
     def exists_(self) -> "SubqueryBuilder":
         """Create an EXISTS subquery builder."""
         return SubqueryBuilder("exists")
@@ -1118,6 +1182,136 @@ class SQLFactory:
             COUNT DISTINCT expression.
         """
         return self.count(column, distinct=True)
+
+    def count_over(
+        self,
+        column: Union[str, exp.Expression, "ExpressionWrapper", "Case", "Column"] = "*",
+        partition_by: str | list[str] | exp.Expression | None = None,
+    ) -> FunctionExpression:
+        """Create a COUNT() OVER() window function for inline total counts.
+
+        This is particularly useful for pagination queries where you want to get
+        the total count in the same query as the paginated results.
+
+        Args:
+            column: Column to count (default "*" for COUNT(*)).
+            partition_by: Optional columns to partition by.
+
+        Returns:
+            COUNT() OVER() window function expression.
+
+        Example:
+            >>> # Simple total count alongside paginated results:
+            >>> query = (
+            ...     sql
+            ...     .select("id", "name", sql.count_over().as_("total"))
+            ...     .from_("users")
+            ...     .where_eq("status", "active")
+            ...     .limit(10)
+            ...     .offset(0)
+            ... )
+            # Produces: SELECT id, name, COUNT(*) OVER() AS total FROM users WHERE status = :status LIMIT 10
+
+            >>> # With partition (count per group):
+            >>> query = sql.select(
+            ...     "*",
+            ...     sql.count_over(partition_by="department").as_(
+            ...         "dept_count"
+            ...     ),
+            ... )
+        """
+        if isinstance(column, str) and column == "*":
+            count_expr = exp.Count(this=exp.Star())
+        else:
+            col_expr = extract_expression(column)
+            count_expr = exp.Count(this=col_expr)
+
+        over_args: dict[str, Any] = {}
+        if partition_by:
+            if isinstance(partition_by, str):
+                over_args["partition_by"] = [exp.column(partition_by)]
+            elif isinstance(partition_by, list):
+                over_args["partition_by"] = [exp.column(col) for col in partition_by]
+            elif isinstance(partition_by, exp.Expression):
+                over_args["partition_by"] = [partition_by]
+
+        return FunctionExpression(exp.Window(this=count_expr, **over_args))
+
+    def sum_over(
+        self,
+        column: Union[str, exp.Expression, "ExpressionWrapper", "Case"],
+        partition_by: str | list[str] | exp.Expression | None = None,
+        order_by: str | list[str] | exp.Expression | None = None,
+    ) -> FunctionExpression:
+        """Create a SUM() OVER() window function.
+
+        Args:
+            column: Column to sum.
+            partition_by: Columns to partition by.
+            order_by: Columns to order by.
+
+        Returns:
+            SUM() OVER() window function expression.
+        """
+        col_expr = extract_expression(column)
+        return self._create_window_function("SUM", [col_expr], partition_by, order_by)
+
+    def avg_over(
+        self,
+        column: Union[str, exp.Expression, "ExpressionWrapper", "Case"],
+        partition_by: str | list[str] | exp.Expression | None = None,
+        order_by: str | list[str] | exp.Expression | None = None,
+    ) -> FunctionExpression:
+        """Create an AVG() OVER() window function.
+
+        Args:
+            column: Column to average.
+            partition_by: Columns to partition by.
+            order_by: Columns to order by.
+
+        Returns:
+            AVG() OVER() window function expression.
+        """
+        col_expr = extract_expression(column)
+        return self._create_window_function("AVG", [col_expr], partition_by, order_by)
+
+    def max_over(
+        self,
+        column: Union[str, exp.Expression, "ExpressionWrapper", "Case"],
+        partition_by: str | list[str] | exp.Expression | None = None,
+        order_by: str | list[str] | exp.Expression | None = None,
+    ) -> FunctionExpression:
+        """Create a MAX() OVER() window function.
+
+        Args:
+            column: Column to find maximum.
+            partition_by: Columns to partition by.
+            order_by: Columns to order by.
+
+        Returns:
+            MAX() OVER() window function expression.
+        """
+        col_expr = extract_expression(column)
+        return self._create_window_function("MAX", [col_expr], partition_by, order_by)
+
+    def min_over(
+        self,
+        column: Union[str, exp.Expression, "ExpressionWrapper", "Case"],
+        partition_by: str | list[str] | exp.Expression | None = None,
+        order_by: str | list[str] | exp.Expression | None = None,
+    ) -> FunctionExpression:
+        """Create a MIN() OVER() window function.
+
+        Args:
+            column: Column to find minimum.
+            partition_by: Columns to partition by.
+            order_by: Columns to order by.
+
+        Returns:
+            MIN() OVER() window function expression.
+        """
+        col_expr = extract_expression(column)
+        return self._create_window_function("MIN", [col_expr], partition_by, order_by)
 
     @staticmethod
     def sum(
@@ -1652,6 +1846,70 @@ class SQLFactory:
             DENSE_RANK window function expression.
         """
         return self._create_window_function("DENSE_RANK", [], partition_by, order_by)
+
+    def lag(
+        self,
+        column: str | exp.Expression,
+        offset: int = 1,
+        default: Any = None,
+        partition_by: str | list[str] | exp.Expression | None = None,
+        order_by: str | list[str] | exp.Expression | None = None,
+    ) -> FunctionExpression:
+        """Create a LAG() window function.
+
+        LAG accesses data from a previous row in the same result set without using a self-join.
+
+        Args:
+            column: The column to get the lagged value from.
+            offset: Number of rows to look back (default 1).
+            default: Value to return when there is no row at the offset.
+            partition_by: Columns to partition by.
+            order_by: Columns to order by.
+
+        Returns:
+            LAG window function expression.
+
+        Example:
+            >>> sql.lag("salary", offset=1, order_by="hire_date")
+            >>> sql.lag("price", partition_by="category", order_by="date")
+        """
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        func_args: list[exp.Expression] = [col_expr, exp.Literal.number(offset)]
+        if default is not None:
+            func_args.append(exp.convert(default))
+        return self._create_window_function("LAG", func_args, partition_by, order_by)
+
+    def lead(
+        self,
+        column: str | exp.Expression,
+        offset: int = 1,
+        default: Any = None,
+        partition_by: str | list[str] | exp.Expression | None = None,
+        order_by: str | list[str] | exp.Expression | None = None,
+    ) -> FunctionExpression:
+        """Create a LEAD() window function.
+
+        LEAD accesses data from a subsequent row in the same result set without using a self-join.
+
+        Args:
+            column: The column to get the lead value from.
+            offset: Number of rows to look forward (default 1).
+            default: Value to return when there is no row at the offset.
+            partition_by: Columns to partition by.
+            order_by: Columns to order by.
+
+        Returns:
+            LEAD window function expression.
+
+        Example:
+            >>> sql.lead("salary", offset=1, order_by="hire_date")
+            >>> sql.lead("price", partition_by="category", order_by="date")
+        """
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        func_args: list[exp.Expression] = [col_expr, exp.Literal.number(offset)]
+        if default is not None:
+            func_args.append(exp.convert(default))
+        return self._create_window_function("LEAD", func_args, partition_by, order_by)
 
     @staticmethod
     def _create_window_function(
