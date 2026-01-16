@@ -24,10 +24,11 @@ class _CursorWithDescription:
         self.statement_type = None
 
 
-def _make_unknown_statement(sql_text: str = "select 1") -> "SQL":
+def _make_command_statement(sql_text: str = "select 1") -> "SQL":
+    """Create a statement with COMMAND operation type (generic fallback)."""
     stmt = SQL(sql_text)
     cast("Any", stmt)._processed_state = ProcessedState(
-        compiled_sql=sql_text, execution_parameters={}, operation_type="UNKNOWN"
+        compiled_sql=sql_text, execution_parameters={}, operation_type="COMMAND"
     )
     return stmt
 
@@ -51,7 +52,7 @@ def _get_test_driver() -> tuple[SqliteDriver, Any]:
 def test_force_select_uses_statement_type_select() -> None:
     driver, connection = _get_test_driver()
     try:
-        stmt = _make_unknown_statement()
+        stmt = _make_command_statement()
         cursor = _CursorWithStatementType("SELECT")
 
         assert cast("Any", driver)._should_force_select(stmt, cursor) is True
@@ -62,7 +63,7 @@ def test_force_select_uses_statement_type_select() -> None:
 def test_force_select_uses_description_when_unknown() -> None:
     driver, connection = _get_test_driver()
     try:
-        stmt = _make_unknown_statement()
+        stmt = _make_command_statement()
         cursor = _CursorWithDescription(True)
 
         assert cast("Any", driver)._should_force_select(stmt, cursor) is True
@@ -73,7 +74,7 @@ def test_force_select_uses_description_when_unknown() -> None:
 def test_force_select_false_when_no_metadata() -> None:
     driver, connection = _get_test_driver()
     try:
-        stmt = _make_unknown_statement()
+        stmt = _make_command_statement()
         cursor = _CursorWithDescription(False)
 
         assert cast("Any", driver)._should_force_select(stmt, cursor) is False

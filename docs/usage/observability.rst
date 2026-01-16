@@ -102,6 +102,7 @@ This enables you to configure SQL execution logs independently from internal deb
 
     sqlspec                              # Root logger for all SQLSpec logs
     ├── sqlspec.sql                      # SQL execution logs (SELECT, INSERT, etc.)
+    ├── sqlspec.pool                     # Connection pool operations (acquire, release, recycle)
     ├── sqlspec.cache                    # Cache operations (hit, miss, evict)
     ├── sqlspec.driver                   # Driver base class operations
     ├── sqlspec.core
@@ -129,7 +130,11 @@ This enables you to configure SQL execution logs independently from internal deb
     logging.getLogger("sqlspec").setLevel(logging.WARNING)
     logging.getLogger("sqlspec.sql").setLevel(logging.INFO)
 
-    # Pattern 3: Disable all SQLSpec logs
+    # Pattern 3: Debug connection pool while keeping other logs quiet
+    logging.getLogger("sqlspec").setLevel(logging.WARNING)
+    logging.getLogger("sqlspec.pool").setLevel(logging.DEBUG)
+
+    # Pattern 4: Disable all SQLSpec logs
     logging.getLogger("sqlspec").setLevel(logging.CRITICAL)
 
 **Using the SQL_LOGGER_NAME constant:**
@@ -172,6 +177,37 @@ Example SQL log output:
 
     SELECT  driver=AsyncpgDriver bind_key=primary duration_ms=3.5 rows=5 sql='SELECT ...'
     INSERT  driver=AsyncpgDriver bind_key=primary duration_ms=1.2 rows=1 sql='INSERT ...'
+
+Pool Logging
+~~~~~~~~~~~~
+
+Connection pool operations are logged to the ``sqlspec.pool`` namespace. This allows
+you to debug connection lifecycle events independently from SQL execution logs.
+
+Pool logs include structured context fields:
+
+- ``adapter`` - The database adapter (aiosqlite, duckdb, pymysql, sqlite)
+- ``pool_id`` - Unique identifier for the pool instance
+- ``database`` - Database name or path (sanitized for privacy)
+- ``connection_id`` - Connection identifier (when applicable)
+- ``reason`` - Why an operation occurred (e.g., exceeded_recycle_time, failed_health_check)
+
+Example pool log messages:
+
+.. code-block:: text
+
+    pool.connection.recycle  adapter=sqlite pool_id=a1b2c3d4 database=:memory: reason=exceeded_recycle_time
+    pool.connection.close.timeout  adapter=aiosqlite pool_id=e5f6g7h8 connection_id=abc timeout_seconds=10.0
+    pool.extension.load.failed  adapter=duckdb pool_id=i9j0k1l2 extension=httpfs error='...'
+
+**Using the POOL_LOGGER_NAME constant:**
+
+.. code-block:: python
+
+    from sqlspec.utils.logging import POOL_LOGGER_NAME
+
+    # Enable pool debug logs for connection troubleshooting
+    logging.getLogger(POOL_LOGGER_NAME).setLevel(logging.DEBUG)
 
 Cloud Log Formatters
 --------------------

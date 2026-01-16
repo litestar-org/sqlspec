@@ -1,16 +1,18 @@
 """SQLite database configuration with thread-local connections."""
 
 import contextlib
+import logging
 import sqlite3
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -31,7 +33,8 @@ class SqliteConnectionParams(TypedDict):
 
 __all__ = ("SqliteConnectionPool",)
 
-logger = get_logger(__name__)
+logger = get_logger(POOL_LOGGER_NAME)
+_ADAPTER_NAME = "sqlite"
 
 
 class SqliteConnectionPool:
@@ -46,6 +49,7 @@ class SqliteConnectionPool:
         "_connection_parameters",
         "_enable_optimizations",
         "_health_check_interval",
+        "_pool_id",
         "_recycle_seconds",
         "_thread_local",
     )
@@ -72,6 +76,15 @@ class SqliteConnectionPool:
         self._enable_optimizations = enable_optimizations
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
+        self._pool_id = str(uuid.uuid4())[:8]
+
+    @property
+    def _database_name(self) -> str:
+        """Get sanitized database name for logging."""
+        db = self._connection_parameters.get("database", ":memory:")
+        if db == ":memory:" or "mode=memory" in str(db):
+            return ":memory:"
+        return str(db)
 
     def _create_connection(self) -> SqliteConnection:
         """Create a new SQLite connection with optimizations."""
@@ -119,7 +132,16 @@ class SqliteConnectionPool:
             return cast("SqliteConnection", self._thread_local.connection)
 
         if self._recycle_seconds > 0 and time.time() - self._thread_local.created_at > self._recycle_seconds:
-            logger.debug("SQLite connection exceeded recycle time, recreating")
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.recycle",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+                recycle_seconds=self._recycle_seconds,
+                reason="exceeded_recycle_time",
+            )
             with contextlib.suppress(Exception):
                 self._thread_local.connection.close()
             self._thread_local.connection = self._create_connection()
@@ -129,7 +151,16 @@ class SqliteConnectionPool:
 
         idle_time = time.time() - thread_state.get("last_used", 0)
         if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
-            logger.debug("SQLite connection failed health check after %.1fs idle, recreating", idle_time)
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.recycle",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+                idle_seconds=round(idle_time, 1),
+                reason="failed_health_check",
+            )
             with contextlib.suppress(Exception):
                 self._thread_local.connection.close()
             self._thread_local.connection = self._create_connection()

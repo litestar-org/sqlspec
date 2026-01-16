@@ -121,7 +121,7 @@ class ProcessedState:
         compiled_sql: str,
         execution_parameters: Any,
         parsed_expression: "exp.Expression | None" = None,
-        operation_type: "OperationType" = "UNKNOWN",
+        operation_type: "OperationType" = "COMMAND",
         parameter_casts: "dict[int, str] | None" = None,
         validation_errors: "list[str] | None" = None,
         parameter_profile: "ParameterProfile | None" = None,
@@ -358,7 +358,7 @@ class SQL:
     def operation_type(self) -> "OperationType":
         """SQL operation type."""
         if self._processed_state is Empty:
-            return "UNKNOWN"
+            return "COMMAND"
         return self._processed_state.operation_type
 
     @property
@@ -569,7 +569,7 @@ class SQL:
         return ProcessedState(
             compiled_sql=self._raw_sql,
             execution_parameters=self._named_parameters or self._positional_parameters,
-            operation_type="UNKNOWN",
+            operation_type="COMMAND",
             parameter_casts={},
             parameter_profile=ParameterProfile.empty(),
             operation_profile=OperationProfile.empty(),

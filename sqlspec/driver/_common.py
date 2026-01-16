@@ -1035,18 +1035,18 @@ class CommonDriverAttributesMixin:
 
         Uses driver metadata (statement_type, description/schema) as a safety net when
         the compiler cannot classify the operation. This remains conservative by only
-        triggering when the operation type is "UNKNOWN".
+        triggering when the operation type is "COMMAND" (generic fallback).
 
         Args:
             statement: SQL statement being executed.
             cursor: Database cursor/job object that may expose metadata.
 
         Returns:
-            True when cursor metadata indicates a row-returning operation despite an
-            unknown operation type; otherwise False.
+            True when cursor metadata indicates a row-returning operation despite a
+            generic command operation type; otherwise False.
 
         """
-        if statement.operation_type != "UNKNOWN":
+        if statement.operation_type != "COMMAND":
             return False
 
         if has_statement_type(cursor) and isinstance(cursor.statement_type, str):

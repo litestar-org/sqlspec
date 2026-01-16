@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from contextvars import ContextVar
 
 __all__ = (
+    "POOL_LOGGER_NAME",
     "SQL_LOGGER_NAME",
     "SqlglotCommandFallbackFilter",
     "StructuredFormatter",
@@ -27,6 +28,18 @@ __all__ = (
     "set_correlation_id",
     "suppress_erroneous_sqlglot_log_messages",
 )
+
+POOL_LOGGER_NAME = "sqlspec.pool"
+"""Logger name for connection pool operations.
+
+Use this constant to configure pool log levels independently::
+
+    import logging
+    from sqlspec.utils.logging import POOL_LOGGER_NAME
+
+    # Show pool operations at DEBUG for troubleshooting
+    logging.getLogger(POOL_LOGGER_NAME).setLevel(logging.DEBUG)
+"""
 
 SQL_LOGGER_NAME = "sqlspec.sql"
 """Logger name for SQL execution logs.

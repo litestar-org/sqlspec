@@ -839,4 +839,6 @@ def test_namespaced_cache_passes_namespace_to_lru_cache() -> None:
     expected_namespaces = ["statement", "builder", "expression", "file", "optimized"]
     for namespace in expected_namespaces:
         internal_cache = cache._caches[namespace]
-        assert internal_cache._namespace == namespace, f"Expected namespace '{namespace}' but got '{internal_cache._namespace}'"
+        assert internal_cache._namespace == namespace, (
+            f"Expected namespace '{namespace}' but got '{internal_cache._namespace}'"
+        )

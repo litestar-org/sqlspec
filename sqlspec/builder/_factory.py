@@ -252,7 +252,7 @@ class SQLFactory:
     def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
         parsed_expr = cls._parse_sql_expression(sql, dialect)
         if parsed_expr is None:
-            return "UNKNOWN"
+            return "COMMAND"
         return cls._detect_type_from_expression(parsed_expr)
 
     def __init__(self, dialect: DialectType = None) -> None:
@@ -318,7 +318,7 @@ class SQLFactory:
             sql_candidate = columns_or_sql[0].strip()
             if self._looks_like_sql(sql_candidate):
                 parsed_expr = self._parse_sql_expression(sql_candidate, builder_dialect)
-                detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
+                detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
                 if detected not in {"SELECT", "WITH"}:
                     msg = (
                         f"sql.select() expects a SELECT or WITH statement, got {detected}. "
@@ -338,7 +338,7 @@ class SQLFactory:
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
                 parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
-                detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
+                detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
                 if detected not in {"INSERT", "SELECT"}:
                     msg = (
                         f"sql.insert() expects INSERT or SELECT (for insert-from-select), got {detected}. "
@@ -356,7 +356,7 @@ class SQLFactory:
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
                 parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
-                detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
+                detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
                 if detected != "UPDATE":
                     msg = (
                         f"sql.update() expects UPDATE statement, got {detected}. "
@@ -372,7 +372,7 @@ class SQLFactory:
         if table_or_sql and self._looks_like_sql(table_or_sql):
             builder = Delete(dialect=builder_dialect)
             parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
-            detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
+            detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
             if detected != "DELETE":
                 msg = (
                     f"sql.delete() expects DELETE statement, got {detected}. "
@@ -388,7 +388,7 @@ class SQLFactory:
         if table_or_sql and self._looks_like_sql(table_or_sql):
             builder = Merge(dialect=builder_dialect)
             parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
-            detected = "UNKNOWN" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
+            detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
             if detected != "MERGE":
                 msg = (
                     f"sql.merge() expects MERGE statement, got {detected}. "

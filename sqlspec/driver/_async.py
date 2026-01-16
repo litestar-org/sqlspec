@@ -67,7 +67,7 @@ __all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase")
 
 
 EMPTY_FILTERS: Final["list[StatementFilter]"] = []
-_LOGGER_NAME: Final[str] = "sqlspec"
+_LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
 
 

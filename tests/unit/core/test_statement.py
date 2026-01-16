@@ -318,7 +318,7 @@ def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
 
 @requires_interpreted
 def test_sql_single_pass_processing_triggered_by_operation_type_property() -> None:
-    """Test accessing .operation_type property returns UNKNOWN without processing."""
+    """Test accessing .operation_type property returns COMMAND without processing."""
     stmt = SQL("INSERT INTO users (name) VALUES ('john')")
 
     with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
@@ -333,7 +333,7 @@ def test_sql_single_pass_processing_triggered_by_operation_type_property() -> No
         op_type = stmt.operation_type
 
         mock_compile.assert_not_called()
-        assert op_type == "UNKNOWN"
+        assert op_type == "COMMAND"
         assert stmt._processed_state is Empty
 
 
@@ -353,7 +353,7 @@ def test_sql_processing_fallback_on_error() -> None:
 
         assert compiled_sql == "INVALID SQL SYNTAX"
         assert params == []
-        assert stmt.operation_type == "UNKNOWN"
+        assert stmt.operation_type == "COMMAND"
         assert stmt._processed_state is not Empty
 
 
@@ -917,7 +917,7 @@ def test_sql_invalid_syntax_handling() -> None:
         op_type = invalid_stmt.operation_type
 
         assert sql_result == "INVALID SQL SYNTAX !@#$%"
-        assert op_type == "UNKNOWN"
+        assert op_type == "COMMAND"
 
 
 def test_sql_special_characters_and_unicode() -> None:

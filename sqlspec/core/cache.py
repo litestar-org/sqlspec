@@ -239,7 +239,11 @@ class LRUCache:
                 self._stats.record_miss()
                 if logger.isEnabledFor(logging.DEBUG):
                     log_with_context(
-                        logger, logging.DEBUG, "cache.miss", cache_namespace=self._namespace, cache_size=len(self._cache)
+                        logger,
+                        logging.DEBUG,
+                        "cache.miss",
+                        cache_namespace=self._namespace,
+                        cache_size=len(self._cache),
                     )
                 return None
 
