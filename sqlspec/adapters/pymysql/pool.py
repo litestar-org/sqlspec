@@ -1,8 +1,10 @@
 """PyMySQL database configuration with thread-local connections."""
 
 import contextlib
+import logging
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
@@ -10,7 +12,7 @@ import pymysql
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.pymysql._typing import PyMysqlConnection
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -40,13 +42,14 @@ class PyMysqlConnectionParams(TypedDict):
 
 __all__ = ("PyMysqlConnectionPool",)
 
-logger = get_logger(__name__)
+logger = get_logger(POOL_LOGGER_NAME)
+_ADAPTER_NAME = "pymysql"
 
 
 class PyMysqlConnectionPool:
     """Thread-local connection manager for PyMySQL."""
 
-    __slots__ = ("_connection_parameters", "_health_check_interval", "_recycle_seconds", "_thread_local")
+    __slots__ = ("_connection_parameters", "_health_check_interval", "_pool_id", "_recycle_seconds", "_thread_local")
 
     def __init__(
         self, connection_parameters: "dict[str, Any]", recycle_seconds: int = 86400, health_check_interval: float = 30.0
@@ -55,6 +58,12 @@ class PyMysqlConnectionPool:
         self._thread_local = threading.local()
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
+        self._pool_id = str(uuid.uuid4())[:8]
+
+    @property
+    def _database_name(self) -> str:
+        """Get sanitized database name for logging."""
+        return str(self._connection_parameters.get("database", "unknown"))
 
     def _create_connection(self) -> PyMysqlConnection:
         connection = pymysql.connect(**self._connection_parameters)
@@ -76,7 +85,16 @@ class PyMysqlConnectionPool:
             return cast("PyMysqlConnection", self._thread_local.connection)
 
         if self._recycle_seconds > 0 and time.time() - self._thread_local.created_at > self._recycle_seconds:
-            logger.debug("PyMySQL connection exceeded recycle time, recreating")
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.recycle",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+                recycle_seconds=self._recycle_seconds,
+                reason="exceeded_recycle_time",
+            )
             with contextlib.suppress(Exception):
                 self._thread_local.connection.close()
             self._thread_local.connection = self._create_connection()
@@ -86,7 +104,16 @@ class PyMysqlConnectionPool:
 
         idle_time = time.time() - thread_state.get("last_used", 0)
         if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
-            logger.debug("PyMySQL connection failed health check after %.1fs idle, recreating", idle_time)
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.recycle",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+                idle_seconds=round(idle_time, 1),
+                reason="failed_health_check",
+            )
             with contextlib.suppress(Exception):
                 self._thread_local.connection.close()
             self._thread_local.connection = self._create_connection()

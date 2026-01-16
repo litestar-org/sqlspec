@@ -744,3 +744,101 @@ def test_cache_with_none_values() -> None:
     missing_result = cache.get(missing_key)
     assert missing_result is None
     assert missing_key not in cache
+
+
+def test_lru_cache_namespace_parameter() -> None:
+    """Test LRUCache accepts namespace parameter."""
+    cache = LRUCache(max_size=10, namespace="test_namespace")
+    assert cache._namespace == "test_namespace"
+
+    cache_no_namespace = LRUCache(max_size=10)
+    assert cache_no_namespace._namespace is None
+
+
+def test_lru_cache_logs_include_namespace(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that cache logs include namespace when provided."""
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="sqlspec.cache")
+
+    cache = LRUCache(max_size=10, namespace="statement")
+    key = CacheKey(("test", "namespace_log"))
+
+    # Trigger cache miss
+    cache.get(key)
+
+    # Find the cache.miss log record
+    miss_records = [r for r in caplog.records if r.getMessage() == "cache.miss"]
+    assert len(miss_records) >= 1
+    record = miss_records[-1]
+    assert record.__dict__["extra_fields"]["cache_namespace"] == "statement"
+    assert "cache_size" in record.__dict__["extra_fields"]
+
+
+def test_lru_cache_logs_hit_with_namespace(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that cache hit logs include namespace."""
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="sqlspec.cache")
+
+    cache = LRUCache(max_size=10, namespace="expression")
+    key = CacheKey(("test", "hit_log"))
+
+    cache.put(key, "test_value")
+    cache.get(key)  # This should be a hit
+
+    hit_records = [r for r in caplog.records if r.getMessage() == "cache.hit"]
+    assert len(hit_records) >= 1
+    record = hit_records[-1]
+    assert record.__dict__["extra_fields"]["cache_namespace"] == "expression"
+
+
+def test_lru_cache_logs_eviction_with_namespace(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that cache eviction logs include namespace."""
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="sqlspec.cache")
+
+    cache = LRUCache(max_size=1, namespace="builder")
+    key1 = CacheKey(("test", 1))
+    key2 = CacheKey(("test", 2))
+
+    cache.put(key1, "value1")
+    cache.put(key2, "value2")  # This should evict key1
+
+    evict_records = [r for r in caplog.records if r.getMessage() == "cache.evict"]
+    assert len(evict_records) >= 1
+    record = evict_records[-1]
+    assert record.__dict__["extra_fields"]["cache_namespace"] == "builder"
+    assert record.__dict__["extra_fields"]["reason"] == "max_size"
+
+
+def test_lru_cache_logs_without_namespace(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that cache logs work when namespace is None."""
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="sqlspec.cache")
+
+    cache = LRUCache(max_size=10)  # No namespace
+    key = CacheKey(("test", "no_namespace"))
+
+    cache.get(key)
+
+    miss_records = [r for r in caplog.records if r.getMessage() == "cache.miss"]
+    assert len(miss_records) >= 1
+    record = miss_records[-1]
+    assert record.__dict__["extra_fields"]["cache_namespace"] is None
+
+
+def test_namespaced_cache_passes_namespace_to_lru_cache() -> None:
+    """Test that NamespacedCache passes correct namespace to internal LRUCache instances."""
+    config = CacheConfig()
+    cache = NamespacedCache(config)
+
+    # Check each internal cache has the correct namespace
+    expected_namespaces = ["statement", "builder", "expression", "file", "optimized"]
+    for namespace in expected_namespaces:
+        internal_cache = cache._caches[namespace]
+        assert internal_cache._namespace == namespace, (
+            f"Expected namespace '{namespace}' but got '{internal_cache._namespace}'"
+        )

@@ -1,6 +1,7 @@
 """Multi-connection pool for aiosqlite."""
 
 import asyncio
+import logging
 import time
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
@@ -8,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import aiosqlite
 
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -24,7 +25,9 @@ __all__ = (
     "AiosqlitePoolConnectionContext",
 )
 
-logger = get_logger(__name__)
+logger = get_logger(POOL_LOGGER_NAME)
+
+_ADAPTER_NAME = "aiosqlite"
 
 
 class AiosqlitePoolClosedError(SQLSpecError):
@@ -127,7 +130,10 @@ class AiosqlitePoolConnection:
                 await self.connection.rollback()
             await self.connection.close()
         except Exception:
-            logger.debug("Error closing connection %s", self.id)
+            # Note: No pool context available at connection level
+            log_with_context(
+                logger, logging.DEBUG, "pool.connection.close.error", adapter=_ADAPTER_NAME, connection_id=self.id
+            )
         finally:
             self._closed = True
 
@@ -173,6 +179,7 @@ class AiosqliteConnectionPool:
         "_lock_instance",
         "_min_size",
         "_operation_timeout",
+        "_pool_id",
         "_pool_size",
         "_queue_instance",
         "_wal_initialized",
@@ -211,6 +218,7 @@ class AiosqliteConnectionPool:
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
         self._wal_initialized = False
         self._warmed = False
+        self._pool_id = uuid4().hex[:8]  # Short ID for logging
 
         self._queue_instance: asyncio.Queue[AiosqlitePoolConnection] | None = None
         self._lock_instance: asyncio.Lock | None = None
@@ -245,6 +253,12 @@ class AiosqliteConnectionPool:
             True if pool is closed
         """
         return self._closed_event_instance is not None and self._closed_event.is_set()
+
+    @property
+    def _database_name(self) -> str:
+        """Get sanitized database name for logging."""
+        db = self._connection_parameters.get("database", "unknown")
+        return str(db).split("/")[-1] if db else "unknown"
 
     def size(self) -> int:
         """Get total number of connections in pool.
@@ -298,7 +312,14 @@ class AiosqliteConnectionPool:
                 self._wal_initialized = True
 
         except Exception:
-            logger.exception("Failed to configure connection")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "pool.connection.configure.error",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+            )
             await connection.execute("PRAGMA foreign_keys = ON")
             await connection.execute("PRAGMA busy_timeout = 30000")
             await connection.commit()
@@ -353,14 +374,30 @@ class AiosqliteConnectionPool:
             reason: Optional reason for retirement
         """
         if reason:
-            logger.debug("Retiring connection %s", connection.id, extra={"reason": reason})
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.retire",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+                reason=reason,
+            )
         async with self._lock:
             self._connection_registry.pop(connection.id, None)
 
         try:
             await asyncio.wait_for(connection.close(), timeout=self._operation_timeout)
         except asyncio.TimeoutError:
-            logger.warning("Connection %s close timed out during retirement", connection.id)
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "pool.connection.close.timeout",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+                timeout_seconds=self._operation_timeout,
+            )
 
     async def _try_provision_new_connection(self) -> "AiosqlitePoolConnection | None":
         """Try to create a new connection if under capacity.
@@ -375,7 +412,16 @@ class AiosqliteConnectionPool:
         try:
             connection = await self._create_connection()
         except Exception:
-            logger.exception("Failed to create new connection")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "pool.connection.create.error",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+                pool_size=len(self._connection_registry),
+                max_size=self._pool_size,
+            )
             return None
         else:
             connection.mark_as_in_use()
@@ -428,7 +474,16 @@ class AiosqliteConnectionPool:
         if connections_needed <= 0:
             return
 
-        logger.debug("Warming pool with %d connections", connections_needed)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "pool.warmup.start",
+            adapter=_ADAPTER_NAME,
+            pool_id=self._pool_id,
+            database=self._database_name,
+            connections_needed=connections_needed,
+            min_size=self._min_size,
+        )
         tasks = [self._create_connection() for _ in range(connections_needed)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -436,7 +491,14 @@ class AiosqliteConnectionPool:
             if isinstance(result, AiosqlitePoolConnection):
                 self._queue.put_nowait(result)
             elif isinstance(result, Exception):
-                logger.warning("Failed to create warm connection: %s", result)
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "pool.warmup.connection.error",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    error=str(result),
+                )
 
     async def _get_connection(self) -> AiosqlitePoolConnection:
         """Run the three-phase connection acquisition cycle.
@@ -495,7 +557,14 @@ class AiosqliteConnectionPool:
             return
 
         if connection.id not in self._connection_registry:
-            logger.warning("Attempted to release unknown connection: %s", connection.id)
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "pool.connection.release.unknown",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+            )
             return
 
         try:
@@ -503,7 +572,15 @@ class AiosqliteConnectionPool:
             connection.mark_as_idle()
             self._queue.put_nowait(connection)
         except Exception as e:
-            logger.warning("Failed to reset connection %s during release: %s", connection.id, e)
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "pool.connection.reset.error",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+                error=str(e),
+            )
             connection.mark_unhealthy()
             await self._retire_connection(connection)
 
@@ -530,4 +607,12 @@ class AiosqliteConnectionPool:
 
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.warning("Error closing connection %s: %s", connections[i].id, result)
+                    log_with_context(
+                        logger,
+                        logging.WARNING,
+                        "pool.close.connection.error",
+                        adapter=_ADAPTER_NAME,
+                        pool_id=self._pool_id,
+                        connection_id=connections[i].id,
+                        error=str(result),
+                    )

@@ -10,6 +10,60 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Logging Improvements
+--------------------
+
+**Cache Namespace Context:**
+
+Cache debug logs now include a ``cache_namespace`` field that identifies which
+cache type (statement, expression, builder, file, optimized) generated the log.
+This makes cache performance debugging significantly easier.
+
+**Example:**
+
+.. code-block:: text
+
+    # Before
+    cache.miss extra_fields={'cache_size': 0}
+
+    # After
+    cache.miss extra_fields={'cache_namespace': 'statement', 'cache_size': 0}
+
+**SQL Logger Namespace (BREAKING CHANGE):**
+
+SQL execution logs now use a dedicated ``sqlspec.sql`` logger (previously used
+``sqlspec.observability``). This allows independent configuration of SQL log
+levels from other operational logs.
+
+**Migration:**
+
+.. code-block:: python
+
+    # Before
+    logging.getLogger("sqlspec.observability").setLevel(logging.INFO)
+
+    # After
+    logging.getLogger("sqlspec.sql").setLevel(logging.INFO)
+
+**SQL Log Message Format (BREAKING CHANGE):**
+
+SQL execution log messages now use the operation type (SELECT, INSERT, etc.)
+as the message instead of the generic ``"db.query"``.
+
+**Example:**
+
+.. code-block:: text
+
+    # Before
+    db.query driver=AsyncpgDriver duration_ms=3.5 rows=5 sql='SELECT ...'
+
+    # After
+    SELECT  driver=AsyncpgDriver bind_key=primary duration_ms=3.5 rows=5 sql='SELECT ...'
+
+If you have log parsers matching ``"db.query"``, update them to match operation types.
+
+**See:** :doc:`/usage/observability` for the full logger hierarchy and configuration examples.
+
 ADK Memory Store
 ----------------
 

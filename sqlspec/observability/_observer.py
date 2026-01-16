@@ -9,6 +9,7 @@ from sqlspec.observability._config import LoggingConfig
 from sqlspec.utils.logging import get_logger
 
 __all__ = (
+    "SQL_LOGGER_NAME",
     "StatementEvent",
     "create_event",
     "create_statement_observer",
@@ -18,6 +19,11 @@ __all__ = (
 
 
 logger = get_logger("sqlspec.observability")
+
+SQL_LOGGER_NAME = "sqlspec.sql"
+"""Logger name for SQL execution logs. Use this to configure SQL log levels independently."""
+
+sql_logger = get_logger(SQL_LOGGER_NAME)
 
 _DEFAULT_LOGGING_CONFIG = LoggingConfig()
 
@@ -255,7 +261,7 @@ def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConf
     if event.is_many and isinstance(event.parameters, (list, tuple)):
         extra["batch_size"] = len(event.parameters)
 
-    if logger.isEnabledFor(logging.DEBUG):
+    if sql_logger.isEnabledFor(logging.DEBUG):
         params, params_truncated = _maybe_truncate_parameters(
             event.parameters, max_items=logging_config.parameter_truncation_count
         )
@@ -263,7 +269,7 @@ def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConf
             extra["parameters_truncated"] = True
         extra["parameters"] = params
 
-    logger.info("db.query", extra=extra)
+    sql_logger.info(event.operation, extra=extra)
 
 
 def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool, int]:

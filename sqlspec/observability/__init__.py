@@ -14,6 +14,7 @@ from sqlspec.observability._dispatcher import LifecycleContext, LifecycleDispatc
 from sqlspec.observability._formatters import AWSLogFormatter, AzureLogFormatter, CloudLogFormatter, GCPLogFormatter
 from sqlspec.observability._formatting import OTelConsoleFormatter, OTelJSONFormatter
 from sqlspec.observability._observer import (
+    SQL_LOGGER_NAME,
     StatementEvent,
     create_event,
     create_statement_observer,
@@ -25,6 +26,7 @@ from sqlspec.observability._sampling import SamplingConfig
 from sqlspec.observability._spans import SpanManager
 
 __all__ = (
+    "SQL_LOGGER_NAME",
     "AWSLogFormatter",
     "AzureLogFormatter",
     "CloudLogFormatter",

@@ -55,6 +55,7 @@ OperationType = Literal[
     "DDL",
     "PRAGMA",
     "MERGE",
+    "COMMAND",
     "UNKNOWN",
 ]
 
@@ -68,7 +69,7 @@ OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
     exp.Update: "UPDATE",
     exp.Delete: "DELETE",
     exp.Pragma: "PRAGMA",
-    exp.Command: "EXECUTE",
+    exp.Command: "COMMAND",
     exp.Create: "DDL",
     exp.Drop: "DDL",
     exp.Alter: "DDL",
@@ -430,7 +431,7 @@ class SQLProcessor:
             else:
                 expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
         except ParseError:
-            return None, "EXECUTE", {}, OperationProfile.empty()
+            return None, "COMMAND", {}, OperationProfile.empty()
         else:
             operation_type = self._detect_operation_type(expression)
             parameter_casts = self._detect_parameter_casts(expression)
@@ -683,7 +684,7 @@ class SQLProcessor:
             final_parameters = processed_params
             ast_was_transformed = False
             expression = None
-            operation_type: OperationType = "EXECUTE"
+            operation_type: OperationType = "COMMAND"
             parameter_casts: dict[int, str] = {}
             parse_cache_key = None
             parse_cache_entry = None
@@ -744,7 +745,7 @@ class SQLProcessor:
             return CompiledSQL(
                 compiled_sql=sql,
                 execution_parameters=parameters,
-                operation_type="UNKNOWN",
+                operation_type="COMMAND",
                 parameter_casts={},
                 parameter_profile=parameter_profile,
                 operation_profile=operation_profile,
@@ -801,7 +802,14 @@ class SQLProcessor:
                 return "COPY_TO"
             return "COPY"
 
-        return "UNKNOWN"
+        # Handle Alias expressions used by sqlglot for unrecognized commands
+        # like UNLISTEN, LISTEN, NOTIFY, DISCARD (PostgreSQL-specific)
+        if isinstance(expression, exp.Alias) and expression.this:
+            return "COMMAND"
+
+        # COMMAND is the generic fallback for any database command
+        # that doesn't fit specific categories
+        return "COMMAND"
 
     def _detect_parameter_casts(self, expression: "exp.Expression | None") -> "dict[int, str]":
         """Detect explicit type casts on parameters in the AST.

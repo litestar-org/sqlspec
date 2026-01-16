@@ -1,20 +1,23 @@
 """DuckDB connection pool with thread-local connections."""
 
+import logging
 import threading
 import time
+import uuid
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import duckdb
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
 
-logger = get_logger(__name__)
+logger = get_logger(POOL_LOGGER_NAME)
+_ADAPTER_NAME = "duckdb"
 
 DEFAULT_MIN_POOL: Final[int] = 1
 DEFAULT_MAX_POOL: Final[int] = 4
@@ -46,6 +49,7 @@ class DuckDBConnectionPool:
         "_is_memory_db",
         "_lock",
         "_on_connection_create",
+        "_pool_id",
         "_recycle",
         "_secrets",
         "_thread_local",
@@ -83,10 +87,19 @@ class DuckDBConnectionPool:
         self._lock = threading.RLock()
         self._created_connections = 0
         self._connection_times: dict[int, float] = {}
+        self._pool_id = str(uuid.uuid4())[:8]
         # Track if this pool uses an in-memory database
         # In-memory databases require connections to stay alive to preserve data
         database = connection_config.get("database", "")
         self._is_memory_db = database.startswith(":memory:") or database == ""
+
+    @property
+    def _database_name(self) -> str:
+        """Get sanitized database name for logging."""
+        db = self._connection_config.get("database", "")
+        if db.startswith(":memory:") or db == "":
+            return ":memory:"
+        return str(db)
 
     def _create_connection(self) -> DuckDBConnection:
         """Create a new DuckDB connection with extensions and secrets."""
@@ -124,7 +137,16 @@ class DuckDBConnectionPool:
                     connection.install_extension(ext_name, **install_kwargs)
                 connection.load_extension(ext_name)
             except Exception as e:
-                logger.debug("Failed to load DuckDB extension %s: %s", ext_name, e)
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "pool.extension.load.failed",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    database=self._database_name,
+                    extension=ext_name,
+                    error=str(e),
+                )
 
         for secret_config in self._secrets:
             secret_type = secret_config.get("secret_type")
@@ -177,7 +199,16 @@ class DuckDBConnectionPool:
             try:
                 connection.execute(f"SET {key} = {normalized}")
             except Exception as exc:  # pragma: no cover - best-effort guard
-                logger.debug("Failed to set DuckDB flag %s: %s", key, exc)
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "pool.flag.set.failed",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    database=self._database_name,
+                    flag=key,
+                    error=str(exc),
+                )
 
     @staticmethod
     def _normalize_flag_value(value: Any) -> str:
@@ -213,7 +244,16 @@ class DuckDBConnectionPool:
 
         idle_time = time.time() - thread_state.get("last_used", 0)
         if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
-            logger.debug("DuckDB connection failed health check after %.1fs idle, recreating", idle_time)
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.recycle",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+                idle_seconds=round(idle_time, 1),
+                reason="failed_health_check",
+            )
             with suppress(Exception):
                 self._thread_local.connection.close()
             self._thread_local.connection = self._create_connection()

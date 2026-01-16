@@ -369,7 +369,10 @@ def test_cache_lru_behavior(basic_statement_config: "StatementConfig") -> None:
         ("ALTER TABLE test ADD COLUMN name TEXT", "DDL"),
         ("COPY users FROM 'file.csv'", "COPY_FROM"),
         ("COPY users TO 'file.csv'", "COPY_TO"),
-        ("EXECUTE my_proc()", "EXECUTE"),
+        ("EXECUTE my_proc()", "COMMAND"),
+        ("VACUUM", "COMMAND"),
+        ("LISTEN channel", "COMMAND"),
+        ("UNLISTEN channel", "COMMAND"),
     ],
 )
 def test_operation_type_detection_via_ast(
@@ -383,8 +386,8 @@ def test_operation_type_detection_via_ast(
         detected_type = processor._detect_operation_type(expression)
         assert detected_type == expected_operation
     except ParseError:
-        detected_type = "EXECUTE"
-        assert detected_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
+        detected_type = "COMMAND"
+        assert detected_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "COMMAND"]
 
 
 def test_copy_operation_helpers() -> None:
@@ -564,6 +567,7 @@ def test_parsing_disabled_fallback(
         "EXECUTE",
         "SCRIPT",
         "DDL",
+        "COMMAND",
         "UNKNOWN",
     ]
 
@@ -663,7 +667,7 @@ def test_parse_error_fallback(basic_statement_config: "StatementConfig", sample_
 
     assert isinstance(result, CompiledSQL)
 
-    assert result.operation_type == "EXECUTE"
+    assert result.operation_type == "COMMAND"
 
 
 def test_empty_sql_handling(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
@@ -696,7 +700,7 @@ def test_sqlglot_parse_exceptions(basic_statement_config: "StatementConfig") -> 
 
         assert isinstance(result, CompiledSQL)
         assert result.expression is None
-        assert result.operation_type == "EXECUTE"
+        assert result.operation_type == "COMMAND"
 
 
 def test_compilation_exception_recovery(basic_statement_config: "StatementConfig") -> None:
@@ -706,7 +710,7 @@ def test_compilation_exception_recovery(basic_statement_config: "StatementConfig
     result = processor.compile("COMPLETELY_INVALID_SQL_STATEMENT", None)
 
     assert isinstance(result, CompiledSQL)
-    assert result.operation_type == "UNKNOWN"
+    assert result.operation_type == "COMMAND"
 
 
 def test_cache_statistics(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
@@ -931,7 +935,7 @@ def test_execute_many_detection(
 def test_module_constants() -> None:
     """Test module constants are properly defined."""
 
-    operation_types = ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
+    operation_types = ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "COMMAND", "UNKNOWN"]
     assert "SELECT" in operation_types
     assert "INSERT" in operation_types
     assert "UPDATE" in operation_types
@@ -940,6 +944,7 @@ def test_module_constants() -> None:
     assert "EXECUTE" in operation_types
     assert "SCRIPT" in operation_types
     assert "DDL" in operation_types
+    assert "COMMAND" in operation_types
     assert "UNKNOWN" in operation_types
 
 
