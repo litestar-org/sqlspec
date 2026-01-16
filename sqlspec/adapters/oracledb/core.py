@@ -15,12 +15,16 @@ from sqlspec.core import (
 )
 from sqlspec.exceptions import (
     CheckViolationError,
+    ConnectionTimeoutError,
     DatabaseConnectionError,
     DataError,
+    DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
@@ -61,6 +65,7 @@ IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-
 _VERSION_COMPONENTS: int = 3
 TYPE_CONVERTER = OracleOutputConverter()
 
+# Oracle ORA error code ranges for category detection
 ORA_CHECK_CONSTRAINT = 2290
 ORA_INTEGRITY_RANGE_START = 2200
 ORA_INTEGRITY_RANGE_END = 2300
@@ -68,25 +73,37 @@ ORA_PARSING_RANGE_START = 900
 ORA_PARSING_RANGE_END = 1000
 ORA_TABLESPACE_FULL = 1652
 
+# Oracle error codes for specific exception mappings
 _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
+    # Integrity constraint violations
     1: (UniqueViolationError, "unique constraint violation"),
     2291: (ForeignKeyViolationError, "foreign key constraint violation"),
     2292: (ForeignKeyViolationError, "foreign key constraint violation"),
     ORA_CHECK_CONSTRAINT: (CheckViolationError, "check constraint violation"),
     1400: (NotNullViolationError, "not-null constraint violation"),
     1407: (NotNullViolationError, "not-null constraint violation"),
-    1017: (DatabaseConnectionError, "connection error"),
-    12154: (DatabaseConnectionError, "connection error"),
-    12541: (DatabaseConnectionError, "connection error"),
-    12545: (DatabaseConnectionError, "connection error"),
-    12514: (DatabaseConnectionError, "connection error"),
-    12505: (DatabaseConnectionError, "connection error"),
-    60: (TransactionError, "transaction error"),
-    8176: (TransactionError, "transaction error"),
-    1722: (DataError, "data error"),
-    1858: (DataError, "data error"),
-    1840: (DataError, "data error"),
-    ORA_TABLESPACE_FULL: (OperationalError, "operational error"),
+    # Permission/access errors
+    1017: (PermissionDeniedError, "invalid username/password"),
+    1031: (PermissionDeniedError, "insufficient privileges"),
+    942: (PermissionDeniedError, "table or view does not exist"),
+    # Connection errors
+    12154: (DatabaseConnectionError, "TNS resolution failed"),
+    12541: (ConnectionTimeoutError, "no listener"),
+    12545: (ConnectionTimeoutError, "connect failed"),
+    12514: (DatabaseConnectionError, "service not known"),
+    12505: (DatabaseConnectionError, "listener rejected"),
+    12170: (ConnectionTimeoutError, "connect timeout"),
+    # Transaction errors
+    60: (DeadlockError, "deadlock detected"),
+    8176: (TransactionError, "consistent read failure"),
+    # Query timeout/cancellation
+    1013: (QueryTimeoutError, "user requested cancel"),
+    # Data errors
+    1722: (DataError, "invalid number"),
+    1858: (DataError, "invalid character"),
+    1840: (DataError, "data conversion error"),
+    # Operational errors
+    ORA_TABLESPACE_FULL: (OperationalError, "tablespace full"),
 }
 
 

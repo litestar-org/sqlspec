@@ -9,10 +9,13 @@ from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
     DataError,
+    DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -48,6 +51,11 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
+SQLITE_BUSY_CODE = 5
+SQLITE_LOCKED_CODE = 6
+SQLITE_INTERRUPT_CODE = 9
+SQLITE_PERM_CODE = 3
+SQLITE_READONLY_CODE = 8
 
 
 _TIME_TO_ISO = build_time_iso_converter()
@@ -200,6 +208,12 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
     raising. This pattern is more robust for use in __exit__ handlers and
     avoids issues with exception control flow in different Python versions.
 
+    Mapping priority:
+    1. SQLite extended error codes (most reliable)
+    2. SQLite error names
+    3. Error message patterns
+    4. Default SQLSpecError fallback
+
     Args:
         error: The SQLite exception to map
 
@@ -214,8 +228,29 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
         error_name = None
     error_msg = str(error).lower()
 
-    if "locked" in error_msg:
-        return _create_sqlite_error(error, error_code or 0, OperationalError, "operational error")
+    # Check for busy/locked conditions first (deadlock-like scenarios in SQLite)
+    # SQLITE_BUSY means another process has the database locked
+    # SQLITE_LOCKED means another connection has the table/rows locked
+    if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":
+        return _create_sqlite_error(error, error_code, DeadlockError, "database busy")
+    if error_code == SQLITE_LOCKED_CODE or error_name == "SQLITE_LOCKED":
+        return _create_sqlite_error(error, error_code, DeadlockError, "database locked")
+    if "locked" in error_msg or "busy" in error_msg:
+        return _create_sqlite_error(error, error_code or 0, DeadlockError, "database locked")
+
+    # Query interruption (timeout-like behavior)
+    if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
+        return _create_sqlite_error(error, error_code, QueryTimeoutError, "query interrupted")
+    if "interrupt" in error_msg:
+        return _create_sqlite_error(error, error_code or 0, QueryTimeoutError, "query interrupted")
+
+    # Permission errors
+    if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
+        return _create_sqlite_error(error, error_code, PermissionDeniedError, "permission denied")
+    if error_code == SQLITE_READONLY_CODE or error_name == "SQLITE_READONLY":
+        return _create_sqlite_error(error, error_code, PermissionDeniedError, "database is read-only")
+    if "permission denied" in error_msg or "readonly" in error_msg:
+        return _create_sqlite_error(error, error_code or 0, PermissionDeniedError, "permission denied")
 
     if not error_code:
         if "unique constraint" in error_msg:
@@ -230,6 +265,7 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
             return _create_sqlite_error(error, None, SQLParsingError, "SQL syntax error")
         return _create_sqlite_error(error, None, SQLSpecError, "database error")
 
+    # Constraint violations (check extended error codes first)
     if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
         return _create_sqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
     if error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
@@ -240,14 +276,21 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
         return _create_sqlite_error(error, error_code, CheckViolationError, "check constraint violation")
     if error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
         return _create_sqlite_error(error, error_code, IntegrityError, "integrity constraint violation")
+
+    # Connection/file errors
     if error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
         return _create_sqlite_error(error, error_code, DatabaseConnectionError, "connection error")
     if error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
         return _create_sqlite_error(error, error_code, OperationalError, "operational error")
+
+    # Data type errors
     if error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
         return _create_sqlite_error(error, error_code, DataError, "data error")
+
+    # SQL syntax errors
     if error_code == 1 or "syntax" in error_msg:
         return _create_sqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
+
     return _create_sqlite_error(error, error_code, SQLSpecError, "database error")
 
 

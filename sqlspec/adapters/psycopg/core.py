@@ -15,21 +15,29 @@ from sqlspec.core import (
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import (
     CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
+    ConnectionTimeoutError,
+    DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
-    OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
+    SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
-    TransactionError,
     UniqueViolationError,
+    map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
+
+# Module-level lazy import for psycopg errors (mypyc optimization)
+try:
+    from psycopg import errors as pg_errors
+except ImportError:
+    pg_errors = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -417,34 +425,62 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     raising. This pattern is more robust for use in __exit__ handlers and
     avoids issues with exception control flow in different Python versions.
 
+    Mapping priority:
+    1. Native psycopg exception types (isinstance checks - most reliable)
+    2. SQLSTATE code via centralized utility
+    3. Generic SQLSpecError fallback
+
     Args:
         error: The psycopg exception to map
 
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    error_code = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
-    if not error_code:
-        return _create_postgres_error(error, None, SQLSpecError, "database error")
+    # Priority 1: Check native psycopg exception types first (most reliable)
+    if pg_errors is not None:
+        # Integrity constraint violations
+        if isinstance(error, pg_errors.UniqueViolation):
+            return _create_postgres_error(error, "23505", UniqueViolationError, "unique constraint violation")
+        if isinstance(error, pg_errors.ForeignKeyViolation):
+            return _create_postgres_error(error, "23503", ForeignKeyViolationError, "foreign key constraint violation")
+        if isinstance(error, pg_errors.NotNullViolation):
+            return _create_postgres_error(error, "23502", NotNullViolationError, "not-null constraint violation")
+        if isinstance(error, pg_errors.CheckViolation):
+            return _create_postgres_error(error, "23514", CheckViolationError, "check constraint violation")
+        if isinstance(error, pg_errors.IntegrityError):
+            return _create_postgres_error(error, "23000", IntegrityError, "integrity constraint violation")
 
-    if error_code == "23505":
-        return _create_postgres_error(error, error_code, UniqueViolationError, "unique constraint violation")
-    if error_code == "23503":
-        return _create_postgres_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
-    if error_code == "23502":
-        return _create_postgres_error(error, error_code, NotNullViolationError, "not-null constraint violation")
-    if error_code == "23514":
-        return _create_postgres_error(error, error_code, CheckViolationError, "check constraint violation")
-    if error_code.startswith("23"):
-        return _create_postgres_error(error, error_code, IntegrityError, "integrity constraint violation")
-    if error_code.startswith("42"):
-        return _create_postgres_error(error, error_code, SQLParsingError, "SQL syntax error")
-    if error_code.startswith("08"):
-        return _create_postgres_error(error, error_code, DatabaseConnectionError, "connection error")
-    if error_code.startswith("40"):
-        return _create_postgres_error(error, error_code, TransactionError, "transaction error")
-    if error_code.startswith("22"):
-        return _create_postgres_error(error, error_code, DataError, "data error")
-    if error_code.startswith(("53", "54", "55", "57", "58")):
-        return _create_postgres_error(error, error_code, OperationalError, "operational error")
+        # Transaction and serialization errors
+        if isinstance(error, pg_errors.DeadlockDetected):
+            return _create_postgres_error(error, "40P01", DeadlockError, "deadlock detected")
+        if isinstance(error, pg_errors.SerializationFailure):
+            return _create_postgres_error(error, "40001", SerializationConflictError, "serialization failure")
+
+        # Query timeout/cancellation
+        if isinstance(error, pg_errors.QueryCanceled):
+            return _create_postgres_error(error, "57014", QueryTimeoutError, "query canceled")
+
+        # Permission/authentication errors
+        if isinstance(error, pg_errors.InsufficientPrivilege):
+            return _create_postgres_error(error, "42501", PermissionDeniedError, "insufficient privilege")
+
+        # Connection errors
+        if hasattr(pg_errors, "AdminShutdown") and isinstance(error, pg_errors.AdminShutdown):
+            return _create_postgres_error(error, "57P01", ConnectionTimeoutError, "admin shutdown")
+        if hasattr(pg_errors, "CannotConnectNow") and isinstance(error, pg_errors.CannotConnectNow):
+            return _create_postgres_error(error, "57P03", ConnectionTimeoutError, "cannot connect now")
+
+        # SQL syntax errors
+        if isinstance(error, pg_errors.SyntaxError):
+            return _create_postgres_error(error, "42601", SQLParsingError, "SQL syntax error")
+
+    # Priority 2: Fall back to SQLSTATE code mapping using centralized utility
+    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
+    error_code = sqlstate_attr if sqlstate_attr is not None else None
+    if error_code:
+        exc_class = map_sqlstate_to_exception(error_code)
+        if exc_class:
+            return _create_postgres_error(error, error_code, exc_class, "database error")
+
+    # Priority 3: Default fallback
     return _create_postgres_error(error, error_code, SQLSpecError, "database error")

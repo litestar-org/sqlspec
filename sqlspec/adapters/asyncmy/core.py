@@ -5,11 +5,15 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
+    ConnectionTimeoutError,
     DatabaseConnectionError,
     DataError,
+    DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
@@ -38,9 +42,26 @@ __all__ = (
     "resolve_rowcount",
 )
 
+# MySQL error codes for constraint violations
 MYSQL_ER_DUP_ENTRY = 1062
 MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
+
+# MySQL error codes for permission/access errors
+MYSQL_ER_DBACCESS_DENIED = 1044
+MYSQL_ER_ACCESS_DENIED = 1045
+MYSQL_ER_TABLEACCESS_DENIED = 1142
+
+# MySQL error codes for transaction errors
+MYSQL_ER_LOCK_WAIT_TIMEOUT = 1205
+MYSQL_ER_LOCK_DEADLOCK = 1213
+
+# MySQL error codes for connection errors
+MYSQL_CR_CONNECTION_ERROR = 2002
+MYSQL_CR_CONN_HOST_ERROR = 2003
+MYSQL_CR_UNKNOWN_HOST = 2005
+MYSQL_CR_SERVER_GONE_ERROR = 2006
+MYSQL_CR_SERVER_LOST = 2013
 
 
 def _bool_to_int(value: bool) -> int:
@@ -171,6 +192,12 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     raising. This pattern is more robust for use in __exit__ handlers and
     avoids issues with exception control flow in different Python versions.
 
+    Mapping priority:
+    1. Specific error codes (most reliable for MySQL)
+    2. SQLSTATE codes (where available)
+    3. Generic error code ranges
+    4. Default SQLSpecError fallback
+
     Args:
         error: The AsyncMy exception to map
         logger: Optional logger for migration warnings
@@ -179,13 +206,16 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
         True to suppress expected migration errors, or a SQLSpec exception
     """
     error_code = error.args[0] if len(error.args) >= 1 and isinstance(error.args[0], int) else None
-    sqlstate = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
+    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
+    sqlstate = sqlstate_attr if sqlstate_attr is not None else None
 
+    # Migration-specific errors to suppress
     if error_code in {1061, 1091}:
         if logger is not None:
             logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", error)
         return True
 
+    # Integrity constraint violations
     if sqlstate == "23505" or error_code == MYSQL_ER_DUP_ENTRY:
         return _create_mysql_error(error, sqlstate, error_code, UniqueViolationError, "unique constraint violation")
     if sqlstate == "23503" or error_code in {1216, 1217, 1451, 1452}:
@@ -198,20 +228,44 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
         return _create_mysql_error(error, sqlstate, error_code, CheckViolationError, "check constraint violation")
     if sqlstate and sqlstate.startswith("23"):
         return _create_mysql_error(error, sqlstate, error_code, IntegrityError, "integrity constraint violation")
-    if sqlstate and sqlstate.startswith("42"):
-        return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
-    if sqlstate and sqlstate.startswith("08"):
-        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
+
+    # Permission/access errors (check specific codes first)
+    if error_code in {MYSQL_ER_DBACCESS_DENIED, MYSQL_ER_ACCESS_DENIED, MYSQL_ER_TABLEACCESS_DENIED}:
+        return _create_mysql_error(error, sqlstate, error_code, PermissionDeniedError, "access denied")
+    if sqlstate and sqlstate.startswith("28"):
+        return _create_mysql_error(error, sqlstate, error_code, PermissionDeniedError, "authorization error")
+
+    # Transaction errors (deadlock vs lock wait timeout)
+    if error_code == MYSQL_ER_LOCK_DEADLOCK:
+        return _create_mysql_error(error, sqlstate, error_code, DeadlockError, "deadlock detected")
+    if error_code == MYSQL_ER_LOCK_WAIT_TIMEOUT:
+        return _create_mysql_error(error, sqlstate, error_code, QueryTimeoutError, "lock wait timeout")
     if sqlstate and sqlstate.startswith("40"):
         return _create_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
-    if sqlstate and sqlstate.startswith("22"):
-        return _create_mysql_error(error, sqlstate, error_code, DataError, "data error")
-    if error_code in {2002, 2003, 2005, 2006, 2013}:
-        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
-    if error_code in {1205, 1213}:
-        return _create_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
+
+    # SQL syntax errors
+    if sqlstate and sqlstate.startswith("42"):
+        return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
     if error_code in range(1064, 1100):
         return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
+
+    # Connection errors
+    if sqlstate and sqlstate.startswith("08"):
+        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
+    if error_code == MYSQL_CR_SERVER_LOST:
+        return _create_mysql_error(error, sqlstate, error_code, ConnectionTimeoutError, "connection lost")
+    if error_code in {
+        MYSQL_CR_CONNECTION_ERROR,
+        MYSQL_CR_CONN_HOST_ERROR,
+        MYSQL_CR_UNKNOWN_HOST,
+        MYSQL_CR_SERVER_GONE_ERROR,
+    }:
+        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
+
+    # Data errors
+    if sqlstate and sqlstate.startswith("22"):
+        return _create_mysql_error(error, sqlstate, error_code, DataError, "data error")
+
     return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
 
 
