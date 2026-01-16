@@ -40,6 +40,7 @@ from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat,
 from sqlspec.typing import VersionInfo
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.schema import ValueT, to_value_type
 from sqlspec.utils.type_guards import has_asdict_method, is_dict_row, is_mapping_like
 
 if TYPE_CHECKING:
@@ -618,33 +619,119 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
         )
 
+    @overload
     def select_value(
         self,
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT]",
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "ValueT": ...
+
+    @overload
+    def select_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def select_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | Any":
         """Execute a select statement and return a single scalar value.
 
         Expects exactly one row with one column.
         Raises an exception if no rows or more than one row/column is returned.
+
+        Args:
+            statement: SQL statement or query builder to execute.
+            *parameters: Positional parameters for the statement.
+            value_type: Optional type to convert the result to. When provided,
+                the return value is converted to this type and the return type
+                is narrowed for type checkers. Supports int, float, str, bool,
+                datetime, date, time, Decimal, UUID, Path, dict, and list.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The scalar value, optionally converted to the specified type.
+
+        Raises:
+            ValueError: If no rows or more than one row/column is returned.
+            TypeError: If value_type is provided and conversion fails.
+
+        Examples:
+            Basic usage (returns Any):
+
+            >>> count = driver.select_value("SELECT COUNT(*) FROM users")
+
+            With type hint (returns int):
+
+            >>> count = driver.select_value(
+            ...     "SELECT COUNT(*) FROM users", value_type=int
+            ... )
+
+            With UUID conversion:
+
+            >>> user_id = driver.select_value(
+            ...     "SELECT id FROM users WHERE name = :name",
+            ...     {"name": "alice"},
+            ...     value_type=UUID,
+            ... )
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         try:
-            return result.scalar()
+            value = result.scalar()
         except ValueError as error:
             handle_single_row_error(error)
+
+        if value_type is not None:
+            return to_value_type(value, value_type)
+        return value
+
+    @overload
+    def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT": ...
+
+    @overload
+    def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any: ...
 
     def fetch_value(
         self,
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "ValueT | Any":
         """Execute a select statement and return a single scalar value.
 
         This is an alias for :meth:`select_value` provided for users familiar
@@ -657,33 +744,122 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             select_value(): Primary method with identical behavior
 
         """
-        return self.select_value(statement, *parameters, statement_config=statement_config, **kwargs)
+        return self.select_value(
+            statement, *parameters, value_type=value_type, statement_config=statement_config, **kwargs
+        )
+
+    @overload
+    def select_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | None": ...
+
+    @overload
+    def select_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any: ...
 
     def select_value_or_none(
         self,
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "ValueT | None | Any":
         """Execute a select statement and return a single scalar value or None.
 
         Returns None if no rows are found.
         Expects at most one row with one column.
         Raises an exception if more than one row is returned.
+
+        Args:
+            statement: SQL statement or query builder to execute.
+            *parameters: Positional parameters for the statement.
+            value_type: Optional type to convert the result to. When provided,
+                the return value is converted to this type and the return type
+                is narrowed to ``T | None`` for type checkers. Supports int, float,
+                str, bool, datetime, date, time, Decimal, UUID, Path, dict, and list.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The scalar value (optionally converted), or None if no rows found.
+
+        Raises:
+            ValueError: If more than one row is returned.
+            TypeError: If value_type is provided and conversion fails.
+
+        Examples:
+            Basic usage:
+
+            >>> email = driver.select_value_or_none(
+            ...     "SELECT email FROM users WHERE id = :id", {"id": 123}
+            ... )
+            >>> if email is not None:
+            ...     print(email)
+
+            With type hint:
+
+            >>> count = driver.select_value_or_none(
+            ...     "SELECT COUNT(*) FROM users WHERE active = true",
+            ...     value_type=int,
+            ... )
+            >>> if count is not None and count > 0:
+            ...     print(f"Found {count} active users")
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        return result.scalar_or_none()
+        value = result.scalar_or_none()
+
+        if value is None:
+            return None
+        if value_type is not None:
+            return to_value_type(value, value_type)
+        return value
+
+    @overload
+    def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | None": ...
+
+    @overload
+    def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any: ...
 
     def fetch_value_or_none(
         self,
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "ValueT | None | Any":
         """Execute a select statement and return a single scalar value or None.
 
         This is an alias for :meth:`select_value_or_none` provided for users familiar
@@ -697,7 +873,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             select_value_or_none(): Primary method with identical behavior
 
         """
-        return self.select_value_or_none(statement, *parameters, statement_config=statement_config, **kwargs)
+        return self.select_value_or_none(
+            statement, *parameters, value_type=value_type, statement_config=statement_config, **kwargs
+        )
 
     @overload
     def select_with_total(
