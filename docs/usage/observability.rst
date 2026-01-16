@@ -92,6 +92,87 @@ You can configure detailed SQL logging and sampling to reduce noise in productio
    :dedent: 4
    :no-upgrade:
 
+Logger Hierarchy
+----------------
+
+SQLSpec uses a hierarchical logger namespace that allows fine-grained control over log levels.
+This enables you to configure SQL execution logs independently from internal debug logs.
+
+.. code-block:: text
+
+    sqlspec                              # Root logger for all SQLSpec logs
+    ├── sqlspec.sql                      # SQL execution logs (SELECT, INSERT, etc.)
+    ├── sqlspec.cache                    # Cache operations (hit, miss, evict)
+    ├── sqlspec.driver                   # Driver base class operations
+    ├── sqlspec.core
+    │   ├── sqlspec.core.compiler        # SQL compilation
+    │   ├── sqlspec.core.splitter        # Statement splitting
+    │   └── sqlspec.core.statement       # Statement processing
+    ├── sqlspec.adapters
+    │   ├── sqlspec.adapters.asyncpg     # AsyncPG adapter
+    │   ├── sqlspec.adapters.psycopg     # Psycopg adapter
+    │   └── ...                          # Other adapters
+    └── sqlspec.observability
+        └── sqlspec.observability.lifecycle  # Lifecycle events
+
+**Common Configuration Patterns:**
+
+.. code-block:: python
+
+    import logging
+
+    # Pattern 1: Debug cache while keeping SQL logs at INFO
+    logging.getLogger("sqlspec").setLevel(logging.WARNING)
+    logging.getLogger("sqlspec.cache").setLevel(logging.DEBUG)
+
+    # Pattern 2: Show SQL queries, suppress internal logs
+    logging.getLogger("sqlspec").setLevel(logging.WARNING)
+    logging.getLogger("sqlspec.sql").setLevel(logging.INFO)
+
+    # Pattern 3: Disable all SQLSpec logs
+    logging.getLogger("sqlspec").setLevel(logging.CRITICAL)
+
+**Using the SQL_LOGGER_NAME constant:**
+
+.. code-block:: python
+
+    from sqlspec.observability import SQL_LOGGER_NAME
+
+    # Configure SQL logging level
+    logging.getLogger(SQL_LOGGER_NAME).setLevel(logging.INFO)
+
+Cache Logging
+~~~~~~~~~~~~~
+
+Cache debug logs include a ``cache_namespace`` field to identify which cache type
+generated the log. The five cache namespaces are:
+
+- ``statement`` - Compiled SQL statement cache
+- ``expression`` - Parsed expression cache
+- ``builder`` - Query builder cache
+- ``file`` - SQL file cache
+- ``optimized`` - Optimized expression cache
+
+Example cache log output with namespace:
+
+.. code-block:: text
+
+    cache.miss extra_fields={'cache_namespace': 'statement', 'cache_size': 0}
+    cache.hit  extra_fields={'cache_namespace': 'expression', 'cache_size': 42}
+
+SQL Execution Logs
+~~~~~~~~~~~~~~~~~~
+
+SQL execution logs use the operation type (SELECT, INSERT, UPDATE, DELETE, etc.)
+as the log message, making logs easier to scan visually.
+
+Example SQL log output:
+
+.. code-block:: text
+
+    SELECT  driver=AsyncpgDriver bind_key=primary duration_ms=3.5 rows=5 sql='SELECT ...'
+    INSERT  driver=AsyncpgDriver bind_key=primary duration_ms=1.2 rows=1 sql='INSERT ...'
+
 Cloud Log Formatters
 --------------------
 

@@ -17,14 +17,30 @@ if TYPE_CHECKING:
     from contextvars import ContextVar
 
 __all__ = (
+    "SQL_LOGGER_NAME",
     "SqlglotCommandFallbackFilter",
     "StructuredFormatter",
     "correlation_id_var",
     "get_correlation_id",
     "get_logger",
+    "log_with_context",
     "set_correlation_id",
     "suppress_erroneous_sqlglot_log_messages",
 )
+
+SQL_LOGGER_NAME = "sqlspec.sql"
+"""Logger name for SQL execution logs.
+
+Use this constant to configure SQL execution log levels independently
+from other SQLSpec logs::
+
+    import logging
+    from sqlspec.utils.logging import SQL_LOGGER_NAME
+
+    # Show SQL queries at INFO, suppress internal debug logs
+    logging.getLogger("sqlspec").setLevel(logging.WARNING)
+    logging.getLogger(SQL_LOGGER_NAME).setLevel(logging.INFO)
+"""
 
 _BASE_RECORD_KEYS: "set[str] | None" = None
 

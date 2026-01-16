@@ -62,7 +62,7 @@ CACHE_STATS_UPDATE_INTERVAL: Final = 100
 
 CACHE_KEY_SLOTS: Final = ("_hash", "_key_data")
 CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp", "access_count")
-LRU_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats")
+LRU_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats", "_namespace")
 CACHE_STATS_SLOTS: Final = ("hits", "misses", "evictions", "total_operations", "memory_usage")
 
 
@@ -199,18 +199,25 @@ class LRUCache:
 
     __slots__ = LRU_CACHE_SLOTS
 
-    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
+    def __init__(
+        self,
+        max_size: int = DEFAULT_MAX_SIZE,
+        ttl_seconds: int | None = DEFAULT_TTL_SECONDS,
+        namespace: str | None = None,
+    ) -> None:
         """Initialize LRU cache.
 
         Args:
             max_size: Maximum number of cache entries
             ttl_seconds: Time-to-live in seconds (None for no expiration)
+            namespace: Optional namespace identifier for logging context
         """
         self._cache: dict[CacheKey, CacheNode] = {}
         self._lock = threading.RLock()
         self._max_size = max_size
         self._ttl = ttl_seconds
         self._stats = CacheStats()
+        self._namespace = namespace
 
         self._head = CacheNode(CacheKey(()), None)
         self._tail = CacheNode(CacheKey(()), None)
@@ -231,7 +238,9 @@ class LRUCache:
             if node is None:
                 self._stats.record_miss()
                 if logger.isEnabledFor(logging.DEBUG):
-                    log_with_context(logger, logging.DEBUG, "cache.miss", cache_size=len(self._cache))
+                    log_with_context(
+                        logger, logging.DEBUG, "cache.miss", cache_namespace=self._namespace, cache_size=len(self._cache)
+                    )
                 return None
 
             ttl = self._ttl
@@ -244,7 +253,12 @@ class LRUCache:
                     self._stats.record_eviction()
                     if logger.isEnabledFor(logging.DEBUG):
                         log_with_context(
-                            logger, logging.DEBUG, "cache.evict", cache_size=len(self._cache), reason="expired"
+                            logger,
+                            logging.DEBUG,
+                            "cache.evict",
+                            cache_namespace=self._namespace,
+                            cache_size=len(self._cache),
+                            reason="expired",
                         )
                     return None
 
@@ -252,7 +266,9 @@ class LRUCache:
             node.access_count += 1
             self._stats.record_hit()
             if logger.isEnabledFor(logging.DEBUG):
-                log_with_context(logger, logging.DEBUG, "cache.hit", cache_size=len(self._cache))
+                log_with_context(
+                    logger, logging.DEBUG, "cache.hit", cache_namespace=self._namespace, cache_size=len(self._cache)
+                )
             return node.value
 
     def put(self, key: CacheKey, value: Any) -> None:
@@ -283,7 +299,12 @@ class LRUCache:
                     self._stats.record_eviction()
                     if logger.isEnabledFor(logging.DEBUG):
                         log_with_context(
-                            logger, logging.DEBUG, "cache.evict", cache_size=len(self._cache), reason="max_size"
+                            logger,
+                            logging.DEBUG,
+                            "cache.evict",
+                            cache_namespace=self._namespace,
+                            cache_size=len(self._cache),
+                            reason="max_size",
                         )
 
     def delete(self, key: CacheKey) -> bool:
@@ -676,7 +697,7 @@ class NamespacedCache:
         caches: dict[str, LRUCache] = {}
         for namespace, (_, size_getter) in NAMESPACED_CACHE_CONFIG.items():
             size = size_getter(config)
-            caches[namespace] = LRUCache(size, ttl_seconds)
+            caches[namespace] = LRUCache(size, ttl_seconds, namespace=namespace)
         return caches
 
     def _is_enabled(self, namespace: str) -> bool:
