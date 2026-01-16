@@ -472,7 +472,8 @@ def apply_column_pruning(
         After pruning:
             SELECT id, name FROM (SELECT id, name FROM users)
     """
-    from sqlglot import optimizer
+    from sqlglot.optimizer import pushdown_projections as pushdown_projections_module
+    from sqlglot.optimizer import qualify as qualify_module
 
     from sqlspec.core.cache import get_cache
 
@@ -489,14 +490,14 @@ def apply_column_pruning(
 
     # Apply qualification to resolve column references
     try:
-        qualified = optimizer.qualify.qualify(expression.copy(), dialect=dialect, validate_qualify_columns=False)
+        qualified = qualify_module.qualify(expression.copy(), dialect=dialect, validate_qualify_columns=False)
     except Exception:
         # If qualification fails, return unchanged expression
         return expression
 
     # Apply pushdown_projections to remove unused columns
     try:
-        pruned = optimizer.pushdown_projections.pushdown_projections(qualified, dialect=dialect)
+        pruned = pushdown_projections_module.pushdown_projections(qualified, dialect=dialect)
     except Exception:
         # If pushdown fails, return the qualified expression
         pruned = qualified
