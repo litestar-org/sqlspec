@@ -25,6 +25,7 @@ from sqlspec.protocols import (
     CursorMetadataProtocol,
     DictProtocol,
     HasAddListenerProtocol,
+    HasAsDictProtocol,
     HasConfigProtocol,
     HasConnectionConfigProtocol,
     HasDatabaseUrlAndBindKeyProtocol,
@@ -53,6 +54,7 @@ from sqlspec.protocols import (
     HasTypecodeSizedProtocol,
     HasValueProtocol,
     HasWhereProtocol,
+    MappingLikeProtocol,
     NotificationProtocol,
     PipelineCapableProtocol,
     QueryResultProtocol,
@@ -102,6 +104,7 @@ __all__ = (
     "has_add_listener",
     "has_array_interface",
     "has_arrow_table_stats",
+    "has_asdict_method",
     "has_config_attribute",
     "has_connection_config",
     "has_cursor_metadata",
@@ -157,6 +160,7 @@ __all__ = (
     "is_expression",
     "is_iterable_parameters",
     "is_local_path",
+    "is_mapping_like",
     "is_msgspec_struct",
     "is_msgspec_struct_with_field",
     "is_msgspec_struct_without_field",
@@ -407,6 +411,33 @@ def is_dict_row(row: Any) -> "TypeGuard[dict[str, Any]]":
         True if the row is a dictionary, False otherwise
     """
     return isinstance(row, dict)
+
+
+def is_mapping_like(obj: Any) -> "TypeGuard[MappingLikeProtocol]":
+    """Check if an object can be converted to dict via dict() constructor.
+
+    This matches database row types like sqlite3.Row, asyncpg.Record, psycopg.Row
+    that have keys() method and support __getitem__ access.
+
+    Args:
+        obj: The object to check
+
+    Returns:
+        True if the object has keys() method and __getitem__, False otherwise
+    """
+    return isinstance(obj, MappingLikeProtocol)
+
+
+def has_asdict_method(obj: Any) -> "TypeGuard[HasAsDictProtocol]":
+    """Check if an object has _asdict() method (e.g., NamedTuple).
+
+    Args:
+        obj: The object to check
+
+    Returns:
+        True if the object has _asdict() method, False otherwise
+    """
+    return isinstance(obj, HasAsDictProtocol)
 
 
 def is_iterable_parameters(parameters: Any) -> "TypeGuard[Sequence[Any]]":

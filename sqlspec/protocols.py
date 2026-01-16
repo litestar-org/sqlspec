@@ -37,6 +37,7 @@ __all__ = (
     "CursorMetadataProtocol",
     "DictProtocol",
     "HasAddListenerProtocol",
+    "HasAsDictProtocol",
     "HasConfigProtocol",
     "HasConnectionConfigProtocol",
     "HasDataProtocol",
@@ -68,6 +69,7 @@ __all__ = (
     "HasTypecodeSizedProtocol",
     "HasValueProtocol",
     "HasWhereProtocol",
+    "MappingLikeProtocol",
     "NotificationProtocol",
     "ObjectStoreProtocol",
     "PipelineCapableProtocol",
@@ -385,6 +387,36 @@ class DictProtocol(Protocol):
     """Protocol for objects with a __dict__ attribute."""
 
     __dict__: dict[str, Any]
+
+
+@runtime_checkable
+class MappingLikeProtocol(Protocol):
+    """Protocol for objects that can be converted to dict via dict() constructor.
+
+    This matches database row types like sqlite3.Row, asyncpg.Record, psycopg.Row
+    that support dictionary-like access with keys() method.
+    """
+
+    def keys(self) -> "Iterator[str]":
+        """Return an iterator over the keys."""
+        ...
+
+    def __getitem__(self, key: str) -> Any:
+        """Get item by key."""
+        ...
+
+
+@runtime_checkable
+class HasAsDictProtocol(Protocol):
+    """Protocol for objects with _asdict() method (e.g., NamedTuple).
+
+    Used for row types that don't support dict() constructor directly
+    but can be converted via _asdict() method.
+    """
+
+    def _asdict(self) -> "dict[str, Any]":
+        """Convert to dictionary."""
+        ...
 
 
 @runtime_checkable
