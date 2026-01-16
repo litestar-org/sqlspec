@@ -138,6 +138,7 @@ class TestSubclassBugFixes:
         assert result == datetime.time(12, 30, 45)
         assert type(result) is datetime.time
 
+
 # =============================================================================
 # Integer Conversion Tests
 # =============================================================================

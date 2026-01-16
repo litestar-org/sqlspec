@@ -234,6 +234,17 @@ def _is_foreign_key_metadata_type(schema_type: type) -> bool:
 
 
 def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
+    """Convert data to ForeignKeyMetadata schema type.
+
+    Handles both single items and lists for consistency with other converters.
+    """
+    if isinstance(data, list):
+        return [_convert_single_foreign_key_metadata(item, schema_type) for item in data]
+    return _convert_single_foreign_key_metadata(data, schema_type)
+
+
+def _convert_single_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
+    """Convert a single item to ForeignKeyMetadata."""
     if not is_dict(data):
         return data
     payload = {
@@ -436,13 +447,43 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
     return schema_type(**dict(data)) if is_dict(data) else data
 
 
-_SCHEMA_CONVERTERS: "dict[str, Callable[[Any, Any], Any]]" = {
-    "typed_dict": _convert_typed_dict,
-    "dataclass": _convert_dataclass,
-    "msgspec": _convert_msgspec,
-    "pydantic": _convert_pydantic,
-    "attrs": _convert_attrs,
-}
+# Cache for schema converters - maps type directly to converter callable (or None if unsupported)
+# Manual dict cache is faster than lru_cache for mypyc: direct dict[type] lookup vs decorated call
+_SCHEMA_CONVERTER_CACHE: "dict[type, Callable[[Any, Any], Any] | None]" = {}
+
+
+def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | None":
+    """Get the converter function for a schema type with caching.
+
+    This is optimized for mypyc: uses a plain dict cache instead of lru_cache,
+    and caches the callable directly instead of a string key.
+
+    Args:
+        schema_type: The schema type to get a converter for.
+
+    Returns:
+        Converter function if schema_type is a supported schema, None otherwise.
+    """
+    try:
+        return _SCHEMA_CONVERTER_CACHE[schema_type]
+    except KeyError:
+        # Determine converter - order by expected frequency
+        if is_typed_dict(schema_type):
+            conv: Callable[[Any, Any], Any] | None = _convert_typed_dict
+        elif is_dataclass(schema_type):
+            conv = _convert_dataclass
+        elif is_msgspec_struct(schema_type):
+            conv = _convert_msgspec
+        elif is_pydantic_model(schema_type):
+            conv = _convert_pydantic
+        elif is_attrs_schema(schema_type):
+            conv = _convert_attrs
+        elif _is_foreign_key_metadata_type(schema_type):
+            conv = _convert_foreign_key_metadata
+        else:
+            conv = None
+        _SCHEMA_CONVERTER_CACHE[schema_type] = conv  # pyright: ignore[reportArgumentType]
+        return conv
 
 
 @overload
@@ -478,16 +519,13 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
     if schema_type is None:
         return data
 
-    schema_type_key = _detect_schema_type(schema_type)
-    if schema_type_key is None:
-        if _is_foreign_key_metadata_type(schema_type):
-            if isinstance(data, list):
-                return [_convert_foreign_key_metadata(item, schema_type) for item in data]
-            return _convert_foreign_key_metadata(data, schema_type)
+    # Get cached converter - single dict lookup, no string indirection
+    conv = _get_schema_converter(schema_type)
+    if conv is None:
         msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
         raise SQLSpecError(msg)
 
-    return _SCHEMA_CONVERTERS[schema_type_key](data, schema_type)
+    return conv(data, schema_type)
 
 
 # =============================================================================
@@ -532,6 +570,11 @@ def _try_parse_json(value: str) -> Any:
 
 # Boolean true values for string conversion
 _BOOL_TRUE_VALUES: Final[frozenset[str]] = frozenset({"true", "1", "yes", "y", "t", "on"})
+
+# Types requiring strict type() identity check due to subclass gotchas:
+# - bool is subclass of int (isinstance(True, int) is True)
+# - datetime is subclass of date (isinstance(datetime(...), date) is True)
+_STRICT_IDENTITY_TYPES: Final[tuple[type, ...]] = (int, bool, datetime.date, datetime.time)
 
 
 def _convert_to_int(value: Any) -> int:
@@ -895,33 +938,20 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
         >>> to_value_type(False, int)
         0
     """
-    # Check if value_type is a schema type (Pydantic, dataclass, msgspec, attrs, TypedDict)
-    # This must come before the fast path to handle these types correctly
-    schema_type_key = _detect_schema_type(value_type)  # type: ignore[arg-type]
-    if schema_type_key is not None:
-        parsed = _ensure_json_parsed(value)
-        return cast("ValueT", to_schema(parsed, schema_type=value_type))
-
-    # Fast path: already correct type
-    # Use strict type check for types with problematic subclass relationships:
-    # - bool is a subclass of int (isinstance(True, int) is True)
-    # - datetime is a subclass of date (isinstance(datetime(...), date) is True)
-    # For these types, we must use type() identity to ensure correct behavior
-    if value_type in (int, bool, datetime.date, datetime.time):
-        # Strict check: type must match exactly
-        if type(value) is value_type:
-            return value
-    elif isinstance(value, value_type):
-        # Safe to use isinstance for types without problematic subclasses
+    # Fast path: already correct type (handles ~90% of cases)
+    # Uses strict type() identity which correctly handles subclass gotchas:
+    # - type(True) is int → False (bool is subclass of int)
+    # - type(datetime(...)) is date → False (datetime is subclass of date)
+    if type(value) is value_type:
         return value
 
-    # Type-specific conversions
+    # Scalar type conversions - most common cases, fast pointer comparisons under mypyc
     if value_type is int:
         return cast("ValueT", _convert_to_int(value))
-    if value_type is float:
-        return cast("ValueT", _convert_to_float(value))
     if value_type is str:
         return cast("ValueT", str(value))
+    if value_type is float:
+        return cast("ValueT", _convert_to_float(value))
     if value_type is bool:
         return cast("ValueT", _convert_to_bool(value))
     if value_type is datetime.datetime:
@@ -941,7 +971,14 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
     if value_type is list:
         return cast("ValueT", _convert_to_list(value))
 
-    # Fallback: try direct construction
+    # Schema types (Pydantic, dataclass, msgspec, attrs, TypedDict)
+    # Deferred after scalar checks to avoid overhead for common scalar queries
+    schema_type_key = _detect_schema_type(value_type)  # type: ignore[arg-type]
+    if schema_type_key is not None:
+        parsed = _ensure_json_parsed(value)
+        return cast("ValueT", to_schema(parsed, schema_type=value_type))
+
+    # Fallback: try direct construction for custom types
     try:
         return value_type(value)  # type: ignore[call-arg]
     except (TypeError, ValueError) as e:
