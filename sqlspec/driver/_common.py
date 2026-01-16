@@ -105,6 +105,79 @@ def _select_dominant_style(
     return cast("ParameterStyle", best_style)
 
 
+def _extract_pagination_placeholders_from_expression(expression: "exp.Expression") -> "set[str]":
+    """Extract named placeholder names from LIMIT and OFFSET clauses of an expression.
+
+    Args:
+        expression: A SQLGlot SELECT expression to scan.
+
+    Returns:
+        Set of placeholder names found in LIMIT/OFFSET clauses.
+    """
+    pagination_placeholders: set[str] = set()
+
+    # Extract from LIMIT clause
+    limit_clause = expression.args.get("limit")
+    if limit_clause:
+        for node in limit_clause.walk():
+            if isinstance(node, exp.Placeholder) and node.this is not None:
+                pagination_placeholders.add(str(node.this))
+
+    # Extract from OFFSET clause
+    offset_clause = expression.args.get("offset")
+    if offset_clause:
+        for node in offset_clause.walk():
+            if isinstance(node, exp.Placeholder) and node.this is not None:
+                pagination_placeholders.add(str(node.this))
+
+    return pagination_placeholders
+
+
+def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
+    """Extract placeholder names from LIMIT and OFFSET clauses.
+
+    These are the placeholders that should be EXCLUDED from count queries,
+    since count queries remove LIMIT/OFFSET clauses.
+
+    First tries to use statement_expression if it has named placeholders.
+    For raw SQL strings where statement_expression is None or has positional
+    placeholders, parses the raw_sql once to extract the names.
+
+    Args:
+        original_sql: The SQL object to extract pagination placeholders from.
+
+    Returns:
+        Set of placeholder names found in LIMIT/OFFSET clauses.
+    """
+    import sqlglot
+
+    # First try: use statement_expression if available and has named placeholders
+    stmt_expr = original_sql.statement_expression
+    if stmt_expr is not None:
+        placeholders = _extract_pagination_placeholders_from_expression(stmt_expr)
+        if placeholders:
+            return placeholders
+        # Check if it has any named placeholders at all - if not, fall through
+        has_named = any(isinstance(n, exp.Placeholder) and n.this is not None for n in stmt_expr.walk())
+        if has_named:
+            # Expression has named placeholders but none in LIMIT/OFFSET
+            return set()
+
+    # Fallback: parse raw_sql to extract LIMIT/OFFSET placeholder names
+    # This is necessary for raw SQL strings before compile() or after
+    # compile() converts placeholders to positional style
+    raw_sql = original_sql.raw_sql
+    if not raw_sql:
+        return set()
+
+    try:
+        parsed = sqlglot.parse_one(raw_sql)
+        return _extract_pagination_placeholders_from_expression(parsed)
+    except Exception:
+        # If parsing fails, return empty set (conservative - don't filter anything)
+        return set()
+
+
 class SyncExceptionHandler(Protocol):
     """Protocol for synchronous exception handlers with deferred exception pattern.
 
@@ -1414,6 +1487,10 @@ class CommonDriverAttributesMixin:
         Copies any existing ``WITH`` clause (sqlglot stores it under ``with_``) and falls back to inferred tables if the FROM clause is missing.
         When GROUP BY, JOINs, or a WITH clause exist we wrap the payload in a subquery before counting.
         """
+        # Extract pagination placeholders BEFORE compile() transforms them
+        # Uses statement_expression if available, falls back to parsing raw_sql
+        pagination_params = _extract_pagination_placeholders(original_sql)
+
         if not original_sql.expression:
             original_sql.compile()
 
@@ -1485,22 +1562,28 @@ class CommonDriverAttributesMixin:
 
             if cte is not None:
                 count_expr.set("with_", cte.copy())
+            # Filter out pagination parameters (limit/offset) captured before compile()
+            filtered_named_params = {
+                k: v for k, v in original_sql.named_parameters.items() if k not in pagination_params
+            }
             return SQL(
                 count_expr,
                 *original_sql.positional_parameters,
                 statement_config=original_sql.statement_config,
-                **original_sql.named_parameters,
+                **filtered_named_params,
             )
 
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
         if cte is not None:
             count_expr.set("with_", cte.copy())
+        # Filter out pagination parameters (limit/offset) captured before compile()
+        filtered_named_params = {k: v for k, v in original_sql.named_parameters.items() if k not in pagination_params}
         return SQL(
             count_expr,
             *original_sql.positional_parameters,
             statement_config=original_sql.statement_config,
-            **original_sql.named_parameters,
+            **filtered_named_params,
         )
 
     def _add_count_over_column(self, original_sql: "SQL", alias: str = "_total_count") -> "SQL":
