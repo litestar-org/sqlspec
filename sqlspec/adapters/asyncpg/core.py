@@ -10,16 +10,18 @@ import asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
-    DatabaseConnectionError,
-    DataError,
+    ConnectionTimeoutError,
+    DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
-    OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
+    SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
-    TransactionError,
     UniqueViolationError,
+    map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.logging import get_logger
@@ -305,13 +307,19 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     raising. This pattern is more robust for use in __aexit__ handlers and
     avoids issues with exception control flow in different Python versions.
 
+    Mapping priority:
+    1. Native asyncpg exception types (isinstance checks - most reliable)
+    2. SQLSTATE code via centralized utility
+    3. Generic SQLSpecError fallback
+
     Args:
         error: The asyncpg exception to map
 
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    # Check specific exception types first
+    # Priority 1: Check specific exception types first (most reliable)
+    # Integrity constraint violations
     if isinstance(error, asyncpg.exceptions.UniqueViolationError):
         return _create_postgres_error(error, "23505", UniqueViolationError, "unique constraint violation")
     if isinstance(error, asyncpg.exceptions.ForeignKeyViolationError):
@@ -320,34 +328,46 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
         return _create_postgres_error(error, "23502", NotNullViolationError, "not-null constraint violation")
     if isinstance(error, asyncpg.exceptions.CheckViolationError):
         return _create_postgres_error(error, "23514", CheckViolationError, "check constraint violation")
+    if isinstance(error, asyncpg.exceptions.IntegrityConstraintViolationError):
+        return _create_postgres_error(error, "23000", IntegrityError, "integrity constraint violation")
+
+    # Transaction and serialization errors
+    if isinstance(error, asyncpg.exceptions.DeadlockDetectedError):
+        return _create_postgres_error(error, "40P01", DeadlockError, "deadlock detected")
+    if isinstance(error, asyncpg.exceptions.SerializationError):
+        return _create_postgres_error(error, "40001", SerializationConflictError, "serialization failure")
+
+    # Query timeout/cancellation
+    if isinstance(error, asyncpg.exceptions.QueryCanceledError):
+        return _create_postgres_error(error, "57014", QueryTimeoutError, "query canceled")
+
+    # Permission/authentication errors
+    if isinstance(error, asyncpg.exceptions.InsufficientPrivilegeError):
+        return _create_postgres_error(error, "42501", PermissionDeniedError, "insufficient privilege")
+    if isinstance(error, asyncpg.exceptions.InvalidPasswordError):
+        return _create_postgres_error(error, "28P01", PermissionDeniedError, "invalid password")
+    if isinstance(error, asyncpg.exceptions.InvalidAuthorizationSpecificationError):
+        return _create_postgres_error(error, "28000", PermissionDeniedError, "authorization error")
+
+    # Connection errors
+    if isinstance(error, asyncpg.exceptions.ConnectionDoesNotExistError):
+        return _create_postgres_error(error, "08003", ConnectionTimeoutError, "connection does not exist")
+    if isinstance(error, asyncpg.exceptions.CannotConnectNowError):
+        return _create_postgres_error(error, "57P03", ConnectionTimeoutError, "cannot connect now")
+
+    # SQL syntax errors
     if isinstance(error, asyncpg.exceptions.PostgresSyntaxError):
         return _create_postgres_error(error, "42601", SQLParsingError, "SQL syntax error")
 
-    # Fall back to SQLSTATE code mapping
-    error_code = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
-    if not error_code:
-        return _create_postgres_error(error, None, SQLSpecError, "database error")
+    # Priority 2: Fall back to SQLSTATE code mapping using centralized utility
+    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
+    error_code = sqlstate_attr if sqlstate_attr is not None else None
+    if error_code:
+        exc_class = map_sqlstate_to_exception(error_code)
+        if exc_class:
+            return _create_postgres_error(error, error_code, exc_class, "database error")
 
-    if error_code == "23505":
-        return _create_postgres_error(error, error_code, UniqueViolationError, "unique constraint violation")
-    if error_code == "23503":
-        return _create_postgres_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
-    if error_code == "23502":
-        return _create_postgres_error(error, error_code, NotNullViolationError, "not-null constraint violation")
-    if error_code == "23514":
-        return _create_postgres_error(error, error_code, CheckViolationError, "check constraint violation")
-    if error_code.startswith("23"):
-        return _create_postgres_error(error, error_code, IntegrityError, "integrity constraint violation")
-    if error_code.startswith("42"):
-        return _create_postgres_error(error, error_code, SQLParsingError, "SQL syntax error")
-    if error_code.startswith("08"):
-        return _create_postgres_error(error, error_code, DatabaseConnectionError, "connection error")
-    if error_code.startswith("40"):
-        return _create_postgres_error(error, error_code, TransactionError, "transaction error")
-    if error_code.startswith("22"):
-        return _create_postgres_error(error, error_code, DataError, "data error")
-    if error_code.startswith(("53", "54", "55", "57", "58")):
-        return _create_postgres_error(error, error_code, OperationalError, "operational error")
+    # Priority 3: Default fallback
     return _create_postgres_error(error, error_code, SQLSpecError, "database error")
 
 

@@ -5,10 +5,13 @@ from typing import Any, Final
 STACK_SQL_PREVIEW_LIMIT: Final[int] = 120
 
 __all__ = (
+    "SQLSTATE_EXCEPTION_MAP",
     "CheckViolationError",
     "ConfigResolverError",
+    "ConnectionTimeoutError",
     "DataError",
     "DatabaseConnectionError",
+    "DeadlockError",
     "DialectNotSupportedError",
     "EventChannelError",
     "FileNotFoundInStorageError",
@@ -23,6 +26,8 @@ __all__ = (
     "NotNullViolationError",
     "OperationalError",
     "OutOfOrderMigrationError",
+    "PermissionDeniedError",
+    "QueryTimeoutError",
     "RepositoryError",
     "SQLBuilderError",
     "SQLConversionError",
@@ -38,6 +43,7 @@ __all__ = (
     "TransactionError",
     "TransactionRetryError",
     "UniqueViolationError",
+    "map_sqlstate_to_exception",
 )
 
 
@@ -55,7 +61,7 @@ class SQLSpecError(Exception):
         """
         str_args = [str(arg) for arg in args if arg]
         if not detail:
-            detail = str_args[0] if str_args else self.detail
+            detail = str_args[0] if str_args else ""
         self.detail = detail
         if detail and detail not in str_args:
             str_args = [detail, *str_args]
@@ -73,7 +79,7 @@ class SQLSpecError(Exception):
         return " ".join(parts).strip()
 
 
-class MissingDependencyError(SQLSpecError, ImportError):
+class MissingDependencyError(SQLSpecError):
     """Raised when a required dependency is not installed."""
 
     def __init__(self, package: str, install_package: str | None = None) -> None:
@@ -174,6 +180,28 @@ class DatabaseConnectionError(SQLSpecError):
     """Database connection error (invalid credentials, network failure, etc.)."""
 
 
+class PermissionDeniedError(DatabaseConnectionError):
+    """Database access denied due to insufficient privileges.
+
+    Raised when:
+    - User lacks privileges for the operation (SQLSTATE 42501)
+    - Invalid credentials provided (SQLSTATE 28000/28P01)
+    - Database access denied (MySQL 1044/1045/1142)
+    - Oracle insufficient privileges (ORA-01031)
+    """
+
+
+class ConnectionTimeoutError(DatabaseConnectionError):
+    """Database connection attempt timed out.
+
+    Raised when:
+    - TCP connection timeout to database server
+    - DNS resolution timeout
+    - SSL/TLS handshake timeout
+    - Oracle connect timeout (ORA-12170)
+    """
+
+
 class TransactionError(SQLSpecError):
     """Transaction error (rollback, deadlock, serialization failure)."""
 
@@ -184,6 +212,19 @@ class SerializationConflictError(TransactionError):
 
 class TransactionRetryError(TransactionError):
     """Transaction failed after retries were exhausted."""
+
+
+class DeadlockError(TransactionError):
+    """Deadlock detected during transaction execution.
+
+    Raised when:
+    - PostgreSQL deadlock detected (SQLSTATE 40P01)
+    - MySQL deadlock detected (Error 1213)
+    - Oracle deadlock detected (ORA-00060)
+    - SQLite database locked (SQLITE_LOCKED)
+
+    Applications should typically retry the transaction when this error occurs.
+    """
 
 
 class DataError(SQLSpecError):
@@ -229,6 +270,17 @@ class StackExecutionError(SQLSpecError):
 
 class OperationalError(SQLSpecError):
     """Operational database error (timeout, disk full, resource limit)."""
+
+
+class QueryTimeoutError(OperationalError):
+    """Query execution timed out or was canceled.
+
+    Raised when:
+    - Statement timeout exceeded (SQLSTATE 57014)
+    - Query canceled by user/operator
+    - Lock wait timeout exceeded (MySQL 1205)
+    - Oracle user requested cancel (ORA-01013)
+    """
 
 
 class StorageOperationFailedError(SQLSpecError):
@@ -306,6 +358,65 @@ class OutOfOrderMigrationError(MigrationError):
     Out-of-order migrations occur when a pending migration has a timestamp
     earlier than already-applied migrations, typically from late-merging branches.
     """
+
+
+# SQLSTATE class code length (first 2 characters of 5-character SQLSTATE)
+SQLSTATE_CLASS_CODE_LEN: Final[int] = 2
+
+# SQLSTATE to exception mapping for database-agnostic error translation
+SQLSTATE_EXCEPTION_MAP: Final[dict[str, type[SQLSpecError]]] = {
+    # Exact SQLSTATE matches (5 characters) - most specific
+    "23505": UniqueViolationError,
+    "23503": ForeignKeyViolationError,
+    "23502": NotNullViolationError,
+    "23514": CheckViolationError,
+    "40001": SerializationConflictError,
+    "40P01": DeadlockError,
+    "57014": QueryTimeoutError,
+    # Class-level matches (2 characters) - broader categories
+    "02": NotFoundError,
+    "08": DatabaseConnectionError,
+    "22": DataError,
+    "23": IntegrityError,
+    "28": PermissionDeniedError,
+    "40": TransactionError,
+    "42": SQLParsingError,
+    "53": OperationalError,
+    "54": OperationalError,
+    "55": OperationalError,
+    "57": OperationalError,
+    "58": OperationalError,
+}
+
+
+def map_sqlstate_to_exception(sqlstate: str | None) -> type[SQLSpecError] | None:
+    """Map a SQLSTATE code to a SQLSpec exception class.
+
+    Checks in order of specificity:
+    1. Exact 5-character match (e.g., "23505" → UniqueViolationError)
+    2. 2-character class match (e.g., "23" → IntegrityError)
+
+    Args:
+        sqlstate: 5-character SQLSTATE code (e.g., "23505")
+
+    Returns:
+        Matching exception class or None if not mapped
+    """
+    if not sqlstate:
+        return None
+
+    # Cache global in local for faster access in mypyc
+    exc_map = SQLSTATE_EXCEPTION_MAP
+
+    # Single lookup instead of in + []
+    if exc_class := exc_map.get(sqlstate):
+        return exc_class
+
+    # Class prefix lookup
+    if len(sqlstate) >= SQLSTATE_CLASS_CODE_LEN and (exc_class := exc_map.get(sqlstate[:SQLSTATE_CLASS_CODE_LEN])):
+        return exc_class
+
+    return None
 
 
 @contextmanager

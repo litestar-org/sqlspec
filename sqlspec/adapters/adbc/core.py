@@ -15,15 +15,17 @@ from sqlspec.core import (
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
-    DataError,
+    DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
-    TransactionError,
     UniqueViolationError,
+    map_sqlstate_to_exception,
 )
 from sqlspec.typing import Empty
 from sqlspec.utils.module_loader import import_string
@@ -424,15 +426,22 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     raising. This pattern is more robust for use in __exit__ handlers and
     avoids issues with exception control flow in different Python versions.
 
+    Mapping priority:
+    1. SQLSTATE codes (most reliable for ADBC drivers)
+    2. Error message patterns
+    3. Default SQLSpecError fallback
+
     Args:
         error: The ADBC exception to map
 
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    sqlstate = error.sqlstate if has_sqlstate(error) and error.sqlstate is not None else None
+    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
+    sqlstate = sqlstate_attr if sqlstate_attr is not None else None
 
     if sqlstate:
+        # Use centralized SQLSTATE mapping for specific codes
         if sqlstate == "23505":
             return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
         if sqlstate == "23503":
@@ -441,20 +450,36 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
             return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
         if sqlstate == "23514":
             return _create_adbc_error(error, CheckViolationError, "check constraint violation")
-        if sqlstate.startswith("23"):
-            return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
-        if sqlstate.startswith("42"):
-            return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
-        if sqlstate.startswith("08"):
-            return _create_adbc_error(error, DatabaseConnectionError, "connection error")
-        if sqlstate.startswith("40"):
-            return _create_adbc_error(error, TransactionError, "transaction error")
-        if sqlstate.startswith("22"):
-            return _create_adbc_error(error, DataError, "data error")
+
+        # Deadlock and serialization errors
+        if sqlstate == "40P01":
+            return _create_adbc_error(error, DeadlockError, "deadlock detected")
+        if sqlstate == "40001":
+            return _create_adbc_error(error, DeadlockError, "serialization failure")
+
+        # Query timeout/cancellation
+        if sqlstate == "57014":
+            return _create_adbc_error(error, QueryTimeoutError, "query canceled")
+
+        # Permission errors
+        if sqlstate == "42501":
+            return _create_adbc_error(error, PermissionDeniedError, "insufficient privilege")
+        if sqlstate == "28000":
+            return _create_adbc_error(error, PermissionDeniedError, "invalid authorization")
+
+        # Use centralized mapping for SQLSTATE class prefixes
+        exc_class = map_sqlstate_to_exception(sqlstate)
+        if exc_class is not None and exc_class is not SQLSpecError:
+            description = _get_sqlstate_description(sqlstate)
+            return _create_adbc_error(error, exc_class, description)
+
+        # Fallback for unmapped SQLSTATE codes
         return _create_adbc_error(error, SQLSpecError, "database error")
 
+    # Message-based fallback when no SQLSTATE is available
     error_msg = str(error).lower()
 
+    # Constraint violations
     if "unique" in error_msg or "duplicate" in error_msg:
         return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
     if "foreign key" in error_msg:
@@ -465,11 +490,51 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
         return _create_adbc_error(error, CheckViolationError, "check constraint violation")
     if "constraint" in error_msg:
         return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
+
+    # Deadlock/lock patterns
+    if "deadlock" in error_msg:
+        return _create_adbc_error(error, DeadlockError, "deadlock detected")
+    if "serialization" in error_msg or "concurrent update" in error_msg:
+        return _create_adbc_error(error, DeadlockError, "serialization failure")
+
+    # Timeout/cancellation patterns
+    if "timeout" in error_msg or "cancel" in error_msg or "interrupt" in error_msg:
+        return _create_adbc_error(error, QueryTimeoutError, "query timeout")
+
+    # Permission patterns
+    if "permission" in error_msg or "denied" in error_msg or "unauthorized" in error_msg:
+        return _create_adbc_error(error, PermissionDeniedError, "permission denied")
+
+    # Syntax errors
     if "syntax" in error_msg:
         return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
+
+    # Connection errors
     if "connection" in error_msg or "connect" in error_msg:
         return _create_adbc_error(error, DatabaseConnectionError, "connection error")
+
     return _create_adbc_error(error, SQLSpecError, "database error")
+
+
+_SQLSTATE_CLASS_CODE_LEN = 2
+
+# Module-level SQLSTATE descriptions (mypyc optimization - avoid dict creation per call)
+_SQLSTATE_DESCRIPTIONS: dict[str, str] = {
+    "23": "integrity constraint violation",
+    "40": "transaction error",
+    "42": "SQL syntax error",
+    "08": "connection error",
+    "22": "data error",
+    "28": "authorization error",
+    "57": "operational error",
+    "02": "no data",
+}
+
+
+def _get_sqlstate_description(sqlstate: str) -> str:
+    """Get a human-readable description for a SQLSTATE code class."""
+    class_code = sqlstate[:_SQLSTATE_CLASS_CODE_LEN] if len(sqlstate) >= _SQLSTATE_CLASS_CODE_LEN else sqlstate
+    return _SQLSTATE_DESCRIPTIONS.get(class_code, "database error")
 
 
 def _identity(value: Any) -> Any:

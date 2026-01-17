@@ -14,6 +14,8 @@ from sqlspec.exceptions import (
     NotFoundError,
     NotNullViolationError,
     OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -213,6 +215,11 @@ def create_mapped_exception(exc_type: Any, error: Any) -> SQLSpecError:
     raising. This pattern is more robust for use in __exit__ handlers and
     avoids issues with exception control flow in different Python versions.
 
+    Mapping priority:
+    1. Exception type name patterns (most reliable for DuckDB)
+    2. Error message patterns
+    3. Default SQLSpecError fallback
+
     Args:
         exc_type: The exception type (class)
         error: The DuckDB exception to map
@@ -223,6 +230,7 @@ def create_mapped_exception(exc_type: Any, error: Any) -> SQLSpecError:
     error_msg = str(error).lower()
     exc_name = exc_type.__name__.lower()
 
+    # Constraint violations (check type name first, then message patterns)
     if "constraintexception" in exc_name:
         if "unique" in error_msg or "duplicate" in error_msg:
             return _create_duckdb_error(error, UniqueViolationError, "unique constraint violation")
@@ -234,14 +242,34 @@ def create_mapped_exception(exc_type: Any, error: Any) -> SQLSpecError:
             return _create_duckdb_error(error, CheckViolationError, "check constraint violation")
         return _create_duckdb_error(error, IntegrityError, "integrity constraint violation")
 
+    # Catalog/schema errors
     if "catalogexception" in exc_name:
         return _create_duckdb_error(error, NotFoundError, "catalog error")
+
+    # SQL parsing errors
     if "parserexception" in exc_name or "binderexception" in exc_name:
         return _create_duckdb_error(error, SQLParsingError, "SQL parsing error")
+
+    # Permission/access errors (DuckDB can have file permission issues)
+    if "permissionexception" in exc_name:
+        return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
+    if "permission denied" in error_msg or "access denied" in error_msg:
+        return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
+
+    # Interrupt/cancellation errors (DuckDB supports query interruption)
+    if "interruptexception" in exc_name:
+        return _create_duckdb_error(error, QueryTimeoutError, "query interrupted")
+    if "interrupt" in error_msg or "cancel" in error_msg:
+        return _create_duckdb_error(error, QueryTimeoutError, "query canceled")
+
+    # I/O errors
     if "ioexception" in exc_name:
         return _create_duckdb_error(error, OperationalError, "operational error")
+
+    # Data type errors
     if "conversionexception" in exc_name or "type mismatch" in error_msg:
         return _create_duckdb_error(error, DataError, "data error")
+
     return _create_duckdb_error(error, SQLSpecError, "database error")
 
 

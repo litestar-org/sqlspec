@@ -7,9 +7,11 @@ from google.api_core import exceptions as api_exceptions
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
-    DatabaseConnectionError,
+    DeadlockError,
     NotFoundError,
     OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -169,20 +171,46 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     raising. This pattern is more robust for use in __exit__ handlers and
     avoids issues with exception control flow in different Python versions.
 
+    Mapping priority:
+    1. Native google.api_core exception types (isinstance checks)
+    2. Default SQLSpecError fallback
+
     Args:
         error: The Spanner exception to map
 
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    # Integrity errors
     if isinstance(error, api_exceptions.AlreadyExists):
         return _create_spanner_error(error, UniqueViolationError, "resource already exists")
+
+    # Resource not found
     if isinstance(error, api_exceptions.NotFound):
         return _create_spanner_error(error, NotFoundError, "resource not found")
+
+    # SQL/argument errors
     if isinstance(error, api_exceptions.InvalidArgument):
         return _create_spanner_error(error, SQLParsingError, "invalid query or argument")
+
+    # Permission/authentication errors
     if isinstance(error, api_exceptions.PermissionDenied):
-        return _create_spanner_error(error, DatabaseConnectionError, "permission denied")
+        return _create_spanner_error(error, PermissionDeniedError, "permission denied")
+    if isinstance(error, api_exceptions.Unauthenticated):
+        return _create_spanner_error(error, PermissionDeniedError, "authentication failed")
+
+    # Transaction errors (deadlock/abort)
+    if isinstance(error, api_exceptions.Aborted):
+        return _create_spanner_error(error, DeadlockError, "transaction aborted")
+
+    # Query timeout/cancellation
+    if isinstance(error, api_exceptions.Cancelled):
+        return _create_spanner_error(error, QueryTimeoutError, "operation cancelled")
+    if isinstance(error, api_exceptions.DeadlineExceeded):
+        return _create_spanner_error(error, QueryTimeoutError, "deadline exceeded")
+
+    # Service/operational errors
     if isinstance(error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests)):
         return _create_spanner_error(error, OperationalError, "service unavailable or rate limited")
+
     return _create_spanner_error(error, SQLSpecError, "error")
