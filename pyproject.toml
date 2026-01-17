@@ -182,6 +182,7 @@ exclude = [
 include = [
   "sqlspec/core/**/*.py",                  # Core module
   "sqlspec/builder/**/*.py",               # Builder module
+  "sqlspec/exceptions.py",                 # Exceptions module
   "sqlspec/loader.py",                     # Loader module
   "sqlspec/observability/**/*.py",         # Observability utilities
   "sqlspec/driver/**/*.py",                # Driver module
