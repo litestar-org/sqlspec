@@ -111,30 +111,17 @@ jobs:
           PYTEST_ADDOPTS: "--max-worker-restart=0 -s"
         run: timeout 900s uv run pytest -n 2 --dist=loadgroup
 
-  test-linux-freethreaded:
-    runs-on: ubuntu-latest
-    continue-on-error: true  # Experimental - don't fail build for freethreading issues
-    timeout-minutes: 30
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-
-      - name: Set up Python 3.14t (free-threaded)
-        run: uv python install 3.14t
-
-      - name: Install dependencies
-        # Use minimal extras - many binary packages don't have cp314t wheels yet
-        run: uv sync --extra aiosqlite --extra duckdb --dev
-
-      - name: Test
-        env:
-          PYTHONFAULTHANDLER: "1"
-          PYTEST_ADDOPTS: "--max-worker-restart=0 -s"
-        # Run only tests that don't require unavailable binary dependencies
-        run: timeout 900s uv run pytest tests/unit -n 2 --dist=loadgroup
+  # test-linux-freethreaded:
+  #   # Disabled: cp314t ecosystem not mature enough yet (missing binary wheels, long build times)
+  #   runs-on: ubuntu-latest
+  #   continue-on-error: true
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: astral-sh/setup-uv@v3
+  #     - run: uv python install 3.14t
+  #     - run: uv sync --extra aiosqlite --extra duckdb --dev
+  #     - run: uv run pytest tests/unit -n 2 --dist=loadgroup
 
   # test-windows:
   #   runs-on: windows-latest
