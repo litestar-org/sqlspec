@@ -61,7 +61,7 @@ class SQLSpecError(Exception):
         """
         str_args = [str(arg) for arg in args if arg]
         if not detail:
-            detail = str_args[0] if str_args else self.detail
+            detail = str_args[0] if str_args else ""
         self.detail = detail
         if detail and detail not in str_args:
             str_args = [detail, *str_args]
