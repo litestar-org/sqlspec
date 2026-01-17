@@ -14,6 +14,17 @@ name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
 version = "0.38.0"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
+    "Typing :: Typed",
+]
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
