@@ -1787,7 +1787,7 @@ class TestConfigDrivenParseNormalization:
             supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
         )
 
-        needs_normalization = processor._needs_parse_normalization(param_info, config)
+        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
         assert needs_normalization is True
 
     def test_no_normalization_when_style_in_supported(
@@ -1803,7 +1803,7 @@ class TestConfigDrivenParseNormalization:
             supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
         )
 
-        needs_normalization = processor._needs_parse_normalization(param_info, config)
+        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
         assert needs_normalization is False
 
     def test_normalization_converts_to_default_style(
@@ -1818,7 +1818,7 @@ class TestConfigDrivenParseNormalization:
             supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
         )
 
-        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)
+        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
 
         # Should have converted to NUMERIC ($1)
         assert "%(name)s" not in normalized_sql
@@ -1836,7 +1836,7 @@ class TestConfigDrivenParseNormalization:
             supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
         )
 
-        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)
+        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
         assert normalized_sql == sql
 
     def test_none_supported_styles_defaults_to_default_style(
@@ -1855,12 +1855,12 @@ class TestConfigDrivenParseNormalization:
         # SQL with NUMERIC should NOT need normalization
         sql_numeric = "SELECT * FROM t WHERE id = $1"
         param_info_numeric = validator.extract_parameters(sql_numeric)
-        assert processor._needs_parse_normalization(param_info_numeric, config) is False
+        assert processor._needs_parse_normalization(param_info_numeric, config) is False  # pyright: ignore
 
         # SQL with NAMED_PYFORMAT SHOULD need normalization (not in default set)
         sql_pyformat = "SELECT * FROM t WHERE id = %(name)s"
         param_info_pyformat = validator.extract_parameters(sql_pyformat)
-        assert processor._needs_parse_normalization(param_info_pyformat, config) is True
+        assert processor._needs_parse_normalization(param_info_pyformat, config) is True  # pyright: ignore
 
     def test_multiple_unsupported_parameters_all_normalized(
         self, processor: ParameterProcessor, validator: ParameterValidator
@@ -1873,7 +1873,7 @@ class TestConfigDrivenParseNormalization:
             default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles={ParameterStyle.NUMERIC}
         )
 
-        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)
+        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
 
         # No pyformat placeholders should remain
         assert "%(a)s" not in normalized_sql
