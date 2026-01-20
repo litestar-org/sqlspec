@@ -581,18 +581,18 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     @overload
     def provide_request_session(
         self,
-        key: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]",
+        key: "SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT] | type[SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT]]",
         state: "State",
         scope: "Scope",
-    ) -> "SyncDriverAdapterBase": ...
+    ) -> "DriverT": ...
 
     @overload
     def provide_request_session(
         self,
-        key: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
+        key: "AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT] | type[AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT]]",
         state: "State",
         scope: "Scope",
-    ) -> "AsyncDriverAdapterBase": ...
+    ) -> "DriverT": ...
 
     @overload
     def provide_request_session(
@@ -625,9 +625,31 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             self._raise_missing_connection(plugin_state.connection_key)
         return self._create_session(plugin_state, connection, scope)
 
+    @overload
     def provide_request_session_sync(
-        self, key: "str | SyncConfigT | type[SyncConfigT]", state: "State", scope: "Scope"
-    ) -> "SyncDriverAdapterBase":
+        self,
+        key: "SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
+
+    @overload
+    def provide_request_session_sync(
+        self,
+        key: "type[SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
+
+    @overload
+    def provide_request_session_sync(self, key: str, state: "State", scope: "Scope") -> "SyncDriverAdapterBase": ...
+
+    def provide_request_session_sync(
+        self,
+        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "SyncDriverAdapterBase | Any":
         """Provide a sync database session for the specified configuration key from request scope.
 
         If no connection exists in scope, one will be created from the pool and stored
@@ -647,9 +669,33 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         connection = self._ensure_connection(plugin_state, state, scope)
         return cast("SyncDriverAdapterBase", self._create_session(plugin_state, connection, scope))
 
+    @overload
     async def provide_request_session_async(
-        self, key: "str | AsyncConfigT | type[AsyncConfigT]", state: "State", scope: "Scope"
-    ) -> "AsyncDriverAdapterBase":
+        self,
+        key: "AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
+
+    @overload
+    async def provide_request_session_async(
+        self,
+        key: "type[AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
+
+    @overload
+    async def provide_request_session_async(
+        self, key: str, state: "State", scope: "Scope"
+    ) -> "AsyncDriverAdapterBase": ...
+
+    async def provide_request_session_async(
+        self,
+        key: "str | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "AsyncDriverAdapterBase | Any":
         """Provide an async database session for the specified configuration key from request scope.
 
         If no connection exists in scope, one will be created from the pool and stored
