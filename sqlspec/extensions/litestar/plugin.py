@@ -530,8 +530,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         msg = f"No database configuration found for name '{name}'. Available keys: {self._get_available_keys()}"
         raise KeyError(msg)
 
-    def _ensure_connection(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
-        """Ensure a connection exists in scope, creating one from the pool if needed."""
+    def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
+        """Ensure a connection exists in scope, creating one from the pool if needed (sync)."""
         connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
         if connection is not None:
             return connection
@@ -666,7 +666,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             A sync driver session instance for the specified database configuration.
         """
         plugin_state = self._get_plugin_state(key)
-        connection = self._ensure_connection(plugin_state, state, scope)
+        connection = self._ensure_connection_sync(plugin_state, state, scope)
         return cast("SyncDriverAdapterBase", self._create_session(plugin_state, connection, scope))
 
     @overload
@@ -801,7 +801,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             A database connection instance for the specified database configuration.
         """
         plugin_state = self._get_plugin_state(key)
-        return self._ensure_connection(plugin_state, state, scope)
+        return self._ensure_connection_sync(plugin_state, state, scope)
 
     @overload
     async def provide_request_connection_async(
