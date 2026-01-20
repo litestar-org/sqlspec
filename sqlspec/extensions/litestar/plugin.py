@@ -530,10 +530,86 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         msg = f"No database configuration found for name '{name}'. Available keys: {self._get_available_keys()}"
         raise KeyError(msg)
 
+    def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
+        """Ensure a connection exists in scope, creating one from the pool if needed (sync)."""
+        connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
+        if connection is not None:
+            return connection
+
+        pool = state.get(plugin_state.pool_key)
+        if pool is None:
+            self._raise_missing_connection(plugin_state.connection_key)
+
+        cm = plugin_state.config.provide_connection(pool)
+        connection = cm.__enter__()  # type: ignore[union-attr]
+        set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)
+        return connection
+
+    async def _ensure_connection_async(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
+        """Ensure a connection exists in scope, creating one from the pool if needed (async)."""
+        connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
+        if connection is not None:
+            return connection
+
+        pool = state.get(plugin_state.pool_key)
+        if pool is None:
+            self._raise_missing_connection(plugin_state.connection_key)
+
+        cm = plugin_state.config.provide_connection(pool)
+        connection = await cm.__aenter__()  # type: ignore[union-attr]
+        set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)
+        return connection
+
+    def _create_session(
+        self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
+    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
+        """Create a session from a connection and store it in scope."""
+        session_scope_key = f"{plugin_state.session_key}_instance"
+
+        session = get_sqlspec_scope_state(scope, session_scope_key)
+        if session is not None:
+            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
+
+        session = plugin_state.config.driver_type(
+            connection=connection,
+            statement_config=plugin_state.config.statement_config,
+            driver_features=plugin_state.config.driver_features,
+        )
+        set_sqlspec_scope_state(scope, session_scope_key, session)
+        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
+
+    @overload
     def provide_request_session(
-        self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]", state: "State", scope: "Scope"
+        self,
+        key: "SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT] | type[SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
+
+    @overload
+    def provide_request_session(
+        self,
+        key: "AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT] | type[AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
+
+    @overload
+    def provide_request_session(
+        self, key: str, state: "State", scope: "Scope"
+    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase": ...
+
+    def provide_request_session(
+        self,
+        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
+        state: "State",
+        scope: "Scope",
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Provide a database session for the specified configuration key from request scope.
+
+        This method requires the connection to already exist in scope (e.g., from DI injection).
+        For on-demand connection creation, use ``provide_request_session_sync`` or
+        ``provide_request_session_async`` instead.
 
         Args:
             key: The configuration identifier (same as get_config).
@@ -544,61 +620,131 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             A driver session instance for the specified database configuration.
         """
         plugin_state = self._get_plugin_state(key)
-        session_scope_key = f"{plugin_state.session_key}_instance"
-
-        session = get_sqlspec_scope_state(scope, session_scope_key)
-        if session is not None:
-            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
-
         connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
         if connection is None:
             self._raise_missing_connection(plugin_state.connection_key)
+        return self._create_session(plugin_state, connection, scope)
 
-        session = plugin_state.config.driver_type(
-            connection=connection,
-            statement_config=plugin_state.config.statement_config,
-            driver_features=plugin_state.config.driver_features,
-        )
-        set_sqlspec_scope_state(scope, session_scope_key, session)
+    @overload
+    def provide_request_session_sync(
+        self,
+        key: "SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
 
-        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
+    @overload
+    def provide_request_session_sync(
+        self,
+        key: "type[SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
 
-    def provide_sync_request_session(
-        self, key: "str | SyncConfigT | type[SyncConfigT]", state: "State", scope: "Scope"
-    ) -> "SyncDriverAdapterBase":
+    @overload
+    def provide_request_session_sync(self, key: str, state: "State", scope: "Scope") -> "SyncDriverAdapterBase": ...
+
+    def provide_request_session_sync(
+        self,
+        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "SyncDriverAdapterBase | Any":
         """Provide a sync database session for the specified configuration key from request scope.
 
+        If no connection exists in scope, one will be created from the pool and stored
+        in scope for reuse. The connection will be cleaned up by the before_send handler.
+
+        For async configurations, use ``provide_request_session_async`` instead.
+
         Args:
-            key: The sync configuration identifier.
+            key: The configuration identifier (same as get_config).
             state: The Litestar application State object.
             scope: The ASGI scope containing the request context.
 
         Returns:
             A sync driver session instance for the specified database configuration.
         """
-        session = self.provide_request_session(key, state, scope)
-        return cast("SyncDriverAdapterBase", session)
+        plugin_state = self._get_plugin_state(key)
+        connection = self._ensure_connection_sync(plugin_state, state, scope)
+        return cast("SyncDriverAdapterBase", self._create_session(plugin_state, connection, scope))
 
-    def provide_async_request_session(
-        self, key: "str | AsyncConfigT | type[AsyncConfigT]", state: "State", scope: "Scope"
-    ) -> "AsyncDriverAdapterBase":
+    @overload
+    async def provide_request_session_async(
+        self,
+        key: "AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
+
+    @overload
+    async def provide_request_session_async(
+        self,
+        key: "type[AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "DriverT": ...
+
+    @overload
+    async def provide_request_session_async(
+        self, key: str, state: "State", scope: "Scope"
+    ) -> "AsyncDriverAdapterBase": ...
+
+    async def provide_request_session_async(
+        self,
+        key: "str | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "AsyncDriverAdapterBase | Any":
         """Provide an async database session for the specified configuration key from request scope.
 
+        If no connection exists in scope, one will be created from the pool and stored
+        in scope for reuse. The connection will be cleaned up by the before_send handler.
+
+        For sync configurations, use ``provide_request_session`` instead.
+
         Args:
-            key: The async configuration identifier.
+            key: The configuration identifier (same as get_config).
             state: The Litestar application State object.
             scope: The ASGI scope containing the request context.
 
         Returns:
             An async driver session instance for the specified database configuration.
         """
-        session = self.provide_request_session(key, state, scope)
-        return cast("AsyncDriverAdapterBase", session)
+        plugin_state = self._get_plugin_state(key)
+        connection = await self._ensure_connection_async(plugin_state, state, scope)
+        return cast("AsyncDriverAdapterBase", self._create_session(plugin_state, connection, scope))
+
+    @overload
+    def provide_request_connection(
+        self,
+        key: "SyncDatabaseConfig[ConnectionT, Any, Any] | NoPoolSyncConfig[ConnectionT, Any] | AsyncDatabaseConfig[ConnectionT, Any, Any] | NoPoolAsyncConfig[ConnectionT, Any]",
+        state: "State",
+        scope: "Scope",
+    ) -> "ConnectionT": ...
+
+    @overload
+    def provide_request_connection(
+        self,
+        key: "type[SyncDatabaseConfig[ConnectionT, Any, Any] | NoPoolSyncConfig[ConnectionT, Any] | AsyncDatabaseConfig[ConnectionT, Any, Any] | NoPoolAsyncConfig[ConnectionT, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "ConnectionT": ...
+
+    @overload
+    def provide_request_connection(self, key: str, state: "State", scope: "Scope") -> Any: ...
 
     def provide_request_connection(
-        self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]", state: "State", scope: "Scope"
-    ) -> "Any":
+        self,
+        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> Any:
         """Provide a database connection for the specified configuration key from request scope.
+
+        This method requires the connection to already exist in scope (e.g., from DI injection).
+        For on-demand connection creation, use ``provide_request_connection_sync`` or
+        ``provide_request_connection_async`` instead.
 
         Args:
             key: The configuration identifier (same as get_config).
@@ -612,11 +758,96 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
         if connection is None:
             self._raise_missing_connection(plugin_state.connection_key)
-
         return connection
 
+    @overload
+    def provide_request_connection_sync(
+        self,
+        key: "SyncDatabaseConfig[ConnectionT, Any, Any] | NoPoolSyncConfig[ConnectionT, Any]",
+        state: "State",
+        scope: "Scope",
+    ) -> "ConnectionT": ...
+
+    @overload
+    def provide_request_connection_sync(
+        self,
+        key: "type[SyncDatabaseConfig[ConnectionT, Any, Any] | NoPoolSyncConfig[ConnectionT, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "ConnectionT": ...
+
+    @overload
+    def provide_request_connection_sync(self, key: str, state: "State", scope: "Scope") -> Any: ...
+
+    def provide_request_connection_sync(
+        self,
+        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> Any:
+        """Provide a sync database connection for the specified configuration key from request scope.
+
+        If no connection exists in scope, one will be created from the pool and stored
+        in scope for reuse. The connection will be cleaned up by the before_send handler.
+
+        For async configurations, use ``provide_request_connection_async`` instead.
+
+        Args:
+            key: The configuration identifier (same as get_config).
+            state: The Litestar application State object.
+            scope: The ASGI scope containing the request context.
+
+        Returns:
+            A database connection instance for the specified database configuration.
+        """
+        plugin_state = self._get_plugin_state(key)
+        return self._ensure_connection_sync(plugin_state, state, scope)
+
+    @overload
+    async def provide_request_connection_async(
+        self,
+        key: "AsyncDatabaseConfig[ConnectionT, Any, Any] | NoPoolAsyncConfig[ConnectionT, Any]",
+        state: "State",
+        scope: "Scope",
+    ) -> "ConnectionT": ...
+
+    @overload
+    async def provide_request_connection_async(
+        self,
+        key: "type[AsyncDatabaseConfig[ConnectionT, Any, Any] | NoPoolAsyncConfig[ConnectionT, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> "ConnectionT": ...
+
+    @overload
+    async def provide_request_connection_async(self, key: str, state: "State", scope: "Scope") -> Any: ...
+
+    async def provide_request_connection_async(
+        self,
+        key: "str | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
+        state: "State",
+        scope: "Scope",
+    ) -> Any:
+        """Provide an async database connection for the specified configuration key from request scope.
+
+        If no connection exists in scope, one will be created from the pool and stored
+        in scope for reuse. The connection will be cleaned up by the before_send handler.
+
+        For sync configurations, use ``provide_request_connection`` instead.
+
+        Args:
+            key: The configuration identifier (same as get_config).
+            state: The Litestar application State object.
+            scope: The ASGI scope containing the request context.
+
+        Returns:
+            A database connection instance for the specified database configuration.
+        """
+        plugin_state = self._get_plugin_state(key)
+        return await self._ensure_connection_async(plugin_state, state, scope)
+
     def _get_plugin_state(
-        self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]"
+        self, key: "str | DatabaseConfigProtocol[Any, Any, Any] | type[DatabaseConfigProtocol[Any, Any, Any]]"
     ) -> PluginConfigState:
         """Get plugin state for a configuration by key."""
         if isinstance(key, str):
