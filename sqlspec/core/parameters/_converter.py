@@ -84,42 +84,6 @@ class ParameterConverter:
             ParameterStyle.POSITIONAL_PYFORMAT: _placeholder_positional_pyformat,
         }
 
-    def normalize_sql_for_parsing(
-        self, sql: str, dialect: str | None = None, param_info: "list[ParameterInfo] | None" = None
-    ) -> "tuple[str, list[ParameterInfo]]":
-        param_info = param_info or self.validator.extract_parameters(sql)
-
-        incompatible_styles = self.validator.get_sqlglot_incompatible_styles(dialect)
-        needs_conversion = any(p.style in incompatible_styles for p in param_info)
-
-        if not needs_conversion:
-            return sql, param_info
-
-        converted_sql = self._convert_to_sqlglot_compatible(sql, param_info, incompatible_styles)
-        return converted_sql, param_info
-
-    def _convert_to_sqlglot_compatible(
-        self, sql: str, param_info: "list[ParameterInfo]", incompatible_styles: "set[ParameterStyle]"
-    ) -> str:
-        converted_sql = sql
-        for param in reversed(param_info):
-            if param.style in incompatible_styles:
-                if (
-                    param.style in {ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_AT, ParameterStyle.NAMED_DOLLAR}
-                    and param.name
-                    and param.name.isidentifier()
-                ):
-                    placeholder_name = param.name
-                else:
-                    placeholder_name = f"param_{param.ordinal}"
-                canonical_placeholder = f":{placeholder_name}"
-                converted_sql = (
-                    converted_sql[: param.position]
-                    + canonical_placeholder
-                    + converted_sql[param.position + len(param.placeholder_text) :]
-                )
-        return converted_sql
-
     def convert_placeholder_style(
         self,
         sql: str,

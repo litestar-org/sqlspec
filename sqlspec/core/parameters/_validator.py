@@ -160,21 +160,3 @@ class ParameterValidator:
             parameters.append(ParameterInfo(name, style, match.start(), ordinal, placeholder_text))
             ordinal += 1
         return parameters
-
-    def get_sqlglot_incompatible_styles(self, dialect: str | None = None) -> "set[ParameterStyle]":
-        """Return placeholder styles incompatible with SQLGlot for the dialect."""
-        base_incompatible = {
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.POSITIONAL_COLON,
-        }
-
-        if dialect and dialect.lower() in {"mysql", "mariadb"}:
-            return base_incompatible
-        if dialect and dialect.lower() in {"postgres", "postgresql"}:
-            return {ParameterStyle.POSITIONAL_COLON}
-        if dialect and dialect.lower() == "sqlite":
-            return {ParameterStyle.POSITIONAL_COLON}
-        if dialect and dialect.lower() in {"oracle", "bigquery"}:
-            return base_incompatible
-        return base_incompatible

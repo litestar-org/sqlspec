@@ -19,16 +19,26 @@ def test_pool_logger_name_constant() -> None:
 
 def test_pool_logger_independent_configuration() -> None:
     """Test that sqlspec.pool can be configured independently from sqlspec root."""
-    # Set sqlspec root to WARNING, but sqlspec.pool to DEBUG
-    logging.getLogger("sqlspec").setLevel(logging.WARNING)
-    logging.getLogger("sqlspec.pool").setLevel(logging.DEBUG)
-
-    pool_logger = logging.getLogger(POOL_LOGGER_NAME)
-    assert pool_logger.isEnabledFor(logging.DEBUG)
-
-    # Root should not allow INFO
     root_logger = logging.getLogger("sqlspec")
-    assert not root_logger.isEnabledFor(logging.INFO)
+    pool_logger = logging.getLogger(POOL_LOGGER_NAME)
+
+    # Save original levels
+    original_root_level = root_logger.level
+    original_pool_level = pool_logger.level
+
+    try:
+        # Set sqlspec root to WARNING, but sqlspec.pool to DEBUG
+        root_logger.setLevel(logging.WARNING)
+        pool_logger.setLevel(logging.DEBUG)
+
+        assert pool_logger.isEnabledFor(logging.DEBUG)
+
+        # Root should not allow INFO
+        assert not root_logger.isEnabledFor(logging.INFO)
+    finally:
+        # Restore original levels to avoid affecting other tests
+        root_logger.setLevel(original_root_level)
+        pool_logger.setLevel(original_pool_level)
 
 
 class TestSqlitePoolLogging:

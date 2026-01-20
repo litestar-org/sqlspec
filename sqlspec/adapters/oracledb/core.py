@@ -532,7 +532,7 @@ def build_profile() -> "DriverParameterProfile":
     return DriverParameterProfile(
         name="OracleDB",
         default_style=ParameterStyle.POSITIONAL_COLON,
-        supported_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
+        supported_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
         default_execution_style=ParameterStyle.NAMED_COLON,
         supported_execution_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
         has_native_list_expansion=False,
