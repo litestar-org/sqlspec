@@ -145,7 +145,7 @@ def build_profile() -> "DriverParameterProfile":
         default_style=ParameterStyle.QMARK,
         supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
         default_execution_style=ParameterStyle.QMARK,
-        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
         has_native_list_expansion=True,
         preserve_parameter_format=True,
         needs_static_script_compilation=False,

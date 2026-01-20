@@ -106,7 +106,17 @@ def collect_null_parameter_ordinals(parameters: Any, profile: "ParameterProfile"
 
 def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[str, int | str]]":
     identifiers: set[tuple[str, int | str]] = set()
-    for parameter in parameter_profile.parameters:
+    parameters = parameter_profile.parameters
+    if not parameters:
+        return identifiers
+
+    # Check if we have mixed styles - if so, use ordinal-based counting for positional styles
+    styles = {p.style for p in parameters}
+    has_mixed_positional_styles = len(styles) > 1 and any(
+        s in styles for s in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}
+    )
+
+    for parameter in parameters:
         style = parameter.style
         name = parameter.name
         if style in {
@@ -117,7 +127,10 @@ def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set
         }:
             identifiers.add(("named", name or f"param_{parameter.ordinal}"))
         elif style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
-            if name and name.isdigit():
+            # When mixed with ordinal styles (like QMARK), use ordinal instead of explicit index
+            if has_mixed_positional_styles:
+                identifiers.add(("index", parameter.ordinal))
+            elif name and name.isdigit():
                 identifiers.add(("index", int(name) - 1))
             else:
                 identifiers.add(("index", parameter.ordinal))

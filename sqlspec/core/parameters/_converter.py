@@ -274,7 +274,7 @@ class ParameterConverter:
             return tuple(param_values)
         return tuple(param_values)
 
-    def _convert_parameter_format(
+    def _convert_parameter_format(  # noqa: C901
         self,
         parameters: "ParameterPayload",
         param_info: "list[ParameterInfo]",
@@ -327,6 +327,9 @@ class ParameterConverter:
             ParameterStyle.NAMED_DOLLAR,
             ParameterStyle.NAMED_PYFORMAT,
         }
+        # POSITIONAL_COLON is a special case that always requires dict output
+        if target_style == ParameterStyle.POSITIONAL_COLON:
+            return self._convert_to_positional_colon_format(parameters, param_info)
 
         if is_named_style:
             if isinstance(parameters, Mapping):

@@ -461,13 +461,6 @@ class ParameterProcessor:
         ):
             return False
 
-        if (
-            config.supported_execution_parameter_styles is not None
-            and len(config.supported_execution_parameter_styles) > 1
-            and all(style in config.supported_execution_parameter_styles for style in current_styles)
-        ):
-            return False
-
         if len(current_styles) > 1:
             return True
 
