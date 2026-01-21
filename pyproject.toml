@@ -1,5 +1,16 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3 :: Only",
+  "Typing :: Typed",
+]
 dependencies = [
   "typing-extensions",
   "sqlglot>=19.9.0",
@@ -14,17 +25,6 @@ name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
 version = "0.38.1"
-classifiers = [
-    "Development Status :: 5 - Production/Stable",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
-    "Programming Language :: Python :: 3 :: Only",
-    "Typing :: Typed",
-]
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -147,6 +147,12 @@ test = [
   "pytest-xdist>=3.6.1",
   "pytest-timeout>=2.3.1",
 ]
+
+[tool.uv]
+# NOTE: mysql-connector-python 9.6.0 (released 2026-01-21) removed Python 3.12+ wheels.
+# This is an Oracle packaging bug. Pinning to versions before that date until fixed.
+# Check https://pypi.org/project/mysql-connector-python/#files for updates.
+exclude-newer-package = { mysql-connector-python = "2026-01-20" }
 
 [project.scripts]
 sqlspec = "sqlspec.__main__:run_cli"
