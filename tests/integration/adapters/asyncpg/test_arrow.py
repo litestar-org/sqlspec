@@ -179,9 +179,11 @@ async def test_select_to_arrow_type_preservation(asyncpg_async_driver: AsyncpgDr
     result = await asyncpg_async_driver.select_to_arrow("SELECT * FROM arrow_types_test ORDER BY id")
 
     df = result.to_pandas()
+    from pandas.api.types import is_bool_dtype, is_string_dtype
+
     assert len(df) == 2
-    assert df["name"].dtype == object
-    assert df["is_active"].dtype == bool
+    assert is_string_dtype(df["name"])
+    assert is_bool_dtype(df["is_active"])
 
     await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_types_test CASCADE")
 

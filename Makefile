@@ -78,6 +78,11 @@ upgrade:                                            ## Upgrade all dependencies 
 	@echo "${OK} Dependencies updated 🔄"
 	@uv run pre-commit autoupdate
 	@echo "${OK} Updated Pre-commit hooks 🔄"
+	@uv lock >/dev/null 2>&1
+	@echo ""
+	@echo "${WARN} mysql-connector-python is pinned via [tool.uv] exclude-newer-package in pyproject.toml"
+	@echo "${INFO} Check https://pypi.org/project/mysql-connector-python/#files for Python 3.12+ wheels."
+	@echo "${INFO} Once Oracle fixes their packaging, remove the constraint from pyproject.toml."
 
 .PHONY: lock
 lock:                                              ## Rebuild lockfiles from scratch

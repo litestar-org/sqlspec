@@ -165,6 +165,7 @@ async def test_select_to_arrow_type_preservation(psqlpy_driver: "PsqlpyDriver") 
     """Test that PostgreSQL types map correctly to Arrow."""
 
     driver = psqlpy_driver
+    await driver.execute("DROP TABLE IF EXISTS arrow_types_test CASCADE")
     await driver.execute(
         """
             CREATE TABLE arrow_types_test (
