@@ -200,8 +200,10 @@ async def test_select_to_arrow_type_preservation(aiosqlite_arrow_config: Aiosqli
             result = await session.select_to_arrow("SELECT * FROM arrow_types_test ORDER BY id")
 
             df = result.to_pandas()
+            from pandas.api.types import is_string_dtype
+
             assert len(df) == 2
-            assert df["name"].dtype == object
+            assert is_string_dtype(df["name"])
             # SQLite INTEGER (for booleans) comes through as int64
             assert df["is_active"].dtype in (int, "int64", "Int64")
     finally:

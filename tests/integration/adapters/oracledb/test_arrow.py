@@ -232,8 +232,10 @@ async def test_select_to_arrow_type_preservation(oracle_async_session: "OracleAs
         result = await driver.select_to_arrow("SELECT * FROM arrow_types_test ORDER BY id")
 
         df = result.to_pandas()
+        from pandas.api.types import is_string_dtype
+
         assert len(df) == 2
-        assert df["name"].dtype == object
+        assert is_string_dtype(df["name"])
         assert set(df["is_active"].unique()) <= {0, 1}
     finally:
         await _safe_drop_table(driver, "arrow_types_test")

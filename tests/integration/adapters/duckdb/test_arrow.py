@@ -184,9 +184,11 @@ def test_select_to_arrow_type_preservation(duckdb_basic_session: "DuckDBDriver")
         result = driver.select_to_arrow("SELECT * FROM arrow_types_test ORDER BY id")
 
         df = result.to_pandas()
+        from pandas.api.types import is_string_dtype
+
         assert len(df) == 2
         assert df["id"].dtype == "int32"
-        assert df["name"].dtype == "object"
+        assert is_string_dtype(df["name"])
         assert df["price"].dtype == "float64"
         assert df["active"].dtype == "bool"
     finally:
