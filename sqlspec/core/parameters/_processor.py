@@ -277,10 +277,27 @@ class ParameterProcessor:
 
         return False
 
-    def _normalize_sql_for_parsing(self, sql: str, param_info: "list[ParameterInfo]", dialect: str | None) -> str:
-        if not self._needs_parse_normalization(param_info, dialect):
+    def _normalize_sql_for_parsing(
+        self, sql: str, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig"
+    ) -> str:
+        """Normalize SQL for sqlglot parsing by converting unsupported parameter styles.
+
+        When a parameter style is not in config.supported_parameter_styles (what sqlglot
+        can parse for this dialect), convert it to config.default_parameter_style.
+
+        Args:
+            sql: SQL string with parameters.
+            param_info: List of detected parameter placeholders.
+            config: Parameter style configuration.
+
+        Returns:
+            SQL string with parameters converted to a sqlglot-compatible style.
+        """
+        if not self._needs_parse_normalization(param_info, config):
             return sql
-        normalized_sql, _ = self._converter.normalize_sql_for_parsing(sql, dialect, param_info=param_info)
+        # Convert to the default style that sqlglot can parse for this dialect
+        target_style = config.default_parameter_style
+        normalized_sql, _ = self._converter.convert_placeholder_style(sql, None, target_style, is_many=False)
         return normalized_sql
 
     def _make_processor_cache_key(
@@ -381,7 +398,7 @@ class ParameterProcessor:
             and not config.output_transformer
             and not requires_mapping
         ):
-            normalized_sql = self._normalize_sql_for_parsing(sql, param_info, dialect) if normalize_for_parsing else sql
+            normalized_sql = self._normalize_sql_for_parsing(sql, param_info, config) if normalize_for_parsing else sql
             result = ParameterProcessingResult(
                 sql, parameters, ParameterProfile(param_info), sqlglot_sql=normalized_sql
             )
@@ -415,7 +432,7 @@ class ParameterProcessor:
         final_param_info = self._validator.extract_parameters(processed_sql)
         final_profile = ParameterProfile(final_param_info)
         sqlglot_sql = (
-            self._normalize_sql_for_parsing(processed_sql, final_param_info, dialect)
+            self._normalize_sql_for_parsing(processed_sql, final_param_info, config)
             if normalize_for_parsing
             else processed_sql
         )
@@ -444,13 +461,6 @@ class ParameterProcessor:
         ):
             return False
 
-        if (
-            config.supported_execution_parameter_styles is not None
-            and len(config.supported_execution_parameter_styles) > 1
-            and all(style in config.supported_execution_parameter_styles for style in current_styles)
-        ):
-            return False
-
         if len(current_styles) > 1:
             return True
 
@@ -463,9 +473,21 @@ class ParameterProcessor:
 
         return True
 
-    def _needs_parse_normalization(self, param_info: "list[ParameterInfo]", dialect: str | None = None) -> bool:
-        incompatible_styles = self._validator.get_sqlglot_incompatible_styles(dialect)
-        return any(p.style in incompatible_styles for p in param_info)
+    def _needs_parse_normalization(self, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig") -> bool:
+        """Check if SQL needs normalization before sqlglot parsing.
+
+        A style needs normalization if it's NOT in config.supported_parameter_styles,
+        which represents what sqlglot can parse for this driver's dialect.
+
+        Args:
+            param_info: List of detected parameter placeholders.
+            config: Parameter style configuration with supported_parameter_styles.
+
+        Returns:
+            True if any parameter style is not supported by sqlglot for this dialect.
+        """
+        supported = config.supported_parameter_styles
+        return any(p.style not in supported for p in param_info)
 
     def _convert_placeholders_for_execution(
         self,

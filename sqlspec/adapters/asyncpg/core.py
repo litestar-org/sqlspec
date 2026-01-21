@@ -121,7 +121,7 @@ def build_profile() -> "DriverParameterProfile":
     return DriverParameterProfile(
         name="AsyncPG",
         default_style=ParameterStyle.NUMERIC,
-        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
+        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
         default_execution_style=ParameterStyle.NUMERIC,
         supported_execution_styles={ParameterStyle.NUMERIC},
         has_native_list_expansion=True,

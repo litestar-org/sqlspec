@@ -57,21 +57,10 @@ def _placeholder_positional_pyformat(_: Any) -> str:
 class ParameterConverter:
     """Parameter style conversion helper."""
 
-    __slots__ = ("_format_converters", "_placeholder_generators", "validator")
+    __slots__ = ("_placeholder_generators", "validator")
 
     def __init__(self, validator: "ParameterValidator | None" = None) -> None:
         self.validator = validator or ParameterValidator()
-
-        self._format_converters = {
-            ParameterStyle.POSITIONAL_COLON: self._convert_to_positional_colon_format,
-            ParameterStyle.NAMED_COLON: self._convert_to_named_colon_format,
-            ParameterStyle.NAMED_PYFORMAT: self._convert_to_named_pyformat_format,
-            ParameterStyle.QMARK: self._convert_to_positional_format,
-            ParameterStyle.NUMERIC: self._convert_to_positional_format,
-            ParameterStyle.POSITIONAL_PYFORMAT: self._convert_to_positional_format,
-            ParameterStyle.NAMED_AT: self._convert_to_named_colon_format,
-            ParameterStyle.NAMED_DOLLAR: self._convert_to_named_colon_format,
-        }
 
         self._placeholder_generators: dict[ParameterStyle, Callable[[Any], str]] = {
             ParameterStyle.QMARK: _placeholder_qmark,
@@ -83,42 +72,6 @@ class ParameterConverter:
             ParameterStyle.NAMED_PYFORMAT: _placeholder_named_pyformat,
             ParameterStyle.POSITIONAL_PYFORMAT: _placeholder_positional_pyformat,
         }
-
-    def normalize_sql_for_parsing(
-        self, sql: str, dialect: str | None = None, param_info: "list[ParameterInfo] | None" = None
-    ) -> "tuple[str, list[ParameterInfo]]":
-        param_info = param_info or self.validator.extract_parameters(sql)
-
-        incompatible_styles = self.validator.get_sqlglot_incompatible_styles(dialect)
-        needs_conversion = any(p.style in incompatible_styles for p in param_info)
-
-        if not needs_conversion:
-            return sql, param_info
-
-        converted_sql = self._convert_to_sqlglot_compatible(sql, param_info, incompatible_styles)
-        return converted_sql, param_info
-
-    def _convert_to_sqlglot_compatible(
-        self, sql: str, param_info: "list[ParameterInfo]", incompatible_styles: "set[ParameterStyle]"
-    ) -> str:
-        converted_sql = sql
-        for param in reversed(param_info):
-            if param.style in incompatible_styles:
-                if (
-                    param.style in {ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_AT, ParameterStyle.NAMED_DOLLAR}
-                    and param.name
-                    and param.name.isidentifier()
-                ):
-                    placeholder_name = param.name
-                else:
-                    placeholder_name = f"param_{param.ordinal}"
-                canonical_placeholder = f":{placeholder_name}"
-                converted_sql = (
-                    converted_sql[: param.position]
-                    + canonical_placeholder
-                    + converted_sql[param.position + len(param.placeholder_text) :]
-                )
-        return converted_sql
 
     def convert_placeholder_style(
         self,
@@ -203,6 +156,8 @@ class ParameterConverter:
                 new_placeholder = generator(unique_params[param_key])
             else:
                 param_name = param.name or f"param_{param.ordinal}"
+                if isinstance(param_name, str) and param_name.isdigit():
+                    param_name = f"param_{param.ordinal}"
                 new_placeholder = generator(param_name)
 
             converted_sql = (
@@ -363,7 +318,6 @@ class ParameterConverter:
             ParameterStyle.NAMED_DOLLAR,
             ParameterStyle.NAMED_PYFORMAT,
         }
-
         if is_named_style:
             if isinstance(parameters, Mapping):
                 return dict(parameters)
@@ -507,37 +461,3 @@ class ParameterConverter:
                 return parameters[unique_ordinal]
 
         return None
-
-    def _convert_to_positional_format(
-        self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> "ConvertedParameters":
-        return self._convert_parameter_format(
-            parameters, param_info, ParameterStyle.QMARK, parameters, preserve_parameter_format=False
-        )
-
-    def _convert_to_named_colon_format(
-        self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> "ConvertedParameters":
-        return self._convert_parameter_format(
-            parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
-        )
-
-    def _convert_to_positional_colon_format(
-        self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> "NamedParameterOutput":
-        if isinstance(parameters, Mapping):
-            return dict(parameters)
-
-        param_dict: dict[str, Any] = {}
-        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            for index, value in enumerate(parameters):
-                param_dict[str(index + 1)] = value
-
-        return param_dict
-
-    def _convert_to_named_pyformat_format(
-        self, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
-    ) -> "ConvertedParameters":
-        return self._convert_parameter_format(
-            parameters, param_info, ParameterStyle.NAMED_PYFORMAT, parameters, preserve_parameter_format=False
-        )

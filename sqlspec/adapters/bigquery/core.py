@@ -18,6 +18,7 @@ from sqlspec.core import (
     ParameterProfile,
     ParameterStyle,
     StatementConfig,
+    build_null_pruning_transform,
     build_statement_config_from_profile,
 )
 from sqlspec.exceptions import (
@@ -612,6 +613,7 @@ def build_profile() -> "DriverParameterProfile":
             list: _identity,
             type(None): _return_none,
         },
+        default_ast_transformer=build_null_pruning_transform(dialect="bigquery"),
         extras={"json_tuple_strategy": "tuple", "type_coercion_overrides": {list: _identity, tuple: _tuple_to_list}},
         default_dialect="bigquery",
     )

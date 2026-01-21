@@ -160,13 +160,8 @@ def build_profile() -> "DriverParameterProfile":
 
     return DriverParameterProfile(
         name="Psycopg",
-        default_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-            ParameterStyle.QMARK,
-        },
+        default_style=ParameterStyle.NUMERIC,
+        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
         default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
         supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
         has_native_list_expansion=True,

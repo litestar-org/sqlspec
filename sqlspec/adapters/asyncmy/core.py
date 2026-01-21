@@ -125,7 +125,7 @@ def build_profile() -> "DriverParameterProfile":
     return DriverParameterProfile(
         name="AsyncMy",
         default_style=ParameterStyle.QMARK,
-        supported_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
+        supported_styles={ParameterStyle.QMARK},
         default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
         supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
         has_native_list_expansion=False,

@@ -39,21 +39,71 @@ from sqlspec.core import (
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 
-_ADAPTER_MODULE_NAMES: "tuple[str, ...]" = (
-    "sqlspec.adapters.adbc",
-    "sqlspec.adapters.aiosqlite",
-    "sqlspec.adapters.asyncmy",
-    "sqlspec.adapters.asyncpg",
-    "sqlspec.adapters.bigquery",
-    "sqlspec.adapters.duckdb",
-    "sqlspec.adapters.oracledb",
-    "sqlspec.adapters.psqlpy",
-    "sqlspec.adapters.psycopg",
-    "sqlspec.adapters.sqlite",
+_ADAPTER_DRIVER_MODULES: "tuple[str, ...]" = (
+    "sqlspec.adapters.adbc.driver",
+    "sqlspec.adapters.aiosqlite.driver",
+    "sqlspec.adapters.asyncmy.driver",
+    "sqlspec.adapters.asyncpg.driver",
+    "sqlspec.adapters.bigquery.driver",
+    "sqlspec.adapters.cockroach_asyncpg.driver",
+    "sqlspec.adapters.cockroach_psycopg.driver",
+    "sqlspec.adapters.duckdb.driver",
+    "sqlspec.adapters.mock.driver",
+    "sqlspec.adapters.mysqlconnector.driver",
+    "sqlspec.adapters.oracledb.driver",
+    "sqlspec.adapters.psqlpy.driver",
+    "sqlspec.adapters.psycopg.driver",
+    "sqlspec.adapters.pymysql.driver",
+    "sqlspec.adapters.spanner.driver",
+    "sqlspec.adapters.sqlite.driver",
 )
 
-for _module_name in _ADAPTER_MODULE_NAMES:
+for _module_name in _ADAPTER_DRIVER_MODULES:
     import_module(_module_name)
+
+_ADAPTER_PROFILE_KEYS: "tuple[str, ...]" = (
+    "adbc",
+    "aiosqlite",
+    "asyncmy",
+    "asyncpg",
+    "bigquery",
+    "cockroach_asyncpg",
+    "cockroach_psycopg",
+    "duckdb",
+    "mock",
+    "mysql-connector",
+    "oracledb",
+    "psqlpy",
+    "psycopg",
+    "pymysql",
+    "spanner",
+    "sqlite",
+)
+
+_STYLE_PLACEHOLDER: "dict[ParameterStyle, str]" = {
+    ParameterStyle.QMARK: "?",
+    ParameterStyle.NUMERIC: "$1",
+    ParameterStyle.NAMED_COLON: ":param",
+    ParameterStyle.POSITIONAL_COLON: ":1",
+    ParameterStyle.NAMED_AT: "@param",
+    ParameterStyle.NAMED_DOLLAR: "$param",
+    ParameterStyle.NAMED_PYFORMAT: "%(param)s",
+    ParameterStyle.POSITIONAL_PYFORMAT: "%s",
+}
+
+
+def _normalize_sqlglot_dialect(dialect: "str | None") -> str:
+    if not dialect:
+        return ""
+    if dialect == "postgresql":
+        return "postgres"
+    return dialect
+
+
+def _build_sql_for_style(style: ParameterStyle) -> str:
+    placeholder = _STYLE_PLACEHOLDER[style]
+    return f"SELECT * FROM test_table WHERE col = {placeholder}"
+
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -333,6 +383,18 @@ def test_replace_null_parameters_with_literals_numeric_dialect() -> None:
     assert cleaned_params == (42,)
 
 
+def test_replace_null_parameters_with_literals_named_bigquery() -> None:
+    """Named parameters should inline NULL literals and drop None values."""
+
+    expression = sqlglot.parse_one("INSERT INTO test VALUES (@id, @desc)", dialect="bigquery")
+    modified_expression, cleaned_params = replace_null_parameters_with_literals(
+        expression, {"id": 1, "desc": None}, dialect="bigquery"
+    )
+
+    assert modified_expression.sql(dialect="bigquery") == "INSERT INTO test VALUES (@id, NULL)"
+    assert cleaned_params == {"id": 1}
+
+
 def test_replace_placeholders_with_literals_basic_sequence() -> None:
     """Placeholders are replaced by literals when provided with positional parameters."""
 
@@ -444,6 +506,66 @@ def test_register_driver_profile_allows_override() -> None:
         assert resolved_profile.has_native_list_expansion is True
     finally:
         DRIVER_PARAMETER_PROFILES.pop(key, None)
+
+
+def test_all_driver_profiles_registered() -> None:
+    """All adapter driver profiles should be registered for tests."""
+    missing_profiles = [key for key in _ADAPTER_PROFILE_KEYS if key not in DRIVER_PARAMETER_PROFILES]
+    assert not missing_profiles
+
+
+@pytest.mark.parametrize("adapter_key", _ADAPTER_PROFILE_KEYS)
+def test_supported_styles_sqlglot_parseable(adapter_key: str) -> None:
+    """Supported styles must parse with SQLGlot for the adapter dialect."""
+    profile = get_driver_profile(adapter_key)
+    dialect = _normalize_sqlglot_dialect(profile.default_dialect)
+
+    for style in profile.supported_styles:
+        if style not in _STYLE_PLACEHOLDER:
+            continue
+        sql = _build_sql_for_style(style)
+        try:
+            sqlglot.parse_one(sql, dialect=dialect)
+        except Exception as exc:  # pragma: no cover - diagnostics in failure
+            pytest.fail(f"{adapter_key} {style.value} failed SQLGlot parse ({dialect}): {exc}")
+
+
+@pytest.mark.parametrize("adapter_key", _ADAPTER_PROFILE_KEYS)
+def test_supported_styles_skip_parse_normalization(adapter_key: str) -> None:
+    """Supported styles should not trigger parse normalization."""
+    profile = get_driver_profile(adapter_key)
+    config = build_statement_config_from_profile(profile).parameter_config
+    processor = ParameterProcessor()
+    validator = ParameterValidator()
+
+    for style in config.supported_parameter_styles:
+        if style not in _STYLE_PLACEHOLDER:
+            continue
+        sql = _build_sql_for_style(style)
+        param_info = validator.extract_parameters(sql)
+        assert param_info
+        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
+        assert needs_normalization is False
+
+    if config.supported_execution_parameter_styles is not None:
+        assert config.default_execution_parameter_style in config.supported_execution_parameter_styles
+
+
+@pytest.mark.parametrize("adapter_key", _ADAPTER_PROFILE_KEYS)
+def test_unsupported_styles_require_parse_normalization(adapter_key: str) -> None:
+    """Unsupported styles should always trigger parse normalization."""
+    profile = get_driver_profile(adapter_key)
+    config = build_statement_config_from_profile(profile).parameter_config
+    processor = ParameterProcessor()
+    validator = ParameterValidator()
+
+    unsupported_styles = set(_STYLE_PLACEHOLDER).difference(config.supported_parameter_styles)
+    for style in unsupported_styles:
+        sql = _build_sql_for_style(style)
+        param_info = validator.extract_parameters(sql)
+        assert param_info
+        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
+        assert needs_normalization is True
 
 
 def test_mixed_parameter_style_with_processor() -> None:
@@ -764,94 +886,10 @@ def test_parameter_position_tracking(validator: ParameterValidator) -> None:
     assert sql[named_param.position : named_param.position + len(":name")] == ":name"
 
 
-@pytest.mark.parametrize(
-    "dialect,expected_incompatible",
-    [
-        (None, {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT, ParameterStyle.POSITIONAL_COLON}),
-        ("mysql", {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT, ParameterStyle.POSITIONAL_COLON}),
-        ("postgres", {ParameterStyle.POSITIONAL_COLON}),
-        ("sqlite", {ParameterStyle.POSITIONAL_COLON}),
-        (
-            "oracle",
-            {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT, ParameterStyle.POSITIONAL_COLON},
-        ),
-        (
-            "bigquery",
-            {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT, ParameterStyle.POSITIONAL_COLON},
-        ),
-    ],
-)
-def test_get_sqlglot_incompatible_styles(
-    validator: ParameterValidator, dialect: str | None, expected_incompatible: set[ParameterStyle]
-) -> None:
-    """Test dialect-specific SQLGlot incompatible style detection."""
-    incompatible = validator.get_sqlglot_incompatible_styles(dialect)
-    assert incompatible == expected_incompatible
-
-
 @pytest.fixture
 def converter() -> ParameterConverter:
     """Create a ParameterConverter instance."""
     return ParameterConverter()
-
-
-@pytest.mark.parametrize(
-    "sql,dialect,expected_needs_conversion",
-    [
-        ("SELECT * FROM users WHERE id = ?", "postgres", False),
-        ("SELECT * FROM users WHERE id = :name", "postgres", False),
-        ("SELECT * FROM users WHERE id = %s", "postgres", False),
-        ("SELECT * FROM users WHERE id = %s", "mysql", True),
-        ("SELECT * FROM users WHERE id = %(name)s", "mysql", True),
-        ("SELECT * FROM users WHERE id = :1", "postgres", True),
-        ("SELECT * FROM users WHERE id = :1", "oracle", True),
-    ],
-)
-def test_normalize_sql_for_parsing(
-    converter: ParameterConverter, sql: str, dialect: str, expected_needs_conversion: bool
-) -> None:
-    """Test Phase 1 SQLGlot compatibility normalization."""
-    normalized_sql, param_info = converter.normalize_sql_for_parsing(sql, dialect)
-
-    if expected_needs_conversion:
-        assert normalized_sql != sql
-
-        assert ":param_" in normalized_sql
-    else:
-        assert normalized_sql == sql
-
-    assert len(param_info) > 0
-
-
-def test_normalize_sql_pyformat_conversion(converter: ParameterConverter) -> None:
-    """Test conversion of problematic pyformat styles."""
-    sql = "SELECT * FROM users WHERE name = %s AND id = %(user_id)s"
-    normalized_sql, param_info = converter.normalize_sql_for_parsing(sql, "mysql")
-
-    assert "%s" not in normalized_sql
-    assert "%(user_id)s" not in normalized_sql
-    assert ":param_0" in normalized_sql
-    assert ":param_1" in normalized_sql
-
-    assert len(param_info) == 2
-    assert param_info[0].style == ParameterStyle.POSITIONAL_PYFORMAT
-    assert param_info[1].style == ParameterStyle.NAMED_PYFORMAT
-    assert param_info[1].name == "user_id"
-
-
-def test_normalize_sql_positional_colon_conversion(converter: ParameterConverter) -> None:
-    """Test conversion of Oracle-style positional colon parameters."""
-    sql = "SELECT * FROM users WHERE id = :1 AND name = :2"
-    normalized_sql, param_info = converter.normalize_sql_for_parsing(sql, "oracle")
-
-    assert ":1" not in normalized_sql
-    assert ":2" not in normalized_sql
-    assert ":param_0" in normalized_sql
-    assert ":param_1" in normalized_sql
-
-    assert len(param_info) == 2
-    assert param_info[0].style == ParameterStyle.POSITIONAL_COLON
-    assert param_info[1].style == ParameterStyle.POSITIONAL_COLON
 
 
 @pytest.mark.parametrize(
@@ -1154,7 +1192,7 @@ def test_missing_named_parameters_can_fallback_when_disabled(converter: Paramete
         ("sqlite", ParameterStyle.NAMED_COLON, ParameterStyle.QMARK, "?", list),
         ("postgresql", ParameterStyle.QMARK, ParameterStyle.NUMERIC, "$1", list),
         ("mysql", ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT, "%s", list),
-        ("oracle", ParameterStyle.QMARK, ParameterStyle.POSITIONAL_COLON, ":1", dict),
+        ("oracle", ParameterStyle.QMARK, ParameterStyle.POSITIONAL_COLON, ":1", tuple),
         ("sqlserver", ParameterStyle.QMARK, ParameterStyle.NAMED_AT, "@param", dict),
         ("postgresql", ParameterStyle.QMARK, ParameterStyle.NAMED_DOLLAR, "$param", dict),
     ],
@@ -1195,19 +1233,6 @@ def test_mixed_style_detection(validator: ParameterValidator) -> None:
     assert ParameterStyle.QMARK in styles
     assert ParameterStyle.NAMED_COLON in styles
     assert ParameterStyle.NAMED_PYFORMAT in styles
-
-
-def test_mixed_style_normalization() -> None:
-    """Test normalization of mixed parameter styles."""
-    converter = ParameterConverter()
-    sql = "SELECT * FROM users WHERE id = ? AND name = :name AND status = %(status)s"
-
-    normalized_sql, _ = converter.normalize_sql_for_parsing(sql, "mysql")
-
-    assert "?" in normalized_sql
-    assert ":name" in normalized_sql
-    assert "%(status)s" not in normalized_sql
-    assert ":param_" in normalized_sql
 
 
 def test_parameter_caching() -> None:
@@ -1337,40 +1362,6 @@ def test_large_parameter_count(validator: ParameterValidator) -> None:
 def test_is_iterable_parameters(obj: Any, expected: bool) -> None:
     """Test is_iterable_parameters helper function."""
     assert is_iterable_parameters(obj) == expected
-
-
-def test_sqlite_compatibility(validator: ParameterValidator) -> None:
-    """Test SQLite parameter style compatibility."""
-
-    incompatible = validator.get_sqlglot_incompatible_styles("sqlite")
-    assert ParameterStyle.POSITIONAL_COLON in incompatible
-    assert ParameterStyle.QMARK not in incompatible
-    assert ParameterStyle.NAMED_COLON not in incompatible
-
-
-def test_postgresql_compatibility(validator: ParameterValidator) -> None:
-    """Test PostgreSQL parameter style compatibility."""
-
-    incompatible = validator.get_sqlglot_incompatible_styles("postgres")
-    assert incompatible == {ParameterStyle.POSITIONAL_COLON}
-
-
-def test_mysql_compatibility(validator: ParameterValidator) -> None:
-    """Test MySQL parameter style compatibility."""
-
-    incompatible = validator.get_sqlglot_incompatible_styles("mysql")
-    assert ParameterStyle.POSITIONAL_PYFORMAT in incompatible
-    assert ParameterStyle.NAMED_PYFORMAT in incompatible
-    assert ParameterStyle.POSITIONAL_COLON in incompatible
-
-
-def test_oracle_compatibility(validator: ParameterValidator) -> None:
-    """Test Oracle parameter style compatibility."""
-
-    incompatible = validator.get_sqlglot_incompatible_styles("oracle")
-    assert ParameterStyle.POSITIONAL_COLON in incompatible
-    assert ParameterStyle.POSITIONAL_PYFORMAT in incompatible
-    assert ParameterStyle.NAMED_PYFORMAT in incompatible
 
 
 def test_dollar_numeric_vs_named_disambiguation() -> None:
@@ -1885,3 +1876,340 @@ def test_converted_parameters_processor_coercion(processor: ParameterProcessor) 
     # Should return list with coerced value
     assert isinstance(result.parameters, (list, tuple))
     assert result.parameters[0] == "coerced:42"
+
+
+# =============================================================================
+# Config-Driven Parse Normalization Tests
+# =============================================================================
+
+
+class TestConfigDrivenParseNormalization:
+    """Test that parse normalization decisions use config.supported_parameter_styles."""
+
+    @pytest.fixture
+    def processor(self) -> ParameterProcessor:
+        """Create a ParameterProcessor instance."""
+        return ParameterProcessor()
+
+    @pytest.fixture
+    def validator(self) -> ParameterValidator:
+        """Create a ParameterValidator instance."""
+        return ParameterValidator()
+
+    def test_needs_normalization_when_style_not_in_supported(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """Style NOT in supported_parameter_styles triggers normalization."""
+        sql = "SELECT * FROM t WHERE id = %(name)s"
+        param_info = validator.extract_parameters(sql)
+
+        # Config where NAMED_PYFORMAT is NOT supported
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+        )
+
+        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
+        assert needs_normalization is True
+
+    def test_no_normalization_when_style_in_supported(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """Style IN supported_parameter_styles does NOT trigger normalization."""
+        sql = "SELECT * FROM t WHERE id = $1"
+        param_info = validator.extract_parameters(sql)
+
+        # Config where NUMERIC is supported
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+        )
+
+        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
+        assert needs_normalization is False
+
+    def test_normalization_converts_to_default_style(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """Normalization converts to config.default_parameter_style."""
+        sql = "SELECT * FROM t WHERE id = %(name)s"
+        param_info = validator.extract_parameters(sql)
+
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+        )
+
+        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
+
+        # Should have converted to NUMERIC ($1)
+        assert "%(name)s" not in normalized_sql
+        assert "$1" in normalized_sql
+
+    def test_no_normalization_preserves_original_sql(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """When no normalization needed, original SQL is preserved."""
+        sql = "SELECT * FROM t WHERE id = $1"
+        param_info = validator.extract_parameters(sql)
+
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+        )
+
+        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
+        assert normalized_sql == sql
+
+    def test_none_supported_styles_defaults_to_default_style(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """When supported_parameter_styles=None, defaults to {default_style}."""
+        # When passing None, ParameterStyleConfig defaults to frozenset({default_style})
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles=None,  # type: ignore[arg-type]
+        )
+
+        # Should have defaulted to {NUMERIC}
+        assert config.supported_parameter_styles == frozenset({ParameterStyle.NUMERIC})
+
+        # SQL with NUMERIC should NOT need normalization
+        sql_numeric = "SELECT * FROM t WHERE id = $1"
+        param_info_numeric = validator.extract_parameters(sql_numeric)
+        assert processor._needs_parse_normalization(param_info_numeric, config) is False  # pyright: ignore
+
+        # SQL with NAMED_PYFORMAT SHOULD need normalization (not in default set)
+        sql_pyformat = "SELECT * FROM t WHERE id = %(name)s"
+        param_info_pyformat = validator.extract_parameters(sql_pyformat)
+        assert processor._needs_parse_normalization(param_info_pyformat, config) is True  # pyright: ignore
+
+    def test_multiple_unsupported_parameters_all_normalized(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """Multiple unsupported parameters are all normalized."""
+        sql = "SELECT * FROM t WHERE a = %(a)s AND b = %(b)s AND c = %(c)s"
+        param_info = validator.extract_parameters(sql)
+
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles={ParameterStyle.NUMERIC}
+        )
+
+        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
+
+        # No pyformat placeholders should remain
+        assert "%(a)s" not in normalized_sql
+        assert "%(b)s" not in normalized_sql
+        assert "%(c)s" not in normalized_sql
+
+        # Should have NUMERIC placeholders
+        assert "$" in normalized_sql
+
+
+class TestDriverProfileValidation:
+    """Validate all driver profiles have correct supported_styles."""
+
+    def _get_all_driver_profiles(self) -> dict[str, DriverParameterProfile]:
+        """Collect all driver profiles."""
+        return {key: get_driver_profile(key) for key in _ADAPTER_PROFILE_KEYS if key in DRIVER_PARAMETER_PROFILES}
+
+    def test_default_style_in_supported_styles(self) -> None:
+        """default_style must be in supported_styles for all drivers."""
+        profiles = self._get_all_driver_profiles()
+
+        for name, profile in profiles.items():
+            assert profile.default_style in profile.supported_styles, (
+                f"{name}: default_style {profile.default_style} not in supported_styles {profile.supported_styles}"
+            )
+
+    def test_default_execution_style_in_supported_execution_styles(self) -> None:
+        """default_execution_style must be in supported_execution_styles for all drivers."""
+        profiles = self._get_all_driver_profiles()
+
+        for name, profile in profiles.items():
+            assert (
+                profile.supported_execution_styles
+                and profile.default_execution_style in profile.supported_execution_styles
+            ), (
+                f"{name}: default_execution_style {profile.default_execution_style} "
+                f"not in supported_execution_styles {profile.supported_execution_styles}"
+            )
+
+    def test_no_pyformat_in_supported_styles(self) -> None:
+        """Pyformat styles should NOT be in supported_styles (sqlglot can't parse %)."""
+        profiles = self._get_all_driver_profiles()
+        pyformat_styles = {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}
+
+        for name, profile in profiles.items():
+            incompatible = profile.supported_styles & pyformat_styles
+            assert not incompatible, (
+                f"{name}: supported_styles contains {incompatible} but sqlglot interprets % as modulo"
+            )
+
+
+class TestEndToEndParameterNormalization:
+    """Test complete parameter processing flow."""
+
+    @pytest.fixture
+    def processor(self) -> ParameterProcessor:
+        """Create a ParameterProcessor instance."""
+        return ParameterProcessor()
+
+    def test_pyformat_normalized_for_sqlglot_sql(self, processor: ParameterProcessor) -> None:
+        """Pyformat input should be normalized in sqlglot_sql output."""
+        sql = "SELECT * FROM t WHERE name = %(name)s"
+        params = {"name": "test"}
+
+        # Config similar to asyncpg - pyformat NOT in supported_styles
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+            default_execution_parameter_style=ParameterStyle.NUMERIC,
+            supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        )
+
+        result = processor.process(sql, params, config, dialect="postgres")
+
+        # sqlglot_sql should NOT contain pyformat
+        assert result.sqlglot_sql is not None
+        assert "%(name)s" not in result.sqlglot_sql
+
+    def test_supported_style_preserved_in_sqlglot_sql(self, processor: ParameterProcessor) -> None:
+        """Supported styles should be preserved in sqlglot_sql."""
+        sql = "SELECT * FROM t WHERE id = $1"
+        params = ["test"]
+
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+            default_execution_parameter_style=ParameterStyle.NUMERIC,
+            supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        )
+
+        result = processor.process(sql, params, config, dialect="postgres")
+
+        # sqlglot_sql should still have $1
+        assert result.sqlglot_sql is not None
+        assert "$1" in result.sqlglot_sql
+
+
+class TestAsyncPGSpecificBehavior:
+    """Test AsyncPG-specific parameter handling."""
+
+    @pytest.fixture
+    def asyncpg_config(self) -> ParameterStyleConfig | None:
+        """Get AsyncPG config if available."""
+        try:
+            from sqlspec.adapters.asyncpg.core import driver_profile
+
+            return ParameterStyleConfig(
+                default_parameter_style=driver_profile.default_style,
+                supported_parameter_styles=driver_profile.supported_styles,
+                default_execution_parameter_style=driver_profile.default_execution_style,
+                supported_execution_parameter_styles=driver_profile.supported_execution_styles,
+            )
+        except ImportError:
+            return None
+
+    @pytest.fixture
+    def processor(self) -> ParameterProcessor:
+        """Create a ParameterProcessor instance."""
+        return ParameterProcessor()
+
+    def test_asyncpg_pyformat_converts_for_sqlglot(
+        self, processor: ParameterProcessor, asyncpg_config: ParameterStyleConfig | None
+    ) -> None:
+        """AsyncPG: pyformat input should be converted for sqlglot parsing."""
+        if asyncpg_config is None:
+            pytest.skip("asyncpg adapter not available")
+
+        sql = "SELECT * FROM t WHERE name = %(name)s"
+        params = {"name": "test"}
+
+        result = processor.process(sql, params, asyncpg_config, dialect="postgres")
+
+        # sqlglot_sql should NOT contain pyformat (% = modulo in postgres)
+        assert result.sqlglot_sql is not None
+        assert "%(name)s" not in result.sqlglot_sql
+        # Should be converted to NUMERIC ($1) or NAMED_COLON (:name)
+        assert "$" in result.sqlglot_sql or ":" in result.sqlglot_sql
+
+
+class TestPsycopgSpecificBehavior:
+    """Test Psycopg-specific parameter handling."""
+
+    @pytest.fixture
+    def psycopg_config(self) -> ParameterStyleConfig | None:
+        """Get Psycopg config if available."""
+        try:
+            from sqlspec.adapters.psycopg.core import driver_profile
+
+            return ParameterStyleConfig(
+                default_parameter_style=driver_profile.default_style,
+                supported_parameter_styles=driver_profile.supported_styles,
+                default_execution_parameter_style=driver_profile.default_execution_style,
+                supported_execution_parameter_styles=driver_profile.supported_execution_styles,
+            )
+        except ImportError:
+            return None
+
+    @pytest.fixture
+    def processor(self) -> ParameterProcessor:
+        """Create a ParameterProcessor instance."""
+        return ParameterProcessor()
+
+    def test_psycopg_pyformat_normalized_for_parsing(
+        self, processor: ParameterProcessor, psycopg_config: ParameterStyleConfig | None
+    ) -> None:
+        """Psycopg: pyformat normalized for sqlglot but available for execution."""
+        if psycopg_config is None:
+            pytest.skip("psycopg adapter not available")
+
+        sql = "SELECT * FROM t WHERE name = %(name)s"
+        params = {"name": "test"}
+
+        result = processor.process(sql, params, psycopg_config, dialect="postgres")
+
+        # sqlglot_sql should NOT contain pyformat (normalized for parsing)
+        assert result.sqlglot_sql is not None
+        assert "%(name)s" not in result.sqlglot_sql
+
+
+class TestMySQLAdaptersBehavior:
+    """Test MySQL adapter parameter handling."""
+
+    @pytest.fixture
+    def pymysql_config(self) -> ParameterStyleConfig | None:
+        """Get PyMySQL config if available."""
+        try:
+            from sqlspec.adapters.pymysql.core import driver_profile
+
+            return ParameterStyleConfig(
+                default_parameter_style=driver_profile.default_style,
+                supported_parameter_styles=driver_profile.supported_styles,
+                default_execution_parameter_style=driver_profile.default_execution_style,
+                supported_execution_parameter_styles=driver_profile.supported_execution_styles,
+            )
+        except ImportError:
+            return None
+
+    @pytest.fixture
+    def processor(self) -> ParameterProcessor:
+        """Create a ParameterProcessor instance."""
+        return ParameterProcessor()
+
+    def test_pymysql_pyformat_normalized_for_parsing(
+        self, processor: ParameterProcessor, pymysql_config: ParameterStyleConfig | None
+    ) -> None:
+        """PyMySQL: pyformat normalized for sqlglot parsing."""
+        if pymysql_config is None:
+            pytest.skip("pymysql adapter not available")
+
+        sql = "SELECT * FROM t WHERE name = %s"
+        params = ["test"]
+
+        result = processor.process(sql, params, pymysql_config, dialect="mysql")
+
+        # sqlglot_sql should NOT contain %s
+        assert result.sqlglot_sql is not None
+        assert "%s" not in result.sqlglot_sql

@@ -12,7 +12,13 @@ from sqlspec.core.parameters._alignment import (
     normalize_parameter_key,
     validate_parameter_alignment,
 )
-from sqlspec.core.parameters._types import ConvertedParameters, ParameterMapping, ParameterPayload, ParameterProfile
+from sqlspec.core.parameters._types import (
+    ConvertedParameters,
+    ParameterMapping,
+    ParameterPayload,
+    ParameterProfile,
+    ParameterStyle,
+)
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.type_guards import get_value_attribute
 
@@ -61,11 +67,12 @@ class _LiteralInliningTransform:
 
 
 class _NullPlaceholderTransformer:
-    __slots__ = ("_null_positions", "_qmark_position", "_sorted_null_positions")
+    __slots__ = ("_null_names", "_null_positions", "_qmark_position", "_sorted_null_positions")
 
-    def __init__(self, null_positions: "set[int]", sorted_null_positions: "list[int]") -> None:
+    def __init__(self, null_positions: "set[int]", sorted_null_positions: "list[int]", null_names: "set[str]") -> None:
         self._null_positions = null_positions
         self._sorted_null_positions = sorted_null_positions
+        self._null_names = null_names
         self._qmark_position = 0
 
     def __call__(self, node: Any) -> Any:
@@ -89,14 +96,17 @@ class _NullPlaceholderTransformer:
             return node
 
         if isinstance(node, _exp.Parameter) and node.this is not None:
-            parameter_text = str(node.this)
-            if parameter_text.isdigit():
-                param_index = int(parameter_text) - 1
+            parameter_text = node.this.name if isinstance(node.this, _exp.Var) else str(node.this)
+            normalized_text = parameter_text.lstrip("@:$")
+            if normalized_text.isdigit():
+                param_index = int(normalized_text) - 1
                 if param_index in self._null_positions:
                     return _exp.Null()
                 shift = bisect.bisect_left(self._sorted_null_positions, param_index)
                 new_param_num = param_index - shift + 1
                 return _exp.Parameter(this=str(new_param_num))
+            if normalized_text in self._null_names:
+                return _exp.Null()
             return node
 
         return node
@@ -233,9 +243,31 @@ def replace_null_parameters_with_literals(
             return expression, list(parameters)
         return expression, None
 
-    sorted_null_positions = sorted(null_positions)
+    named_styles = {
+        ParameterStyle.NAMED_COLON,
+        ParameterStyle.NAMED_AT,
+        ParameterStyle.NAMED_DOLLAR,
+        ParameterStyle.NAMED_PYFORMAT,
+    }
+    positional_styles = {
+        ParameterStyle.QMARK,
+        ParameterStyle.POSITIONAL_PYFORMAT,
+        ParameterStyle.POSITIONAL_COLON,
+        ParameterStyle.NUMERIC,
+    }
+    null_names: set[str] = set()
+    positional_null_positions: set[int] = set()
+    for parameter in profile.parameters:
+        if parameter.ordinal not in null_positions:
+            continue
+        if parameter.style in named_styles and parameter.name:
+            null_names.add(parameter.name)
+        if parameter.style in positional_styles:
+            positional_null_positions.add(parameter.ordinal)
 
-    transformer = _NullPlaceholderTransformer(null_positions, sorted_null_positions)
+    sorted_null_positions = sorted(positional_null_positions)
+
+    transformer = _NullPlaceholderTransformer(positional_null_positions, sorted_null_positions, null_names)
     transformed_expression = expression.transform(transformer)
 
     cleaned_parameters: ConvertedParameters

@@ -84,11 +84,10 @@ def spanner_database(
 @pytest.fixture(scope="session")
 def spanner_config(
     spanner_service: SpannerService, spanner_connection: spanner.Client, spanner_database: "Database"
-) -> "SpannerSyncConfig":
+) -> "Generator[SpannerSyncConfig, None, None]":
     """Create SpannerSyncConfig after ensuring database exists."""
     api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
-
-    return SpannerSyncConfig(
+    config = SpannerSyncConfig(
         connection_config={
             "project": spanner_service.project,
             "instance_id": spanner_service.instance_name,
@@ -99,6 +98,10 @@ def spanner_config(
             "max_sessions": 5,
         }
     )
+    try:
+        yield config
+    finally:
+        config.close_pool()
 
 
 @pytest.fixture

@@ -42,13 +42,17 @@ ADAPTER_CONFIGS = [
     },
     {
         "name": "MySQL",
-        "parameter_style": ParameterStyle.POSITIONAL_PYFORMAT,
+        # MySQL uses QMARK for sqlglot parsing (supported_parameter_styles)
+        # but POSITIONAL_PYFORMAT for execution (supported_execution_parameter_styles)
+        "parameter_style": ParameterStyle.QMARK,
+        "execution_style": ParameterStyle.POSITIONAL_PYFORMAT,
         "dialect": "mysql",
         "example_queries": {
-            "select": "SELECT * FROM users WHERE id = %s",
-            "insert": "INSERT INTO users (name) VALUES (%s)",
-            "update": "UPDATE users SET name = %s WHERE id = %s",
-            "delete": "DELETE FROM users WHERE id = %s",
+            # Use QMARK in examples since that's what sqlglot can parse
+            "select": "SELECT * FROM users WHERE id = ?",
+            "insert": "INSERT INTO users (name) VALUES (?)",
+            "update": "UPDATE users SET name = ? WHERE id = ?",
+            "delete": "DELETE FROM users WHERE id = ?",
         },
     },
 ]
@@ -65,14 +69,19 @@ def adapter_config(request: pytest.FixtureRequest) -> "dict[str, Any]":
 @pytest.fixture
 def statement_config_for_adapter(adapter_config: "dict[str, Any]") -> StatementConfig:
     """Create statement config for specific adapter."""
+    # parameter_style is for sqlglot parsing (supported_parameter_styles)
+    # execution_style (if different) is for driver execution (supported_execution_parameter_styles)
+    parse_style = adapter_config["parameter_style"]
+    exec_style = adapter_config.get("execution_style", parse_style)
+
     return StatementConfig(
         dialect=adapter_config["dialect"],
         enable_caching=False,
         parameter_config=ParameterStyleConfig(
-            default_parameter_style=adapter_config["parameter_style"],
-            supported_parameter_styles={adapter_config["parameter_style"]},
-            default_execution_parameter_style=adapter_config["parameter_style"],
-            supported_execution_parameter_styles={adapter_config["parameter_style"]},
+            default_parameter_style=parse_style,
+            supported_parameter_styles={parse_style},
+            default_execution_parameter_style=exec_style,
+            supported_execution_parameter_styles={exec_style},
         ),
     )
 
@@ -94,9 +103,6 @@ def test_adapter_parameter_style_handling(
     elif adapter_config["parameter_style"] == ParameterStyle.NUMERIC:
         statement = SQL(queries["select"], 1, statement_config=config)
         assert "$1" in statement.sql or "?" in statement.sql
-    elif adapter_config["parameter_style"] == ParameterStyle.POSITIONAL_PYFORMAT:
-        statement = SQL(queries["select"], 1, statement_config=config)
-        assert "%s" in statement.sql or "?" in statement.sql
 
 
 def test_adapter_sql_compilation(
