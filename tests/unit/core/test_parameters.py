@@ -39,21 +39,71 @@ from sqlspec.core import (
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 
-_ADAPTER_MODULE_NAMES: "tuple[str, ...]" = (
-    "sqlspec.adapters.adbc",
-    "sqlspec.adapters.aiosqlite",
-    "sqlspec.adapters.asyncmy",
-    "sqlspec.adapters.asyncpg",
-    "sqlspec.adapters.bigquery",
-    "sqlspec.adapters.duckdb",
-    "sqlspec.adapters.oracledb",
-    "sqlspec.adapters.psqlpy",
-    "sqlspec.adapters.psycopg",
-    "sqlspec.adapters.sqlite",
+_ADAPTER_DRIVER_MODULES: "tuple[str, ...]" = (
+    "sqlspec.adapters.adbc.driver",
+    "sqlspec.adapters.aiosqlite.driver",
+    "sqlspec.adapters.asyncmy.driver",
+    "sqlspec.adapters.asyncpg.driver",
+    "sqlspec.adapters.bigquery.driver",
+    "sqlspec.adapters.cockroach_asyncpg.driver",
+    "sqlspec.adapters.cockroach_psycopg.driver",
+    "sqlspec.adapters.duckdb.driver",
+    "sqlspec.adapters.mock.driver",
+    "sqlspec.adapters.mysqlconnector.driver",
+    "sqlspec.adapters.oracledb.driver",
+    "sqlspec.adapters.psqlpy.driver",
+    "sqlspec.adapters.psycopg.driver",
+    "sqlspec.adapters.pymysql.driver",
+    "sqlspec.adapters.spanner.driver",
+    "sqlspec.adapters.sqlite.driver",
 )
 
-for _module_name in _ADAPTER_MODULE_NAMES:
+for _module_name in _ADAPTER_DRIVER_MODULES:
     import_module(_module_name)
+
+_ADAPTER_PROFILE_KEYS: "tuple[str, ...]" = (
+    "adbc",
+    "aiosqlite",
+    "asyncmy",
+    "asyncpg",
+    "bigquery",
+    "cockroach_asyncpg",
+    "cockroach_psycopg",
+    "duckdb",
+    "mock",
+    "mysql-connector",
+    "oracledb",
+    "psqlpy",
+    "psycopg",
+    "pymysql",
+    "spanner",
+    "sqlite",
+)
+
+_STYLE_PLACEHOLDER: "dict[ParameterStyle, str]" = {
+    ParameterStyle.QMARK: "?",
+    ParameterStyle.NUMERIC: "$1",
+    ParameterStyle.NAMED_COLON: ":param",
+    ParameterStyle.POSITIONAL_COLON: ":1",
+    ParameterStyle.NAMED_AT: "@param",
+    ParameterStyle.NAMED_DOLLAR: "$param",
+    ParameterStyle.NAMED_PYFORMAT: "%(param)s",
+    ParameterStyle.POSITIONAL_PYFORMAT: "%s",
+}
+
+
+def _normalize_sqlglot_dialect(dialect: "str | None") -> str:
+    if not dialect:
+        return ""
+    if dialect == "postgresql":
+        return "postgres"
+    return dialect
+
+
+def _build_sql_for_style(style: ParameterStyle) -> str:
+    placeholder = _STYLE_PLACEHOLDER[style]
+    return f"SELECT * FROM test_table WHERE col = {placeholder}"
+
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -333,6 +383,18 @@ def test_replace_null_parameters_with_literals_numeric_dialect() -> None:
     assert cleaned_params == (42,)
 
 
+def test_replace_null_parameters_with_literals_named_bigquery() -> None:
+    """Named parameters should inline NULL literals and drop None values."""
+
+    expression = sqlglot.parse_one("INSERT INTO test VALUES (@id, @desc)", dialect="bigquery")
+    modified_expression, cleaned_params = replace_null_parameters_with_literals(
+        expression, {"id": 1, "desc": None}, dialect="bigquery"
+    )
+
+    assert modified_expression.sql(dialect="bigquery") == "INSERT INTO test VALUES (@id, NULL)"
+    assert cleaned_params == {"id": 1}
+
+
 def test_replace_placeholders_with_literals_basic_sequence() -> None:
     """Placeholders are replaced by literals when provided with positional parameters."""
 
@@ -444,6 +506,66 @@ def test_register_driver_profile_allows_override() -> None:
         assert resolved_profile.has_native_list_expansion is True
     finally:
         DRIVER_PARAMETER_PROFILES.pop(key, None)
+
+
+def test_all_driver_profiles_registered() -> None:
+    """All adapter driver profiles should be registered for tests."""
+    missing_profiles = [key for key in _ADAPTER_PROFILE_KEYS if key not in DRIVER_PARAMETER_PROFILES]
+    assert not missing_profiles
+
+
+@pytest.mark.parametrize("adapter_key", _ADAPTER_PROFILE_KEYS)
+def test_supported_styles_sqlglot_parseable(adapter_key: str) -> None:
+    """Supported styles must parse with SQLGlot for the adapter dialect."""
+    profile = get_driver_profile(adapter_key)
+    dialect = _normalize_sqlglot_dialect(profile.default_dialect)
+
+    for style in profile.supported_styles:
+        if style not in _STYLE_PLACEHOLDER:
+            continue
+        sql = _build_sql_for_style(style)
+        try:
+            sqlglot.parse_one(sql, dialect=dialect)
+        except Exception as exc:  # pragma: no cover - diagnostics in failure
+            pytest.fail(f"{adapter_key} {style.value} failed SQLGlot parse ({dialect}): {exc}")
+
+
+@pytest.mark.parametrize("adapter_key", _ADAPTER_PROFILE_KEYS)
+def test_supported_styles_skip_parse_normalization(adapter_key: str) -> None:
+    """Supported styles should not trigger parse normalization."""
+    profile = get_driver_profile(adapter_key)
+    config = build_statement_config_from_profile(profile).parameter_config
+    processor = ParameterProcessor()
+    validator = ParameterValidator()
+
+    for style in config.supported_parameter_styles:
+        if style not in _STYLE_PLACEHOLDER:
+            continue
+        sql = _build_sql_for_style(style)
+        param_info = validator.extract_parameters(sql)
+        assert param_info
+        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
+        assert needs_normalization is False
+
+    if config.supported_execution_parameter_styles is not None:
+        assert config.default_execution_parameter_style in config.supported_execution_parameter_styles
+
+
+@pytest.mark.parametrize("adapter_key", _ADAPTER_PROFILE_KEYS)
+def test_unsupported_styles_require_parse_normalization(adapter_key: str) -> None:
+    """Unsupported styles should always trigger parse normalization."""
+    profile = get_driver_profile(adapter_key)
+    config = build_statement_config_from_profile(profile).parameter_config
+    processor = ParameterProcessor()
+    validator = ParameterValidator()
+
+    unsupported_styles = set(_STYLE_PLACEHOLDER).difference(config.supported_parameter_styles)
+    for style in unsupported_styles:
+        sql = _build_sql_for_style(style)
+        param_info = validator.extract_parameters(sql)
+        assert param_info
+        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
+        assert needs_normalization is True
 
 
 def test_mixed_parameter_style_with_processor() -> None:
@@ -1070,7 +1192,7 @@ def test_missing_named_parameters_can_fallback_when_disabled(converter: Paramete
         ("sqlite", ParameterStyle.NAMED_COLON, ParameterStyle.QMARK, "?", list),
         ("postgresql", ParameterStyle.QMARK, ParameterStyle.NUMERIC, "$1", list),
         ("mysql", ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT, "%s", list),
-        ("oracle", ParameterStyle.QMARK, ParameterStyle.POSITIONAL_COLON, ":1", dict),
+        ("oracle", ParameterStyle.QMARK, ParameterStyle.POSITIONAL_COLON, ":1", tuple),
         ("sqlserver", ParameterStyle.QMARK, ParameterStyle.NAMED_AT, "@param", dict),
         ("postgresql", ParameterStyle.QMARK, ParameterStyle.NAMED_DOLLAR, "$param", dict),
     ],
@@ -1889,18 +2011,7 @@ class TestDriverProfileValidation:
 
     def _get_all_driver_profiles(self) -> dict[str, DriverParameterProfile]:
         """Collect all driver profiles."""
-        profiles = {}
-        for module_name in _ADAPTER_MODULE_NAMES:
-            try:
-                # Try to get the driver_profile from core submodule
-                core_module = import_module(f"{module_name}.core")
-                if hasattr(core_module, "driver_profile"):
-                    profile = core_module.driver_profile
-                    adapter_name = module_name.split(".")[-1]
-                    profiles[adapter_name] = profile
-            except (ImportError, AttributeError):
-                continue
-        return profiles
+        return {key: get_driver_profile(key) for key in _ADAPTER_PROFILE_KEYS if key in DRIVER_PARAMETER_PROFILES}
 
     def test_default_style_in_supported_styles(self) -> None:
         """default_style must be in supported_styles for all drivers."""

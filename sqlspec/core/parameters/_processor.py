@@ -392,19 +392,11 @@ class ParameterProcessor:
             return self._compile_static_script(sql, parameters, config, is_many, cache_key)
 
         requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
-        # POSITIONAL_COLON (e.g., :1) requires dict parameters - cannot take early return with list/tuple
-        needs_positional_colon_conversion = (
-            ParameterStyle.POSITIONAL_COLON in original_styles
-            and parameters is not None
-            and isinstance(parameters, Sequence)
-            and not isinstance(parameters, (str, bytes, Mapping))
-        )
         if (
             not needs_execution_conversion
             and not config.type_coercion_map
             and not config.output_transformer
             and not requires_mapping
-            and not needs_positional_colon_conversion
         ):
             normalized_sql = self._normalize_sql_for_parsing(sql, param_info, config) if normalize_for_parsing else sql
             result = ParameterProcessingResult(
@@ -506,25 +498,6 @@ class ParameterProcessor:
         needs_execution_conversion: bool,
         is_many: bool,
     ) -> "tuple[str, ConvertedParameters]":
-        # POSITIONAL_COLON (e.g., :1, :2) requires dict parameters with string numeric keys
-        # This must happen even when SQL placeholders don't need conversion
-        if ParameterStyle.POSITIONAL_COLON in original_styles and parameters is not None:
-            if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-                converted_sets: list[dict[str, Any] | Any] = []
-                for param_set in parameters:
-                    if isinstance(param_set, Mapping):
-                        converted_sets.append(dict(param_set))
-                    elif isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
-                        converted_sets.append({str(i + 1): v for i, v in enumerate(param_set)})
-                    else:
-                        converted_sets.append(param_set)
-                return sql, converted_sets
-            if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, Mapping)):
-                converted = {str(i + 1): v for i, v in enumerate(parameters)}
-                return sql, converted
-            if isinstance(parameters, Mapping):
-                return sql, dict(parameters)
-
         if not needs_execution_conversion:
             # Convert parameters to concrete type for return
             if parameters is None:
