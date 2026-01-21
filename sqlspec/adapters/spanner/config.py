@@ -272,6 +272,10 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def _close_pool(self) -> None:
         if self.connection_instance and supports_close(self.connection_instance):
             self.connection_instance.close()
+        if self._client and supports_close(self._client):
+            self._client.close()
+        self._client = None
+        self._database = None
 
     def provide_connection(self, *args: Any, transaction: "bool" = False, **kwargs: Any) -> "SpannerConnectionContext":
         """Yield a Snapshot (default) or Transaction context from the configured pool.
