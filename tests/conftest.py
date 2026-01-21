@@ -1,3 +1,4 @@
+import os
 import warnings
 
 warnings.filterwarnings(
@@ -49,6 +50,17 @@ pytest_plugins = [
 
 pytestmark = pytest.mark.anyio
 here = Path(__file__).parent
+
+
+@pytest.fixture(scope="session", autouse=True)
+def disable_spanner_builtin_metrics() -> "Generator[None, None, None]":
+    """Disable Spanner built-in metrics export during tests."""
+    if os.getenv("SPANNER_DISABLE_BUILTIN_METRICS") is None:
+        os.environ["SPANNER_DISABLE_BUILTIN_METRICS"] = "true"
+        yield
+        os.environ.pop("SPANNER_DISABLE_BUILTIN_METRICS", None)
+    else:
+        yield
 
 
 @pytest.fixture(scope="session")
