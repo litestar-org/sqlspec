@@ -39,24 +39,27 @@ async def cockroach_asyncpg_parameter_session(
         }
     )
 
-    async with config.provide_session() as session:
-        await session.execute_script("""
-            DROP TABLE IF EXISTS test_parameter_conversion CASCADE;
-            CREATE TABLE test_parameter_conversion (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INT DEFAULT 0,
-                description TEXT
-            );
-            INSERT INTO test_parameter_conversion (name, value, description) VALUES
-                ('test1', 100, 'First test'),
-                ('test2', 200, 'Second test'),
-                ('test3', 300, NULL);
-        """)
+    try:
+        async with config.provide_session() as session:
+            await session.execute_script("""
+                DROP TABLE IF EXISTS test_parameter_conversion CASCADE;
+                CREATE TABLE test_parameter_conversion (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INT DEFAULT 0,
+                    description TEXT
+                );
+                INSERT INTO test_parameter_conversion (name, value, description) VALUES
+                    ('test1', 100, 'First test'),
+                    ('test2', 200, 'Second test'),
+                    ('test3', 300, NULL);
+            """)
 
-        yield session
+            yield session
 
-        await session.execute_script("DROP TABLE IF EXISTS test_parameter_conversion")
+            await session.execute_script("DROP TABLE IF EXISTS test_parameter_conversion")
+    finally:
+        # Close pool AFTER session context exits to avoid deadlock
         await config.close_pool()
 
 
