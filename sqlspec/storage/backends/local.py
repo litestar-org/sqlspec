@@ -72,10 +72,14 @@ class LocalStore:
 
         Args:
             uri: File URI or path (e.g., "file:///path" or "/path")
-            **kwargs: Additional options (base_path for relative operations)
+            **kwargs: Additional options including:
+                - base_path: Subdirectory relative to URI path. If relative, it's combined
+                  with the URI path. If absolute, it takes precedence (backward compatible).
 
-        The URI may be a file:// path (Windows style like file:///C:/path is supported),
-        and an explicit base_path override will take precedence before we ensure the directory exists.
+        The URI may be a file:// path (Windows style like file:///C:/path is supported).
+        When both URI and base_path are provided, they are combined:
+        - file:///home/user/storage + base_path="subdir" -> /home/user/storage/subdir
+        - file:///home/user/storage + base_path="/other" -> /other (absolute takes precedence)
         """
         if uri.startswith("file://"):
             parsed = urlparse(uri)
@@ -89,7 +93,9 @@ class LocalStore:
             self.base_path = Path.cwd()
 
         if "base_path" in kwargs:
-            self.base_path = Path(kwargs["base_path"]).resolve()
+            # Combine URI path with base_path (Path division handles absolute paths correctly)
+            # If base_path is absolute, it takes precedence (backward compatible)
+            self.base_path = (self.base_path / kwargs["base_path"]).resolve()
 
         if not self.base_path.exists():
             self.base_path.mkdir(parents=True, exist_ok=True)
@@ -377,10 +383,27 @@ class LocalStore:
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
     ) -> AsyncIterator[bytes]:
-        """Stream bytes from file asynchronously."""
-        from sqlspec.storage.backends.base import AsyncBytesIterator
+        """Stream bytes from file asynchronously.
 
-        return AsyncBytesIterator(self.stream_read(path, chunk_size, **kwargs))
+        Uses asyncio.to_thread() to run blocking file I/O in a thread pool,
+        ensuring the event loop is not blocked during read operations.
+
+        Args:
+            path: Path to the file to read.
+            chunk_size: Size of chunks to yield (default: 65536 bytes).
+            **kwargs: Additional arguments (unused).
+
+        Returns:
+            AsyncIterator yielding chunks of bytes.
+        """
+        import asyncio
+
+        from sqlspec.storage.backends.base import AsyncChunkedBytesIterator
+
+        resolved = self._resolve_path(path)
+        # Run blocking I/O in thread pool to avoid blocking event loop
+        data = await asyncio.to_thread(resolved.read_bytes)
+        return AsyncChunkedBytesIterator(data, chunk_size or 65536)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects asynchronously."""

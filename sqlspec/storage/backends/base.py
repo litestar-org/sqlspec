@@ -8,7 +8,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
-__all__ = ("AsyncArrowBatchIterator", "AsyncBytesIterator", "ObjectStoreBase")
+__all__ = ("AsyncArrowBatchIterator", "AsyncBytesIterator", "AsyncChunkedBytesIterator", "ObjectStoreBase")
 
 
 class AsyncArrowBatchIterator:
@@ -58,6 +58,9 @@ class AsyncBytesIterator:
 
     The class wraps a synchronous iterator and exposes it as an async iterator,
     enabling usage with `async for` syntax.
+
+    Note: This class blocks the event loop during I/O. For non-blocking streaming,
+    use AsyncChunkedBytesIterator with pre-loaded data instead.
     """
 
     __slots__ = ("_sync_iter",)
@@ -87,6 +90,65 @@ class AsyncBytesIterator:
             return next(self._sync_iter)
         except StopIteration:
             raise StopAsyncIteration from None
+
+
+class AsyncChunkedBytesIterator:
+    """Async iterator that yields pre-loaded bytes data in chunks.
+
+    This class implements the async iterator protocol without using async generators,
+    allowing it to be compiled by mypyc (which doesn't support async generators).
+
+    Unlike AsyncBytesIterator, this class works with pre-loaded data and yields
+    control to the event loop between chunks via asyncio.sleep(0), ensuring
+    the event loop is not blocked during iteration.
+
+    Usage pattern:
+        # Load data in thread pool to avoid blocking
+        data = await asyncio.to_thread(read_bytes, path)
+        # Stream chunks without blocking event loop
+        return AsyncChunkedBytesIterator(data, chunk_size=65536)
+    """
+
+    __slots__ = ("_chunk_size", "_data", "_offset")
+
+    def __init__(self, data: bytes, chunk_size: int = 65536) -> None:
+        """Initialize the chunked bytes iterator.
+
+        Args:
+            data: The bytes data to iterate over in chunks.
+            chunk_size: Size of each chunk to yield (default: 65536 bytes).
+        """
+        self._data = data
+        self._chunk_size = chunk_size
+        self._offset = 0
+
+    def __aiter__(self) -> "AsyncChunkedBytesIterator":
+        """Return self as the async iterator."""
+        return self
+
+    async def __anext__(self) -> bytes:
+        """Get the next chunk of bytes asynchronously.
+
+        Yields control to the event loop via asyncio.sleep(0) before returning
+        each chunk, ensuring other tasks can run during iteration.
+
+        Returns:
+            The next chunk of bytes.
+
+        Raises:
+            StopAsyncIteration: When all data has been yielded.
+        """
+        import asyncio
+
+        if self._offset >= len(self._data):
+            raise StopAsyncIteration
+
+        # Yield to event loop to allow other tasks to run
+        await asyncio.sleep(0)
+
+        chunk = self._data[self._offset : self._offset + self._chunk_size]
+        self._offset += self._chunk_size
+        return chunk
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

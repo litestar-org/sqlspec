@@ -444,3 +444,122 @@ def test_arrow_operations_without_pyarrow(tmp_path: Path) -> None:
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
         list(store.stream_arrow("*.parquet"))
+
+
+# Tests for base_path combination fix
+
+
+def test_file_uri_with_relative_base_path(tmp_path: Path) -> None:
+    """Test that file:// URI + relative base_path are combined correctly."""
+    # Create the subdirectory
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+
+    store = LocalStore(f"file://{tmp_path}", base_path="subdir")
+
+    # base_path should be combined with URI path
+    assert store.base_path == subdir.resolve()
+
+
+def test_file_uri_with_absolute_base_path_override(tmp_path: Path) -> None:
+    """Test that absolute base_path takes precedence (backward compatible)."""
+    other_path = tmp_path / "other"
+    other_path.mkdir()
+
+    store = LocalStore(f"file://{tmp_path}", base_path=str(other_path))
+
+    # Absolute base_path should override
+    assert store.base_path == other_path.resolve()
+
+
+def test_file_uri_with_nested_base_path(tmp_path: Path) -> None:
+    """Test that nested relative base_path is combined correctly."""
+    # Create nested directory
+    nested = tmp_path / "level1" / "level2"
+    nested.mkdir(parents=True)
+
+    store = LocalStore(f"file://{tmp_path}", base_path="level1/level2")
+
+    assert store.base_path == nested.resolve()
+
+
+def test_base_path_combination_full_workflow(tmp_path: Path) -> None:
+    """Test full read/write workflow with base_path combination."""
+    subdir = tmp_path / "storage" / "data"
+    subdir.mkdir(parents=True)
+
+    store = LocalStore(f"file://{tmp_path}/storage", base_path="data")
+
+    # Write and read should work correctly
+    test_data = b"test content"
+    store.write_bytes("test.bin", test_data)
+    result = store.read_bytes("test.bin")
+
+    assert result == test_data
+    # Verify file is in the correct location
+    assert (subdir / "test.bin").exists()
+
+
+# Tests for async streaming non-blocking fix
+
+
+async def test_stream_read_async_does_not_block_event_loop(tmp_path: Path) -> None:
+    """Test that stream_read_async doesn't block the event loop."""
+    import asyncio
+
+    store = LocalStore(str(tmp_path))
+
+    # Write a reasonably sized file
+    test_data = b"x" * 100_000
+    store.write_bytes("large_file.bin", test_data)
+
+    # Track if concurrent task runs during streaming
+    concurrent_task_ran = False
+
+    async def concurrent_task() -> None:
+        nonlocal concurrent_task_ran
+        await asyncio.sleep(0)
+        concurrent_task_ran = True
+
+    async def stream_file() -> bytes:
+        chunks = [chunk async for chunk in await store.stream_read_async("large_file.bin", chunk_size=1000)]
+        return b"".join(chunks)
+
+    # Run streaming and concurrent task together
+    result, _ = await asyncio.gather(stream_file(), concurrent_task())
+
+    assert result == test_data
+    assert concurrent_task_ran, "Concurrent task should have run during streaming"
+
+
+async def test_stream_read_async_respects_chunk_size(tmp_path: Path) -> None:
+    """Test that stream_read_async respects the chunk_size parameter."""
+    store = LocalStore(str(tmp_path))
+
+    test_data = b"x" * 10_000
+    store.write_bytes("chunked_file.bin", test_data)
+
+    chunk_size = 1000
+    chunks = [chunk async for chunk in await store.stream_read_async("chunked_file.bin", chunk_size=chunk_size)]
+
+    # All chunks except possibly the last should be exactly chunk_size
+    for chunk in chunks[:-1]:
+        assert len(chunk) == chunk_size
+
+    # Reassemble and verify
+    assert b"".join(chunks) == test_data
+
+
+async def test_stream_read_async_with_base_path(tmp_path: Path) -> None:
+    """Test async streaming works correctly with base_path combination."""
+    subdir = tmp_path / "data"
+    subdir.mkdir()
+
+    store = LocalStore(f"file://{tmp_path}", base_path="data")
+
+    test_data = b"streaming test data"
+    store.write_bytes("stream_test.bin", test_data)
+
+    chunks = [chunk async for chunk in await store.stream_read_async("stream_test.bin")]
+
+    assert b"".join(chunks) == test_data
