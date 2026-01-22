@@ -77,11 +77,18 @@ class FSSpecBackend:
             uri: Filesystem URI (protocol://path).
             **kwargs: Additional fsspec configuration options, including an optional base_path.
 
-        For cloud URIs such as S3/GS/Azure, we derive a default base_path from the bucket/path when no explicit base_path is provided.
+        For cloud URIs (S3/GS/Azure) and file:// URIs, we derive a default base_path from the
+        URI path when no explicit base_path is provided. When both URI and base_path are provided,
+        they are combined (base_path is appended to URI-derived path).
+
+        Examples:
+            - FSSpecBackend("s3://bucket/prefix") -> base_path = "bucket/prefix"
+            - FSSpecBackend("file:///home/user/storage") -> base_path = "/home/user/storage"
+            - FSSpecBackend("file:///home/user", base_path="subdir") -> base_path = "/home/user/subdir"
         """
         ensure_fsspec()
 
-        base_path = kwargs.pop("base_path", "")
+        explicit_base_path = kwargs.pop("base_path", "")
 
         if "://" in uri:
             self.protocol = uri.split("://", maxsplit=1)[0]
@@ -93,13 +100,24 @@ class FSSpecBackend:
                     uri_base_path = parsed.netloc
                     if parsed.path and parsed.path != "/":
                         uri_base_path = f"{uri_base_path}{parsed.path}"
-                    if not base_path:
-                        base_path = uri_base_path
+                    # Combine URI path with explicit base_path if both provided
+                    if explicit_base_path:
+                        uri_base_path = f"{uri_base_path.rstrip('/')}/{explicit_base_path.lstrip('/')}"
+                    explicit_base_path = uri_base_path
+            elif self.protocol == "file":
+                parsed = urlparse(uri)
+                if parsed.path and parsed.path != "/":
+                    # For file protocol, keep the path as-is (preserve leading slash for absolute paths)
+                    uri_base_path = parsed.path
+                    # Combine URI path with explicit base_path if both provided
+                    if explicit_base_path:
+                        uri_base_path = f"{uri_base_path.rstrip('/')}/{explicit_base_path.lstrip('/')}"
+                    explicit_base_path = uri_base_path
         else:
             self.protocol = uri
             self._fs_uri = f"{uri}://"
 
-        self.base_path = base_path.rstrip("/") if base_path else ""
+        self.base_path = explicit_base_path.rstrip("/") if explicit_base_path else ""
 
         import fsspec
 
@@ -453,10 +471,26 @@ class FSSpecBackend:
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
     ) -> AsyncIterator[bytes]:
-        """Stream bytes from storage asynchronously."""
-        from sqlspec.storage.backends.base import AsyncBytesIterator
+        """Stream bytes from storage asynchronously.
 
-        return AsyncBytesIterator(self.stream_read(path, chunk_size, **kwargs))
+        Uses asyncio.to_thread() to run blocking I/O in a thread pool,
+        ensuring the event loop is not blocked during read operations.
+
+        Args:
+            path: Path to the file to read.
+            chunk_size: Size of chunks to yield (default: 65536 bytes).
+            **kwargs: Additional arguments passed to read_bytes.
+
+        Returns:
+            AsyncIterator yielding chunks of bytes.
+        """
+        import asyncio
+
+        from sqlspec.storage.backends.base import AsyncChunkedBytesIterator
+
+        # Pass original path - read_bytes handles path resolution
+        data = await asyncio.to_thread(self.read_bytes, path, **kwargs)
+        return AsyncChunkedBytesIterator(data, chunk_size or 65536)
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.

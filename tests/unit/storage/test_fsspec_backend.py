@@ -479,3 +479,124 @@ def test_arrow_operations_without_pyarrow(tmp_path: Path) -> None:
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
         list(store.stream_arrow("*.parquet"))
+
+
+# Tests for file:// URI auto-derive base_path fix
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_file_uri_auto_derives_base_path(tmp_path: Path) -> None:
+    """Test that file:// URI automatically derives base_path."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    store = FSSpecBackend(f"file://{tmp_path}")
+
+    # base_path should be derived from URI (absolute path preserved)
+    assert store.base_path == str(tmp_path)
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_file_uri_with_explicit_base_path_combination(tmp_path: Path) -> None:
+    """Test that file:// URI + explicit base_path are combined."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    store = FSSpecBackend(f"file://{tmp_path}", base_path="subdir")
+
+    # base_path should combine URI path with explicit base_path (absolute path preserved)
+    expected_base_path = f"{tmp_path}/subdir"
+    assert store.base_path == expected_base_path
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_file_uri_base_path_full_workflow(tmp_path: Path) -> None:
+    """Test full read/write workflow with file:// URI auto-derived base_path."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    # Create subdirectory for the test
+    subdir = tmp_path / "data"
+    subdir.mkdir()
+
+    store = FSSpecBackend(f"file://{tmp_path}", base_path="data")
+
+    # Write and read should work correctly
+    test_data = b"test content"
+    store.write_bytes("test.bin", test_data)
+    result = store.read_bytes("test.bin")
+
+    assert result == test_data
+    # Verify file is in the correct location
+    assert (subdir / "test.bin").exists()
+
+
+# Tests for async streaming non-blocking fix
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_stream_read_async_does_not_block_event_loop(tmp_path: Path) -> None:
+    """Test that stream_read_async doesn't block the event loop."""
+    import asyncio
+
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    store = FSSpecBackend("file", base_path=str(tmp_path))
+
+    # Write a reasonably sized file
+    test_data = b"x" * 100_000
+    store.write_bytes("large_file.bin", test_data)
+
+    # Track if concurrent task runs during streaming
+    concurrent_task_ran = False
+
+    async def concurrent_task() -> None:
+        nonlocal concurrent_task_ran
+        await asyncio.sleep(0)
+        concurrent_task_ran = True
+
+    async def stream_file() -> bytes:
+        chunks = [chunk async for chunk in await store.stream_read_async("large_file.bin", chunk_size=1000)]
+        return b"".join(chunks)
+
+    # Run streaming and concurrent task together
+    result, _ = await asyncio.gather(stream_file(), concurrent_task())
+
+    assert result == test_data
+    assert concurrent_task_ran, "Concurrent task should have run during streaming"
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_stream_read_async_respects_chunk_size(tmp_path: Path) -> None:
+    """Test that stream_read_async respects the chunk_size parameter."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    store = FSSpecBackend("file", base_path=str(tmp_path))
+
+    test_data = b"x" * 10_000
+    store.write_bytes("chunked_file.bin", test_data)
+
+    chunk_size = 1000
+    chunks = [chunk async for chunk in await store.stream_read_async("chunked_file.bin", chunk_size=chunk_size)]
+
+    # All chunks except possibly the last should be exactly chunk_size
+    for chunk in chunks[:-1]:
+        assert len(chunk) == chunk_size
+
+    # Reassemble and verify
+    assert b"".join(chunks) == test_data
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_stream_read_async_with_file_uri_base_path(tmp_path: Path) -> None:
+    """Test async streaming works correctly with file:// URI base_path."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    subdir = tmp_path / "data"
+    subdir.mkdir()
+
+    store = FSSpecBackend(f"file://{tmp_path}", base_path="data")
+
+    test_data = b"streaming test data"
+    store.write_bytes("stream_test.bin", test_data)
+
+    chunks = [chunk async for chunk in await store.stream_read_async("stream_test.bin")]
+
+    assert b"".join(chunks) == test_data

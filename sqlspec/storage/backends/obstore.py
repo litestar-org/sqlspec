@@ -90,8 +90,19 @@ class ObStoreBackend:
         """Initialize obstore backend.
 
         Args:
-            uri: Storage URI (e.g., 's3://bucket', 'file:///path', 'gs://bucket')
-            **kwargs: Additional options including base_path and obstore configuration
+            uri: Storage URI. Supported formats:
+                - file:///absolute/path - Local filesystem
+                - s3://bucket/prefix - AWS S3
+                - gs://bucket/prefix - Google Cloud Storage
+                - az://container/prefix - Azure Blob Storage
+                - memory:// - In-memory storage (for testing)
+            **kwargs: Additional options:
+                - base_path (str): For local files (file://), this is combined with
+                  the URI path to form the storage root. For example:
+                  uri="file:///data" + base_path="uploads" → /data/uploads
+                  If base_path is absolute, it overrides the URI path (backward compat).
+                  For cloud storage, base_path is used as an object key prefix.
+                - Other obstore configuration options (timeouts, credentials, etc.)
 
         """
         ensure_obstore()
@@ -123,7 +134,9 @@ class ObStoreBackend:
                 if path_obj.is_file():
                     path_str = str(path_obj.parent)
 
-                local_store_root = self.base_path or path_str
+                # Combine URI path with base_path for correct storage location
+                # If base_path is absolute, Path division will use it directly (backward compat)
+                local_store_root = str(Path(path_str) / self.base_path) if self.base_path else path_str
 
                 self._is_local_store = True
                 self._local_store_root = local_store_root
@@ -228,11 +241,14 @@ class ObStoreBackend:
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects using obstore."""
-        resolved_prefix = (
-            resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
-            if prefix
-            else self.base_path or ""
-        )
+        # For LocalStore, the base_path is already included in the store root,
+        # so we use empty prefix when none is given. For cloud stores, use base_path.
+        if prefix:
+            resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
+        elif self._is_local_store:
+            resolved_prefix = ""
+        else:
+            resolved_prefix = self.base_path or ""
         items = self.store.list_with_delimiter(resolved_prefix) if not recursive else self.store.list(resolved_prefix)
         paths = sorted(item["path"] for batch in items for item in batch)
         _log_storage_event(
@@ -629,37 +645,46 @@ class ObStoreBackend:
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
     ) -> AsyncIterator[bytes]:
-        """Stream bytes from storage asynchronously."""
+        """Stream bytes from storage asynchronously.
+
+        Uses asyncio.to_thread() to ensure the event loop is not blocked
+        during I/O operations with cloud storage backends. This prevents
+        heartbeat timeouts and allows concurrent async tasks to execute
+        during large file downloads.
+        """
+        import asyncio
+
+        from sqlspec.storage.backends.base import AsyncChunkedBytesIterator
+
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
-        result = await self.store.get_async(resolved_path)
-        stream = result.stream()
+        # Run blocking I/O in thread pool to avoid blocking event loop
+        data = await asyncio.to_thread(self.read_bytes, resolved_path)
 
-        async def _generator() -> AsyncIterator[bytes]:
-            async for chunk in stream:
-                yield bytes(chunk)
+        _log_storage_event(
+            "storage.read",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="stream_read",
+            mode="async",
+            path=resolved_path,
+        )
 
-            _log_storage_event(
-                "storage.read",
-                backend_type=self.backend_type,
-                protocol=self.protocol,
-                operation="stream_read",
-                mode="async",
-                path=resolved_path,
-            )
-
-        return _generator()
+        return AsyncChunkedBytesIterator(data, chunk_size or 65536)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""
-        resolved_prefix = (
-            resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
-            if prefix
-            else self.base_path or ""
-        )
+        # For LocalStore, the base_path is already included in the store root,
+        # so we use empty prefix when none is given. For cloud stores, use base_path.
+        if prefix:
+            resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
+        elif self._is_local_store:
+            resolved_prefix = ""
+        else:
+            resolved_prefix = self.base_path or ""
 
         objects: list[str] = []
         async for batch in self.store.list_async(resolved_prefix):  # pyright: ignore[reportAttributeAccessIssue]

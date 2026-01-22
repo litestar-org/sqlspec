@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Unit tests for ObStoreBackend."""
 
 from pathlib import Path
@@ -468,3 +469,171 @@ def test_arrow_operations_without_pyarrow(tmp_path: Path) -> None:
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
         list(store.stream_arrow("*.parquet"))
+
+
+# Tests for base_path fixes (Issue #336)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_file_uri_with_relative_base_path(tmp_path: Path) -> None:
+    """Test that file:// URI + relative base_path combines correctly."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    subdir = "data/uploads"
+    store = ObStoreBackend(f"file://{tmp_path}", base_path=subdir)
+
+    # Verify internal state - paths should be combined
+    expected_root = str(tmp_path / subdir)
+    assert store._local_store_root == expected_root
+
+    # Write and read back
+    store.write_bytes("test.txt", b"hello")
+    assert store.read_bytes("test.txt") == b"hello"
+
+    # Verify file is in correct physical location
+    assert (tmp_path / subdir / "test.txt").exists()
+    assert (tmp_path / subdir / "test.txt").read_bytes() == b"hello"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_file_uri_with_absolute_base_path_override(tmp_path: Path) -> None:
+    """Test that absolute base_path overrides URI path (backward compatible)."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    override_path = tmp_path / "override"
+    override_path.mkdir()
+
+    # Use an ignored URI path but absolute base_path
+    store = ObStoreBackend(f"file://{tmp_path}/ignored", base_path=str(override_path))
+
+    # Should use the absolute base_path directly (Path division behavior)
+    assert store._local_store_root == str(override_path)
+
+    # Operations should work in override location
+    store.write_bytes("test.txt", b"override content")
+    assert (override_path / "test.txt").read_bytes() == b"override content"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_file_uri_with_nested_base_path(tmp_path: Path) -> None:
+    """Test that deeply nested base_path works correctly."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    nested_path = "a/b/c/d/e"
+    store = ObStoreBackend(f"file://{tmp_path}", base_path=nested_path)
+
+    # Verify paths are combined correctly
+    expected_root = str(tmp_path / nested_path)
+    assert store._local_store_root == expected_root
+
+    # Write and verify
+    store.write_bytes("deep.txt", b"deep content")
+    assert (tmp_path / nested_path / "deep.txt").exists()
+    assert store.read_bytes("deep.txt") == b"deep content"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_stream_read_async_with_base_path(tmp_path: Path) -> None:
+    """Test that stream_read_async works after write with base_path."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}", base_path="workspaces")
+
+    # Write data
+    test_data = b"streaming test data" * 100
+    await store.write_bytes_async("stream.bin", test_data)
+
+    # Read back via streaming
+    chunks = [chunk async for chunk in await store.stream_read_async("stream.bin")]
+
+    assert b"".join(chunks) == test_data
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_full_workflow_with_base_path(tmp_path: Path) -> None:
+    """Test complete workflow: write, list, read, delete with base_path."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}", base_path="app/data")
+
+    # Write files
+    await store.write_bytes_async("file1.txt", b"content1")
+    await store.write_bytes_async("subdir/file2.txt", b"content2")
+
+    # List files
+    files = await store.list_objects_async()
+    assert any("file1.txt" in f for f in files)
+    assert any("file2.txt" in f for f in files)
+
+    # Read files
+    assert await store.read_bytes_async("file1.txt") == b"content1"
+    assert await store.read_bytes_async("subdir/file2.txt") == b"content2"
+
+    # Verify physical location
+    assert (tmp_path / "app/data/file1.txt").exists()
+    assert (tmp_path / "app/data/subdir/file2.txt").exists()
+
+    # Delete and verify
+    await store.delete_async("file1.txt")
+    assert not await store.exists_async("file1.txt")
+    assert not (tmp_path / "app/data/file1.txt").exists()
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_stream_read_async_does_not_block_event_loop(tmp_path: Path) -> None:
+    """Test that stream_read_async doesn't block other async tasks."""
+    import asyncio
+
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+
+    # Write a reasonably sized file
+    test_data = b"x" * (1024 * 1024)  # 1MB
+    await store.write_bytes_async("large_file.bin", test_data)
+
+    # Track if concurrent task executed
+    concurrent_task_executed = False
+
+    async def concurrent_task() -> None:
+        nonlocal concurrent_task_executed
+        await asyncio.sleep(0.001)  # Small delay
+        concurrent_task_executed = True
+
+    async def stream_and_check() -> bytes:
+        # Start concurrent task
+        task = asyncio.create_task(concurrent_task())
+
+        # Stream the file
+        chunks = [chunk async for chunk in await store.stream_read_async("large_file.bin", chunk_size=8192)]
+
+        await task
+        return b"".join(chunks)
+
+    result = await stream_and_check()
+
+    assert result == test_data
+    assert concurrent_task_executed, "Concurrent task should have executed during streaming"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_stream_read_async_respects_chunk_size(tmp_path: Path) -> None:
+    """Test that stream_read_async respects the chunk_size parameter."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+
+    # Write test data
+    test_data = b"a" * 1000
+    await store.write_bytes_async("chunked.bin", test_data)
+
+    # Stream with specific chunk size
+    chunk_size = 100
+    chunks = [chunk async for chunk in await store.stream_read_async("chunked.bin", chunk_size=chunk_size)]
+
+    # All chunks except possibly the last should be exactly chunk_size
+    for chunk in chunks[:-1]:
+        assert len(chunk) == chunk_size
+
+    # Total data should match
+    assert b"".join(chunks) == test_data
