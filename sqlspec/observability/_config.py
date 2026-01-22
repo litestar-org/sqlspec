@@ -99,7 +99,13 @@ class TelemetryConfig:
 class LoggingConfig:
     """Controls log output format and verbosity."""
 
-    __slots__ = ("include_driver_name", "include_sql_hash", "include_trace_context", "parameter_truncation_count", "sql_truncation_length")
+    __slots__ = (
+        "include_driver_name",
+        "include_sql_hash",
+        "include_trace_context",
+        "parameter_truncation_count",
+        "sql_truncation_length",
+    )
 
     def __init__(
         self,

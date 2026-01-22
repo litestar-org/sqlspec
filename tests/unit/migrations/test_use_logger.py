@@ -32,19 +32,13 @@ def async_config() -> AiosqliteConfig:
 @pytest.fixture
 def sync_config_with_use_logger() -> SqliteConfig:
     """Create a sync database config with use_logger=True in migration_config."""
-    return SqliteConfig(
-        connection_config={"database": ":memory:"},
-        migration_config={"use_logger": True},
-    )
+    return SqliteConfig(connection_config={"database": ":memory:"}, migration_config={"use_logger": True})
 
 
 @pytest.fixture
 def async_config_with_use_logger() -> AiosqliteConfig:
     """Create an async database config with use_logger=True in migration_config."""
-    return AiosqliteConfig(
-        connection_config={"database": ":memory:"},
-        migration_config={"use_logger": True},
-    )
+    return AiosqliteConfig(connection_config={"database": ":memory:"}, migration_config={"use_logger": True})
 
 
 class TestResolveUseLogger:
