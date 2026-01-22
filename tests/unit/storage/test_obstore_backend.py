@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Unit tests for ObStoreBackend."""
 
 from pathlib import Path
