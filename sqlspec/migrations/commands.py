@@ -297,7 +297,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 file_checksums[result[0]] = result[1]
         return file_checksums
 
-    def _synchronize_version_records(self, driver: Any) -> int:
+    def _synchronize_version_records(self, driver: Any, *, use_logger: bool = False) -> int:
         """Synchronize database version records with migration files.
 
         Auto-updates DB tracking when migrations have been renamed by fix command.
@@ -308,6 +308,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
         Args:
             driver: Database driver instance.
+            use_logger: If True, output to logger instead of Rich console.
 
         Returns:
             Number of version records updated.
@@ -343,8 +344,15 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         migration = self.runner.load_migration(file_path, new_version)
                         if migration["checksum"] == applied_checksum:
                             self.tracker.update_version_record(driver, old_version, new_version)
-                            console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                            if use_logger:
+                                logger.info("Reconciled version: %s -> %s", old_version, new_version)
+                            else:
+                                console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
                             updated_count += 1
+                        elif use_logger:
+                            logger.warning(
+                                "Checksum mismatch for %s -> %s, skipping auto-sync", old_version, new_version
+                            )
                         else:
                             console.print(
                                 f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
@@ -356,18 +364,30 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 for file_version, (file_checksum, _) in file_checksums.items():
                     if file_version not in applied_map and applied_record["checksum"] == file_checksum:
                         self.tracker.update_version_record(driver, applied_version, file_version)
-                        console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
+                        if use_logger:
+                            logger.info("Reconciled version: %s -> %s", applied_version, file_version)
+                        else:
+                            console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
                         updated_count += 1
                         break
 
         if updated_count > 0:
-            console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
+            if use_logger:
+                logger.info("Reconciled %d version record(s)", updated_count)
+            else:
+                console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
 
         return updated_count
 
     @_with_command_span("upgrade", metadata_fn=_upgrade_metadata)
     def upgrade(
-        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+        self,
+        revision: str = "head",
+        allow_missing: bool = False,
+        auto_sync: bool = True,
+        dry_run: bool = False,
+        *,
+        use_logger: bool = False,
     ) -> None:
         """Upgrade to a target revision.
 
@@ -382,12 +402,18 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             auto_sync: If True, automatically reconcile renamed migrations in database.
                 Defaults to True. Can be disabled via --no-auto-sync flag.
             dry_run: If True, show what would be done without making changes.
+            use_logger: If True, output to logger instead of Rich console.
+                Defaults to False. Can be set via MigrationConfig for persistent default.
         """
         runtime = self._runtime
         applied_count = 0
+        effective_use_logger = self._resolve_use_logger(use_logger)
 
         if dry_run:
-            console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
+            if effective_use_logger:
+                logger.info("DRY RUN MODE: No database changes will be applied")
+            else:
+                console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
 
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
@@ -395,7 +421,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             if auto_sync:
                 config_auto_sync = self.config.migration_config.get("auto_sync", True)
                 if config_auto_sync:
-                    self._synchronize_version_records(driver)
+                    self._synchronize_version_records(driver, use_logger=effective_use_logger)
 
             applied_migrations = self.tracker.get_applied_migrations(driver)
             applied_versions = [m["version_num"] for m in applied_migrations]
@@ -421,9 +447,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             if not pending:
                 if not all_migrations:
-                    console.print(
-                        "[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]"
-                    )
+                    if effective_use_logger:
+                        logger.info("No migrations found. Create your first migration with 'sqlspec create-migration'.")
+                    else:
+                        console.print(
+                            "[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]"
+                        )
+                elif effective_use_logger:
+                    logger.info("Already at latest version")
                 else:
                     console.print("[green]Already at latest version[/]")
                 return
@@ -434,16 +465,25 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             validate_migration_order(pending_versions, applied_versions, strict_ordering)
 
-            console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
+            if effective_use_logger:
+                logger.info("Found %d pending migrations", len(pending))
+            else:
+                console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
 
             for version, file_path in pending:
                 migration = self.runner.load_migration(file_path, version)
 
                 action_verb = "Would apply" if dry_run else "Applying"
-                console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
+                if effective_use_logger:
+                    logger.info("%s %s: %s", action_verb, version, migration["description"])
+                else:
+                    console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
 
                 if dry_run:
-                    console.print(f"[dim]Migration file: {file_path}[/]")
+                    if effective_use_logger:
+                        logger.info("Migration file: %s", file_path)
+                    else:
+                        console.print(f"[dim]Migration file: {file_path}[/]")
                     continue
 
                 try:
@@ -455,33 +495,48 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
                     _, execution_time = self.runner.execute_upgrade(driver, migration, on_success=record_version)
                     applied_count += 1
-                    console.print(f"[green]✓ Applied in {execution_time}ms[/]")
+                    if effective_use_logger:
+                        logger.info("Applied migration %s in %dms", version, execution_time)
+                    else:
+                        console.print(f"[green]✓ Applied in {execution_time}ms[/]")
 
                 except Exception as exc:
                     use_txn = self.runner.should_use_transaction(migration, self.config)
                     rollback_msg = " (transaction rolled back)" if use_txn else ""
-                    console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
+                    if effective_use_logger:
+                        logger.exception("Migration %s failed%s", version, rollback_msg)
+                    else:
+                        console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
                     self._last_command_error = exc
                     return
 
         if dry_run:
-            console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+            if effective_use_logger:
+                logger.info("Dry run complete. No changes were made to the database.")
+            else:
+                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
         elif applied_count:
             self._record_command_metric("applied", float(applied_count))
 
     @_with_command_span("downgrade", metadata_fn=_downgrade_metadata)
-    def downgrade(self, revision: str = "-1", *, dry_run: bool = False) -> None:
+    def downgrade(self, revision: str = "-1", *, dry_run: bool = False, use_logger: bool = False) -> None:
         """Downgrade to a target revision.
 
         Args:
             revision: Target revision or "-1" for one step back.
             dry_run: If True, show what would be done without making changes.
+            use_logger: If True, output to logger instead of Rich console.
+                Defaults to False. Can be set via MigrationConfig for persistent default.
         """
         runtime = self._runtime
         reverted_count = 0
+        effective_use_logger = self._resolve_use_logger(use_logger)
 
         if dry_run:
-            console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
+            if effective_use_logger:
+                logger.info("DRY RUN MODE: No database changes will be applied")
+            else:
+                console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
 
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
@@ -489,7 +544,10 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             if runtime is not None:
                 runtime.increment_metric("migrations.command.downgrade.available", float(len(applied)))
             if not applied:
-                console.print("[yellow]No migrations to downgrade[/]")
+                if effective_use_logger:
+                    logger.info("No migrations to downgrade")
+                else:
+                    console.print("[yellow]No migrations to downgrade[/]")
                 return
 
             to_revert = []
@@ -508,25 +566,40 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 runtime.increment_metric("migrations.command.downgrade.pending", float(len(to_revert)))
 
             if not to_revert:
-                console.print("[yellow]Nothing to downgrade[/]")
+                if effective_use_logger:
+                    logger.info("Nothing to downgrade")
+                else:
+                    console.print("[yellow]Nothing to downgrade[/]")
                 return
 
-            console.print(f"[yellow]Reverting {len(to_revert)} migrations[/]")
+            if effective_use_logger:
+                logger.info("Reverting %d migrations", len(to_revert))
+            else:
+                console.print(f"[yellow]Reverting {len(to_revert)} migrations[/]")
             all_files = dict(self.runner.get_migration_files())
             for migration_record in to_revert:
                 version = migration_record["version_num"]
                 if version not in all_files:
-                    console.print(f"[red]Migration file not found for {version}[/]")
+                    if effective_use_logger:
+                        logger.error("Migration file not found for %s", version)
+                    else:
+                        console.print(f"[red]Migration file not found for {version}[/]")
                     if runtime is not None:
                         runtime.increment_metric("migrations.command.downgrade.missing_files")
                     continue
                 migration = self.runner.load_migration(all_files[version], version)
 
                 action_verb = "Would revert" if dry_run else "Reverting"
-                console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
+                if effective_use_logger:
+                    logger.info("%s %s: %s", action_verb, version, migration["description"])
+                else:
+                    console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
 
                 if dry_run:
-                    console.print(f"[dim]Migration file: {all_files[version]}[/]")
+                    if effective_use_logger:
+                        logger.info("Migration file: %s", all_files[version])
+                    else:
+                        console.print(f"[dim]Migration file: {all_files[version]}[/]")
                     continue
 
                 try:
@@ -536,16 +609,25 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
                     _, execution_time = self.runner.execute_downgrade(driver, migration, on_success=remove_version)
                     reverted_count += 1
-                    console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
+                    if effective_use_logger:
+                        logger.info("Reverted migration %s in %dms", version, execution_time)
+                    else:
+                        console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as exc:
                     use_txn = self.runner.should_use_transaction(migration, self.config)
                     rollback_msg = " (transaction rolled back)" if use_txn else ""
-                    console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
+                    if effective_use_logger:
+                        logger.exception("Migration %s failed%s", version, rollback_msg)
+                    else:
+                        console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
                     self._last_command_error = exc
                     return
 
         if dry_run:
-            console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+            if effective_use_logger:
+                logger.info("Dry run complete. No changes were made to the database.")
+            else:
+                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
         elif reverted_count:
             self._record_command_metric("applied", float(reverted_count))
 
@@ -825,7 +907,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 file_checksums[result[0]] = result[1]
         return file_checksums
 
-    async def _synchronize_version_records(self, driver: Any) -> int:
+    async def _synchronize_version_records(self, driver: Any, *, use_logger: bool = False) -> int:
         """Synchronize database version records with migration files.
 
         Auto-updates DB tracking when migrations have been renamed by fix command.
@@ -836,6 +918,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
         Args:
             driver: Database driver instance.
+            use_logger: If True, output to logger instead of Rich console.
 
         Returns:
             Number of version records updated.
@@ -871,8 +954,15 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         migration = await self.runner.load_migration(file_path, new_version)
                         if migration["checksum"] == applied_checksum:
                             await self.tracker.update_version_record(driver, old_version, new_version)
-                            console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                            if use_logger:
+                                logger.info("Reconciled version: %s -> %s", old_version, new_version)
+                            else:
+                                console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
                             updated_count += 1
+                        elif use_logger:
+                            logger.warning(
+                                "Checksum mismatch for %s -> %s, skipping auto-sync", old_version, new_version
+                            )
                         else:
                             console.print(
                                 f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
@@ -884,18 +974,30 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 for file_version, (file_checksum, _) in file_checksums.items():
                     if file_version not in applied_map and applied_record["checksum"] == file_checksum:
                         await self.tracker.update_version_record(driver, applied_version, file_version)
-                        console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
+                        if use_logger:
+                            logger.info("Reconciled version: %s -> %s", applied_version, file_version)
+                        else:
+                            console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
                         updated_count += 1
                         break
 
         if updated_count > 0:
-            console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
+            if use_logger:
+                logger.info("Reconciled %d version record(s)", updated_count)
+            else:
+                console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
 
         return updated_count
 
     @_with_command_span("upgrade", metadata_fn=_upgrade_metadata)
     async def upgrade(
-        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+        self,
+        revision: str = "head",
+        allow_missing: bool = False,
+        auto_sync: bool = True,
+        dry_run: bool = False,
+        *,
+        use_logger: bool = False,
     ) -> None:
         """Upgrade to a target revision.
 
@@ -910,12 +1012,18 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             auto_sync: If True, automatically reconcile renamed migrations in database.
                 Defaults to True. Can be disabled via --no-auto-sync flag.
             dry_run: If True, show what would be done without making changes.
+            use_logger: If True, output to logger instead of Rich console.
+                Defaults to False. Can be set via MigrationConfig for persistent default.
         """
         runtime = self._runtime
         applied_count = 0
+        effective_use_logger = self._resolve_use_logger(use_logger)
 
         if dry_run:
-            console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
+            if effective_use_logger:
+                logger.info("DRY RUN MODE: No database changes will be applied")
+            else:
+                console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
 
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
@@ -924,7 +1032,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
                 config_auto_sync = migration_config.get("auto_sync", True)
                 if config_auto_sync:
-                    await self._synchronize_version_records(driver)
+                    await self._synchronize_version_records(driver, use_logger=effective_use_logger)
 
             applied_migrations = await self.tracker.get_applied_migrations(driver)
             applied_versions = [m["version_num"] for m in applied_migrations]
@@ -950,9 +1058,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             if not pending:
                 if not all_migrations:
-                    console.print(
-                        "[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]"
-                    )
+                    if effective_use_logger:
+                        logger.info("No migrations found. Create your first migration with 'sqlspec create-migration'.")
+                    else:
+                        console.print(
+                            "[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]"
+                        )
+                elif effective_use_logger:
+                    logger.info("Already at latest version")
                 else:
                     console.print("[green]Already at latest version[/]")
                 return
@@ -963,15 +1076,24 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             validate_migration_order(pending_versions, applied_versions, strict_ordering)
 
-            console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
+            if effective_use_logger:
+                logger.info("Found %d pending migrations", len(pending))
+            else:
+                console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
             for version, file_path in pending:
                 migration = await self.runner.load_migration(file_path, version)
 
                 action_verb = "Would apply" if dry_run else "Applying"
-                console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
+                if effective_use_logger:
+                    logger.info("%s %s: %s", action_verb, version, migration["description"])
+                else:
+                    console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
 
                 if dry_run:
-                    console.print(f"[dim]Migration file: {file_path}[/]")
+                    if effective_use_logger:
+                        logger.info("Migration file: %s", file_path)
+                    else:
+                        console.print(f"[dim]Migration file: {file_path}[/]")
                     continue
 
                 try:
@@ -983,32 +1105,47 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
                     _, execution_time = await self.runner.execute_upgrade(driver, migration, on_success=record_version)
                     applied_count += 1
-                    console.print(f"[green]✓ Applied in {execution_time}ms[/]")
+                    if effective_use_logger:
+                        logger.info("Applied migration %s in %dms", version, execution_time)
+                    else:
+                        console.print(f"[green]✓ Applied in {execution_time}ms[/]")
                 except Exception as exc:
                     use_txn = self.runner.should_use_transaction(migration, self.config)
                     rollback_msg = " (transaction rolled back)" if use_txn else ""
-                    console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
+                    if effective_use_logger:
+                        logger.exception("Migration %s failed%s", version, rollback_msg)
+                    else:
+                        console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
                     self._last_command_error = exc
                     return
 
         if dry_run:
-            console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+            if effective_use_logger:
+                logger.info("Dry run complete. No changes were made to the database.")
+            else:
+                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
         elif applied_count:
             self._record_command_metric("applied", float(applied_count))
 
     @_with_command_span("downgrade", metadata_fn=_downgrade_metadata)
-    async def downgrade(self, revision: str = "-1", *, dry_run: bool = False) -> None:
+    async def downgrade(self, revision: str = "-1", *, dry_run: bool = False, use_logger: bool = False) -> None:
         """Downgrade to a target revision.
 
         Args:
             revision: Target revision or "-1" for one step back.
             dry_run: If True, show what would be done without making changes.
+            use_logger: If True, output to logger instead of Rich console.
+                Defaults to False. Can be set via MigrationConfig for persistent default.
         """
         runtime = self._runtime
         reverted_count = 0
+        effective_use_logger = self._resolve_use_logger(use_logger)
 
         if dry_run:
-            console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
+            if effective_use_logger:
+                logger.info("DRY RUN MODE: No database changes will be applied")
+            else:
+                console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
 
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
@@ -1017,7 +1154,10 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             if runtime is not None:
                 runtime.increment_metric("migrations.command.downgrade.available", float(len(applied)))
             if not applied:
-                console.print("[yellow]No migrations to downgrade[/]")
+                if effective_use_logger:
+                    logger.info("No migrations to downgrade")
+                else:
+                    console.print("[yellow]No migrations to downgrade[/]")
                 return
             to_revert = []
             if revision == "-1":
@@ -1035,15 +1175,24 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 runtime.increment_metric("migrations.command.downgrade.pending", float(len(to_revert)))
 
             if not to_revert:
-                console.print("[yellow]Nothing to downgrade[/]")
+                if effective_use_logger:
+                    logger.info("Nothing to downgrade")
+                else:
+                    console.print("[yellow]Nothing to downgrade[/]")
                 return
 
-            console.print(f"[yellow]Reverting {len(to_revert)} migrations[/]")
+            if effective_use_logger:
+                logger.info("Reverting %d migrations", len(to_revert))
+            else:
+                console.print(f"[yellow]Reverting {len(to_revert)} migrations[/]")
             all_files = dict(await self.runner.get_migration_files())
             for migration_record in to_revert:
                 version = migration_record["version_num"]
                 if version not in all_files:
-                    console.print(f"[red]Migration file not found for {version}[/]")
+                    if effective_use_logger:
+                        logger.error("Migration file not found for %s", version)
+                    else:
+                        console.print(f"[red]Migration file not found for {version}[/]")
                     if runtime is not None:
                         runtime.increment_metric("migrations.command.downgrade.missing_files")
                     continue
@@ -1051,10 +1200,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 migration = await self.runner.load_migration(all_files[version], version)
 
                 action_verb = "Would revert" if dry_run else "Reverting"
-                console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
+                if effective_use_logger:
+                    logger.info("%s %s: %s", action_verb, version, migration["description"])
+                else:
+                    console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
 
                 if dry_run:
-                    console.print(f"[dim]Migration file: {all_files[version]}[/]")
+                    if effective_use_logger:
+                        logger.info("Migration file: %s", all_files[version])
+                    else:
+                        console.print(f"[dim]Migration file: {all_files[version]}[/]")
                     continue
 
                 try:
@@ -1066,16 +1221,25 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         driver, migration, on_success=remove_version
                     )
                     reverted_count += 1
-                    console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
+                    if effective_use_logger:
+                        logger.info("Reverted migration %s in %dms", version, execution_time)
+                    else:
+                        console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as exc:
                     use_txn = self.runner.should_use_transaction(migration, self.config)
                     rollback_msg = " (transaction rolled back)" if use_txn else ""
-                    console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
+                    if effective_use_logger:
+                        logger.exception("Migration %s failed%s", version, rollback_msg)
+                    else:
+                        console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
                     self._last_command_error = exc
                     return
 
         if dry_run:
-            console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+            if effective_use_logger:
+                logger.info("Dry run complete. No changes were made to the database.")
+            else:
+                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
         elif reverted_count:
             self._record_command_metric("applied", float(reverted_count))
 

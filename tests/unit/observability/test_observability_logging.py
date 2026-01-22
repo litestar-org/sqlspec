@@ -15,25 +15,49 @@ def test_logging_config_defaults() -> None:
     assert config.sql_truncation_length == 2000
     assert config.parameter_truncation_count == 100
     assert config.include_trace_context is True
+    assert config.include_driver_name is False
 
 
 def test_logging_config_custom_values() -> None:
     config = LoggingConfig(
-        include_sql_hash=False, sql_truncation_length=512, parameter_truncation_count=25, include_trace_context=False
+        include_sql_hash=False,
+        sql_truncation_length=512,
+        parameter_truncation_count=25,
+        include_trace_context=False,
+        include_driver_name=True,
     )
     assert config.include_sql_hash is False
     assert config.sql_truncation_length == 512
     assert config.parameter_truncation_count == 25
     assert config.include_trace_context is False
+    assert config.include_driver_name is True
 
 
 def test_logging_config_copy_and_equality() -> None:
     config = LoggingConfig(
-        include_sql_hash=False, sql_truncation_length=128, parameter_truncation_count=10, include_trace_context=False
+        include_sql_hash=False,
+        sql_truncation_length=128,
+        parameter_truncation_count=10,
+        include_trace_context=False,
+        include_driver_name=True,
     )
     clone = config.copy()
     assert clone == config
     assert clone is not config
+    assert clone.include_driver_name is True
+
+
+def test_logging_config_equality_with_include_driver_name() -> None:
+    """Test that include_driver_name is included in equality comparison."""
+    config1 = LoggingConfig(include_driver_name=True)
+    config2 = LoggingConfig(include_driver_name=False)
+    assert config1 != config2
+
+
+def test_logging_config_repr_includes_include_driver_name() -> None:
+    """Test that repr includes include_driver_name."""
+    config = LoggingConfig(include_driver_name=True)
+    assert "include_driver_name=True" in repr(config)
 
 
 def test_logging_config_unhashable() -> None:
@@ -238,8 +262,8 @@ def test_sql_log_message_is_operation_type(caplog) -> None:
         assert record.getMessage() == operation, f"Expected message '{operation}' but got '{record.getMessage()}'"
 
 
-def test_sql_log_driver_in_extra_fields(caplog) -> None:
-    """Test that driver is in structured extra fields, not message."""
+def test_sql_log_driver_excluded_by_default(caplog) -> None:
+    """Test that driver is NOT in logs by default."""
     caplog.set_level(logging.INFO, logger="sqlspec.sql")
 
     event = create_event(
@@ -264,7 +288,44 @@ def test_sql_log_driver_in_extra_fields(caplog) -> None:
     record = caplog.records[-1]
     # Driver should not be in the message
     assert "AsyncpgDriver" not in record.getMessage()
-    # Driver should be in extra fields
+    # Driver should NOT be in extra fields by default
+    assert "sqlspec.driver" not in record.__dict__
+    # db.system should still be present
+    assert "db.system" in record.__dict__
+
+
+def test_sql_log_driver_included_when_enabled(caplog) -> None:
+    """Test that driver IS in logs when include_driver_name=True."""
+    from sqlspec.observability._observer import create_statement_observer
+
+    caplog.set_level(logging.INFO, logger="sqlspec.sql")
+
+    config = LoggingConfig(include_driver_name=True)
+    observer = create_statement_observer(config)
+
+    event = create_event(
+        sql="SELECT 1",
+        parameters=None,
+        driver="AsyncpgDriver",
+        adapter="AsyncpgAdapter",
+        bind_key="primary",
+        operation="SELECT",
+        execution_mode=None,
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.001,
+        correlation_id=None,
+        storage_backend=None,
+        started_at=0.0,
+    )
+
+    observer(event)
+
+    record = caplog.records[-1]
+    # Driver should not be in the message
+    assert "AsyncpgDriver" not in record.getMessage()
+    # Driver should be in extra fields when enabled
     assert record.__dict__["sqlspec.driver"] == "AsyncpgDriver"
 
 

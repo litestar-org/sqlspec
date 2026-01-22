@@ -99,7 +99,7 @@ class TelemetryConfig:
 class LoggingConfig:
     """Controls log output format and verbosity."""
 
-    __slots__ = ("include_sql_hash", "include_trace_context", "parameter_truncation_count", "sql_truncation_length")
+    __slots__ = ("include_driver_name", "include_sql_hash", "include_trace_context", "parameter_truncation_count", "sql_truncation_length")
 
     def __init__(
         self,
@@ -108,11 +108,13 @@ class LoggingConfig:
         sql_truncation_length: int = 2000,
         parameter_truncation_count: int = 100,
         include_trace_context: bool = True,
+        include_driver_name: bool = False,
     ) -> None:
         self.include_sql_hash = include_sql_hash
         self.sql_truncation_length = sql_truncation_length
         self.parameter_truncation_count = parameter_truncation_count
         self.include_trace_context = include_trace_context
+        self.include_driver_name = include_driver_name
 
     def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
         msg = "LoggingConfig objects are mutable and unhashable"
@@ -126,12 +128,14 @@ class LoggingConfig:
             sql_truncation_length=self.sql_truncation_length,
             parameter_truncation_count=self.parameter_truncation_count,
             include_trace_context=self.include_trace_context,
+            include_driver_name=self.include_driver_name,
         )
 
     def __repr__(self) -> str:
         return (
             f"LoggingConfig(include_sql_hash={self.include_sql_hash!r}, sql_truncation_length={self.sql_truncation_length!r}, "
-            f"parameter_truncation_count={self.parameter_truncation_count!r}, include_trace_context={self.include_trace_context!r})"
+            f"parameter_truncation_count={self.parameter_truncation_count!r}, include_trace_context={self.include_trace_context!r}, "
+            f"include_driver_name={self.include_driver_name!r})"
         )
 
     def __eq__(self, other: object) -> bool:
@@ -142,6 +146,7 @@ class LoggingConfig:
             and self.sql_truncation_length == other.sql_truncation_length
             and self.parameter_truncation_count == other.parameter_truncation_count
             and self.include_trace_context == other.include_trace_context
+            and self.include_driver_name == other.include_driver_name
         )
 
 

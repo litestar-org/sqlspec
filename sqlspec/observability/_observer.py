@@ -224,7 +224,6 @@ def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConf
     extra: dict[str, object | None] = {
         "db.system": event.db_system,
         "db.operation": event.operation,
-        "sqlspec.driver": event.driver,
         "sqlspec.bind_key": event.bind_key,
         "sqlspec.transaction_state": event.transaction_state,
         "sqlspec.prepared_statement": event.prepared_statement,
@@ -253,6 +252,9 @@ def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConf
     if event.sql_hash:
         extra["db.statement.hash"] = event.sql_hash
         extra["sql_hash"] = event.sql_hash
+
+    if logging_config.include_driver_name:
+        extra["sqlspec.driver"] = event.driver
 
     params_summary = _summarize_parameters(event.parameters)
     if params_summary:

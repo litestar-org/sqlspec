@@ -700,6 +700,24 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
             self._last_command_metrics = {}
         self._last_command_metrics[name] = self._last_command_metrics.get(name, 0.0) + value
 
+    def _resolve_use_logger(self, method_value: bool) -> bool:
+        """Resolve effective use_logger setting.
+
+        Method parameter takes precedence over config default. When the method
+        parameter is True, logger output is used. When False, we check the config
+        default.
+
+        Args:
+            method_value: The use_logger parameter passed to the method.
+
+        Returns:
+            True to use logger output, False for Rich console output.
+        """
+        if method_value:
+            return True
+        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        return bool(migration_config.get("use_logger", False))
+
     @abstractmethod
     def init(self, directory: str, package: bool = True) -> Any:
         """Initialize migration directory structure."""
