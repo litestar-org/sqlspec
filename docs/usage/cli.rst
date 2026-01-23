@@ -18,8 +18,11 @@ Common Options
 --------------
 
 - ``--bind-key`` targets a specific database configuration.
-- ``--yes`` skips confirmation prompts.
+- ``--no-prompt`` skips confirmation prompts.
 - ``--format`` selects SQL vs Python migration files.
+- ``--use-logger`` emits migration output via structured logger.
+- ``--no-echo`` disables console output for migration commands.
+- ``--summary`` emits a single summary log entry when logger output is enabled.
 
 Tips
 ----

@@ -27,6 +27,17 @@ Configuration
 Set ``migration_config`` on your database configuration to customize script
 locations, version table names, and extension migration behavior.
 
+Logging and Echo Controls
+-------------------------
+
+Configure output behavior with ``migration_config`` or CLI flags:
+
+- ``use_logger`` to emit structured logs instead of console output.
+- ``echo`` to control console output when not using the logger.
+- ``summary_only`` to emit a single summary log entry when logger output is enabled.
+
+The CLI equivalents are ``--use-logger``, ``--no-echo``, and ``--summary``.
+
 Related Guides
 --------------
 

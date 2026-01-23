@@ -169,15 +169,17 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
                 logger.debug("Migration tracking table schema is up-to-date")
                 return
 
-            console.print(
-                f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
-            )
+            if self._should_echo():
+                console.print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+                )
 
             for col_name in sorted(missing_columns):
                 self._add_column(driver, col_name)
 
             driver.commit()
-            console.print("[green]Migration tracking table schema updated successfully[/]")
+            if self._should_echo():
+                console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as e:
             logger.warning("Could not check or migrate tracking table schema: %s", e)
@@ -363,15 +365,17 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
                 logger.debug("Migration tracking table schema is up-to-date")
                 return
 
-            console.print(
-                f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
-            )
+            if self._should_echo():
+                console.print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+                )
 
             for col_name in sorted(missing_columns):
                 await self._add_column(driver, col_name)
 
             await driver.commit()
-            console.print("[green]Migration tracking table schema updated successfully[/]")
+            if self._should_echo():
+                console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as e:
             logger.warning("Could not check or migrate tracking table schema: %s", e)

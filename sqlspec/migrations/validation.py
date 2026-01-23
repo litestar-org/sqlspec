@@ -5,12 +5,14 @@ which can occur when branches with migrations merge in different orders across
 staging and production environments.
 """
 
+import logging
 from typing import TYPE_CHECKING
 
 from rich.console import Console
 
 from sqlspec.exceptions import OutOfOrderMigrationError
 from sqlspec.migrations.version import parse_version
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
 __all__ = ("MigrationGap", "detect_out_of_order_migrations", "format_out_of_order_warning")
 
 console = Console()
+logger = get_logger("sqlspec.migrations.validation")
 
 
 class MigrationGap:
@@ -166,7 +169,13 @@ def format_out_of_order_warning(gaps: "list[MigrationGap]") -> str:
 
 
 def validate_migration_order(
-    pending_versions: "list[str]", applied_versions: "list[str]", strict_ordering: bool = False
+    pending_versions: "list[str]",
+    applied_versions: "list[str]",
+    strict_ordering: bool = False,
+    *,
+    use_logger: bool = False,
+    echo: bool = True,
+    summary_only: bool = False,
 ) -> None:
     """Validate migration order and raise error if out-of-order in strict mode.
 
@@ -178,6 +187,9 @@ def validate_migration_order(
         applied_versions: List of migration versions already applied.
         strict_ordering: If True, raise error for out-of-order migrations.
             If False (default), log warning but allow.
+        use_logger: If True, emit warning via logger instead of console.
+        echo: Whether to echo output to the console.
+        summary_only: Whether summary-only logging is enabled.
 
     Raises:
         OutOfOrderMigrationError: If out-of-order migrations detected and
@@ -203,5 +215,11 @@ def validate_migration_order(
         msg = f"{warning_message}\n\nStrict ordering is enabled. Use --allow-missing to override."
         raise OutOfOrderMigrationError(msg)
 
+    if use_logger:
+        if not summary_only:
+            log_with_context(logger, logging.WARNING, "migration.order.warning", warning_message=warning_message)
+        return
+    if not echo:
+        return
     console.print("[yellow]Out-of-order migrations detected[/]")
     console.print(f"[yellow]{warning_message}[/]")

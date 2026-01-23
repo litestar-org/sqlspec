@@ -165,6 +165,24 @@ class MigrationConfig(TypedDict):
     Defaults to False (Rich console output).
     """
 
+    echo: NotRequired[bool]
+    """Echo migration output to the console.
+
+    When False, console output is suppressed. This is useful for script or CI
+    environments that need quiet stdout.
+
+    Defaults to True.
+    """
+
+    summary_only: NotRequired[bool]
+    """Emit a single summary log entry for migration commands.
+
+    When True and ``use_logger`` is enabled, per-migration output is suppressed
+    in favor of a single structured summary log event.
+
+    Defaults to False.
+    """
+
 
 class FlaskConfig(TypedDict):
     """Configuration options for Flask SQLSpec extension.
@@ -1051,6 +1069,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         dry_run: bool = False,
         *,
         use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
     ) -> "Awaitable[None] | None":
         """Apply database migrations up to specified revision.
 
@@ -1061,12 +1081,20 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             dry_run: Show what would be done without applying. Defaults to False.
             use_logger: Use Python logger instead of Rich console for output.
                 Defaults to False. Can be set via MigrationConfig for persistent default.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         raise NotImplementedError
 
     @abstractmethod
     def migrate_down(
-        self, revision: str = "-1", *, dry_run: bool = False, use_logger: bool = False
+        self,
+        revision: str = "-1",
+        *,
+        dry_run: bool = False,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
     ) -> "Awaitable[None] | None":
         """Apply database migrations down to specified revision.
 
@@ -1075,6 +1103,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             dry_run: Show what would be done without applying. Defaults to False.
             use_logger: Use Python logger instead of Rich console for output.
                 Defaults to False. Can be set via MigrationConfig for persistent default.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         raise NotImplementedError
 
@@ -1210,6 +1240,8 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         dry_run: bool = False,
         *,
         use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
     ) -> None:
         """Apply database migrations up to specified revision.
 
@@ -1219,20 +1251,34 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             auto_sync: Auto-reconcile renamed migrations.
             dry_run: Show what would be done without applying.
             use_logger: Use Python logger instead of Rich console for output.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         commands = self._ensure_migration_commands()
-        commands.upgrade(revision, allow_missing, auto_sync, dry_run, use_logger=use_logger)
+        commands.upgrade(
+            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
+        )
 
-    def migrate_down(self, revision: str = "-1", *, dry_run: bool = False, use_logger: bool = False) -> None:
+    def migrate_down(
+        self,
+        revision: str = "-1",
+        *,
+        dry_run: bool = False,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
+    ) -> None:
         """Apply database migrations down to specified revision.
 
         Args:
             revision: Target revision, "-1" for one step back, or "base" for all migrations.
             dry_run: Show what would be done without applying.
             use_logger: Use Python logger instead of Rich console for output.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         commands = self._ensure_migration_commands()
-        commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger)
+        commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
 
     def get_current_migration(self, verbose: bool = False) -> "str | None":
         """Get the current migration version.
@@ -1363,6 +1409,8 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         dry_run: bool = False,
         *,
         use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
     ) -> None:
         """Apply database migrations up to specified revision.
 
@@ -1372,20 +1420,34 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             auto_sync: Auto-reconcile renamed migrations.
             dry_run: Show what would be done without applying.
             use_logger: Use Python logger instead of Rich console for output.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.upgrade(revision, allow_missing, auto_sync, dry_run, use_logger=use_logger)
+        await commands.upgrade(
+            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
+        )
 
-    async def migrate_down(self, revision: str = "-1", *, dry_run: bool = False, use_logger: bool = False) -> None:
+    async def migrate_down(
+        self,
+        revision: str = "-1",
+        *,
+        dry_run: bool = False,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
+    ) -> None:
         """Apply database migrations down to specified revision.
 
         Args:
             revision: Target revision, "-1" for one step back, or "base" for all migrations.
             dry_run: Show what would be done without applying.
             use_logger: Use Python logger instead of Rich console for output.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger)
+        await commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
 
     async def get_current_migration(self, verbose: bool = False) -> "str | None":
         """Get the current migration version.
@@ -1546,6 +1608,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         dry_run: bool = False,
         *,
         use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
     ) -> None:
         """Apply database migrations up to specified revision.
 
@@ -1555,20 +1619,34 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             auto_sync: Auto-reconcile renamed migrations.
             dry_run: Show what would be done without applying.
             use_logger: Use Python logger instead of Rich console for output.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         commands = self._ensure_migration_commands()
-        commands.upgrade(revision, allow_missing, auto_sync, dry_run, use_logger=use_logger)
+        commands.upgrade(
+            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
+        )
 
-    def migrate_down(self, revision: str = "-1", *, dry_run: bool = False, use_logger: bool = False) -> None:
+    def migrate_down(
+        self,
+        revision: str = "-1",
+        *,
+        dry_run: bool = False,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
+    ) -> None:
         """Apply database migrations down to specified revision.
 
         Args:
             revision: Target revision, "-1" for one step back, or "base" for all migrations.
             dry_run: Show what would be done without applying.
             use_logger: Use Python logger instead of Rich console for output.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         commands = self._ensure_migration_commands()
-        commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger)
+        commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
 
     def get_current_migration(self, verbose: bool = False) -> "str | None":
         """Get the current migration version.
@@ -1731,6 +1809,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         dry_run: bool = False,
         *,
         use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
     ) -> None:
         """Apply database migrations up to specified revision.
 
@@ -1740,20 +1820,34 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             auto_sync: Auto-reconcile renamed migrations.
             dry_run: Show what would be done without applying.
             use_logger: Use Python logger instead of Rich console for output.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.upgrade(revision, allow_missing, auto_sync, dry_run, use_logger=use_logger)
+        await commands.upgrade(
+            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
+        )
 
-    async def migrate_down(self, revision: str = "-1", *, dry_run: bool = False, use_logger: bool = False) -> None:
+    async def migrate_down(
+        self,
+        revision: str = "-1",
+        *,
+        dry_run: bool = False,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
+    ) -> None:
         """Apply database migrations down to specified revision.
 
         Args:
             revision: Target revision, "-1" for one step back, or "base" for all migrations.
             dry_run: Show what would be done without applying.
             use_logger: Use Python logger instead of Rich console for output.
+            echo: Echo output to the console. Defaults to True when unset.
+            summary_only: Emit a single summary log entry when logger output is enabled.
         """
         commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger)
+        await commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
 
     async def get_current_migration(self, verbose: bool = False) -> "str | None":
         """Get the current migration version.
