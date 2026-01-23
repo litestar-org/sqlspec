@@ -753,3 +753,53 @@ def test_psycopg_sync_for_share_locking(psycopg_session: "PsycopgSyncDriver") ->
         raise
     finally:
         psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+def test_psycopg_sync_on_connection_create_hook(postgres_service: "PostgresService") -> None:
+    """Test on_connection_create callback is invoked for sync connections."""
+    hook_call_count = 0
+
+    def connection_hook(conn: Any) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    conninfo = (
+        f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} "
+        f"password={postgres_service.password} dbname={postgres_service.database}"
+    )
+    config = PsycopgSyncConfig(
+        connection_config={"conninfo": conninfo, "min_size": 1, "max_size": 2},
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    try:
+        with config.provide_session() as session:
+            session.execute("SELECT 1")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        config.close_pool()
+
+
+async def test_psycopg_async_on_connection_create_hook(postgres_service: "PostgresService") -> None:
+    """Test on_connection_create callback is invoked for async connections."""
+    hook_call_count = 0
+
+    async def connection_hook(conn: Any) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    conninfo = (
+        f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} "
+        f"password={postgres_service.password} dbname={postgres_service.database}"
+    )
+    config = PsycopgAsyncConfig(
+        connection_config={"conninfo": conninfo, "min_size": 1, "max_size": 2},
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    try:
+        async with config.provide_session() as session:
+            await session.execute("SELECT 1")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        await config.close_pool()

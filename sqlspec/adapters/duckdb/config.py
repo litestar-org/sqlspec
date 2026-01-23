@@ -16,7 +16,6 @@ from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, DuckDBExc
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
@@ -24,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.core import StatementConfig
+    from sqlspec.observability import ObservabilityConfig
 __all__ = (
     "DuckDBConfig",
     "DuckDBConnectionParams",
@@ -186,19 +186,6 @@ class DuckDBConnectionContext:
         return None
 
 
-class _DuckDBConnectionHook:
-    __slots__ = ("_hook",)
-
-    def __init__(self, hook: "Callable[[Any], None]") -> None:
-        self._hook = hook
-
-    def __call__(self, context: "dict[str, Any]") -> None:
-        connection = context.get("connection")
-        if connection is None:
-            return
-        self._hook(connection)
-
-
 class _DuckDBSessionConnectionHandler:
     __slots__ = ("_config", "_ctx")
 
@@ -310,7 +297,10 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                 extension_flags[key] = connection_config.pop(key)
 
         features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        user_connection_hook = cast("Callable[[Any], None] | None", features.pop("on_connection_create", None))
+        # Extract and store callback for pool - pool is source of truth for connection initialization
+        self._user_connection_hook = cast(
+            "Callable[[DuckDBConnection], DuckDBConnection | None] | None", features.pop("on_connection_create", None)
+        )
         features.setdefault("enable_uuid_conversion", True)
         serializer = features.setdefault("json_serializer", to_json)
 
@@ -318,13 +308,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             existing_flags = cast("dict[str, Any]", features.get("extension_flags", {}))
             merged_flags = {**existing_flags, **extension_flags}
             features["extension_flags"] = merged_flags
-
-        local_observability = observability_config
-        if user_connection_hook is not None:
-            lifecycle_override = ObservabilityConfig(
-                lifecycle={"on_connection_create": [_DuckDBConnectionHook(user_connection_hook)]}
-            )
-            local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
 
         statement_config = statement_config or build_statement_config(
             json_serializer=cast("Callable[[Any], str]", serializer)
@@ -339,7 +322,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             statement_config=statement_config,
             driver_features=features,
             extension_config=extension_config,
-            observability_config=local_observability,
+            observability_config=observability_config,
             **kwargs,
         )
 
@@ -367,6 +350,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             extensions=extensions_dicts,
             extension_flags=extension_flags_dict,
             secrets=secrets_dicts,
+            on_connection_create=self._user_connection_hook,
             **pool_kwargs,
         )
 

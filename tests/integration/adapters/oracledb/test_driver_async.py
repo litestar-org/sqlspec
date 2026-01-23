@@ -527,3 +527,33 @@ async def test_async_uppercase_columns_when_disabled(oracle_async_config: Oracle
         await session.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
         )
+
+
+async def test_oracle_async_on_connection_create_hook(oracle_23ai_service: "OracleService") -> None:
+    """Test on_connection_create callback is invoked for each connection."""
+    hook_call_count = 0
+
+    async def connection_hook(conn: Any, tag: str) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    config = OracleAsyncConfig(
+        connection_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 2,
+        },
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    try:
+        async with config.provide_session() as session:
+            await session.execute("SELECT 1 FROM DUAL")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        if config.connection_instance:
+            await config.close_pool()

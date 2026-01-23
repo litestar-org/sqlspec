@@ -24,7 +24,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -68,6 +68,9 @@ class AiosqliteDriverFeatures(TypedDict):
         Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
         Defaults to sqlspec.utils.serializers.from_json.
+    on_connection_create: Async callback executed when a connection is created.
+        Receives the raw aiosqlite connection for low-level driver configuration.
+        Runs after internal setup (PRAGMA optimizations).
     enable_events: Enable database event channel support.
         Defaults to True when extension_config["events"] is configured.
         Provides pub/sub capabilities via table-backed queue (SQLite has no native pub/sub).
@@ -81,6 +84,7 @@ class AiosqliteDriverFeatures(TypedDict):
     enable_custom_adapters: NotRequired[bool]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    on_connection_create: "NotRequired[Callable[[AiosqliteConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -191,12 +195,18 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[AiosqliteConnection], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=config_dict,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -258,6 +268,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             connect_timeout=connect_timeout,
             idle_timeout=idle_timeout,
             operation_timeout=operation_timeout,
+            on_connection_create=self._user_connection_hook,
         )
 
         if self.driver_features.get("enable_custom_adapters", False):

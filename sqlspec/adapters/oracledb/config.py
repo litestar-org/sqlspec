@@ -30,7 +30,7 @@ from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseCo
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from oracledb import AuthMode
 
@@ -103,6 +103,10 @@ class OracleDriverFeatures(TypedDict):
         Applies only to RAW(16) columns; other RAW sizes remain unchanged.
         Uses Python's stdlib uuid module (no external dependencies).
         Defaults to True for improved type safety and storage efficiency.
+    on_connection_create: Callback executed when a connection is acquired from pool.
+        For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
+        For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
+        Called after internal setup (numpy vectors, UUID handlers).
     enable_events: Enable database event channel support.
         Defaults to True when extension_config["events"] is configured.
         Provides pub/sub capabilities via Oracle Advanced Queuing or table-backed fallback.
@@ -117,6 +121,7 @@ class OracleDriverFeatures(TypedDict):
     enable_numpy_vectors: NotRequired[bool]
     enable_lowercase_column_names: NotRequired[bool]
     enable_uuid_binary: NotRequired[bool]
+    on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -170,7 +175,7 @@ class _OracleSyncSessionConnectionHandler:
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections."""
 
-    __slots__ = ()
+    __slots__ = ("_user_connection_hook",)
 
     driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
@@ -210,12 +215,18 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
         driver_features = apply_driver_features(driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[OracleSyncConnection, str], None] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -225,26 +236,32 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Create the actual connection pool."""
         config = dict(self.connection_config)
 
-        if requires_session_callback(self.driver_features):
+        # Always use session_callback to support user callback
+        if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool(**config)
 
     def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
-        """Initialize connection with optional type handlers.
+        """Initialize connection with optional type handlers and user callback.
 
         Registers NumPy vector handlers and UUID binary handlers when enabled.
         Registration order ensures handler chaining works correctly.
+        User callback is called after internal setup.
 
         Args:
             connection: Oracle connection to initialize.
-            tag: Connection tag for session state (unused).
+            tag: Connection tag for session state.
         """
         if self.driver_features.get("enable_numpy_vectors", False):
             register_numpy_handlers(connection)
 
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
+
+        # Call user-provided callback after internal setup
+        if self._user_connection_hook is not None:
+            self._user_connection_hook(connection, tag)
 
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
@@ -383,7 +400,7 @@ class _OracleAsyncSessionConnectionHandler:
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections."""
 
-    __slots__ = ()
+    __slots__ = ("_user_connection_hook",)
 
     connection_type: "ClassVar[type[OracleAsyncConnection]]" = OracleAsyncConnection
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
@@ -422,12 +439,18 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
         driver_features = apply_driver_features(driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[OracleAsyncConnection, str], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config or default_statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -437,26 +460,32 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
 
-        if requires_session_callback(self.driver_features):
+        # Always use session_callback to support user callback
+        if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool_async(**config)
 
     async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
-        """Initialize async connection with optional type handlers.
+        """Initialize async connection with optional type handlers and user callback.
 
         Registers NumPy vector handlers and UUID binary handlers when enabled.
         Registration order ensures handler chaining works correctly.
+        User callback is called after internal setup.
 
         Args:
             connection: Oracle async connection to initialize.
-            tag: Connection tag for session state (unused).
+            tag: Connection tag for session state.
         """
         if self.driver_features.get("enable_numpy_vectors", False):
             register_numpy_handlers(connection)
 
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
+
+        # Call user-provided callback after internal setup
+        if self._user_connection_hook is not None:
+            await self._user_connection_hook(connection, tag)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

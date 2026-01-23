@@ -15,7 +15,7 @@ from sqlspec.adapters.pymysql._typing import PyMysqlConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
 
 class PyMysqlConnectionParams(TypedDict):
@@ -49,15 +49,35 @@ _ADAPTER_NAME = "pymysql"
 class PyMysqlConnectionPool:
     """Thread-local connection manager for PyMySQL."""
 
-    __slots__ = ("_connection_parameters", "_health_check_interval", "_pool_id", "_recycle_seconds", "_thread_local")
+    __slots__ = (
+        "_connection_parameters",
+        "_health_check_interval",
+        "_on_connection_create",
+        "_pool_id",
+        "_recycle_seconds",
+        "_thread_local",
+    )
 
     def __init__(
-        self, connection_parameters: "dict[str, Any]", recycle_seconds: int = 86400, health_check_interval: float = 30.0
+        self,
+        connection_parameters: "dict[str, Any]",
+        recycle_seconds: int = 86400,
+        health_check_interval: float = 30.0,
+        on_connection_create: "Callable[[PyMysqlConnection], None] | None" = None,
     ) -> None:
+        """Initialize the thread-local connection manager.
+
+        Args:
+            connection_parameters: PyMySQL connection parameters
+            recycle_seconds: Connection recycle time in seconds (default 24h)
+            health_check_interval: Seconds of idle time before running health check
+            on_connection_create: Callback executed when connection is created
+        """
         self._connection_parameters = connection_parameters
         self._thread_local = threading.local()
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
+        self._on_connection_create = on_connection_create
         self._pool_id = str(uuid.uuid4())[:8]
 
     @property
@@ -67,6 +87,11 @@ class PyMysqlConnectionPool:
 
     def _create_connection(self) -> PyMysqlConnection:
         connection = pymysql.connect(**self._connection_parameters)
+
+        # Call user-provided callback after connection creation
+        if self._on_connection_create is not None:
+            self._on_connection_create(connection)
+
         return cast("PyMysqlConnection", connection)
 
     def _is_connection_alive(self, connection: PyMysqlConnection) -> bool:

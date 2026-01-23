@@ -63,7 +63,7 @@ class DuckDBConnectionPool:
         extensions: "list[dict[str, Any]] | None" = None,
         extension_flags: "dict[str, Any] | None" = None,
         secrets: "list[dict[str, Any]] | None" = None,
-        on_connection_create: "Callable[[DuckDBConnection], None] | None" = None,
+        on_connection_create: "Callable[[DuckDBConnection], DuckDBConnection | None] | None" = None,
     ) -> None:
         """Initialize the thread-local connection manager.
 

@@ -153,6 +153,26 @@ def test_connection_with_hook() -> None:
         assert setting_value == 1 or setting_value == "1"
 
 
+def test_connection_hook_direct_config() -> None:
+    """Test on_connection_create callback with direct config usage (not via registry)."""
+    hook_call_count = 0
+
+    def connection_hook(connection: DuckDBConnection) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    config = DuckDBConfig(
+        connection_config={"database": f":memory:{uuid4().hex}"},
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    # Direct config usage without SQLSpec registry
+    with config.provide_session() as session:
+        session.execute("SELECT 1")
+
+    assert hook_call_count >= 1, "Hook should be called at least once"
+
+
 def test_connection_read_only_mode() -> None:
     """Test DuckDB connection in read-only mode."""
 

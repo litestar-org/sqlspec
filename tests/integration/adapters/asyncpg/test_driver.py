@@ -904,3 +904,28 @@ async def test_asyncpg_statement_stack_marks_prepared(asyncpg_session: "AsyncpgD
     assert results[0].metadata.get("prepared_statement") is True
     assert results[1].metadata is not None
     assert results[1].metadata.get("prepared_statement") is True
+
+
+async def test_asyncpg_on_connection_create_hook(postgres_service: "PostgresService") -> None:
+    """Test on_connection_create callback is invoked for each connection."""
+    hook_call_count = 0
+
+    async def connection_hook(conn: Any) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    dsn = (
+        f"postgres://{postgres_service.user}:{postgres_service.password}@"
+        f"{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
+    config = AsyncpgConfig(
+        connection_config={"dsn": dsn, "min_size": 1, "max_size": 2},
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    try:
+        async with config.provide_session() as session:
+            await session.execute("SELECT 1")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        await config.close_pool()

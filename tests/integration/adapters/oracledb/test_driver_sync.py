@@ -519,3 +519,30 @@ def test_sync_uppercase_columns_when_disabled(oracle_sync_config: OracleSyncConf
         session.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
         )
+
+
+def test_oracle_sync_on_connection_create_hook(oracle_23ai_service: "OracleService") -> None:
+    """Test on_connection_create callback is invoked for each connection."""
+    hook_call_count = 0
+
+    def connection_hook(conn: Any, tag: str) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    config = OracleSyncConfig(
+        connection_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        },
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    try:
+        with config.provide_session() as session:
+            session.execute("SELECT 1 FROM DUAL")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        config.close_pool()

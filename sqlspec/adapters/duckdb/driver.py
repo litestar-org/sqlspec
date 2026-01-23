@@ -41,21 +41,25 @@ _type_converter = DuckDBOutputConverter()
 
 
 class DuckDBCursor:
-    """Context manager for DuckDB cursor management."""
+    """Context manager for DuckDB connection-as-cursor.
 
-    __slots__ = ("connection", "cursor")
+    DuckDB connections implement the cursor interface and preserve
+    variable state. Using connection directly avoids cursor overhead
+    and fixes SET VARIABLE persistence.
+
+    See: https://github.com/litestar-org/sqlspec/issues/341
+    """
+
+    __slots__ = ("connection",)
 
     def __init__(self, connection: "DuckDBConnection") -> None:
         self.connection = connection
-        self.cursor: Any | None = None
 
-    def __enter__(self) -> Any:
-        self.cursor = self.connection.cursor()
-        return self.cursor
+    def __enter__(self) -> "DuckDBConnection":
+        return self.connection
 
     def __exit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            self.cursor.close()
+        pass  # Connection lifecycle managed by pool/session
 
 
 class DuckDBExceptionHandler:

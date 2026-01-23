@@ -578,3 +578,25 @@ def test_sqlite_for_update_skip_locked_generates_sql(sqlite_session: SqliteDrive
     result = sqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
+
+
+def test_sqlite_on_connection_create_hook() -> None:
+    """Test on_connection_create callback is invoked for each connection."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    hook_call_count = 0
+
+    def connection_hook(conn: Any) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"}, driver_features={"on_connection_create": connection_hook}
+    )
+
+    try:
+        with config.provide_session() as session:
+            session.execute("SELECT 1")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        config.close_pool()

@@ -1,11 +1,15 @@
 """Integration tests for PyMySQL driver implementation."""
 
 import math
+from typing import TYPE_CHECKING
 
 import pytest
 
 from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.pymysql import PyMysqlDriver
+
+if TYPE_CHECKING:
+    from pytest_databases.docker.mysql import MySQLService
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql, pytest.mark.pymysql]
 
@@ -201,3 +205,34 @@ def test_pymysql_for_update(pymysql_driver: PyMysqlDriver) -> None:
     except Exception:
         driver.rollback()
         raise
+
+
+def test_pymysql_on_connection_create_hook(mysql_service: "MySQLService") -> None:
+    """Test on_connection_create callback is invoked for each connection."""
+    from typing import Any
+
+    from sqlspec.adapters.pymysql import PyMysqlConfig
+
+    hook_call_count = 0
+
+    def connection_hook(conn: Any) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    config = PyMysqlConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+        },
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    try:
+        with config.provide_session() as session:
+            session.execute("SELECT 1")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        config.close_pool()

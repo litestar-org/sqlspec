@@ -307,12 +307,18 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[AsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=normalize_connection_config(connection_config),
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -432,7 +438,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         return await asyncpg_create_pool(**config)
 
     async def _init_connection(self, connection: "AsyncpgConnection") -> None:
-        """Initialize connection with JSON codecs and pgvector support.
+        """Initialize connection with JSON codecs, pgvector support, and user callback.
 
         Args:
             connection: AsyncPG connection to initialize.
@@ -455,6 +461,10 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
             if self._pgvector_available:
                 await register_pgvector_support(connection)
+
+        # Call user-provided callback after internal setup
+        if self._user_connection_hook is not None:
+            await self._user_connection_hook(connection)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool and cleanup connectors."""
