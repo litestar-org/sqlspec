@@ -85,9 +85,7 @@ def test_sqlite_config_migrate_up_calls_commands(tmp_path: Path) -> None:
     with patch.object(SyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
         config.migrate_up(revision="head", allow_missing=True, auto_sync=False, dry_run=True)
 
-        mock_upgrade.assert_called_once_with(
-            "head", True, False, True, use_logger=False, echo=None, summary_only=None
-        )
+        mock_upgrade.assert_called_once_with("head", True, False, True, use_logger=False, echo=None, summary_only=None)
 
 
 def test_sqlite_config_migrate_down_calls_commands(tmp_path: Path) -> None:
@@ -209,9 +207,7 @@ async def test_asyncpg_config_migrate_up_calls_commands(tmp_path: Path) -> None:
     with patch.object(AsyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
         await config.migrate_up(revision="0002", allow_missing=False, auto_sync=True, dry_run=False)
 
-        mock_upgrade.assert_called_once_with(
-            "0002", False, True, False, use_logger=False, echo=None, summary_only=None
-        )
+        mock_upgrade.assert_called_once_with("0002", False, True, False, use_logger=False, echo=None, summary_only=None)
 
 
 @pytest.mark.asyncio
@@ -322,9 +318,7 @@ def test_duckdb_pooled_config_migrate_up_calls_commands(tmp_path: Path) -> None:
     with patch.object(SyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
         config.migrate_up(revision="head", allow_missing=False, auto_sync=True, dry_run=False)
 
-        mock_upgrade.assert_called_once_with(
-            "head", False, True, False, use_logger=False, echo=None, summary_only=None
-        )
+        mock_upgrade.assert_called_once_with("head", False, True, False, use_logger=False, echo=None, summary_only=None)
 
 
 def test_duckdb_pooled_config_get_current_migration_calls_commands(tmp_path: Path) -> None:
@@ -355,9 +349,7 @@ async def test_aiosqlite_async_config_migrate_up_calls_commands(tmp_path: Path) 
     with patch.object(AsyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
         await config.migrate_up(revision="head", allow_missing=True, auto_sync=True, dry_run=True)
 
-        mock_upgrade.assert_called_once_with(
-            "head", True, True, True, use_logger=False, echo=None, summary_only=None
-        )
+        mock_upgrade.assert_called_once_with("head", True, True, True, use_logger=False, echo=None, summary_only=None)
 
 
 def test_migrate_up_default_parameters_sync(tmp_path: Path) -> None:
@@ -372,9 +364,7 @@ def test_migrate_up_default_parameters_sync(tmp_path: Path) -> None:
     with patch.object(SyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
         config.migrate_up()
 
-        mock_upgrade.assert_called_once_with(
-            "head", False, True, False, use_logger=False, echo=None, summary_only=None
-        )
+        mock_upgrade.assert_called_once_with("head", False, True, False, use_logger=False, echo=None, summary_only=None)
 
 
 @pytest.mark.asyncio
@@ -390,9 +380,7 @@ async def test_migrate_up_default_parameters_async(tmp_path: Path) -> None:
     with patch.object(AsyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
         await config.migrate_up()
 
-        mock_upgrade.assert_called_once_with(
-            "head", False, True, False, use_logger=False, echo=None, summary_only=None
-        )
+        mock_upgrade.assert_called_once_with("head", False, True, False, use_logger=False, echo=None, summary_only=None)
 
 
 def test_migrate_down_default_parameters_sync(tmp_path: Path) -> None:
