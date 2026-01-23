@@ -119,7 +119,7 @@ class _PsqlpySessionFactory:
         ctx = pool.acquire()
         self._ctx = ctx
         connection = await ctx.__aenter__()
-        await self._config._ensure_connection_initialized(connection)
+        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
     async def release_connection(self, _conn: "PsqlpyConnection") -> None:
@@ -148,7 +148,7 @@ class PsqlpyConnectionContext:
 
         self._ctx = pool.acquire()
         connection = await self._ctx.__aenter__()
-        await self._config._ensure_connection_initialized(connection)
+        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
         return connection  # type: ignore[no-any-return]
 
     async def __aexit__(

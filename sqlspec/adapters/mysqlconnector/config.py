@@ -139,7 +139,7 @@ class MysqlConnectorSyncConnectionContext:
             self._connection = cast("MysqlConnectorSyncConnection", self._config.connection_instance.get_connection())
         else:
             self._connection = self._config.create_connection()
-        self._config._ensure_connection_initialized(self._connection)
+        self._config._ensure_connection_initialized(self._connection)  # pyright: ignore[reportPrivateUsage]
         return self._connection
 
     def __exit__(
@@ -163,7 +163,7 @@ class _MysqlConnectorSyncSessionConnectionHandler:
             self._connection = cast("MysqlConnectorSyncConnection", self._config.connection_instance.get_connection())
         else:
             self._connection = self._config.create_connection()
-        self._config._ensure_connection_initialized(self._connection)
+        self._config._ensure_connection_initialized(self._connection)  # pyright: ignore[reportPrivateUsage]
         return self._connection
 
     def release_connection(self, _conn: MysqlConnectorSyncConnection) -> None:

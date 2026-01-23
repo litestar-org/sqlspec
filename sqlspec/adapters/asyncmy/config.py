@@ -107,7 +107,7 @@ class _AsyncmySessionFactory:
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AsyncmyConnection", await ctx.__aenter__())
-        await self._config._ensure_connection_initialized(connection)
+        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
     async def release_connection(self, _conn: "AsyncmyConnection") -> None:
@@ -133,7 +133,7 @@ class AsyncmyConnectionContext:
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AsyncmyConnection", await ctx.__aenter__())
-        await self._config._ensure_connection_initialized(connection)
+        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
     async def __aexit__(
