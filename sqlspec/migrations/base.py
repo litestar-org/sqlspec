@@ -33,7 +33,7 @@ logger = get_logger("sqlspec.migrations.base")
 class BaseMigrationTracker(ABC, Generic[DriverT]):
     """Base class for migration version tracking."""
 
-    __slots__ = ("version_table",)
+    __slots__ = ("_output_policy", "version_table")
 
     def __init__(self, version_table_name: str = "ddl_migrations") -> None:
         """Initialize the migration tracker.
@@ -42,6 +42,19 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             version_table_name: Name of the table to track migrations.
         """
         self.version_table = version_table_name
+        self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
+
+    def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
+        """Set output policy for tracker console/logging behavior."""
+        self._output_policy = {"use_logger": use_logger, "echo": echo, "summary_only": summary_only}
+
+    def _should_echo(self) -> bool:
+        """Return True when console output should be emitted."""
+        return bool(self._output_policy.get("echo", True)) and not bool(self._output_policy.get("use_logger", False))
+
+    def _use_logger(self) -> bool:
+        """Return True when logger output is preferred."""
+        return bool(self._output_policy.get("use_logger", False))
 
     def _get_create_table_sql(self) -> CreateTable:
         """Get SQL builder for creating the tracking table.
@@ -691,7 +704,11 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
         readme = migrations_dir / "README.md"
         readme.write_text(self._get_init_readme_content())
 
-        console.print(f"[green]Initialized migrations in {directory}[/]")
+        use_logger, echo, summary_only = self._resolve_output_policy(False, None, None)
+        if echo and not use_logger:
+            console.print(f"[green]Initialized migrations in {directory}[/]")
+        elif use_logger and not summary_only:
+            logger.info("Initialized migrations in %s", directory)
 
     def _record_command_metric(self, name: str, value: float) -> None:
         """Accumulate per-command metrics for decorator flushing."""
@@ -717,6 +734,29 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
             return True
         migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
         return bool(migration_config.get("use_logger", False))
+
+    def _resolve_echo(self, method_value: "bool | None") -> bool:
+        """Resolve effective echo setting."""
+        if method_value is not None:
+            return bool(method_value)
+        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        return bool(migration_config.get("echo", True))
+
+    def _resolve_summary_only(self, method_value: "bool | None") -> bool:
+        """Resolve effective summary_only setting."""
+        if method_value is not None:
+            return bool(method_value)
+        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        return bool(migration_config.get("summary_only", False))
+
+    def _resolve_output_policy(
+        self, use_logger: bool, echo: "bool | None", summary_only: "bool | None"
+    ) -> "tuple[bool, bool, bool]":
+        """Resolve output policy with method values overriding config defaults."""
+        resolved_use_logger = self._resolve_use_logger(use_logger)
+        resolved_echo = self._resolve_echo(echo)
+        resolved_summary_only = self._resolve_summary_only(summary_only)
+        return resolved_use_logger, resolved_echo, resolved_summary_only
 
     @abstractmethod
     def init(self, directory: str, package: bool = True) -> Any:

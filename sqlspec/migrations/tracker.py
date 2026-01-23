@@ -49,6 +49,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        console = Console()
         try:
             columns_data = driver.data_dictionary.get_columns(driver, self.version_table)
             if not columns_data:
@@ -78,16 +79,17 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 )
                 return
 
-            console = Console()
-            console.print(
-                f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
-            )
+            if self._should_echo():
+                console.print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+                )
 
             for col_name in sorted(missing_columns):
                 self._add_column(driver, col_name)
 
             driver.commit()
-            console.print("[green]Migration tracking table schema updated successfully[/]")
+            if self._should_echo():
+                console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as exc:
             log_with_context(
@@ -336,6 +338,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        console = Console()
         try:
             columns_data = await driver.data_dictionary.get_columns(driver, self.version_table)
             if not columns_data:
@@ -365,16 +368,17 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 )
                 return
 
-            console = Console()
-            console.print(
-                f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
-            )
+            if self._should_echo():
+                console.print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+                )
 
             for col_name in sorted(missing_columns):
                 await self._add_column(driver, col_name)
 
             await driver.commit()
-            console.print("[green]Migration tracking table schema updated successfully[/]")
+            if self._should_echo():
+                console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as exc:
             log_with_context(

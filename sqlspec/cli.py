@@ -178,6 +178,18 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     dry_run_option = click.option(
         "--dry-run", is_flag=True, default=False, help="Show what would be executed without making changes"
     )
+    use_logger_option = click.option(
+        "--use-logger",
+        is_flag=True,
+        default=False,
+        help="Emit migration output via structured logger instead of console output",
+    )
+    no_echo_option = click.option(
+        "--no-echo", is_flag=True, default=False, help="Disable console output for migration commands"
+    )
+    summary_only_option = click.option(
+        "--summary", is_flag=True, default=False, help="Emit a single summary log entry when logger output is enabled"
+    )
     execution_mode_option = click.option(
         "--execution-mode",
         type=click.Choice(["auto", "sync", "async"]),
@@ -349,6 +361,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         exclude: "tuple[str, ...]",
         dry_run: bool,
         operation_name: str,
+        echo: bool = True,
     ) -> "list[tuple[str, Any]] | None":
         """Process configuration selection for multi-config operations.
 
@@ -362,6 +375,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             exclude: Config names to exclude.
             dry_run: Whether this is a dry run.
             operation_name: Name of the operation for display.
+            echo: Whether to echo output to the console.
 
         Returns:
             List of (config_name, config) tuples to process, or None for single config mode.
@@ -378,13 +392,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         configs_to_process = filter_configs(migration_configs, include, exclude)
 
         if not configs_to_process:
-            console.print("[yellow]No configurations match the specified criteria.[/]")
+            if echo:
+                console.print("[yellow]No configurations match the specified criteria.[/]")
             return []
 
         if dry_run:
-            console.print(f"[blue]Dry run: Would {operation_name} {len(configs_to_process)} configuration(s)[/]")
-            for config_name, _ in configs_to_process:
-                console.print(f"  • {config_name}")
+            if echo:
+                console.print(f"[blue]Dry run: Would {operation_name} {len(configs_to_process)} configuration(s)[/]")
+                for config_name, _ in configs_to_process:
+                    console.print(f"  • {config_name}")
             return []
 
         return configs_to_process
@@ -463,6 +479,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @include_option
     @exclude_option
     @dry_run_option
+    @use_logger_option
+    @no_echo_option
+    @summary_only_option
     @click.argument("revision", type=str, default="-1")
     def downgrade_database(  # pyright: ignore[reportUnusedFunction]
         bind_key: str | None,
@@ -471,12 +490,25 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         include: "tuple[str, ...]",
         exclude: "tuple[str, ...]",
         dry_run: bool,
+        use_logger: bool,
+        no_echo: bool,
+        summary_only: bool,
     ) -> None:
         """Downgrade the database to the latest revision."""
 
         from sqlspec.migrations.commands import create_migration_commands
 
         ctx = _ensure_click_context()
+        effective_no_echo = no_echo or summary_only
+        echo_setting = False if effective_no_echo else None
+        summary_setting = True if summary_only else None
+        echo_enabled = not effective_no_echo and not use_logger
+
+        def _should_echo(config: Any) -> bool:
+            if not echo_enabled:
+                return False
+            migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
+            return not bool(migration_config.get("use_logger", False))
 
         def _downgrade_for_config(config: Any) -> None:
             """Downgrade a single config with sync/async dispatch."""
@@ -485,17 +517,33 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             )
 
             def sync_downgrade() -> None:
-                migration_commands.downgrade(revision=revision, dry_run=dry_run)
+                migration_commands.downgrade(
+                    revision=revision,
+                    dry_run=dry_run,
+                    use_logger=use_logger,
+                    echo=echo_setting,
+                    summary_only=summary_setting,
+                )
 
             async def async_downgrade() -> None:
                 await cast("AsyncMigrationCommands[Any]", migration_commands).downgrade(
-                    revision=revision, dry_run=dry_run
+                    revision=revision,
+                    dry_run=dry_run,
+                    use_logger=use_logger,
+                    echo=echo_setting,
+                    summary_only=summary_setting,
                 )
 
             _execute_for_config(config, sync_downgrade, async_downgrade)
 
         configs_to_process = process_multiple_configs(
-            ctx, bind_key, include, exclude, dry_run=dry_run, operation_name=f"downgrade to {revision}"
+            ctx,
+            bind_key,
+            include,
+            exclude,
+            dry_run=dry_run,
+            operation_name=f"downgrade to {revision}",
+            echo=echo_enabled,
         )
 
         if configs_to_process is not None:
@@ -505,38 +553,53 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             if not no_prompt and not Confirm.ask(
                 f"[bold]Are you sure you want to downgrade {len(configs_to_process)} configuration(s) to revision {revision}?[/]"
             ):
-                console.print("[yellow]Operation cancelled.[/]")
+                if echo_enabled:
+                    console.print("[yellow]Operation cancelled.[/]")
                 return
 
-            console.rule("[yellow]Starting multi-configuration downgrade process[/]", align="left")
+            if echo_enabled:
+                console.rule("[yellow]Starting multi-configuration downgrade process[/]", align="left")
 
             sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
 
             for config_name, config in sync_configs:
-                console.print(f"[blue]Downgrading configuration: {config_name}[/]")
+                if _should_echo(config):
+                    console.print(f"[blue]Downgrading configuration: {config_name}[/]")
                 try:
                     _downgrade_for_config(config)
-                    console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
+                    if _should_echo(config):
+                        console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
                 except Exception as e:
-                    console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
+                    if _should_echo(config):
+                        console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
 
             if async_configs:
 
                 async def _run_async_configs() -> None:
                     for config_name, config in async_configs:
-                        console.print(f"[blue]Downgrading configuration: {config_name}[/]")
+                        if _should_echo(config):
+                            console.print(f"[blue]Downgrading configuration: {config_name}[/]")
                         try:
                             migration_commands: AsyncMigrationCommands[Any] = cast(
                                 "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
                             )
-                            await migration_commands.downgrade(revision=revision, dry_run=dry_run)
-                            console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
+                            await migration_commands.downgrade(
+                                revision=revision,
+                                dry_run=dry_run,
+                                use_logger=use_logger,
+                                echo=echo_setting,
+                                summary_only=summary_setting,
+                            )
+                            if _should_echo(config):
+                                console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
                         except Exception as e:
-                            console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
+                            if _should_echo(config):
+                                console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
 
                 run_(_run_async_configs)()
         else:
-            console.rule("[yellow]Starting database downgrade process[/]", align="left")
+            if echo_enabled:
+                console.rule("[yellow]Starting database downgrade process[/]", align="left")
             input_confirmed = (
                 True
                 if no_prompt
@@ -552,6 +615,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @include_option
     @exclude_option
     @dry_run_option
+    @use_logger_option
+    @no_echo_option
+    @summary_only_option
     @execution_mode_option
     @no_auto_sync_option
     @click.argument("revision", type=str, default="head")
@@ -562,6 +628,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         include: "tuple[str, ...]",
         exclude: "tuple[str, ...]",
         dry_run: bool,
+        use_logger: bool,
+        no_echo: bool,
+        summary_only: bool,
         execution_mode: str,
         no_auto_sync: bool,
     ) -> None:
@@ -572,7 +641,18 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         from sqlspec.migrations.commands import create_migration_commands
 
         ctx = _ensure_click_context()
-        if execution_mode != "auto":
+        effective_no_echo = no_echo or summary_only
+        echo_setting = False if effective_no_echo else None
+        summary_setting = True if summary_only else None
+        echo_enabled = not effective_no_echo and not use_logger
+
+        def _should_echo(config: Any) -> bool:
+            if not echo_enabled:
+                return False
+            migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
+            return not bool(migration_config.get("use_logger", False))
+
+        if execution_mode != "auto" and echo_enabled:
             console.print(f"[dim]Execution mode: {execution_mode}[/]")
 
         def _upgrade_for_config(config: Any) -> None:
@@ -582,17 +662,29 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             )
 
             def sync_upgrade() -> None:
-                migration_commands.upgrade(revision=revision, auto_sync=not no_auto_sync, dry_run=dry_run)
+                migration_commands.upgrade(
+                    revision=revision,
+                    auto_sync=not no_auto_sync,
+                    dry_run=dry_run,
+                    use_logger=use_logger,
+                    echo=echo_setting,
+                    summary_only=summary_setting,
+                )
 
             async def async_upgrade() -> None:
                 await cast("AsyncMigrationCommands[Any]", migration_commands).upgrade(
-                    revision=revision, auto_sync=not no_auto_sync, dry_run=dry_run
+                    revision=revision,
+                    auto_sync=not no_auto_sync,
+                    dry_run=dry_run,
+                    use_logger=use_logger,
+                    echo=echo_setting,
+                    summary_only=summary_setting,
                 )
 
             _execute_for_config(config, sync_upgrade, async_upgrade)
 
         configs_to_process = process_multiple_configs(
-            ctx, bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}"
+            ctx, bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}", echo=echo_enabled
         )
 
         if configs_to_process is not None:
@@ -602,40 +694,54 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             if not no_prompt and not Confirm.ask(
                 f"[bold]Are you sure you want to upgrade {len(configs_to_process)} configuration(s) to revision {revision}?[/]"
             ):
-                console.print("[yellow]Operation cancelled.[/]")
+                if echo_enabled:
+                    console.print("[yellow]Operation cancelled.[/]")
                 return
 
-            console.rule("[yellow]Starting multi-configuration upgrade process[/]", align="left")
+            if echo_enabled:
+                console.rule("[yellow]Starting multi-configuration upgrade process[/]", align="left")
 
             sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
 
             for config_name, config in sync_configs:
-                console.print(f"[blue]Upgrading configuration: {config_name}[/]")
+                if _should_echo(config):
+                    console.print(f"[blue]Upgrading configuration: {config_name}[/]")
                 try:
                     _upgrade_for_config(config)
-                    console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
+                    if _should_echo(config):
+                        console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
                 except Exception as e:
-                    console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
+                    if _should_echo(config):
+                        console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
 
             if async_configs:
 
                 async def _run_async_configs() -> None:
                     for config_name, config in async_configs:
-                        console.print(f"[blue]Upgrading configuration: {config_name}[/]")
+                        if _should_echo(config):
+                            console.print(f"[blue]Upgrading configuration: {config_name}[/]")
                         try:
                             migration_commands: AsyncMigrationCommands[Any] = cast(
                                 "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
                             )
                             await migration_commands.upgrade(
-                                revision=revision, auto_sync=not no_auto_sync, dry_run=dry_run
+                                revision=revision,
+                                auto_sync=not no_auto_sync,
+                                dry_run=dry_run,
+                                use_logger=use_logger,
+                                echo=echo_setting,
+                                summary_only=summary_setting,
                             )
-                            console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
+                            if _should_echo(config):
+                                console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
                         except Exception as e:
-                            console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
+                            if _should_echo(config):
+                                console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
 
                 run_(_run_async_configs)()
         else:
-            console.rule("[yellow]Starting database upgrade process[/]", align="left")
+            if echo_enabled:
+                console.rule("[yellow]Starting database upgrade process[/]", align="left")
             input_confirmed = (
                 True
                 if no_prompt
