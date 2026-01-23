@@ -424,7 +424,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.upgrade.assert_called_once_with(revision="head", auto_sync=True, dry_run=False)
+    mock_commands.upgrade.assert_called_once_with(
+        revision="head", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -455,7 +457,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.upgrade.assert_called_once_with(revision="abc123", auto_sync=True, dry_run=False)
+    mock_commands.upgrade.assert_called_once_with(
+        revision="abc123", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -486,7 +490,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.downgrade.assert_called_once_with(revision="-1", dry_run=False)
+    mock_commands.downgrade.assert_called_once_with(
+        revision="-1", dry_run=False, use_logger=False, echo=None, summary_only=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -767,4 +773,6 @@ def get_multi_configs():
 
     assert result.exit_code == 0
     # Should only process the analytics_db config
-    mock_commands.upgrade.assert_called_once_with(revision="head", auto_sync=True, dry_run=False)
+    mock_commands.upgrade.assert_called_once_with(
+        revision="head", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+    )

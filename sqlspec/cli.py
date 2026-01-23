@@ -188,7 +188,11 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         "--no-echo", is_flag=True, default=False, help="Disable console output for migration commands"
     )
     summary_only_option = click.option(
-        "--summary", is_flag=True, default=False, help="Emit a single summary log entry when logger output is enabled"
+        "--summary",
+        "summary_only",
+        is_flag=True,
+        default=False,
+        help="Emit a single summary log entry when logger output is enabled",
     )
     execution_mode_option = click.option(
         "--execution-mode",
