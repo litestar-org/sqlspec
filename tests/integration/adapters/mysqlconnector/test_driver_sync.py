@@ -1,11 +1,15 @@
 """Integration tests for MysqlConnector sync driver implementation."""
 
 import math
+from typing import TYPE_CHECKING
 
 import pytest
 
 from sqlspec import SQL, SQLResult, StatementStack
 from sqlspec.adapters.mysqlconnector import MysqlConnectorSyncDriver
+
+if TYPE_CHECKING:
+    from pytest_databases.docker.mysql import MySQLService
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector]
 
@@ -177,3 +181,36 @@ def test_mysqlconnector_sync_sql_object_execution(mysqlconnector_sync_driver: My
     verify_result = driver.execute("SELECT name, value FROM test_table WHERE name = ?", ("sql_obj_test",))
     assert verify_result.get_data()[0]["name"] == "sql_obj_test"
     assert verify_result.get_data()[0]["value"] == 999
+
+
+def test_mysqlconnector_sync_on_connection_create_hook(mysql_service: "MySQLService") -> None:
+    """Test on_connection_create callback is invoked for each connection."""
+    from typing import Any
+
+    from sqlspec.adapters.mysqlconnector import MysqlConnectorSyncConfig
+
+    hook_call_count = 0
+
+    def connection_hook(conn: Any) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    config = MysqlConnectorSyncConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "use_pure": True,
+        },
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    try:
+        with config.provide_session() as session:
+            session.execute("SELECT 1")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        if config.connection_instance:
+            config.close_pool()

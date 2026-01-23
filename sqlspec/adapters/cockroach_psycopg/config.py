@@ -30,7 +30,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -82,7 +82,13 @@ class CockroachPsycopgPoolConfig(CockroachPsycopgConnectionConfig):
 
 
 class CockroachPsycopgDriverFeatures(TypedDict):
-    """CockroachDB driver feature configuration."""
+    """CockroachDB driver feature configuration.
+
+    on_connection_create: Callback executed when a connection is acquired from pool.
+        For sync: Callable[[CockroachSyncConnection], None]
+        For async: Callable[[CockroachAsyncConnection], Awaitable[None]]
+        Called after internal setup (row_factory configuration).
+    """
 
     enable_auto_retry: NotRequired[bool]
     max_retries: NotRequired[int]
@@ -94,6 +100,7 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     prefer_uuid_keys: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -182,12 +189,18 @@ class CockroachPsycopgSyncConfig(
         driver_features.setdefault("enable_auto_retry", True)
         _ = CockroachPsycopgRetryConfig.from_features(driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[CockroachSyncConnection], None] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -227,6 +240,10 @@ class CockroachPsycopgSyncConfig(
         autocommit_setting = self.connection_config.get("autocommit")
         if autocommit_setting is not None:
             conn.autocommit = autocommit_setting
+
+        # Call user-provided callback after internal setup
+        if self._user_connection_hook is not None:
+            self._user_connection_hook(conn)
 
     def _close_pool(self) -> None:
         if not self.connection_instance:
@@ -369,12 +386,18 @@ class CockroachPsycopgAsyncConfig(
         driver_features.setdefault("enable_auto_retry", True)
         _ = CockroachPsycopgRetryConfig.from_features(driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[CockroachAsyncConnection], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -419,6 +442,10 @@ class CockroachPsycopgAsyncConfig(
         autocommit_setting = self.connection_config.get("autocommit")
         if autocommit_setting is not None:
             await conn.set_autocommit(autocommit_setting)
+
+        # Call user-provided callback after internal setup
+        if self._user_connection_hook is not None:
+            await self._user_connection_hook(conn)
 
     async def _close_pool(self) -> None:
         if not self.connection_instance:

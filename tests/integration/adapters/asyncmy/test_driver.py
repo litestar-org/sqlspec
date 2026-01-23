@@ -508,3 +508,37 @@ async def test_asyncmy_for_share_locking(asyncmy_driver: AsyncmyDriver) -> None:
     except Exception:
         await driver.rollback()
         raise
+
+
+async def test_asyncmy_on_connection_create_hook(mysql_service: "MySQLService") -> None:
+    """Test on_connection_create callback is invoked for each connection."""
+    from typing import Any
+
+    hook_call_count = 0
+
+    async def connection_hook(conn: Any) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    config = AsyncmyConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "minsize": 1,
+            "maxsize": 2,
+        },
+        driver_features={"on_connection_create": connection_hook},
+    )
+
+    try:
+        async with config.provide_session() as session:
+            await session.execute("SELECT 1")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        pool = config.connection_instance
+        if pool is not None:
+            pool.close()
+            await pool.wait_closed()

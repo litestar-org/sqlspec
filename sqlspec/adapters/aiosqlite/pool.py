@@ -13,6 +13,7 @@ from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
@@ -178,6 +179,7 @@ class AiosqliteConnectionPool:
         "_idle_timeout",
         "_lock_instance",
         "_min_size",
+        "_on_connection_create",
         "_operation_timeout",
         "_pool_id",
         "_pool_size",
@@ -195,6 +197,7 @@ class AiosqliteConnectionPool:
         idle_timeout: float = 24 * 60 * 60,
         operation_timeout: float = 10.0,
         health_check_interval: float = 30.0,
+        on_connection_create: "Callable[[AiosqliteConnection], Awaitable[None]] | None" = None,
     ) -> None:
         """Initialize connection pool.
 
@@ -206,6 +209,7 @@ class AiosqliteConnectionPool:
             idle_timeout: Maximum time a connection can remain idle
             operation_timeout: Maximum time for connection operations
             health_check_interval: Seconds of idle time before running health check
+            on_connection_create: Async callback executed when connection is created
         """
         self._connection_parameters = connection_parameters
         self._pool_size = pool_size
@@ -214,6 +218,7 @@ class AiosqliteConnectionPool:
         self._idle_timeout = idle_timeout
         self._operation_timeout = operation_timeout
         self._health_check_interval = health_check_interval
+        self._on_connection_create = on_connection_create
 
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
         self._wal_initialized = False
@@ -323,6 +328,10 @@ class AiosqliteConnectionPool:
             await connection.execute("PRAGMA foreign_keys = ON")
             await connection.execute("PRAGMA busy_timeout = 30000")
             await connection.commit()
+
+        # Call user-provided callback after internal setup
+        if self._on_connection_create is not None:
+            await self._on_connection_create(connection)
 
         pool_connection = AiosqlitePoolConnection(connection)
         pool_connection.mark_as_idle()

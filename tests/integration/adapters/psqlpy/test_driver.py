@@ -1,13 +1,16 @@
 """Test PSQLPy driver implementation."""
 
 import asyncio
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
 
 from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
 from tests.conftest import requires_interpreted
+
+if TYPE_CHECKING:
+    from pytest_databases.docker.postgres import PostgresService
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
@@ -659,3 +662,28 @@ async def test_psqlpy_for_share_locking(psqlpy_session: "PsqlpyDriver") -> None:
         raise
     finally:
         await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+async def test_psqlpy_on_connection_create_hook(postgres_service: "PostgresService") -> None:
+    """Test on_connection_create callback is invoked for each connection."""
+    hook_call_count = 0
+
+    async def connection_hook(conn: Any) -> None:
+        nonlocal hook_call_count
+        hook_call_count += 1
+
+    dsn = (
+        f"postgres://{postgres_service.user}:{postgres_service.password}@"
+        f"{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
+    config = PsqlpyConfig(
+        connection_config={"dsn": dsn, "max_db_pool_size": 2}, driver_features={"on_connection_create": connection_hook}
+    )
+
+    try:
+        async with config.provide_session() as session:
+            await session.execute("SELECT 1")
+        assert hook_call_count >= 1, "Hook should be called at least once"
+    finally:
+        if config.connection_instance:
+            config.connection_instance.close()

@@ -1,6 +1,7 @@
 """Asyncmy database configuration."""
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from weakref import WeakSet
 
 import asyncmy
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
@@ -16,7 +17,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
     from asyncmy.pool import Pool  # pyright: ignore
@@ -71,6 +72,9 @@ class AsyncmyDriverFeatures(TypedDict):
     json_deserializer: Custom JSON deserializer function.
         Defaults to sqlspec.utils.serializers.from_json.
         Use for performance (orjson) or custom decoding.
+    on_connection_create: Async callback executed when a connection is acquired from pool.
+        Receives the raw asyncmy connection for low-level driver configuration.
+        Called exactly once per physical connection using WeakSet tracking.
     enable_events: Enable database event channel support.
         Defaults to True when extension_config["events"] is configured.
         Provides pub/sub capabilities via table-backed queue (MySQL/MariaDB have no native pub/sub).
@@ -83,6 +87,7 @@ class AsyncmyDriverFeatures(TypedDict):
 
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    on_connection_create: "NotRequired[Callable[[AsyncmyConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -101,7 +106,9 @@ class _AsyncmySessionFactory:
             self._config.connection_instance = pool
         ctx = pool.acquire()
         self._ctx = ctx
-        return cast("AsyncmyConnection", await ctx.__aenter__())
+        connection = cast("AsyncmyConnection", await ctx.__aenter__())
+        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        return connection
 
     async def release_connection(self, _conn: "AsyncmyConnection") -> None:
         if self._ctx is not None:
@@ -125,7 +132,9 @@ class AsyncmyConnectionContext:
             self._config.connection_instance = pool
         ctx = pool.acquire()
         self._ctx = ctx
-        return cast("AsyncmyConnection", await ctx.__aenter__())
+        connection = cast("AsyncmyConnection", await ctx.__aenter__())
+        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        return connection
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
@@ -181,12 +190,20 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[AsyncmyConnection], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+        # Track initialized connections to ensure callback runs exactly once per physical connection
+        self._initialized_connections: WeakSet[Any] = WeakSet()
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -204,6 +221,17 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         initialization, specialized type handling).
         """
         return cast("AsyncmyPool", await asyncmy.create_pool(**dict(self.connection_config)))
+
+    async def _ensure_connection_initialized(self, connection: "AsyncmyConnection") -> None:
+        """Ensure connection callback has been called exactly once for this connection.
+
+        Uses WeakSet tracking to ensure the callback runs once per physical connection.
+        """
+        if self._user_connection_hook is None:
+            return
+        if connection not in self._initialized_connections:
+            await self._user_connection_hook(connection)
+            self._initialized_connections.add(connection)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
@@ -226,7 +254,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         if pool is None:
             pool = await self.create_pool()
             self.connection_instance = pool
-        return cast("AsyncmyConnection", await pool.acquire())
+        connection = cast("AsyncmyConnection", await pool.acquire())
+        await self._ensure_connection_initialized(connection)
+        return connection
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncmyConnectionContext":
         """Provide an async connection context manager.

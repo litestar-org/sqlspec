@@ -26,7 +26,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from sqlspec.core import StatementConfig
 
@@ -78,6 +78,11 @@ class PsycopgDriverFeatures(TypedDict):
         Set to False to disable pgvector support even when package is available.
     json_serializer: Custom JSON serializer for StatementConfig parameter handling.
     json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
+    on_connection_create: Callback executed when a connection is created/acquired from the pool.
+        Receives the raw psycopg connection for low-level driver configuration.
+        Runs after internal setup (row_factory, pgvector registration).
+        For sync config: Callable[[PsycopgSyncConnection], None]
+        For async config: Callable[[PsycopgAsyncConnection], Awaitable[None]]
     enable_events: Enable database event channel support.
         Defaults to True when extension_config["events"] is configured.
         Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
@@ -93,6 +98,7 @@ class PsycopgDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    on_connection_create: NotRequired["Callable[..., Any]"]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -200,12 +206,18 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -247,6 +259,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         if self.driver_features.get("enable_pgvector", False):
             register_pgvector_sync(conn)
+
+        # Call user-provided callback after internal setup
+        if self._user_connection_hook is not None:
+            self._user_connection_hook(conn)
 
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
@@ -429,12 +445,18 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
@@ -479,8 +501,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if autocommit_setting is not None:
             await conn.set_autocommit(autocommit_setting)
 
-            if self.driver_features.get("enable_pgvector", False):
-                await register_pgvector_async(conn)
+        if self.driver_features.get("enable_pgvector", False):
+            await register_pgvector_async(conn)
+
+        # Call user-provided callback after internal setup
+        if self._user_connection_hook is not None:
+            await self._user_connection_hook(conn)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

@@ -649,3 +649,156 @@ def test_duckdb_statement_stack_continue_on_error(duckdb_session: DuckDBDriver) 
     verify = duckdb_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None
     assert verify.data[0]["total"] == 2
+
+
+# =============================================================================
+# Variable Persistence Tests (Regression tests for #341)
+# =============================================================================
+
+
+def test_variable_persistence_across_execute_calls(duckdb_basic_session: DuckDBDriver) -> None:
+    """Test that variables set with SET VARIABLE persist across execute() calls.
+
+    Regression test for: https://github.com/litestar-org/sqlspec/issues/341
+
+    DuckDB variables are cursor-scoped when using explicit cursors, but
+    connection-scoped when using connection.execute() directly. This test
+    verifies the fix where we return the connection instead of creating
+    new cursors.
+    """
+    # Set a variable
+    duckdb_basic_session.execute("SET VARIABLE my_var = 'test_value'")
+
+    # Read it back in a separate execute call - this should work now
+    result = duckdb_basic_session.execute("SELECT getvariable('my_var') AS var_value")
+
+    assert result.data is not None
+    assert len(result.data) == 1
+    assert result.data[0]["var_value"] == "test_value"
+
+
+def test_variable_update_and_override(duckdb_basic_session: DuckDBDriver) -> None:
+    """Test that variables can be updated and overridden across calls.
+
+    Verifies that variable state is properly maintained and can be modified
+    in subsequent execute() calls.
+    """
+    # Set initial value
+    duckdb_basic_session.execute("SET VARIABLE counter = 1")
+
+    # Verify initial value
+    result1 = duckdb_basic_session.execute("SELECT getvariable('counter') AS val")
+    assert result1.data is not None
+    assert result1.data[0]["val"] == 1
+
+    # Update value
+    duckdb_basic_session.execute("SET VARIABLE counter = 42")
+
+    # Verify updated value
+    result2 = duckdb_basic_session.execute("SELECT getvariable('counter') AS val")
+    assert result2.data is not None
+    assert result2.data[0]["val"] == 42
+
+    # Override with string
+    duckdb_basic_session.execute("SET VARIABLE counter = 'now_a_string'")
+
+    # Verify override
+    result3 = duckdb_basic_session.execute("SELECT getvariable('counter') AS val")
+    assert result3.data is not None
+    assert result3.data[0]["val"] == "now_a_string"
+
+
+def test_multiple_variables_persistence(duckdb_basic_session: DuckDBDriver) -> None:
+    """Test that multiple variables can coexist and persist."""
+    # Set multiple variables
+    duckdb_basic_session.execute("SET VARIABLE var_a = 'alpha'")
+    duckdb_basic_session.execute("SET VARIABLE var_b = 100")
+    duckdb_basic_session.execute("SET VARIABLE var_c = 314")  # Use integer to avoid Decimal comparison issues
+
+    # Read all back in a single query
+    result = duckdb_basic_session.execute("""
+        SELECT
+            getvariable('var_a') AS a,
+            getvariable('var_b') AS b,
+            getvariable('var_c') AS c
+    """)
+
+    assert result.data is not None
+    assert len(result.data) == 1
+    assert result.data[0]["a"] == "alpha"
+    assert result.data[0]["b"] == 100
+    assert result.data[0]["c"] == 314
+
+
+def test_workspace_isolation_etl_pattern(duckdb_basic_session: DuckDBDriver) -> None:
+    """Test workspace isolation ETL pattern using variables.
+
+    This is the canonical use case from the issue: setting a workspace ID
+    variable and using it in subsequent queries for tenant isolation.
+    """
+    # Create workspace-aware table
+    duckdb_basic_session.execute_script("""
+        CREATE TABLE workspace_data (
+            workspace_id TEXT,
+            item_name TEXT,
+            value INTEGER
+        );
+
+        INSERT INTO workspace_data VALUES
+            ('ws_001', 'item_a', 10),
+            ('ws_001', 'item_b', 20),
+            ('ws_002', 'item_c', 30),
+            ('ws_002', 'item_d', 40);
+    """)
+
+    try:
+        # Set workspace context
+        duckdb_basic_session.execute("SET VARIABLE current_workspace = 'ws_001'")
+
+        # Query using the variable for workspace isolation
+        result = duckdb_basic_session.execute("""
+            SELECT item_name, value
+            FROM workspace_data
+            WHERE workspace_id = getvariable('current_workspace')
+            ORDER BY item_name
+        """)
+
+        assert result.data is not None
+        assert len(result.data) == 2
+        assert result.data[0]["item_name"] == "item_a"
+        assert result.data[1]["item_name"] == "item_b"
+
+        # Switch workspace context
+        duckdb_basic_session.execute("SET VARIABLE current_workspace = 'ws_002'")
+
+        # Same query now returns different results
+        result2 = duckdb_basic_session.execute("""
+            SELECT item_name, value
+            FROM workspace_data
+            WHERE workspace_id = getvariable('current_workspace')
+            ORDER BY item_name
+        """)
+
+        assert result2.data is not None
+        assert len(result2.data) == 2
+        assert result2.data[0]["item_name"] == "item_c"
+        assert result2.data[1]["item_name"] == "item_d"
+
+    finally:
+        duckdb_basic_session.execute_script("DROP TABLE workspace_data")
+
+
+def test_variable_in_expression(duckdb_basic_session: DuckDBDriver) -> None:
+    """Test using variables in expressions and calculations."""
+    # Set variables for calculation
+    duckdb_basic_session.execute("SET VARIABLE multiplier = 10")
+    duckdb_basic_session.execute("SET VARIABLE base_val = 5")
+
+    # Use in expression
+    result = duckdb_basic_session.execute("""
+        SELECT
+            getvariable('multiplier') * 3 + getvariable('base_val') AS calculated
+    """)
+
+    assert result.data is not None
+    assert result.data[0]["calculated"] == 35  # 10 * 3 + 5

@@ -51,10 +51,22 @@ class PyMysqlPoolParams(PyMysqlConnectionParams):
 
 
 class PyMysqlDriverFeatures(TypedDict):
-    """PyMySQL driver feature flags."""
+    """PyMySQL driver feature flags.
+
+    json_serializer: Custom JSON serializer function.
+        Defaults to sqlspec.utils.serializers.to_json.
+    json_deserializer: Custom JSON deserializer function.
+        Defaults to sqlspec.utils.serializers.from_json.
+    on_connection_create: Callback executed when a connection is created.
+        Receives the raw pymysql connection for low-level driver configuration.
+        Runs after connection creation.
+    enable_events: Enable database event channel support.
+    events_backend: Event channel backend selection.
+    """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    on_connection_create: "NotRequired[Callable[[PyMysqlConnection], None]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -131,12 +143,18 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[PyMysqlConnection], None] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -149,7 +167,12 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         health_check = config.pop("health_check_interval", 30.0)
         extra = config.pop("extra", {})
         config.update(extra)
-        return PyMysqlConnectionPool(config, recycle_seconds=pool_recycle, health_check_interval=health_check)
+        return PyMysqlConnectionPool(
+            config,
+            recycle_seconds=pool_recycle,
+            health_check_interval=health_check,
+            on_connection_create=self._user_connection_hook,
+        )
 
     def _close_pool(self) -> None:
         if self.connection_instance:

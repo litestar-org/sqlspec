@@ -47,6 +47,9 @@ class SqliteDriverFeatures(TypedDict):
         Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
         Defaults to sqlspec.utils.serializers.from_json.
+    on_connection_create: Callback executed when a connection is created.
+        Receives the raw sqlite3 connection for low-level driver configuration.
+        Runs after internal setup (PRAGMA optimizations).
     enable_events: Enable database event channel support.
         Defaults to True when extension_config["events"] is configured.
         Provides pub/sub capabilities via table-backed queue (SQLite has no native pub/sub).
@@ -60,6 +63,7 @@ class SqliteDriverFeatures(TypedDict):
     enable_custom_adapters: NotRequired[bool]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    on_connection_create: "NotRequired[Callable[[SqliteConnection], None]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -162,13 +166,19 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[SqliteConnection], None] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+
         super().__init__(
             bind_key=bind_key,
             connection_instance=connection_instance,
             connection_config=config_dict,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             extension_config=extension_config,
             observability_config=observability_config,
             **kwargs,
@@ -191,7 +201,9 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         if enable_optimizations is not None:
             pool_kwargs["enable_optimizations"] = enable_optimizations
 
-        pool = SqliteConnectionPool(connection_parameters=config_dict, **pool_kwargs)
+        pool = SqliteConnectionPool(
+            connection_parameters=config_dict, on_connection_create=self._user_connection_hook, **pool_kwargs
+        )
 
         if self.driver_features.get("enable_custom_adapters", False):
             self._register_type_adapters()

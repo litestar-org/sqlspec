@@ -14,7 +14,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from sqlspec.core import StatementConfig
 
@@ -81,6 +81,9 @@ class PsqlpyDriverFeatures(TypedDict):
         Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
     json_serializer: Custom JSON serializer applied to the statement configuration.
     json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
+    on_connection_create: Async callback executed when a connection is acquired from pool.
+        Receives the raw psqlpy connection for low-level driver configuration.
+        Called exactly once per physical connection using WeakSet tracking.
     enable_events: Enable database event channel support.
         Defaults to True when extension_config["events"] is configured.
         Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
@@ -96,6 +99,7 @@ class PsqlpyDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    on_connection_create: "NotRequired[Callable[[PsqlpyConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -114,7 +118,9 @@ class _PsqlpySessionFactory:
             self._config.connection_instance = pool
         ctx = pool.acquire()
         self._ctx = ctx
-        return await ctx.__aenter__()
+        connection = await ctx.__aenter__()
+        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        return connection
 
     async def release_connection(self, _conn: "PsqlpyConnection") -> None:
         if self._ctx is not None:
@@ -141,7 +147,9 @@ class PsqlpyConnectionContext:
             self._config.connection_instance = pool
 
         self._ctx = pool.acquire()
-        return await self._ctx.__aenter__()  # type: ignore[no-any-return]
+        connection = await self._ctx.__aenter__()
+        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        return connection  # type: ignore[no-any-return]
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
@@ -192,16 +200,33 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        # Extract user connection hook before storing driver_features
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook: Callable[[PsqlpyConnection], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
+        )
+        # Track initialized connections by ID (psqlpy connections don't support weak refs)
+        self._initialized_connection_ids: set[int] = set()
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
         )
+
+    async def _ensure_connection_initialized(self, connection: "PsqlpyConnection") -> None:
+        """Ensure connection callback has been called exactly once for this connection."""
+        if self._user_connection_hook is None:
+            return
+        conn_id = id(connection)
+        if conn_id not in self._initialized_connection_ids:
+            await self._user_connection_hook(connection)
+            self._initialized_connection_ids.add(conn_id)
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""

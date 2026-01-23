@@ -15,7 +15,7 @@ from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
 
 class SqliteConnectionParams(TypedDict):
@@ -49,6 +49,7 @@ class SqliteConnectionPool:
         "_connection_parameters",
         "_enable_optimizations",
         "_health_check_interval",
+        "_on_connection_create",
         "_pool_id",
         "_recycle_seconds",
         "_thread_local",
@@ -60,6 +61,7 @@ class SqliteConnectionPool:
         enable_optimizations: bool = True,
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
+        on_connection_create: "Callable[[SqliteConnection], None] | None" = None,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -68,6 +70,7 @@ class SqliteConnectionPool:
             enable_optimizations: Whether to apply performance PRAGMAs
             recycle_seconds: Connection recycle time in seconds (default 24h)
             health_check_interval: Seconds of idle time before running health check
+            on_connection_create: Callback executed when connection is created
         """
         if "check_same_thread" not in connection_parameters:
             connection_parameters = {**connection_parameters, "check_same_thread": False}
@@ -76,6 +79,7 @@ class SqliteConnectionPool:
         self._enable_optimizations = enable_optimizations
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
+        self._on_connection_create = on_connection_create
         self._pool_id = str(uuid.uuid4())[:8]
 
     @property
@@ -104,6 +108,10 @@ class SqliteConnectionPool:
                 connection.execute("PRAGMA busy_timeout = 5000")
 
             connection.execute("PRAGMA foreign_keys = ON")
+
+        # Call user-provided callback after internal setup
+        if self._on_connection_create is not None:
+            self._on_connection_create(connection)
 
         return connection  # type: ignore[no-any-return]
 
