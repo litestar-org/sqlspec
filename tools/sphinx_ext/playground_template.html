@@ -343,6 +343,14 @@
     background: rgba(237, 182, 65, 0.08);
   }
 
+  /* CodeMirror - Cursor */
+  .sqlspec-playground .CodeMirror-cursor {
+    border-left: 2px solid #EDB641;
+  }
+  html.dark .sqlspec-playground .CodeMirror-cursor {
+    border-left: 2px solid #EDB641;
+  }
+
   /* Dialog */
   .sqlspec-playground__tip-dialog {
     border: 1px solid rgba(237, 182, 65, 0.3);
@@ -401,9 +409,43 @@
     }
   }
 
+  /* Inline status indicator */
+  .sqlspec-playground__inline-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    color: #64748b;
+    margin-left: 0.5rem;
+  }
+  html.dark .sqlspec-playground__inline-status {
+    color: #94a3b8;
+  }
+  .sqlspec-playground__inline-status--running {
+    color: #EDB641;
+  }
+  .sqlspec-playground__inline-status--success {
+    color: #22c55e;
+  }
+  .sqlspec-playground__inline-status--error {
+    color: #ef4444;
+  }
+  .sqlspec-playground__spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
   /* Table Output */
   .sqlspec-playground__table-wrapper {
     overflow-x: auto;
+    max-height: 320px;
     margin-top: 1rem;
     border-radius: 6px;
     border: 1px solid #e2e8f0;
@@ -434,10 +476,56 @@
 
   .sqlspec-playground__table th {
     background: #f1f5f9;
+    color: #202235;
     font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 2px solid #EDB641;
   }
   html.dark .sqlspec-playground__table th {
     background: #1e293b;
+    color: #e6edf3;
+    border-bottom-color: #EDB641;
+  }
+  .sqlspec-playground__table th:hover {
+    background: #e2e8f0;
+  }
+  html.dark .sqlspec-playground__table th:hover {
+    background: #334155;
+  }
+  .sqlspec-playground__table th .sort-indicator {
+    margin-left: 0.35rem;
+    opacity: 0.5;
+  }
+  .sqlspec-playground__table th.sorted-asc .sort-indicator::after {
+    content: "▲";
+    opacity: 1;
+  }
+  .sqlspec-playground__table th.sorted-desc .sort-indicator::after {
+    content: "▼";
+    opacity: 1;
+  }
+
+  .sqlspec-playground__table tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.02);
+  }
+  html.dark .sqlspec-playground__table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .sqlspec-playground__row-count {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: #64748b;
+  }
+  html.dark .sqlspec-playground__row-count {
+    color: #94a3b8;
   }
 
   /* Error Output */
@@ -460,13 +548,12 @@
 </style>
 
 <section class="sqlspec-playground" id="sqlspec-playground-{{ id }}">
-
-
   <div class="sqlspec-playground__grid">
     <div class="sqlspec-playground__panel">
       <div class="sqlspec-playground__panel-header">
         <span>Python</span>
         <div class="sqlspec-playground__panel-actions">
+          <span class="sqlspec-playground__inline-status" data-inline-status></span>
           <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
           <button class="sqlspec-playground__button sqlspec-playground__button--primary" data-run-python>Run</button>
           <button class="sqlspec-playground__button" data-reset-python>Reset</button>
@@ -480,23 +567,26 @@ spec = SQLSpec()
 config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(config) as session:
-    session.execute("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, name TEXT)")
-    session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
-    result = session.select("SELECT * FROM teams")
-    # Return list of dictionaries for table rendering
-    print(result)
+    session.execute_script("""
+        CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, name TEXT);
+        INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec'), ('Starlite');
+    """)
+    results = session.select("SELECT * FROM teams")
+
+results
       </textarea>
     </div>
   </div>
 
   <div class="sqlspec-playground__output">
     <div class="sqlspec-playground__panel-header">
-      <span>Output</span>
+      <span>Results</span>
       <button class="sqlspec-playground__button" data-clear-output>Clear</button>
     </div>
     <div data-output-container>
-        <pre data-output tabindex="0" aria-live="polite"></pre>
-        <div data-table-output class="sqlspec-playground__table-wrapper"></div>
+        <div data-table-output class="sqlspec-playground__table-wrapper" hidden></div>
+        <div data-row-count class="sqlspec-playground__row-count" hidden></div>
+        <pre data-output tabindex="0" aria-live="polite" hidden></pre>
         <div data-error-output class="sqlspec-playground__error" hidden></div>
     </div>
   </div>
@@ -521,7 +611,9 @@ with spec.provide_session(config) as session:
     const root = document.getElementById("sqlspec-playground-{{ id }}");
     const outputEl = root.querySelector("[data-output]");
     const tableOutputEl = root.querySelector("[data-table-output]");
+    const rowCountEl = root.querySelector("[data-row-count]");
     const errorOutputEl = root.querySelector("[data-error-output]");
+    const inlineStatusEl = root.querySelector("[data-inline-status]");
     const pythonTextarea = root.querySelector("[data-python-editor]");
     const runPythonButton = root.querySelector("[data-run-python]");
     const resetPythonButton = root.querySelector("[data-reset-python]");
@@ -530,9 +622,10 @@ with spec.provide_session(config) as session:
     const openTipsButton = root.querySelector("[data-open-tips]");
     const closeTipsButton = root.querySelector("[data-close-tips]");
 
-    const statusEl = root.querySelector("[data-status]");
-
     const pythonDefault = pythonTextarea.value.trim();
+    let currentData = null;
+    let sortColumn = null;
+    let sortDirection = 'asc';
 
     const pythonEditor = CodeMirror.fromTextArea(pythonTextarea, {
       mode: "python",
@@ -541,49 +634,88 @@ with spec.provide_session(config) as session:
       tabSize: 4,
       indentWithTabs: false,
       viewportMargin: Infinity,
-      styleActiveLine: true
+      styleActiveLine: true,
+      cursorBlinkRate: 530
     });
 
     let pyodide = null;
 
-    const writeOutput = (text) => {
-      outputEl.textContent += `${text}\n`;
-      outputEl.scrollTop = outputEl.scrollHeight;
-    };
-
-    const setStatus = (text, type = "default") => {
-      if (statusEl) {
-        statusEl.textContent = text;
-        statusEl.className = "sqlspec-playground__status";
-        if (type === "ready") {
-          statusEl.classList.add("sqlspec-playground__status--ready");
-        }
+    const setInlineStatus = (text, type) => {
+      if (!inlineStatusEl) return;
+      inlineStatusEl.className = "sqlspec-playground__inline-status";
+      while (inlineStatusEl.firstChild) inlineStatusEl.removeChild(inlineStatusEl.firstChild);
+      if (type === "running") {
+        const spinner = document.createElement('span');
+        spinner.className = 'sqlspec-playground__spinner';
+        inlineStatusEl.appendChild(spinner);
+        inlineStatusEl.appendChild(document.createTextNode(' ' + text));
+        inlineStatusEl.classList.add("sqlspec-playground__inline-status--running");
+      } else if (type === "success") {
+        inlineStatusEl.textContent = '\u2713 ' + text;
+        inlineStatusEl.classList.add("sqlspec-playground__inline-status--success");
+      } else if (type === "error") {
+        inlineStatusEl.textContent = '\u2717 ' + text;
+        inlineStatusEl.classList.add("sqlspec-playground__inline-status--error");
+      } else {
+        inlineStatusEl.textContent = text;
       }
     };
 
     const clearOutput = () => {
       outputEl.textContent = "";
-      tableOutputEl.innerHTML = "";
+      outputEl.hidden = true;
+      while (tableOutputEl.firstChild) tableOutputEl.removeChild(tableOutputEl.firstChild);
       tableOutputEl.hidden = true;
+      if (rowCountEl) rowCountEl.hidden = true;
       errorOutputEl.textContent = "";
       errorOutputEl.hidden = true;
+      currentData = null;
+      sortColumn = null;
+    };
+
+    const sortData = (data, column, direction) => {
+      return [...data].sort((a, b) => {
+        const aVal = a[column], bVal = b[column];
+        if (aVal === bVal) return 0;
+        if (aVal == null) return 1;
+        if (bVal == null) return -1;
+        return (aVal < bVal ? -1 : 1) * (direction === 'asc' ? 1 : -1);
+      });
     };
 
     const renderTable = (data) => {
       if (!Array.isArray(data) || data.length === 0 || typeof data[0] !== 'object') {
-        return; // Not tabular data
+        return false;
       }
-
+      currentData = data;
+      const displayData = sortColumn ? sortData(data, sortColumn, sortDirection) : data;
       const headers = Object.keys(data[0]);
+      while (tableOutputEl.firstChild) tableOutputEl.removeChild(tableOutputEl.firstChild);
+
       const table = document.createElement('table');
       table.className = 'sqlspec-playground__table';
 
-      // Header
+      // Header with sort
       const thead = document.createElement('thead');
       const trHead = document.createElement('tr');
       headers.forEach(header => {
         const th = document.createElement('th');
         th.textContent = header;
+        const indicator = document.createElement('span');
+        indicator.className = 'sort-indicator';
+        th.appendChild(indicator);
+        if (header === sortColumn) {
+          th.classList.add(sortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
+        }
+        th.addEventListener('click', () => {
+          if (sortColumn === header) {
+            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortColumn = header;
+            sortDirection = 'asc';
+          }
+          renderTable(currentData);
+        });
         trHead.appendChild(th);
       });
       thead.appendChild(trHead);
@@ -591,11 +723,12 @@ with spec.provide_session(config) as session:
 
       // Body
       const tbody = document.createElement('tbody');
-      data.forEach(row => {
+      displayData.forEach(row => {
         const tr = document.createElement('tr');
         headers.forEach(header => {
           const td = document.createElement('td');
-          td.textContent = row[header];
+          const val = row[header];
+          td.textContent = val === null ? 'null' : val;
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -603,6 +736,11 @@ with spec.provide_session(config) as session:
       table.appendChild(tbody);
       tableOutputEl.appendChild(table);
       tableOutputEl.hidden = false;
+      if (rowCountEl) {
+        rowCountEl.textContent = data.length + ' row' + (data.length !== 1 ? 's' : '');
+        rowCountEl.hidden = false;
+      }
+      return true;
     };
 
     const showError = (error) => {
@@ -612,27 +750,24 @@ with spec.provide_session(config) as session:
 
     const initializePlayground = async () => {
       try {
-        setStatus("Loading Pyodide...");
+        setInlineStatus("Loading...", "running");
         pyodide = await loadPyodide({
           indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/"
         });
 
-        pyodide.setStdout({ batched: writeOutput });
-        pyodide.setStderr({ batched: writeOutput });
+        const stdoutBuffer = [];
+        pyodide.setStdout({ batched: (t) => stdoutBuffer.push(t) });
+        pyodide.setStderr({ batched: (t) => stdoutBuffer.push(t) });
 
-        setStatus("Loading libraries...");
         await pyodide.loadPackage(["sqlite3", "micropip"]);
         const micropip = pyodide.pyimport("micropip");
-
         await micropip.install("sqlspec");
 
-        setStatus("Ready", "ready");
-        clearOutput();
-        writeOutput("Ready! Click 'Run' to execute the code.");
+        setInlineStatus("Ready", "success");
         runPythonButton.disabled = false;
       } catch (err) {
-        setStatus("Failed to load");
-        showError(`Failed to initialize: ${err}`);
+        setInlineStatus("Failed", "error");
+        showError('Failed to initialize: ' + err);
         console.error(err);
       }
     };
@@ -641,33 +776,52 @@ with spec.provide_session(config) as session:
 
     runPythonButton.addEventListener("click", async () => {
       if (!pyodide) {
-        writeOutput("Pyodide is not ready yet.");
+        setInlineStatus("Not ready", "error");
         return;
       }
 
       clearOutput();
-      writeOutput("Running...\n");
+      setInlineStatus("Running...", "running");
+
+      const stdoutBuffer = [];
+      pyodide.setStdout({ batched: (t) => stdoutBuffer.push(t) });
+      pyodide.setStderr({ batched: (t) => stdoutBuffer.push(t) });
+
       try {
         const result = await pyodide.runPythonAsync(pythonEditor.getValue());
+        let tableRendered = false;
+
         if (result && typeof result.toJs === 'function') {
-             const jsResult = result.toJs({dict_converter: Object.fromEntries});
-             if (Array.isArray(jsResult)) {
-                 renderTable(jsResult);
-             } else {
-                 writeOutput(String(result));
-             }
-        } else if (result !== undefined) {
-             writeOutput(String(result));
+          const jsResult = result.toJs({dict_converter: Object.fromEntries});
+          if (Array.isArray(jsResult)) {
+            tableRendered = renderTable(jsResult);
+          }
         }
 
+        if (tableRendered) {
+          setInlineStatus("Done", "success");
+        } else if (stdoutBuffer.length > 0) {
+          outputEl.textContent = stdoutBuffer.join('\n');
+          outputEl.hidden = false;
+          setInlineStatus("Done", "success");
+        } else if (result !== undefined && result !== null) {
+          outputEl.textContent = String(result);
+          outputEl.hidden = false;
+          setInlineStatus("Done", "success");
+        } else {
+          setInlineStatus("Done", "success");
+        }
       } catch (err) {
         showError(String(err));
+        setInlineStatus("Error", "error");
         console.error(err);
       }
     });
 
     resetPythonButton.addEventListener("click", () => {
       pythonEditor.setValue(pythonDefault);
+      clearOutput();
+      setInlineStatus("Reset", "success");
     });
 
     clearOutputButton.addEventListener("click", () => {
