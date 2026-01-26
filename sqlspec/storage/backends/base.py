@@ -2,13 +2,20 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, cast
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
-__all__ = ("AsyncArrowBatchIterator", "AsyncBytesIterator", "AsyncChunkedBytesIterator", "ObjectStoreBase")
+__all__ = (
+    "AsyncArrowBatchIterator",
+    "AsyncBytesIterator",
+    "AsyncChunkedBytesIterator",
+    "AsyncObStoreStreamIterator",
+    "AsyncThreadedBytesIterator",
+    "ObjectStoreBase",
+)
 
 
 class AsyncArrowBatchIterator:
@@ -149,6 +156,92 @@ class AsyncChunkedBytesIterator:
         chunk = self._data[self._offset : self._offset + self._chunk_size]
         self._offset += self._chunk_size
         return chunk
+
+
+class AsyncObStoreStreamIterator:
+    """Async iterator wrapper for obstore streaming.
+
+    This class wraps obstore's native async stream and ensures it yields
+    bytes objects while remaining compatible with mypyc.
+    """
+
+    __slots__ = ("_stream",)
+
+    def __init__(self, stream: Any) -> None:
+        """Initialize the obstore stream wrapper.
+
+        Args:
+            stream: The native obstore async stream to wrap.
+        """
+        self._stream = stream
+
+    def __aiter__(self) -> "AsyncObStoreStreamIterator":
+        """Return self as the async iterator."""
+        return self
+
+    async def __anext__(self) -> bytes:
+        """Get the next chunk from the obstore stream asynchronously.
+
+        Returns:
+            The next chunk of bytes.
+
+        Raises:
+            StopAsyncIteration: When the stream is exhausted.
+        """
+        try:
+            chunk = await self._stream.__anext__()
+            return bytes(chunk)
+        except StopAsyncIteration:
+            raise StopAsyncIteration from None
+
+
+class AsyncThreadedBytesIterator:
+    """Async iterator that reads from a synchronous file-like object in a thread pool.
+
+    This class implements the async iterator protocol without using async generators,
+    allowing it to be compiled by mypyc. It offloads blocking read/close calls
+    to a thread pool to avoid blocking the event loop.
+    """
+
+    __slots__ = ("_chunk_size", "_file_obj")
+
+    def __init__(self, file_obj: Any, chunk_size: int = 65536) -> None:
+        """Initialize the threaded bytes iterator.
+
+        Args:
+            file_obj: Synchronous file-like object supporting read() and close().
+            chunk_size: Size of each chunk to read (default: 65536 bytes).
+        """
+        self._file_obj = file_obj
+        self._chunk_size = chunk_size
+
+    def __aiter__(self) -> "AsyncThreadedBytesIterator":
+        """Return self as the async iterator."""
+        return self
+
+    async def __anext__(self) -> bytes:
+        """Read the next chunk of bytes in a thread pool.
+
+        Returns:
+            The next chunk of bytes.
+
+        Raises:
+            StopAsyncIteration: When the file is fully read.
+        """
+        import asyncio
+
+        try:
+            chunk = await asyncio.to_thread(self._file_obj.read, self._chunk_size)
+            if not chunk:
+                await asyncio.to_thread(self._file_obj.close)
+                raise StopAsyncIteration
+            return cast("bytes", chunk)
+        except EOFError:
+            await asyncio.to_thread(self._file_obj.close)
+            raise StopAsyncIteration from None
+        except Exception:
+            await asyncio.to_thread(self._file_obj.close)
+            raise
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

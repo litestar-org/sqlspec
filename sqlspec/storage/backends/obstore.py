@@ -647,33 +647,18 @@ class ObStoreBackend:
     ) -> AsyncIterator[bytes]:
         """Stream bytes from storage asynchronously.
 
-        Uses asyncio.to_thread() to ensure the event loop is not blocked
-        during I/O operations with cloud storage backends. This prevents
-        heartbeat timeouts and allows concurrent async tasks to execute
-        during large file downloads.
+        Uses obstore's native async streaming to yield chunks of bytes
+        without buffering the entire file into memory.
         """
-        import asyncio
-
-        from sqlspec.storage.backends.base import AsyncChunkedBytesIterator
+        from sqlspec.storage.backends.base import AsyncObStoreStreamIterator
 
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
-        # Run blocking I/O in thread pool to avoid blocking event loop
-        data = await asyncio.to_thread(self.read_bytes, resolved_path)
-
-        _log_storage_event(
-            "storage.read",
-            backend_type=self.backend_type,
-            protocol=self.protocol,
-            operation="stream_read",
-            mode="async",
-            path=resolved_path,
-        )
-
-        return AsyncChunkedBytesIterator(data, chunk_size or 65536)
+        result = await self.store.get_async(resolved_path)
+        return AsyncObStoreStreamIterator(result.stream())
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""

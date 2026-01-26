@@ -473,24 +473,29 @@ class FSSpecBackend:
     ) -> AsyncIterator[bytes]:
         """Stream bytes from storage asynchronously.
 
-        Uses asyncio.to_thread() to run blocking I/O in a thread pool,
-        ensuring the event loop is not blocked during read operations.
+        Uses asyncio.to_thread() to read chunks of the file in a thread pool,
+        ensuring the event loop is not blocked while avoiding buffering the
+        entire file into memory.
 
         Args:
             path: Path to the file to read.
             chunk_size: Size of chunks to yield (default: 65536 bytes).
-            **kwargs: Additional arguments passed to read_bytes.
+            **kwargs: Additional arguments passed to fs.open.
 
         Returns:
             AsyncIterator yielding chunks of bytes.
         """
         import asyncio
 
-        from sqlspec.storage.backends.base import AsyncChunkedBytesIterator
+        from sqlspec.storage.backends.base import AsyncThreadedBytesIterator
 
-        # Pass original path - read_bytes handles path resolution
-        data = await asyncio.to_thread(self.read_bytes, path, **kwargs)
-        return AsyncChunkedBytesIterator(data, chunk_size or 65536)
+        resolved_path = self._resolve_path(path)
+        chunk_size = chunk_size or 65536
+
+        # Open the file in a thread pool
+        file_obj = await asyncio.to_thread(self.fs.open, resolved_path, mode="rb", **kwargs)
+
+        return AsyncThreadedBytesIterator(file_obj, chunk_size)
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.
