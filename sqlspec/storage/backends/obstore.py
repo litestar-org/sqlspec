@@ -9,6 +9,7 @@ import io
 import logging
 import re
 from collections.abc import AsyncIterator, Iterator
+from datetime import timedelta
 from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, cast, overload
@@ -18,6 +19,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -582,7 +584,6 @@ class ObStoreBackend:
             msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
             raise ValueError(msg)
 
-        from datetime import timedelta
 
         method = "PUT" if for_upload else "GET"
         expires_delta = timedelta(seconds=expires_in)
@@ -650,8 +651,6 @@ class ObStoreBackend:
         Uses obstore's native async streaming to yield chunks of bytes
         without buffering the entire file into memory.
         """
-        from sqlspec.storage.backends.base import AsyncObStoreStreamIterator
-
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
@@ -858,8 +857,6 @@ class ObStoreBackend:
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
-
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
         return AsyncArrowBatchIterator(self.stream_arrow(resolved_pattern, **kwargs))
 
@@ -901,8 +898,6 @@ class ObStoreBackend:
         if expires_in > max_expires:
             msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
             raise ValueError(msg)
-
-        from datetime import timedelta
 
         method = "PUT" if for_upload else "GET"
         expires_delta = timedelta(seconds=expires_in)
