@@ -165,15 +165,19 @@ class AsyncObStoreStreamIterator:
     bytes objects while remaining compatible with mypyc.
     """
 
-    __slots__ = ("_stream",)
+    __slots__ = ("_buffer", "_chunk_size", "_stream", "_stream_exhausted")
 
-    def __init__(self, stream: Any) -> None:
+    def __init__(self, stream: Any, chunk_size: "int | None" = None) -> None:
         """Initialize the obstore stream wrapper.
 
         Args:
             stream: The native obstore async stream to wrap.
+            chunk_size: Optional chunk size to re-chunk streamed data.
         """
         self._stream = stream
+        self._buffer = bytearray()
+        self._chunk_size = chunk_size if chunk_size is not None and chunk_size > 0 else None
+        self._stream_exhausted = False
 
     def __aiter__(self) -> "AsyncObStoreStreamIterator":
         """Return self as the async iterator."""
@@ -188,11 +192,32 @@ class AsyncObStoreStreamIterator:
         Raises:
             StopAsyncIteration: When the stream is exhausted.
         """
-        try:
-            chunk = await self._stream.__anext__()
-            return bytes(chunk)
-        except StopAsyncIteration:
-            raise StopAsyncIteration from None
+        if self._chunk_size is None:
+            try:
+                chunk = await self._stream.__anext__()
+                return bytes(chunk)
+            except StopAsyncIteration:
+                raise StopAsyncIteration from None
+
+        while not self._stream_exhausted and len(self._buffer) < self._chunk_size:
+            try:
+                chunk = await self._stream.__anext__()
+            except StopAsyncIteration:
+                self._stream_exhausted = True
+                break
+            self._buffer.extend(bytes(chunk))
+
+        if self._buffer:
+            if len(self._buffer) >= self._chunk_size:
+                data = bytes(self._buffer[: self._chunk_size])
+                del self._buffer[: self._chunk_size]
+                return data
+            if self._stream_exhausted:
+                data = bytes(self._buffer)
+                self._buffer.clear()
+                return data
+
+        raise StopAsyncIteration from None
 
 
 class AsyncThreadedBytesIterator:
@@ -201,9 +226,12 @@ class AsyncThreadedBytesIterator:
     This class implements the async iterator protocol without using async generators,
     allowing it to be compiled by mypyc. It offloads blocking read/close calls
     to a thread pool to avoid blocking the event loop.
+
+    Call aclose() or use as an async context manager to ensure cleanup when
+    consumers exit early.
     """
 
-    __slots__ = ("_chunk_size", "_file_obj")
+    __slots__ = ("_chunk_size", "_closed", "_file_obj")
 
     def __init__(self, file_obj: Any, chunk_size: int = 65536) -> None:
         """Initialize the threaded bytes iterator.
@@ -214,13 +242,50 @@ class AsyncThreadedBytesIterator:
         """
         self._file_obj = file_obj
         self._chunk_size = chunk_size
+        self._closed = False
 
     def __aiter__(self) -> "AsyncThreadedBytesIterator":
         """Return self as the async iterator."""
         return self
 
+    async def __aenter__(self) -> "AsyncThreadedBytesIterator":
+        """Return the iterator for async context manager usage."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: "type[BaseException] | None",
+        exc: "BaseException | None",
+        tb: "Any | None",
+    ) -> None:
+        """Close the underlying file when exiting a context."""
+        await self.aclose()
+
+    def __del__(self) -> None:
+        """Best-effort cleanup for early exit."""
+        self._close_sync()
+
     def _raise_stop(self) -> NoReturn:
         raise StopAsyncIteration
+
+    def _close_sync(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._file_obj.close()
+        except Exception:
+            return
+
+    async def _close_async(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await asyncio.to_thread(self._file_obj.close)
+
+    async def aclose(self) -> None:
+        """Close the underlying file object."""
+        await self._close_async()
 
     async def __anext__(self) -> bytes:
         """Read the next chunk of bytes in a thread pool.
@@ -228,20 +293,20 @@ class AsyncThreadedBytesIterator:
         Returns:
             The next chunk of bytes.
         """
-        import asyncio
-
         try:
             chunk = await asyncio.to_thread(self._file_obj.read, self._chunk_size)
-            if not chunk:
-                await asyncio.to_thread(self._file_obj.close)
-                self._raise_stop()
-            return cast("bytes", chunk)
         except EOFError:
-            await asyncio.to_thread(self._file_obj.close)
+            await self._close_async()
             self._raise_stop()
-        except Exception:
-            await asyncio.to_thread(self._file_obj.close)
+        except BaseException:
+            await asyncio.shield(self._close_async())
             raise
+
+        if not chunk:
+            await self._close_async()
+            self._raise_stop()
+
+        return cast("bytes", chunk)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

@@ -656,7 +656,7 @@ class ObStoreBackend:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         result = await self.store.get_async(resolved_path)
-        return AsyncObStoreStreamIterator(result.stream())
+        return AsyncObStoreStreamIterator(result.stream(), chunk_size)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""
