@@ -61,3 +61,5 @@ specs/
 .playwright-mcp
 .geminiignore
 uv.toml
+.agent/
+.geminiignore
