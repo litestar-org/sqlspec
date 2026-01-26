@@ -1,8 +1,9 @@
 """Base class for storage backends."""
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -145,7 +146,6 @@ class AsyncChunkedBytesIterator:
         Raises:
             StopAsyncIteration: When all data has been yielded.
         """
-        import asyncio
 
         if self._offset >= len(self._data):
             raise StopAsyncIteration
@@ -219,14 +219,14 @@ class AsyncThreadedBytesIterator:
         """Return self as the async iterator."""
         return self
 
+    def _raise_stop(self) -> NoReturn:
+        raise StopAsyncIteration
+
     async def __anext__(self) -> bytes:
         """Read the next chunk of bytes in a thread pool.
 
         Returns:
             The next chunk of bytes.
-
-        Raises:
-            StopAsyncIteration: When the file is fully read.
         """
         import asyncio
 
@@ -234,11 +234,11 @@ class AsyncThreadedBytesIterator:
             chunk = await asyncio.to_thread(self._file_obj.read, self._chunk_size)
             if not chunk:
                 await asyncio.to_thread(self._file_obj.close)
-                raise StopAsyncIteration
+                self._raise_stop()
             return cast("bytes", chunk)
         except EOFError:
             await asyncio.to_thread(self._file_obj.close)
-            raise StopAsyncIteration from None
+            self._raise_stop()
         except Exception:
             await asyncio.to_thread(self._file_obj.close)
             raise

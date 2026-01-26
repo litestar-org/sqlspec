@@ -12,6 +12,8 @@ import queue
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
+from typing_extensions import Self
+
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
 
@@ -263,13 +265,13 @@ class PortalManager:
     _singleton_lock: "ClassVar[threading.Lock]" = threading.Lock()
     _initialized: bool = False
 
-    def __new__(cls) -> "PortalManager":
+    def __new__(cls) -> Self:
         """Get the singleton instance of PortalManager."""
         if cls._instance is None:
             with cls._singleton_lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-        return cls._instance
+        return cast("Self", cls._instance)
 
     def __init__(self) -> None:
         """Initialize the PortalManager singleton."""

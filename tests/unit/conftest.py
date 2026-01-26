@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from typing_extensions import Self
 
 from sqlspec.core import (
     SQL,
@@ -48,7 +49,7 @@ class MockSyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "MockSyncExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
@@ -71,7 +72,7 @@ class MockAsyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    async def __aenter__(self) -> "MockAsyncExceptionHandler":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
@@ -518,7 +519,7 @@ class MockSyncCursor:
         """Mock close method."""
         self.closed = True
 
-    def __enter__(self) -> "MockSyncCursor":
+    def __enter__(self) -> Self:
         """Context manager entry."""
         return self
 
@@ -596,7 +597,7 @@ class MockAsyncCursor:
         """Mock async close method."""
         self.closed = True
 
-    async def __aenter__(self) -> "MockAsyncCursor":
+    async def __aenter__(self) -> Self:
         """Async context manager entry."""
         return self
 

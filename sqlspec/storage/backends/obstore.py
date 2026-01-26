@@ -584,7 +584,6 @@ class ObStoreBackend:
             msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
             raise ValueError(msg)
 
-
         method = "PUT" if for_upload else "GET"
         expires_delta = timedelta(seconds=expires_in)
 

@@ -106,7 +106,7 @@ class BigQueryExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "BigQueryExceptionHandler":
+    def __enter__(self) -> "Self":
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

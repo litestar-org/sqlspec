@@ -8,6 +8,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, cast
 
 import psqlpy.exceptions
+from typing_extensions import Self
 
 from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
@@ -101,7 +102,7 @@ class PsqlpyExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    async def __aenter__(self) -> "PsqlpyExceptionHandler":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

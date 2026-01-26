@@ -10,6 +10,8 @@ import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import Self
+
 from sqlspec.adapters.mock._typing import MockAsyncSessionContext, MockSyncSessionContext
 from sqlspec.adapters.mock.core import (
     build_insert_statement,
@@ -125,7 +127,7 @@ class MockExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "MockExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
@@ -148,7 +150,7 @@ class MockAsyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    async def __aenter__(self) -> "MockAsyncExceptionHandler":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

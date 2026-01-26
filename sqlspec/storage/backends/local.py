@@ -21,8 +21,6 @@ from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    import asyncio
-
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("LocalStore",)

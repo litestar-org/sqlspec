@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from pre_commit import util as pre_commit_util
 from pre_commit.main import main as pre_commit_main
+from typing_extensions import Self
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -20,7 +21,7 @@ class _PipePty:
         self.r: int | None = None
         self.w: int | None = None
 
-    def __enter__(self) -> "_PipePty":
+    def __enter__(self) -> Self:
         self.r, self.w = os.pipe()
         return self
 

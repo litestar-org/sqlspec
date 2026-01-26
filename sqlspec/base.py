@@ -4,6 +4,8 @@ from collections.abc import Awaitable, Coroutine
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, TypeGuard, cast, overload
 
+from typing_extensions import Self
+
 from sqlspec.config import (
     AsyncConfigT,
     AsyncDatabaseConfig,
@@ -249,7 +251,7 @@ class SQLSpec:
             return f"{config.__class__.__name__}: {exc}"
         return None
 
-    async def __aenter__(self) -> "SQLSpec":
+    async def __aenter__(self) -> Self:
         """Async context manager entry."""
         return self
 
