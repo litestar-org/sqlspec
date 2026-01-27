@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from inspect import Signature, signature
@@ -1510,7 +1512,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for sync database configurations with connection pooling."""
 
-    __slots__ = ("connection_config",)
+    __slots__ = ("_pool_lock", "connection_config")
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
@@ -1549,6 +1551,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
+        self._pool_lock = threading.Lock()
 
     def create_pool(self) -> PoolT:
         """Create and return the connection pool.
@@ -1558,9 +1561,14 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         """
         if self.connection_instance is not None:
             return self.connection_instance
-        self.connection_instance = self._create_pool()
-        self.get_observability_runtime().emit_pool_create(self.connection_instance)
-        return self.connection_instance
+
+        with self._pool_lock:
+            if self.connection_instance is not None:
+                return self.connection_instance
+
+            self.connection_instance = self._create_pool()
+            self.get_observability_runtime().emit_pool_create(self.connection_instance)
+            return self.connection_instance
 
     def close_pool(self) -> None:
         """Close the connection pool."""
@@ -1572,9 +1580,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
-        if self.connection_instance is None:
-            self.connection_instance = self.create_pool()
-        return self.connection_instance
+        return self.create_pool()
 
     def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -1709,7 +1715,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for async database configurations with connection pooling."""
 
-    __slots__ = ("connection_config",)
+    __slots__ = ("_pool_lock", "connection_config")
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
@@ -1750,6 +1756,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
+        self._pool_lock = asyncio.Lock()
 
     async def create_pool(self) -> PoolT:
         """Create and return the connection pool.
@@ -1759,9 +1766,14 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         """
         if self.connection_instance is not None:
             return self.connection_instance
-        self.connection_instance = await self._create_pool()
-        self.get_observability_runtime().emit_pool_create(self.connection_instance)
-        return self.connection_instance
+
+        async with self._pool_lock:
+            if self.connection_instance is not None:
+                return self.connection_instance
+
+            self.connection_instance = await self._create_pool()
+            self.get_observability_runtime().emit_pool_create(self.connection_instance)
+            return self.connection_instance
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
@@ -1773,9 +1785,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
-        if self.connection_instance is None:
-            self.connection_instance = await self.create_pool()
-        return self.connection_instance
+        return await self.create_pool()
 
     async def create_connection(self) -> ConnectionT:
         """Create a database connection."""
