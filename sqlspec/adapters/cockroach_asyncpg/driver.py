@@ -5,6 +5,7 @@ import contextlib
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
+from typing_extensions import Self
 
 from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
@@ -40,7 +41,7 @@ class CockroachAsyncpgExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    async def __aenter__(self) -> "CockroachAsyncpgExceptionHandler":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

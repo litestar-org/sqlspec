@@ -12,6 +12,8 @@ from sqlspec.utils.type_guards import has_extension_config
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from typing_extensions import Self
+
 
 ConfigT = TypeVar("ConfigT")
 
@@ -203,7 +205,7 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    async def __aenter__(self) -> "BaseSQLSpecStore":
+    async def __aenter__(self) -> "Self":
         """Enter context manager."""
         return self
 

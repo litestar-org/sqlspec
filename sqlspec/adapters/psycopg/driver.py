@@ -4,6 +4,7 @@ from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
+from typing_extensions import Self
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
@@ -146,7 +147,7 @@ class PsycopgSyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "PsycopgSyncExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
@@ -586,7 +587,7 @@ class PsycopgAsyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    async def __aenter__(self) -> "PsycopgAsyncExceptionHandler":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

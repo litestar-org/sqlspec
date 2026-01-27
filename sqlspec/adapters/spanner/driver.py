@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
+from typing_extensions import Self
 
 from sqlspec.adapters.spanner._typing import SpannerSessionContext
 from sqlspec.adapters.spanner.core import (
@@ -86,7 +87,7 @@ class SpannerExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "SpannerExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

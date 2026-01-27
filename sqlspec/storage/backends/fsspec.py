@@ -1,4 +1,5 @@
 # pyright: reportPrivateUsage=false
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
@@ -9,6 +10,7 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.storage._utils import import_pyarrow_parquet, resolve_storage_path
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_fsspec
@@ -87,6 +89,7 @@ class FSSpecBackend:
             - FSSpecBackend("file:///home/user", base_path="subdir") -> base_path = "/home/user/subdir"
         """
         ensure_fsspec()
+        import fsspec
 
         explicit_base_path = kwargs.pop("base_path", "")
 
@@ -118,8 +121,6 @@ class FSSpecBackend:
             self._fs_uri = f"{uri}://"
 
         self.base_path = explicit_base_path.rstrip("/") if explicit_base_path else ""
-
-        import fsspec
 
         self.fs = fsspec.filesystem(self.protocol, **kwargs)
         self.backend_type = "fsspec"
@@ -473,24 +474,25 @@ class FSSpecBackend:
     ) -> AsyncIterator[bytes]:
         """Stream bytes from storage asynchronously.
 
-        Uses asyncio.to_thread() to run blocking I/O in a thread pool,
-        ensuring the event loop is not blocked during read operations.
+        Uses asyncio.to_thread() to read chunks of the file in a thread pool,
+        ensuring the event loop is not blocked while avoiding buffering the
+        entire file into memory.
 
         Args:
             path: Path to the file to read.
             chunk_size: Size of chunks to yield (default: 65536 bytes).
-            **kwargs: Additional arguments passed to read_bytes.
+            **kwargs: Additional arguments passed to fs.open.
 
         Returns:
             AsyncIterator yielding chunks of bytes.
         """
-        import asyncio
+        resolved_path = self._resolve_path(path)
+        chunk_size = chunk_size or 65536
 
-        from sqlspec.storage.backends.base import AsyncChunkedBytesIterator
+        # Open the file in a thread pool
+        file_obj = await asyncio.to_thread(self.fs.open, resolved_path, mode="rb", **kwargs)
 
-        # Pass original path - read_bytes handles path resolution
-        data = await asyncio.to_thread(self.read_bytes, path, **kwargs)
-        return AsyncChunkedBytesIterator(data, chunk_size or 65536)
+        return AsyncThreadedBytesIterator(file_obj, chunk_size)
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.
@@ -502,8 +504,6 @@ class FSSpecBackend:
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
-
         return AsyncArrowBatchIterator(self.stream_arrow(pattern, **kwargs))
 
     async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
@@ -547,11 +547,7 @@ class FSSpecBackend:
     async def sign_async(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
-        """Generate signed URL(s) asynchronously.
-
-        Raises:
-            NotImplementedError: fsspec backends do not support URL signing.
-        """
+        """Generate signed URL(s) asynchronously."""
         return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]
 
     async def read_arrow_async(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
