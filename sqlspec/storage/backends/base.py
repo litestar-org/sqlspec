@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Any, NoReturn, cast
 
 from mypy_extensions import mypyc_attr
+from typing_extensions import Self
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
@@ -248,15 +249,12 @@ class AsyncThreadedBytesIterator:
         """Return self as the async iterator."""
         return self
 
-    async def __aenter__(self) -> "AsyncThreadedBytesIterator":
+    async def __aenter__(self) -> Self:
         """Return the iterator for async context manager usage."""
         return self
 
     async def __aexit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc: "BaseException | None",
-        tb: "Any | None",
+        self, exc_type: "type[BaseException] | None", exc: "BaseException | None", tb: "Any | None"
     ) -> None:
         """Close the underlying file when exiting a context."""
         await self.aclose()
