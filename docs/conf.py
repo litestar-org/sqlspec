@@ -320,6 +320,18 @@ def update_html_context(
     context["generate_toctree_html"] = partial(context["generate_toctree_html"], startdepth=0)
 
 
+def _ensure_static_dir(app: Sphinx, exception: Any) -> None:
+    """Ensure _static directory exists for extensions that write to it."""
+    if exception is None and hasattr(app.builder, "outdir"):
+        from pathlib import Path
+
+        static_dir = Path(app.builder.outdir) / "_static"
+        static_dir.mkdir(parents=True, exist_ok=True)
+
+
 def setup(app: Sphinx) -> dict[str, bool]:
     app.setup_extension("shibuya")
+    # Ensure _static exists before sphinx_datatables tries to write to it
+    # Use priority < 500 to run before sphinx_datatables' finish handler
+    app.connect("build-finished", _ensure_static_dir, priority=100)
     return {"parallel_read_safe": True, "parallel_write_safe": True}
