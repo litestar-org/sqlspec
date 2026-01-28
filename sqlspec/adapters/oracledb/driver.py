@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
+from typing_extensions import Self
 
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
@@ -278,7 +279,7 @@ class OracleSyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "OracleSyncExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
@@ -307,7 +308,7 @@ class OracleAsyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    async def __aenter__(self) -> "OracleAsyncExceptionHandler":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

@@ -16,12 +16,11 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import FileNotFoundInStorageError
 from sqlspec.storage._utils import import_pyarrow_parquet
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncChunkedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    import asyncio
-
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("LocalStore",)
@@ -396,10 +395,6 @@ class LocalStore:
         Returns:
             AsyncIterator yielding chunks of bytes.
         """
-        import asyncio
-
-        from sqlspec.storage.backends.base import AsyncChunkedBytesIterator
-
         resolved = self._resolve_path(path)
         # Run blocking I/O in thread pool to avoid blocking event loop
         data = await asyncio.to_thread(resolved.read_bytes)
@@ -447,7 +442,6 @@ class LocalStore:
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
 
         return AsyncArrowBatchIterator(self.stream_arrow(pattern, **kwargs))
 

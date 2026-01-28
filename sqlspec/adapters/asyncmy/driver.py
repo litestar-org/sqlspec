@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
+from typing_extensions import Self
+
 from sqlspec.adapters.asyncmy._typing import AsyncmySessionContext
 
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "AsyncmySessionContext")
@@ -88,7 +90,7 @@ class AsyncmyExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    async def __aenter__(self) -> "AsyncmyExceptionHandler":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

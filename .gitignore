@@ -63,3 +63,4 @@ specs/
 uv.toml
 .agent/
 .geminiignore
+.beads/

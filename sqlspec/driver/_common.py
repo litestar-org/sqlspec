@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoR
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
+from typing_extensions import Self
 
 from sqlspec.builder import QueryBuilder
 from sqlspec.core import (
@@ -188,7 +189,7 @@ class SyncExceptionHandler(Protocol):
 
     pending_exception: Exception | None
 
-    def __enter__(self) -> "SyncExceptionHandler": ...
+    def __enter__(self) -> Self: ...
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
 
@@ -203,7 +204,7 @@ class AsyncExceptionHandler(Protocol):
 
     pending_exception: Exception | None
 
-    async def __aenter__(self) -> "AsyncExceptionHandler": ...
+    async def __aenter__(self) -> Self: ...
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
 
@@ -388,7 +389,7 @@ class StackExecutionObserver:
         self.span: Any | None = None
         self.started = 0.0
 
-    def __enter__(self) -> "StackExecutionObserver":
+    def __enter__(self) -> Self:
         self.started = perf_counter()
         trace_id, span_id = get_trace_context()
         attributes = {

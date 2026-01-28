@@ -10,6 +10,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from typing_extensions import Self
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.portal import PortalManager
@@ -238,7 +239,7 @@ async def test_with_ensure_async_context_manager() -> None:
             self.entered = False
             self.exited = False
 
-        def __enter__(self) -> "SyncContextManager":
+        def __enter__(self) -> Self:
             self.entered = True
             return self
 
@@ -263,7 +264,7 @@ async def test_with_ensure_async_async_context_manager() -> None:
             self.entered = False
             self.exited = False
 
-        async def __aenter__(self) -> "AsyncContextManager":
+        async def __aenter__(self) -> Self:
             self.entered = True
             return self
 

@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
+from typing_extensions import Self
+
 from sqlspec.adapters.duckdb._typing import DuckDBSessionContext
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
@@ -78,7 +80,7 @@ class DuckDBExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "DuckDBExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

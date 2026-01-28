@@ -6,6 +6,7 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
+from typing_extensions import Self
 
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
@@ -57,7 +58,7 @@ class CockroachPsycopgSyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "CockroachPsycopgSyncExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
@@ -80,7 +81,7 @@ class CockroachPsycopgAsyncExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    async def __aenter__(self) -> "CockroachPsycopgAsyncExceptionHandler":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

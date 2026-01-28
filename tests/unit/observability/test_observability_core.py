@@ -9,6 +9,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal, cast
 
+from typing_extensions import Self
+
 from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, SQLSpec, StatementObserver
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
@@ -37,7 +39,7 @@ class _NoOpExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "_NoOpExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:

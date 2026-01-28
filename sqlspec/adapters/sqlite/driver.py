@@ -4,6 +4,8 @@ import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import Self
+
 from sqlspec.adapters.sqlite._typing import SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
     build_insert_statement,
@@ -85,7 +87,7 @@ class SqliteExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "SqliteExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

@@ -7,6 +7,8 @@ database dialects, parameter style conversion, and transaction management.
 import contextlib
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from typing_extensions import Self
+
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     collect_rows,
@@ -83,7 +85,7 @@ class AdbcExceptionHandler:
     def __init__(self) -> None:
         self.pending_exception: Exception | None = None
 
-    def __enter__(self) -> "AdbcExceptionHandler":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:

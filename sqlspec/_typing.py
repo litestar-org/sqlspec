@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
-from typing_extensions import TypeVar, dataclass_transform
+from typing_extensions import Self, TypeVar, dataclass_transform
 
 from sqlspec.utils.module_loader import dependency_flag, module_available
 
@@ -502,8 +502,8 @@ except ImportError:
         def end(self, end_time: "int | None" = None) -> None:
             return None
 
-        def __enter__(self) -> "Span":
-            return self  # type: ignore[return-value]
+        def __enter__(self) -> Self:
+            return self
 
         def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
             return None

@@ -9,6 +9,7 @@ import io
 import logging
 import re
 from collections.abc import AsyncIterator, Iterator
+from datetime import timedelta
 from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, cast, overload
@@ -18,6 +19,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -582,8 +584,6 @@ class ObStoreBackend:
             msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
             raise ValueError(msg)
 
-        from datetime import timedelta
-
         method = "PUT" if for_upload else "GET"
         expires_delta = timedelta(seconds=expires_in)
 
@@ -647,33 +647,16 @@ class ObStoreBackend:
     ) -> AsyncIterator[bytes]:
         """Stream bytes from storage asynchronously.
 
-        Uses asyncio.to_thread() to ensure the event loop is not blocked
-        during I/O operations with cloud storage backends. This prevents
-        heartbeat timeouts and allows concurrent async tasks to execute
-        during large file downloads.
+        Uses obstore's native async streaming to yield chunks of bytes
+        without buffering the entire file into memory.
         """
-        import asyncio
-
-        from sqlspec.storage.backends.base import AsyncChunkedBytesIterator
-
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
-        # Run blocking I/O in thread pool to avoid blocking event loop
-        data = await asyncio.to_thread(self.read_bytes, resolved_path)
-
-        _log_storage_event(
-            "storage.read",
-            backend_type=self.backend_type,
-            protocol=self.protocol,
-            operation="stream_read",
-            mode="async",
-            path=resolved_path,
-        )
-
-        return AsyncChunkedBytesIterator(data, chunk_size or 65536)
+        result = await self.store.get_async(resolved_path)
+        return AsyncObStoreStreamIterator(result.stream(), chunk_size)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""
@@ -873,8 +856,6 @@ class ObStoreBackend:
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        from sqlspec.storage.backends.base import AsyncArrowBatchIterator
-
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
         return AsyncArrowBatchIterator(self.stream_arrow(resolved_pattern, **kwargs))
 
@@ -916,8 +897,6 @@ class ObStoreBackend:
         if expires_in > max_expires:
             msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
             raise ValueError(msg)
-
-        from datetime import timedelta
 
         method = "PUT" if for_upload else "GET"
         expires_delta = timedelta(seconds=expires_in)
