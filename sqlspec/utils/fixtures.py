@@ -206,10 +206,10 @@ def write_fixture(
     if compress:
         file_path = f"{table_name}.json.gz"
         content = gzip.compress(json_content.encode("utf-8"))
-        storage.write_bytes(file_path, content)
+        storage.write_bytes_sync(file_path, content)
     else:
         file_path = f"{table_name}.json"
-        storage.write_text(file_path, json_content)
+        storage.write_text_sync(file_path, json_content)
 
 
 async def write_fixture_async(

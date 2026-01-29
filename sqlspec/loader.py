@@ -278,8 +278,8 @@ class SQLFileLoader:
                 if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
                     file_path = file_path[1:]
                 filename = Path(file_path).name
-                return backend.read_text(filename, encoding=self.encoding)
-            return backend.read_text(path_str, encoding=self.encoding)
+                return backend.read_text_sync(filename, encoding=self.encoding)
+            return backend.read_text_sync(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
         except FileNotFoundInStorageError as e:

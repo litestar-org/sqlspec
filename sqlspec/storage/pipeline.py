@@ -223,18 +223,20 @@ def _encode_arrow_payload(table: "ArrowTable", format_choice: StorageFormat, *, 
 
 
 def _delete_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> None:
-    execute_sync_storage_operation(partial(backend.delete, path), backend=backend_name, operation="delete", path=path)
+    execute_sync_storage_operation(
+        partial(backend.delete_sync, path), backend=backend_name, operation="delete", path=path
+    )
 
 
 def _write_backend_sync(backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str) -> None:
     execute_sync_storage_operation(
-        partial(backend.write_bytes, path, payload), backend=backend_name, operation="write_bytes", path=path
+        partial(backend.write_bytes_sync, path, payload), backend=backend_name, operation="write_bytes", path=path
     )
 
 
 def _read_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> bytes:
     return execute_sync_storage_operation(
-        partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
+        partial(backend.read_bytes_sync, path), backend=backend_name, operation="read_bytes", path=path
     )
 
 
@@ -384,7 +386,7 @@ class SyncStoragePipeline:
     ) -> "Iterator[bytes]":
         """Stream bytes from an artifact."""
         backend, path = self._resolve_backend(source, storage_options)
-        return backend.stream_read(path, chunk_size=chunk_size)
+        return backend.stream_read_sync(path, chunk_size=chunk_size)
 
     def allocate_staging_artifacts(self, requests: "list[StorageLoadRequest]") -> "list[StagedArtifact]":
         """Allocate staging metadata for upcoming loads."""

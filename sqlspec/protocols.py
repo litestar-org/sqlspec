@@ -476,7 +476,10 @@ class HasGetDataProtocol(Protocol):
 
 @runtime_checkable
 class ObjectStoreProtocol(Protocol):
-    """Protocol for object storage operations."""
+    """Protocol for object storage operations.
+
+    All synchronous methods use the `*_sync` suffix for consistency with async methods.
+    """
 
     protocol: str
     backend_type: str
@@ -484,75 +487,75 @@ class ObjectStoreProtocol(Protocol):
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
 
-    def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:
-        """Read bytes from an object."""
+    def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:
+        """Read bytes from an object synchronously."""
         return b""
 
-    def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
-        """Write bytes to an object."""
+    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+        """Write bytes to an object synchronously."""
         return
 
-    def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
-        """Read text from an object."""
+    def read_text_sync(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
+        """Read text from an object synchronously."""
         return ""
 
-    def write_text(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-        """Write text to an object."""
+    def write_text_sync(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+        """Write text to an object synchronously."""
         return
 
-    def exists(self, path: "str | Path", **kwargs: Any) -> bool:
-        """Check if an object exists."""
+    def exists_sync(self, path: "str | Path", **kwargs: Any) -> bool:
+        """Check if an object exists synchronously."""
         return False
 
-    def delete(self, path: "str | Path", **kwargs: Any) -> None:
-        """Delete an object."""
+    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
+        """Delete an object synchronously."""
         return
 
-    def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
-        """Copy an object."""
+    def copy_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
+        """Copy an object synchronously."""
         return
 
-    def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
-        """Move an object."""
+    def move_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
+        """Move an object synchronously."""
         return
 
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
-        """List objects with optional prefix."""
+    def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+        """List objects with optional prefix synchronously."""
         return []
 
-    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
-        """Find objects matching a glob pattern."""
+    def glob_sync(self, pattern: str, **kwargs: Any) -> list[str]:
+        """Find objects matching a glob pattern synchronously."""
         return []
 
-    def is_object(self, path: "str | Path") -> bool:
-        """Check if path points to an object."""
+    def is_object_sync(self, path: "str | Path") -> bool:
+        """Check if path points to an object synchronously."""
         return False
 
-    def is_path(self, path: "str | Path") -> bool:
-        """Check if path points to a prefix (directory-like)."""
+    def is_path_sync(self, path: "str | Path") -> bool:
+        """Check if path points to a prefix (directory-like) synchronously."""
         return False
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
-        """Get object metadata."""
+    def get_metadata_sync(self, path: "str | Path", **kwargs: Any) -> dict[str, object]:
+        """Get object metadata synchronously."""
         return {}
 
-    def read_arrow(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
-        """Read an Arrow table from storage."""
+    def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
+        """Read an Arrow table from storage synchronously."""
         msg = "Arrow reading not implemented"
         raise NotImplementedError(msg)
 
-    def write_arrow(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write an Arrow table to storage."""
+    def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
+        """Write an Arrow table to storage synchronously."""
         msg = "Arrow writing not implemented"
         raise NotImplementedError(msg)
 
-    def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        """Stream Arrow record batches from matching objects."""
+    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
+        """Stream Arrow record batches from matching objects synchronously."""
         msg = "Arrow streaming not implemented"
         raise NotImplementedError(msg)
 
-    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> "Iterator[bytes]":
-        """Stream bytes from an object."""
+    def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> "Iterator[bytes]":
+        """Stream bytes from an object synchronously."""
         msg = "Stream reading not implemented"
         raise NotImplementedError(msg)
 
