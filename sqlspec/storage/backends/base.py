@@ -9,7 +9,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import Self
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
-from sqlspec.utils.sync_tools import CapacityLimiter, async_
+from sqlspec.utils.sync_tools import CapacityLimiter
 
 __all__ = (
     "AsyncArrowBatchIterator",
