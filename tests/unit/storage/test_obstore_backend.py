@@ -41,8 +41,8 @@ def test_write_and_read_bytes(tmp_path: Path) -> None:
     store = ObStoreBackend(f"file://{tmp_path}")
     test_data = b"test data content"
 
-    store.write_bytes("test_file.bin", test_data)
-    result = store.read_bytes("test_file.bin")
+    store.write_bytes_sync("test_file.bin", test_data)
+    result = store.read_bytes_sync("test_file.bin")
 
     assert result == test_data
 
@@ -55,8 +55,8 @@ def test_write_and_read_text(tmp_path: Path) -> None:
     store = ObStoreBackend(f"file://{tmp_path}")
     test_text = "test text content\nwith multiple lines"
 
-    store.write_text("test_file.txt", test_text)
-    result = store.read_text("test_file.txt")
+    store.write_text_sync("test_file.txt", test_text)
+    result = store.read_text_sync("test_file.txt")
 
     assert result == test_text
 
@@ -68,10 +68,10 @@ def test_exists(tmp_path: Path) -> None:
 
     store = ObStoreBackend(f"file://{tmp_path}")
 
-    assert not store.exists("nonexistent.txt")
+    assert not store.exists_sync("nonexistent.txt")
 
-    store.write_text("existing.txt", "content")
-    assert store.exists("existing.txt")
+    store.write_text_sync("existing.txt", "content")
+    assert store.exists_sync("existing.txt")
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -81,11 +81,11 @@ def test_delete(tmp_path: Path) -> None:
 
     store = ObStoreBackend(f"file://{tmp_path}")
 
-    store.write_text("to_delete.txt", "content")
-    assert store.exists("to_delete.txt")
+    store.write_text_sync("to_delete.txt", "content")
+    assert store.exists_sync("to_delete.txt")
 
-    store.delete("to_delete.txt")
-    assert not store.exists("to_delete.txt")
+    store.delete_sync("to_delete.txt")
+    assert not store.exists_sync("to_delete.txt")
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -96,11 +96,11 @@ def test_copy(tmp_path: Path) -> None:
     store = ObStoreBackend(f"file://{tmp_path}")
     original_content = "original content"
 
-    store.write_text("original.txt", original_content)
-    store.copy("original.txt", "copied.txt")
+    store.write_text_sync("original.txt", original_content)
+    store.copy_sync("original.txt", "copied.txt")
 
-    assert store.exists("copied.txt")
-    assert store.read_text("copied.txt") == original_content
+    assert store.exists_sync("copied.txt")
+    assert store.read_text_sync("copied.txt") == original_content
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -111,12 +111,12 @@ def test_move(tmp_path: Path) -> None:
     store = ObStoreBackend(f"file://{tmp_path}")
     original_content = "content to move"
 
-    store.write_text("original.txt", original_content)
-    store.move("original.txt", "moved.txt")
+    store.write_text_sync("original.txt", original_content)
+    store.move_sync("original.txt", "moved.txt")
 
-    assert not store.exists("original.txt")
-    assert store.exists("moved.txt")
-    assert store.read_text("moved.txt") == original_content
+    assert not store.exists_sync("original.txt")
+    assert store.exists_sync("moved.txt")
+    assert store.read_text_sync("moved.txt") == original_content
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -127,12 +127,12 @@ def test_list_objects(tmp_path: Path) -> None:
     store = ObStoreBackend(f"file://{tmp_path}")
 
     # Create test files
-    store.write_text("file1.txt", "content1")
-    store.write_text("file2.txt", "content2")
-    store.write_text("subdir/file3.txt", "content3")
+    store.write_text_sync("file1.txt", "content1")
+    store.write_text_sync("file2.txt", "content2")
+    store.write_text_sync("subdir/file3.txt", "content3")
 
     # List all objects
-    all_objects = store.list_objects()
+    all_objects = store.list_objects_sync()
     assert any("file1.txt" in obj for obj in all_objects)
     assert any("file2.txt" in obj for obj in all_objects)
     assert any("file3.txt" in obj for obj in all_objects)
@@ -146,12 +146,12 @@ def test_glob(tmp_path: Path) -> None:
     store = ObStoreBackend(f"file://{tmp_path}")
 
     # Create test files
-    store.write_text("test1.sql", "SELECT 1")
-    store.write_text("test2.sql", "SELECT 2")
-    store.write_text("config.json", "{}")
+    store.write_text_sync("test1.sql", "SELECT 1")
+    store.write_text_sync("test2.sql", "SELECT 2")
+    store.write_text_sync("config.json", "{}")
 
     # Test glob patterns
-    sql_files = store.glob("*.sql")
+    sql_files = store.glob_sync("*.sql")
     assert any("test1.sql" in obj for obj in sql_files)
     assert any("test2.sql" in obj for obj in sql_files)
     assert not any("config.json" in obj for obj in sql_files)
@@ -165,8 +165,8 @@ def test_get_metadata(tmp_path: Path) -> None:
     store = ObStoreBackend(f"file://{tmp_path}")
     test_content = "test content for metadata"
 
-    store.write_text("test_file.txt", test_content)
-    metadata = store.get_metadata("test_file.txt")
+    store.write_text_sync("test_file.txt", test_content)
+    metadata = store.get_metadata_sync("test_file.txt")
 
     assert "exists" in metadata
     assert metadata["exists"] is True
@@ -179,14 +179,14 @@ def test_is_object_and_is_path(tmp_path: Path) -> None:
 
     store = ObStoreBackend(f"file://{tmp_path}")
 
-    store.write_text("file.txt", "content")
+    store.write_text_sync("file.txt", "content")
     # Create directory by writing file inside it
-    store.write_text("subdir/nested.txt", "content")
+    store.write_text_sync("subdir/nested.txt", "content")
 
-    assert store.is_object("file.txt")
-    assert not store.is_object("subdir")
-    assert not store.is_path("file.txt")
-    assert store.is_path("subdir")
+    assert store.is_object_sync("file.txt")
+    assert not store.is_object_sync("subdir")
+    assert not store.is_path_sync("file.txt")
+    assert store.is_path_sync("subdir")
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
@@ -202,8 +202,8 @@ def test_write_and_read_arrow(tmp_path: Path) -> None:
     data: dict[str, Any] = {"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"], "score": [95.5, 87.0, 92.3]}
     table = pa.table(data)
 
-    store.write_arrow("test_data.parquet", table)
-    result = store.read_arrow("test_data.parquet")
+    store.write_arrow_sync("test_data.parquet", table)
+    result = store.read_arrow_sync("test_data.parquet")
 
     assert result.equals(table)
 
@@ -221,10 +221,10 @@ def test_stream_arrow(tmp_path: Path) -> None:
     data: dict[str, Any] = {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}
     table = pa.table(data)
 
-    store.write_arrow("stream_test.parquet", table)
+    store.write_arrow_sync("stream_test.parquet", table)
 
     # Stream record batches
-    batches = list(store.stream_arrow("stream_test.parquet"))
+    batches = list(store.stream_arrow_sync("stream_test.parquet"))
     assert len(batches) > 0
 
     # Verify we can read the data
@@ -239,7 +239,7 @@ def test_sign_raises_not_implemented_for_local_files(tmp_path: Path) -> None:
 
     store = ObStoreBackend(f"file://{tmp_path}")
 
-    store.write_text("test.txt", "content")
+    store.write_text_sync("test.txt", "content")
 
     # Local file protocol does not support URL signing
     assert store.supports_signing is False
@@ -462,13 +462,13 @@ def test_arrow_operations_without_pyarrow(tmp_path: Path) -> None:
     store = ObStoreBackend(f"file://{tmp_path}")
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
-        store.read_arrow("test.parquet")
+        store.read_arrow_sync("test.parquet")
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
-        store.write_arrow("test.parquet", None)  # type: ignore
+        store.write_arrow_sync("test.parquet", None)  # type: ignore
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
-        list(store.stream_arrow("*.parquet"))
+        list(store.stream_arrow_sync("*.parquet"))
 
 
 # Tests for base_path fixes (Issue #336)
@@ -487,8 +487,8 @@ def test_file_uri_with_relative_base_path(tmp_path: Path) -> None:
     assert store._local_store_root == expected_root
 
     # Write and read back
-    store.write_bytes("test.txt", b"hello")
-    assert store.read_bytes("test.txt") == b"hello"
+    store.write_bytes_sync("test.txt", b"hello")
+    assert store.read_bytes_sync("test.txt") == b"hello"
 
     # Verify file is in correct physical location
     assert (tmp_path / subdir / "test.txt").exists()
@@ -510,7 +510,7 @@ def test_file_uri_with_absolute_base_path_override(tmp_path: Path) -> None:
     assert store._local_store_root == str(override_path)
 
     # Operations should work in override location
-    store.write_bytes("test.txt", b"override content")
+    store.write_bytes_sync("test.txt", b"override content")
     assert (override_path / "test.txt").read_bytes() == b"override content"
 
 
@@ -527,9 +527,9 @@ def test_file_uri_with_nested_base_path(tmp_path: Path) -> None:
     assert store._local_store_root == expected_root
 
     # Write and verify
-    store.write_bytes("deep.txt", b"deep content")
+    store.write_bytes_sync("deep.txt", b"deep content")
     assert (tmp_path / nested_path / "deep.txt").exists()
-    assert store.read_bytes("deep.txt") == b"deep content"
+    assert store.read_bytes_sync("deep.txt") == b"deep content"
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")

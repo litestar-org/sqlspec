@@ -36,8 +36,8 @@ def test_write_and_read_bytes(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
     test_data = b"test data content"
 
-    store.write_bytes("test_file.bin", test_data)
-    result = store.read_bytes("test_file.bin")
+    store.write_bytes_sync("test_file.bin", test_data)
+    result = store.read_bytes_sync("test_file.bin")
 
     assert result == test_data
 
@@ -47,8 +47,8 @@ def test_write_and_read_text(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
     test_text = "test text content\nwith multiple lines"
 
-    store.write_text("test_file.txt", test_text)
-    result = store.read_text("test_file.txt")
+    store.write_text_sync("test_file.txt", test_text)
+    result = store.read_text_sync("test_file.txt")
 
     assert result == test_text
 
@@ -58,8 +58,8 @@ def test_write_and_read_text_custom_encoding(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
     test_text = "test with ünicode"
 
-    store.write_text("test_file.txt", test_text, encoding="latin-1")
-    result = store.read_text("test_file.txt", encoding="latin-1")
+    store.write_text_sync("test_file.txt", test_text, encoding="latin-1")
+    result = store.read_text_sync("test_file.txt", encoding="latin-1")
 
     assert result == test_text
 
@@ -68,21 +68,21 @@ def test_exists(tmp_path: Path) -> None:
     """Test exists operation."""
     store = LocalStore(str(tmp_path))
 
-    assert not store.exists("nonexistent.txt")
+    assert not store.exists_sync("nonexistent.txt")
 
-    store.write_text("existing.txt", "content")
-    assert store.exists("existing.txt")
+    store.write_text_sync("existing.txt", "content")
+    assert store.exists_sync("existing.txt")
 
 
 def test_delete(tmp_path: Path) -> None:
     """Test delete operation."""
     store = LocalStore(str(tmp_path))
 
-    store.write_text("to_delete.txt", "content")
-    assert store.exists("to_delete.txt")
+    store.write_text_sync("to_delete.txt", "content")
+    assert store.exists_sync("to_delete.txt")
 
-    store.delete("to_delete.txt")
-    assert not store.exists("to_delete.txt")
+    store.delete_sync("to_delete.txt")
+    assert not store.exists_sync("to_delete.txt")
 
 
 def test_copy(tmp_path: Path) -> None:
@@ -90,11 +90,11 @@ def test_copy(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
     original_content = "original content"
 
-    store.write_text("original.txt", original_content)
-    store.copy("original.txt", "copied.txt")
+    store.write_text_sync("original.txt", original_content)
+    store.copy_sync("original.txt", "copied.txt")
 
-    assert store.exists("copied.txt")
-    assert store.read_text("copied.txt") == original_content
+    assert store.exists_sync("copied.txt")
+    assert store.read_text_sync("copied.txt") == original_content
 
 
 def test_move(tmp_path: Path) -> None:
@@ -102,12 +102,12 @@ def test_move(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
     original_content = "content to move"
 
-    store.write_text("original.txt", original_content)
-    store.move("original.txt", "moved.txt")
+    store.write_text_sync("original.txt", original_content)
+    store.move_sync("original.txt", "moved.txt")
 
-    assert not store.exists("original.txt")
-    assert store.exists("moved.txt")
-    assert store.read_text("moved.txt") == original_content
+    assert not store.exists_sync("original.txt")
+    assert store.exists_sync("moved.txt")
+    assert store.read_text_sync("moved.txt") == original_content
 
 
 def test_list_objects(tmp_path: Path) -> None:
@@ -115,12 +115,12 @@ def test_list_objects(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
 
     # Create test files
-    store.write_text("file1.txt", "content1")
-    store.write_text("file2.txt", "content2")
-    store.write_text("subdir/file3.txt", "content3")
+    store.write_text_sync("file1.txt", "content1")
+    store.write_text_sync("file2.txt", "content2")
+    store.write_text_sync("subdir/file3.txt", "content3")
 
     # List all objects
-    all_objects = store.list_objects()
+    all_objects = store.list_objects_sync()
     assert "file1.txt" in all_objects
     assert "file2.txt" in all_objects
     assert "subdir/file3.txt" in all_objects
@@ -131,12 +131,12 @@ def test_list_objects_with_prefix(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
 
     # Create test files
-    store.write_text("prefix_file1.txt", "content1")
-    store.write_text("prefix_file2.txt", "content2")
-    store.write_text("other_file.txt", "content3")
+    store.write_text_sync("prefix_file1.txt", "content1")
+    store.write_text_sync("prefix_file2.txt", "content2")
+    store.write_text_sync("other_file.txt", "content3")
 
     # List with prefix
-    prefixed_objects = store.list_objects(prefix="prefix_")
+    prefixed_objects = store.list_objects_sync(prefix="prefix_")
     assert "prefix_file1.txt" in prefixed_objects
     assert "prefix_file2.txt" in prefixed_objects
     assert "other_file.txt" not in prefixed_objects
@@ -147,13 +147,13 @@ def test_glob(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
 
     # Create test files
-    store.write_text("test1.sql", "SELECT 1")
-    store.write_text("test2.sql", "SELECT 2")
-    store.write_text("config.json", "{}")
-    store.write_text("subdir/test3.sql", "SELECT 3")
+    store.write_text_sync("test1.sql", "SELECT 1")
+    store.write_text_sync("test2.sql", "SELECT 2")
+    store.write_text_sync("config.json", "{}")
+    store.write_text_sync("subdir/test3.sql", "SELECT 3")
 
     # Test glob patterns
-    sql_files = store.glob("*.sql")
+    sql_files = store.glob_sync("*.sql")
     assert "test1.sql" in sql_files
     assert "test2.sql" in sql_files
     assert "config.json" not in sql_files
@@ -164,8 +164,8 @@ def test_get_metadata(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
     test_content = "test content for metadata"
 
-    store.write_text("test_file.txt", test_content)
-    metadata = store.get_metadata("test_file.txt")
+    store.write_text_sync("test_file.txt", test_content)
+    metadata = store.get_metadata_sync("test_file.txt")
 
     assert "size" in metadata
     assert "modified" in metadata
@@ -176,13 +176,13 @@ def test_is_object_and_is_path(tmp_path: Path) -> None:
     """Test is_object and is_path operations."""
     store = LocalStore(str(tmp_path))
 
-    store.write_text("file.txt", "content")
+    store.write_text_sync("file.txt", "content")
     (tmp_path / "subdir").mkdir()
 
-    assert store.is_object("file.txt")
-    assert not store.is_object("subdir")
-    assert not store.is_path("file.txt")
-    assert store.is_path("subdir")
+    assert store.is_object_sync("file.txt")
+    assert not store.is_object_sync("subdir")
+    assert not store.is_path_sync("file.txt")
+    assert store.is_path_sync("subdir")
 
 
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="PyArrow not installed")
@@ -194,8 +194,8 @@ def test_write_and_read_arrow(tmp_path: Path) -> None:
     data: dict[str, Any] = {"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"], "score": [95.5, 87.0, 92.3]}
     table = pa.table(data)
 
-    store.write_arrow("test_data.parquet", table)
-    result = store.read_arrow("test_data.parquet")
+    store.write_arrow_sync("test_data.parquet", table)
+    result = store.read_arrow_sync("test_data.parquet")
 
     assert result.equals(table)
 
@@ -209,10 +209,10 @@ def test_stream_arrow(tmp_path: Path) -> None:
     data: dict[str, Any] = {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}
     table = pa.table(data)
 
-    store.write_arrow("stream_test.parquet", table)
+    store.write_arrow_sync("stream_test.parquet", table)
 
     # Stream record batches
-    batches = list(store.stream_arrow("stream_test.parquet"))
+    batches = list(store.stream_arrow_sync("stream_test.parquet"))
     assert len(batches) > 0
 
     # Verify we can read the data
@@ -224,7 +224,7 @@ def test_sign_sync_raises_not_implemented(tmp_path: Path) -> None:
     """Test sign_sync raises NotImplementedError for local files."""
     store = LocalStore(str(tmp_path))
 
-    store.write_text("test.txt", "content")
+    store.write_text_sync("test.txt", "content")
 
     # Local storage does not support URL signing
     assert store.supports_signing is False
@@ -239,7 +239,7 @@ def test_resolve_path_absolute(tmp_path: Path) -> None:
 
     # Absolute path should be returned as-is
     test_path = tmp_path / "test.txt"
-    store.write_text("test.txt", "content")
+    store.write_text_sync("test.txt", "content")
 
     resolved = store._resolve_path(str(test_path))
     assert resolved == test_path
@@ -259,12 +259,12 @@ def test_nested_directory_operations(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
 
     # Write to nested path
-    store.write_text("level1/level2/file.txt", "nested content")
-    assert store.exists("level1/level2/file.txt")
-    assert store.read_text("level1/level2/file.txt") == "nested content"
+    store.write_text_sync("level1/level2/file.txt", "nested content")
+    assert store.exists_sync("level1/level2/file.txt")
+    assert store.read_text_sync("level1/level2/file.txt") == "nested content"
 
     # List should include nested files
-    objects = store.list_objects()
+    objects = store.list_objects_sync()
     assert "level1/level2/file.txt" in objects
 
 
@@ -273,10 +273,10 @@ def test_file_not_found_errors(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
 
     with pytest.raises(FileNotFoundError):
-        store.read_bytes("nonexistent.bin")
+        store.read_bytes_sync("nonexistent.bin")
 
     with pytest.raises(FileNotFoundError):
-        store.read_text("nonexistent.txt")
+        store.read_text_sync("nonexistent.txt")
 
 
 # Async tests
@@ -437,13 +437,13 @@ def test_arrow_operations_without_pyarrow(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
-        store.read_arrow("test.parquet")
+        store.read_arrow_sync("test.parquet")
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
-        store.write_arrow("test.parquet", None)  # type: ignore
+        store.write_arrow_sync("test.parquet", None)  # type: ignore
 
     with pytest.raises(MissingDependencyError, match="pyarrow"):
-        list(store.stream_arrow("*.parquet"))
+        list(store.stream_arrow_sync("*.parquet"))
 
 
 # Tests for base_path combination fix
@@ -492,8 +492,8 @@ def test_base_path_combination_full_workflow(tmp_path: Path) -> None:
 
     # Write and read should work correctly
     test_data = b"test content"
-    store.write_bytes("test.bin", test_data)
-    result = store.read_bytes("test.bin")
+    store.write_bytes_sync("test.bin", test_data)
+    result = store.read_bytes_sync("test.bin")
 
     assert result == test_data
     # Verify file is in the correct location
@@ -511,7 +511,7 @@ async def test_stream_read_async_does_not_block_event_loop(tmp_path: Path) -> No
 
     # Write a reasonably sized file
     test_data = b"x" * 100_000
-    store.write_bytes("large_file.bin", test_data)
+    store.write_bytes_sync("large_file.bin", test_data)
 
     # Track if concurrent task runs during streaming
     concurrent_task_ran = False
@@ -537,7 +537,7 @@ async def test_stream_read_async_respects_chunk_size(tmp_path: Path) -> None:
     store = LocalStore(str(tmp_path))
 
     test_data = b"x" * 10_000
-    store.write_bytes("chunked_file.bin", test_data)
+    store.write_bytes_sync("chunked_file.bin", test_data)
 
     chunk_size = 1000
     chunks = [chunk async for chunk in await store.stream_read_async("chunked_file.bin", chunk_size=chunk_size)]
@@ -558,7 +558,7 @@ async def test_stream_read_async_with_base_path(tmp_path: Path) -> None:
     store = LocalStore(f"file://{tmp_path}", base_path="data")
 
     test_data = b"streaming test data"
-    store.write_bytes("stream_test.bin", test_data)
+    store.write_bytes_sync("stream_test.bin", test_data)
 
     chunks = [chunk async for chunk in await store.stream_read_async("stream_test.bin")]
 

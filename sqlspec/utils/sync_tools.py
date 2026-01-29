@@ -247,9 +247,10 @@ class _AsyncWrapper(Generic[ParamSpecT, ReturnT]):
 
     async def __call__(self, *args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
         partial_f = functools.partial(self._function, *args, **kwargs)
-        used_limiter = self._limiter or _default_limiter
-        async with used_limiter:
-            return await asyncio.to_thread(partial_f)
+        if self._limiter is not None:
+            async with self._limiter:
+                return await asyncio.to_thread(partial_f)
+        return await asyncio.to_thread(partial_f)
 
 
 class _EnsureAsyncWrapper(Generic[ParamSpecT, ReturnT]):

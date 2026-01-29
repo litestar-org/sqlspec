@@ -9,6 +9,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import Self
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
+from sqlspec.utils.sync_tools import CapacityLimiter, async_
 
 __all__ = (
     "AsyncArrowBatchIterator",
@@ -17,7 +18,37 @@ __all__ = (
     "AsyncObStoreStreamIterator",
     "AsyncThreadedBytesIterator",
     "ObjectStoreBase",
+    "storage_limiter",
 )
+
+# Dedicated capacity limiter for storage I/O operations (100 concurrent ops)
+# This is shared across all storage backends to prevent overwhelming the system
+storage_limiter = CapacityLimiter(100)
+
+
+class _ExhaustedSentinel:
+    """Sentinel value to signal iterator exhaustion across thread boundaries.
+
+    StopIteration cannot be raised into asyncio Futures, so we use this sentinel
+    to signal iterator exhaustion from the thread pool back to the async context.
+    """
+
+    __slots__ = ()
+
+
+_EXHAUSTED = _ExhaustedSentinel()
+
+
+def _next_or_sentinel(iterator: "Iterator[Any]") -> "Any":
+    """Get next item or return sentinel if exhausted.
+
+    This helper wraps next() to catch StopIteration in the thread,
+    since StopIteration cannot propagate through asyncio Futures.
+    """
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _EXHAUSTED
 
 
 class AsyncArrowBatchIterator:
@@ -47,16 +78,19 @@ class AsyncArrowBatchIterator:
     async def __anext__(self) -> "ArrowRecordBatch":
         """Get the next item from the iterator asynchronously.
 
+        Uses asyncio.to_thread to offload the blocking next() call
+        to a thread pool, preventing event loop blocking.
+
         Returns:
             The next Arrow record batch.
 
         Raises:
             StopAsyncIteration: When the iterator is exhausted.
         """
-        try:
-            return next(self._sync_iter)
-        except StopIteration:
-            raise StopAsyncIteration from None
+        result = await asyncio.to_thread(_next_or_sentinel, self._sync_iter)
+        if result is _EXHAUSTED:
+            raise StopAsyncIteration
+        return cast("ArrowRecordBatch", result)
 
 
 class AsyncBytesIterator:
@@ -309,93 +343,97 @@ class AsyncThreadedBytesIterator:
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class ObjectStoreBase(ABC):
-    """Base class for storage backends."""
+    """Base class for storage backends.
+
+    All synchronous methods follow the *_sync naming convention for consistency
+    with their async counterparts.
+    """
 
     __slots__ = ()
 
     @abstractmethod
-    def read_bytes(self, path: str, **kwargs: Any) -> bytes:
-        """Read bytes from storage."""
+    def read_bytes_sync(self, path: str, **kwargs: Any) -> bytes:
+        """Read bytes from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:
-        """Write bytes to storage."""
+    def write_bytes_sync(self, path: str, data: bytes, **kwargs: Any) -> None:
+        """Write bytes to storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def stream_read(self, path: str, chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
-        """Stream bytes from storage."""
+    def stream_read_sync(self, path: str, chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def read_text(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
-        """Read text from storage."""
+    def read_text_sync(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+        """Read text from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def write_text(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-        """Write text to storage."""
+    def write_text_sync(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+        """Write text to storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
-        """List objects in storage."""
+    def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
+        """List objects in storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def exists(self, path: str, **kwargs: Any) -> bool:
-        """Check if object exists in storage."""
+    def exists_sync(self, path: str, **kwargs: Any) -> bool:
+        """Check if object exists in storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def delete(self, path: str, **kwargs: Any) -> None:
-        """Delete object from storage."""
+    def delete_sync(self, path: str, **kwargs: Any) -> None:
+        """Delete object from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def copy(self, source: str, destination: str, **kwargs: Any) -> None:
-        """Copy object within storage."""
+    def copy_sync(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Copy object within storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def move(self, source: str, destination: str, **kwargs: Any) -> None:
-        """Move object within storage."""
+    def move_sync(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Move object within storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
-        """Find objects matching pattern."""
+    def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
+        """Find objects matching pattern synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def get_metadata(self, path: str, **kwargs: Any) -> "dict[str, object]":
-        """Get object metadata from storage."""
+    def get_metadata_sync(self, path: str, **kwargs: Any) -> "dict[str, object]":
+        """Get object metadata from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def is_object(self, path: str) -> bool:
-        """Check if path points to an object."""
+    def is_object_sync(self, path: str) -> bool:
+        """Check if path points to an object synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def is_path(self, path: str) -> bool:
-        """Check if path points to a directory."""
+    def is_path_sync(self, path: str) -> bool:
+        """Check if path points to a directory synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def read_arrow(self, path: str, **kwargs: Any) -> ArrowTable:
-        """Read Arrow table from storage."""
+    def read_arrow_sync(self, path: str, **kwargs: Any) -> ArrowTable:
+        """Read Arrow table from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def write_arrow(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
-        """Write Arrow table to storage."""
+    def write_arrow_sync(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
+        """Write Arrow table to storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
-        """Stream Arrow record batches from storage."""
+    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
+        """Stream Arrow record batches from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
@@ -426,7 +464,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in storage asynchronously."""
         raise NotImplementedError
 
@@ -451,7 +489,7 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_metadata_async(self, path: str, **kwargs: Any) -> "dict[str, object]":
+    async def get_metadata_async(self, path: str, **kwargs: Any) -> "dict[str, object]":
         """Get object metadata from storage asynchronously."""
         raise NotImplementedError
 

@@ -4,7 +4,6 @@ A simple, zero-dependency implementation for local file operations.
 No external dependencies like fsspec or obstore required.
 """
 
-import asyncio
 import shutil
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
@@ -16,7 +15,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import FileNotFoundInStorageError
 from sqlspec.storage._utils import import_pyarrow_parquet
-from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncChunkedBytesIterator
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.sync_tools import async_
 
@@ -54,6 +53,11 @@ def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: 
     pq.write_table(table, str(resolved), **options)  # pyright: ignore
 
 
+def _open_file_for_read(path: Path) -> Any:
+    """Open a file for binary reading."""
+    return path.open("rb")
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class LocalStore:
     """Simple local file system storage backend.
@@ -61,10 +65,10 @@ class LocalStore:
     Provides file system operations without requiring fsspec or obstore.
     Supports file:// URIs and regular file paths.
 
-    Implements ObjectStoreProtocol for type safety.
+    All synchronous methods use the *_sync suffix for consistency with async methods.
     """
 
-    __slots__ = ("_loop", "backend_type", "base_path", "protocol")
+    __slots__ = ("backend_type", "base_path", "protocol")
 
     def __init__(self, uri: str = "", **kwargs: Any) -> None:
         """Initialize local storage backend.
@@ -100,7 +104,6 @@ class LocalStore:
             self.base_path.mkdir(parents=True, exist_ok=True)
         elif self.base_path.is_file():
             self.base_path = self.base_path.parent
-        self._loop: asyncio.AbstractEventLoop | None = None
 
         self.protocol = "file"
         self.backend_type = "local"
@@ -117,8 +120,8 @@ class LocalStore:
         p = Path(path)
         return p if p.is_absolute() else self.base_path / p
 
-    def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:
-        """Read bytes from file."""
+    def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:
+        """Read bytes from file synchronously."""
         resolved = self._resolve_path(path)
         try:
             return execute_sync_storage_operation(
@@ -127,8 +130,8 @@ class LocalStore:
         except FileNotFoundInStorageError as error:
             raise FileNotFoundError(str(resolved)) from error
 
-    def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
-        """Write bytes to file."""
+    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+        """Write bytes to file synchronously."""
         resolved = self._resolve_path(path)
 
         execute_sync_storage_operation(
@@ -138,18 +141,18 @@ class LocalStore:
             path=str(resolved),
         )
 
-    def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
-        """Read text from file."""
-        data = self.read_bytes(path, **kwargs)
+    def read_text_sync(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
+        """Read text from file synchronously."""
+        data = self.read_bytes_sync(path, **kwargs)
         return data.decode(encoding)
 
-    def write_text(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-        """Write text to file."""
+    def write_text_sync(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+        """Write text to file synchronously."""
         encoded = data.encode(encoding)
-        self.write_bytes(path, encoded, **kwargs)
+        self.write_bytes_sync(path, encoded, **kwargs)
 
-    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
-        """Stream bytes from file."""
+    def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes from file synchronously."""
         resolved = self._resolve_path(path)
         chunk_size = chunk_size or 65536
         try:
@@ -162,17 +165,13 @@ class LocalStore:
         except FileNotFoundError as error:
             raise FileNotFoundError(str(resolved)) from error
 
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
-        """List objects in directory.
+    def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
+        """List objects in directory synchronously.
 
         Args:
             prefix: Optional prefix that may look like a directory or filename filter.
             recursive: Whether to walk subdirectories.
             **kwargs: Additional backend-specific options (currently unused).
-
-        Args:
-            prefix: Optional prefix that may look like a directory or filename filter.
-            recursive: Whether to walk subdirectories.
 
         When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
         Paths outside base_path are returned with their absolute names.
@@ -202,20 +201,20 @@ class LocalStore:
 
         return sorted(files)
 
-    def exists(self, path: "str | Path", **kwargs: Any) -> bool:
-        """Check if file exists."""
+    def exists_sync(self, path: "str | Path", **kwargs: Any) -> bool:
+        """Check if file exists synchronously."""
         return self._resolve_path(path).exists()
 
-    def delete(self, path: "str | Path", **kwargs: Any) -> None:
-        """Delete file or directory."""
+    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
+        """Delete file or directory synchronously."""
         resolved = self._resolve_path(path)
 
         execute_sync_storage_operation(
             partial(_delete_local_path, resolved), backend=self.backend_type, operation="delete", path=str(resolved)
         )
 
-    def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
-        """Copy file or directory."""
+    def copy_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
+        """Copy file or directory synchronously."""
         src = self._resolve_path(source)
         dst = self._resolve_path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -224,8 +223,8 @@ class LocalStore:
             partial(_copy_local_path, src, dst), backend=self.backend_type, operation="copy", path=f"{src}->{dst}"
         )
 
-    def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
-        """Move file or directory."""
+    def move_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
+        """Move file or directory synchronously."""
         src = self._resolve_path(source)
         dst = self._resolve_path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -233,8 +232,8 @@ class LocalStore:
             partial(shutil.move, str(src), str(dst)), backend=self.backend_type, operation="move", path=f"{src}->{dst}"
         )
 
-    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
-        """Find files matching pattern.
+    def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
+        """Find files matching pattern synchronously.
 
         Supports both relative and absolute patterns by adjusting where the glob search begins.
         """
@@ -256,8 +255,8 @@ class LocalStore:
 
         return sorted(results)
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
-        """Get file metadata."""
+    def get_metadata_sync(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
+        """Get file metadata synchronously."""
         resolved = self._resolve_path(path)
         return execute_sync_storage_operation(
             partial(self._collect_metadata, resolved),
@@ -280,16 +279,16 @@ class LocalStore:
             "path": str(resolved),
         }
 
-    def is_object(self, path: "str | Path") -> bool:
-        """Check if path points to a file."""
+    def is_object_sync(self, path: "str | Path") -> bool:
+        """Check if path points to a file synchronously."""
         return self._resolve_path(path).is_file()
 
-    def is_path(self, path: "str | Path") -> bool:
-        """Check if path points to a directory."""
+    def is_path_sync(self, path: "str | Path") -> bool:
+        """Check if path points to a directory synchronously."""
         return self._resolve_path(path).is_dir()
 
-    def read_arrow(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
-        """Read Arrow table from file."""
+    def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
+        """Read Arrow table from file synchronously."""
         pq = import_pyarrow_parquet()
         resolved = self._resolve_path(path)
         return cast(
@@ -302,8 +301,8 @@ class LocalStore:
             ),
         )
 
-    def write_arrow(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table to file."""
+    def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
+        """Write Arrow table to file synchronously."""
         pq = import_pyarrow_parquet()
         resolved = self._resolve_path(path)
 
@@ -314,14 +313,14 @@ class LocalStore:
             path=str(resolved),
         )
 
-    def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
-        """Stream Arrow record batches from files matching pattern.
+    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
+        """Stream Arrow record batches from files matching pattern synchronously.
 
         Yields:
             Arrow record batches from matching files.
         """
         pq = import_pyarrow_parquet()
-        files = self.glob(pattern)
+        files = self.glob_sync(pattern)
         for file_path in files:
             resolved = self._resolve_path(file_path)
             resolved_str = str(resolved)
@@ -365,26 +364,26 @@ class LocalStore:
 
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file asynchronously."""
-        return await async_(self.read_bytes)(path, **kwargs)
+        return await async_(self.read_bytes_sync)(path, **kwargs)
 
     async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
         """Write bytes to file asynchronously."""
-        await async_(self.write_bytes)(path, data, **kwargs)
+        await async_(self.write_bytes_sync)(path, data, **kwargs)
 
     async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from file asynchronously."""
-        return await async_(self.read_text)(path, encoding, **kwargs)
+        return await async_(self.read_text_sync)(path, encoding, **kwargs)
 
     async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to file asynchronously."""
-        await async_(self.write_text)(path, data, encoding, **kwargs)
+        await async_(self.write_text_sync)(path, data, encoding, **kwargs)
 
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
     ) -> AsyncIterator[bytes]:
         """Stream bytes from file asynchronously.
 
-        Uses asyncio.to_thread() to run blocking file I/O in a thread pool,
+        Uses AsyncThreadedBytesIterator to offload blocking file I/O to a thread pool,
         ensuring the event loop is not blocked during read operations.
 
         Args:
@@ -396,54 +395,60 @@ class LocalStore:
             AsyncIterator yielding chunks of bytes.
         """
         resolved = self._resolve_path(path)
-        # Run blocking I/O in thread pool to avoid blocking event loop
-        data = await asyncio.to_thread(resolved.read_bytes)
-        return AsyncChunkedBytesIterator(data, chunk_size or 65536)
+        chunk_size = chunk_size or 65536
+        # Open file in thread pool to avoid blocking, then use threaded iterator
+        file_obj = await async_(_open_file_for_read)(resolved)
+        return AsyncThreadedBytesIterator(file_obj, chunk_size)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects asynchronously."""
-        return await async_(self.list_objects)(prefix, recursive, **kwargs)
+        return await async_(self.list_objects_sync)(prefix, recursive, **kwargs)
 
     async def exists_async(self, path: "str | Path", **kwargs: Any) -> bool:
         """Check if file exists asynchronously."""
-        return await async_(self.exists)(path, **kwargs)
+        return await async_(self.exists_sync)(path, **kwargs)
 
     async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
         """Delete file asynchronously."""
-        await async_(self.delete)(path, **kwargs)
+        await async_(self.delete_sync)(path, **kwargs)
 
     async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy file asynchronously."""
-        await async_(self.copy)(source, destination, **kwargs)
+        await async_(self.copy_sync)(source, destination, **kwargs)
 
     async def move_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Move file asynchronously."""
-        await async_(self.move)(source, destination, **kwargs)
+        await async_(self.move_sync)(source, destination, **kwargs)
 
     async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
         """Get file metadata asynchronously."""
-        return await async_(self.get_metadata)(path, **kwargs)
+        return await async_(self.get_metadata_sync)(path, **kwargs)
 
     async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
-        """Read Arrow table asynchronously."""
-        return self.read_arrow(path, **kwargs)
+        """Read Arrow table asynchronously.
+
+        Uses async_() to offload blocking PyArrow I/O to thread pool.
+        """
+        return await async_(self.read_arrow_sync)(path, **kwargs)
 
     async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table asynchronously."""
-        self.write_arrow(path, table, **kwargs)
+        """Write Arrow table asynchronously.
+
+        Uses async_() to offload blocking PyArrow I/O to thread pool.
+        """
+        await async_(self.write_arrow_sync)(path, table, **kwargs)
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches asynchronously.
 
         Args:
             pattern: Glob pattern to match files.
-            **kwargs: Additional arguments passed to stream_arrow().
+            **kwargs: Additional arguments passed to stream_arrow_sync().
 
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-
-        return AsyncArrowBatchIterator(self.stream_arrow(pattern, **kwargs))
+        return AsyncArrowBatchIterator(self.stream_arrow_sync(pattern, **kwargs))
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
