@@ -170,16 +170,6 @@ def _(value: bytes, semantic_name: "str | None" = None) -> "TypedParameter":
     return TypedParameter(value, bytes, semantic_name)
 
 
-@_wrap_parameter_by_type.register(type(None))
-def _(value: None, semantic_name: "str | None" = None) -> None:
-    """Return None unchanged - NULL values don't need type wrapping.
-
-    This explicit handler prevents NoneType from falling through to the default
-    handler, which would wrap it in TypedParameter and cause issues with Arrow
-    type inference (creating mixed lists of TypedParameter and None).
-    """
-
-
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterInfo:
     """Metadata describing a single detected SQL parameter."""
@@ -469,7 +459,7 @@ class ParameterProfile:
 class ParameterProcessingResult:
     """Return container for parameter processing output."""
 
-    __slots__ = ("parameter_profile", "parameters", "parsed_expression", "sql", "sqlglot_sql")
+    __slots__ = ("input_named_parameters", "parameter_profile", "parameters", "parsed_expression", "sql", "sqlglot_sql")
 
     def __init__(
         self,
@@ -478,12 +468,14 @@ class ParameterProcessingResult:
         parameter_profile: "ParameterProfile",
         sqlglot_sql: str | None = None,
         parsed_expression: Any = None,
+        input_named_parameters: "tuple[str, ...] | None" = None,
     ) -> None:
         self.sql = sql
         self.parameters = parameters
         self.parameter_profile = parameter_profile
         self.sqlglot_sql = sqlglot_sql or sql
         self.parsed_expression = parsed_expression
+        self.input_named_parameters = input_named_parameters or ()
 
     def __iter__(self) -> "Generator[str | Any, Any, None]":
         yield self.sql
@@ -511,5 +503,6 @@ def is_iterable_parameters(obj: Any) -> bool:
 
 def wrap_with_type(value: Any, semantic_name: "str | None" = None) -> Any:
     """Wrap value with :class:`TypedParameter` if it benefits downstream processing."""
-
+    if value is None:
+        return None
     return _wrap_parameter_by_type(value, semantic_name)

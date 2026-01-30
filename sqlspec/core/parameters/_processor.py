@@ -251,7 +251,13 @@ class ParameterProcessor:
         return stats
 
     def _compile_static_script(
-        self, sql: str, parameters: "ParameterPayload", config: "ParameterStyleConfig", is_many: bool, cache_key: str
+        self,
+        sql: str,
+        parameters: "ParameterPayload",
+        config: "ParameterStyleConfig",
+        is_many: bool,
+        cache_key: str,
+        input_named_parameters: "tuple[str, ...]",
     ) -> "ParameterProcessingResult":
         coerced_params = parameters
         if config.type_coercion_map and parameters:
@@ -260,7 +266,13 @@ class ParameterProcessor:
         static_sql, static_params = self._converter.convert_placeholder_style(
             sql, coerced_params, ParameterStyle.STATIC, is_many, strict_named_parameters=config.strict_named_parameters
         )
-        result = ParameterProcessingResult(static_sql, static_params, ParameterProfile.empty(), sqlglot_sql=static_sql)
+        result = ParameterProcessingResult(
+            static_sql,
+            static_params,
+            ParameterProfile.empty(),
+            sqlglot_sql=static_sql,
+            input_named_parameters=input_named_parameters,
+        )
         return self._store_cached_result(cache_key, result)
 
     def _select_execution_style(
@@ -312,6 +324,7 @@ class ParameterProcessor:
         cached_profile: "ParameterProfile",
         config: "ParameterStyleConfig",
         *,
+        input_named_parameters: "tuple[str, ...]",
         is_many: bool,
         wrap_types: bool,
     ) -> "ConvertedParameters":
@@ -323,8 +336,9 @@ class ParameterProcessor:
 
         Args:
             parameters: New parameter payload to transform.
-            cached_profile: Cached ParameterProfile with named_parameters order.
+            cached_profile: Cached ParameterProfile with execution parameter metadata.
             config: Parameter style configuration.
+            input_named_parameters: Cached input named parameter order.
             is_many: Whether this is execute_many.
             wrap_types: Whether to wrap parameters with type metadata.
 
@@ -344,18 +358,21 @@ class ParameterProcessor:
         if config.type_coercion_map and processed:
             processed = self._coerce_parameter_types(processed, config.type_coercion_map, is_many)
 
-        # Step 3: Named-to-positional mapping if cached SQL uses positional placeholders
-        # but input is a named dict
-        if cached_profile.named_parameters and processed:
-            processed = self._map_named_to_positional(processed, cached_profile.named_parameters, is_many)
+        # Step 3: Named-to-positional mapping only when cached SQL uses positional placeholders.
+        if input_named_parameters and processed:
+            positional_styles = {
+                ParameterStyle.QMARK.value,
+                ParameterStyle.NUMERIC.value,
+                ParameterStyle.POSITIONAL_COLON.value,
+                ParameterStyle.POSITIONAL_PYFORMAT.value,
+            }
+            if any(style in positional_styles for style in cached_profile.styles):
+                processed = self._map_named_to_positional(processed, input_named_parameters, is_many)
 
         return processed
 
     def _map_named_to_positional(
-        self,
-        parameters: "ConvertedParameters",
-        named_order: "tuple[str, ...]",
-        is_many: bool,
+        self, parameters: "ConvertedParameters", named_order: "tuple[str, ...]", is_many: bool
     ) -> "ConvertedParameters":
         """Map named parameters (dict) to positional (tuple) using cached order.
 
@@ -550,6 +567,7 @@ class ParameterProcessor:
                     parameters,
                     cached_result.parameter_profile,
                     config,
+                    input_named_parameters=cached_result.input_named_parameters,
                     is_many=is_many,
                     wrap_types=wrap_types,
                 )
@@ -563,6 +581,7 @@ class ParameterProcessor:
                     cached_result.parameter_profile,
                     sqlglot_sql=cached_result.sqlglot_sql,
                     parsed_expression=cached_result.parsed_expression,
+                    input_named_parameters=cached_result.input_named_parameters,
                 )
             self._cache_misses += 1
 
@@ -570,8 +589,12 @@ class ParameterProcessor:
         original_styles = {p.style for p in param_info} if param_info else set()
         needs_execution_conversion = self._needs_execution_placeholder_conversion(param_info, config)
 
+        input_named_parameters = tuple(p.name for p in param_info if p.name is not None)
+
         if config.needs_static_script_compilation and param_info and parameters and not is_many:
-            return self._compile_static_script(sql, parameters, config, is_many, cache_key)
+            return self._compile_static_script(
+                sql, parameters, config, is_many, cache_key, input_named_parameters=input_named_parameters
+            )
 
         requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
         if (
@@ -587,6 +610,7 @@ class ParameterProcessor:
                 ParameterProfile(param_info),
                 sqlglot_sql=normalized_sql,
                 parsed_expression=parsed_expression,
+                input_named_parameters=input_named_parameters,
             )
             return self._store_cached_result(cache_key, result)
 
@@ -628,6 +652,7 @@ class ParameterProcessor:
             final_profile,
             sqlglot_sql=sqlglot_sql,
             parsed_expression=parsed_expression,
+            input_named_parameters=input_named_parameters,
         )
 
         return self._store_cached_result(cache_key, result)
