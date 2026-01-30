@@ -23,6 +23,7 @@ from sqlspec.core.parameters import (
     ParameterProfile,
     structural_fingerprint,
     validate_parameter_alignment,
+    value_fingerprint,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import get_value_attribute
@@ -779,8 +780,14 @@ class SQLProcessor:
         Returns:
             Cache key string
         """
-        # Use structural fingerprint (keys + types, not values) for better cache hit rates
-        param_fingerprint = structural_fingerprint(parameters, is_many)
+        # For static script compilation, parameter VALUES are embedded in the SQL string,
+        # so different values produce different compiled SQL. Must use value_fingerprint
+        # to avoid returning cached SQL with stale embedded values.
+        if self._config.parameter_config.needs_static_script_compilation:
+            param_fingerprint = value_fingerprint(parameters)
+        else:
+            # Use structural fingerprint (keys + types, not values) for better cache hit rates
+            param_fingerprint = structural_fingerprint(parameters, is_many)
         dialect_str = str(self._config.dialect) if self._config.dialect else None
         # Include both input and execution parameter styles to avoid cache collisions
         # (e.g., MySQL asyncmy uses ? for input but %s for execution)

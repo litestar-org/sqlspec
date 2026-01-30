@@ -152,13 +152,10 @@ def test_pymysql_statement_stack(pymysql_driver: PyMysqlDriver) -> None:
     assert data[0]["total"] == 2
 
 
-@pytest.mark.skip(reason="PyMySQL transaction rollback behavior needs investigation with thread-local pooling")
 def test_pymysql_transactions(pymysql_transaction_config: "PyMysqlConfig") -> None:
     """Test transaction management (begin, commit, rollback).
 
     Note: Uses a dedicated fixture with autocommit=False for proper transaction support.
-    This test is currently skipped due to issues with pymysql's rollback behavior
-    when using thread-local connection pooling.
     """
     import uuid
 

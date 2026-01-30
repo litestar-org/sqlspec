@@ -160,7 +160,6 @@ def test_mysqlconnector_sync_statement_stack(mysqlconnector_sync_driver: MysqlCo
     assert data[0]["total"] == 2
 
 
-@pytest.mark.skip(reason="MySQL Connector transaction rollback behavior needs investigation with connection pooling")
 def test_mysqlconnector_sync_transactions(
     mysqlconnector_sync_transaction_config: "MysqlConnectorSyncConfig",
 ) -> None:

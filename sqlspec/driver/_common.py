@@ -26,7 +26,7 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import structural_fingerprint
+from sqlspec.core.parameters import structural_fingerprint, value_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
@@ -1446,7 +1446,13 @@ class CommonDriverAttributesMixin:
             except TypeError:
                 pass
 
-        params_fingerprint = structural_fingerprint(params)
+        # For static script compilation, parameter VALUES are embedded in the SQL string,
+        # so different values produce different compiled SQL. Must use value_fingerprint
+        # to avoid returning cached SQL with stale embedded values.
+        if config.parameter_config.needs_static_script_compilation:
+            params_fingerprint = value_fingerprint(params)
+        else:
+            params_fingerprint = structural_fingerprint(params)
         base_hash = hash((statement.sql, params_fingerprint, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 

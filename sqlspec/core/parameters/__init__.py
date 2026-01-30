@@ -8,7 +8,11 @@ from sqlspec.core.parameters._alignment import (
     validate_parameter_alignment,
 )
 from sqlspec.core.parameters._converter import ParameterConverter
-from sqlspec.core.parameters._processor import ParameterProcessor, structural_fingerprint
+from sqlspec.core.parameters._processor import (
+    ParameterProcessor,
+    structural_fingerprint,
+    value_fingerprint,
+)
 from sqlspec.core.parameters._registry import (
     DRIVER_PARAMETER_PROFILES,
     build_statement_config_from_profile,
@@ -67,5 +71,6 @@ __all__ = (
     "replace_placeholders_with_literals",
     "structural_fingerprint",
     "validate_parameter_alignment",
+    "value_fingerprint",
     "wrap_with_type",
 )

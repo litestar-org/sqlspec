@@ -22,7 +22,7 @@ from sqlspec.core.parameters._types import (
 )
 from sqlspec.core.parameters._validator import ParameterValidator
 
-__all__ = ("ParameterProcessor", "structural_fingerprint")
+__all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
 
 # Threshold for sampling execute_many parameters instead of full iteration
 _EXECUTE_MANY_SAMPLE_THRESHOLD = 10
@@ -111,6 +111,21 @@ def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False
         Deterministic fingerprint string derived from parameter structure.
     """
     return _structural_fingerprint(parameters, is_many)
+
+
+def value_fingerprint(parameters: "ParameterPayload") -> str:
+    """Return a value-based fingerprint for parameter payloads.
+
+    Unlike structural_fingerprint, this includes actual parameter VALUES in the hash.
+    Used for static script compilation where SQL has values embedded directly.
+
+    Args:
+        parameters: Original parameter payload supplied by the caller.
+
+    Returns:
+        Deterministic fingerprint string including parameter values.
+    """
+    return _value_fingerprint(parameters)
 
 
 def _value_fingerprint(parameters: "ParameterPayload") -> str:
