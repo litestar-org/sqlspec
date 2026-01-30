@@ -782,11 +782,18 @@ class SQLProcessor:
         # Use structural fingerprint (keys + types, not values) for better cache hit rates
         param_fingerprint = structural_fingerprint(parameters, is_many)
         dialect_str = str(self._config.dialect) if self._config.dialect else None
-        param_style = self._config.parameter_config.default_parameter_style.value
+        # Include both input and execution parameter styles to avoid cache collisions
+        # (e.g., MySQL asyncmy uses ? for input but %s for execution)
+        input_style = self._config.parameter_config.default_parameter_style.value
+        exec_style = (
+            self._config.parameter_config.default_execution_parameter_style.value
+            if self._config.parameter_config.default_execution_parameter_style
+            else input_style
+        )
 
         # Exclude enable_parsing and enable_transformations from hash_data as they are
         # per-config static flags, not per-statement - they belong in pipeline key only
-        hash_data = (sql, param_fingerprint, param_style, dialect_str, is_many)
+        hash_data = (sql, param_fingerprint, input_style, exec_style, dialect_str, is_many)
 
         hash_str = hashlib.blake2b(repr(hash_data).encode("utf-8"), digest_size=8).hexdigest()
         return f"sql_{hash_str}"

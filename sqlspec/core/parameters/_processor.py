@@ -354,9 +354,23 @@ class ParameterProcessor:
         # Use structural fingerprint (keys + types, not values) for better cache hit rates
         param_fingerprint = _structural_fingerprint(parameters, is_many)
         dialect_marker = dialect or "default"
-        default_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
+        # Include both input and execution parameter styles to avoid cache collisions
+        # (e.g., MySQL asyncmy uses ? for input but %s for execution)
+        input_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
+        exec_style = (
+            config.default_execution_parameter_style.value if config.default_execution_parameter_style else input_style
+        )
         # Use blake2b hash of tuple components for compact, deterministic cache keys
-        hash_data = (sql, param_fingerprint, default_style, is_many, dialect_marker, wrap_types, normalize_for_parsing)
+        hash_data = (
+            sql,
+            param_fingerprint,
+            input_style,
+            exec_style,
+            is_many,
+            dialect_marker,
+            wrap_types,
+            normalize_for_parsing,
+        )
         return hashlib.blake2b(repr(hash_data).encode(), digest_size=16).hexdigest()
 
     def process(

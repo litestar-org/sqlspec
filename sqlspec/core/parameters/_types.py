@@ -170,6 +170,16 @@ def _(value: bytes, semantic_name: "str | None" = None) -> "TypedParameter":
     return TypedParameter(value, bytes, semantic_name)
 
 
+@_wrap_parameter_by_type.register(type(None))
+def _(value: None, semantic_name: "str | None" = None) -> None:
+    """Return None unchanged - NULL values don't need type wrapping.
+
+    This explicit handler prevents NoneType from falling through to the default
+    handler, which would wrap it in TypedParameter and cause issues with Arrow
+    type inference (creating mixed lists of TypedParameter and None).
+    """
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterInfo:
     """Metadata describing a single detected SQL parameter."""
