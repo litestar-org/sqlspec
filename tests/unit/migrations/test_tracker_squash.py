@@ -106,9 +106,7 @@ class TestSyncTrackerSquashMethods:
         driver.execute.return_value = Mock(data=[{"version_num": "0001"}, {"version_num": "0002"}])
 
         result = tracker.is_squash_already_applied(
-            driver=driver,
-            squashed_version="0001",
-            replaced_versions=["0001", "0002", "0003"],
+            driver=driver, squashed_version="0001", replaced_versions=["0001", "0002", "0003"]
         )
 
         assert result is True
@@ -122,9 +120,7 @@ class TestSyncTrackerSquashMethods:
         driver.execute.return_value = Mock(data=[])
 
         result = tracker.is_squash_already_applied(
-            driver=driver,
-            squashed_version="0001",
-            replaced_versions=["0001", "0002", "0003"],
+            driver=driver, squashed_version="0001", replaced_versions=["0001", "0002", "0003"]
         )
 
         assert result is False
@@ -179,9 +175,7 @@ class TestAsyncTrackerSquashMethods:
         driver.execute = mock_execute
 
         result = await tracker.is_squash_already_applied(
-            driver=driver,
-            squashed_version="0001",
-            replaced_versions=["0001", "0002", "0003"],
+            driver=driver, squashed_version="0001", replaced_versions=["0001", "0002", "0003"]
         )
 
         assert result is True
@@ -200,9 +194,7 @@ class TestAsyncTrackerSquashMethods:
         driver.execute = mock_execute
 
         result = await tracker.is_squash_already_applied(
-            driver=driver,
-            squashed_version="0001",
-            replaced_versions=["0001", "0002", "0003"],
+            driver=driver, squashed_version="0001", replaced_versions=["0001", "0002", "0003"]
         )
 
         assert result is False
