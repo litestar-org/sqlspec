@@ -160,9 +160,7 @@ def test_mysqlconnector_sync_statement_stack(mysqlconnector_sync_driver: MysqlCo
     assert data[0]["total"] == 2
 
 
-def test_mysqlconnector_sync_transactions(
-    mysqlconnector_sync_transaction_config: "MysqlConnectorSyncConfig",
-) -> None:
+def test_mysqlconnector_sync_transactions(mysqlconnector_sync_transaction_config: "MysqlConnectorSyncConfig") -> None:
     """Test transaction management (begin, commit, rollback).
 
     Note: Uses a dedicated fixture with autocommit=False for proper transaction support.
