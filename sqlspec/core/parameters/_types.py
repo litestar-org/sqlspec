@@ -459,7 +459,15 @@ class ParameterProfile:
 class ParameterProcessingResult:
     """Return container for parameter processing output."""
 
-    __slots__ = ("input_named_parameters", "parameter_profile", "parameters", "parsed_expression", "sql", "sqlglot_sql")
+    __slots__ = (
+        "applied_wrap_types",
+        "input_named_parameters",
+        "parameter_profile",
+        "parameters",
+        "parsed_expression",
+        "sql",
+        "sqlglot_sql",
+    )
 
     def __init__(
         self,
@@ -469,6 +477,7 @@ class ParameterProcessingResult:
         sqlglot_sql: str | None = None,
         parsed_expression: Any = None,
         input_named_parameters: "tuple[str, ...] | None" = None,
+        applied_wrap_types: bool = False,
     ) -> None:
         self.sql = sql
         self.parameters = parameters
@@ -476,6 +485,7 @@ class ParameterProcessingResult:
         self.sqlglot_sql = sqlglot_sql or sql
         self.parsed_expression = parsed_expression
         self.input_named_parameters = input_named_parameters or ()
+        self.applied_wrap_types = applied_wrap_types
 
     def __iter__(self) -> "Generator[str | Any, Any, None]":
         yield self.sql

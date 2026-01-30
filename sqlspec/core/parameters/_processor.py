@@ -272,6 +272,7 @@ class ParameterProcessor:
             ParameterProfile.empty(),
             sqlglot_sql=static_sql,
             input_named_parameters=input_named_parameters,
+            applied_wrap_types=False,
         )
         return self._store_cached_result(cache_key, result)
 
@@ -326,7 +327,7 @@ class ParameterProcessor:
         *,
         input_named_parameters: "tuple[str, ...]",
         is_many: bool,
-        wrap_types: bool,
+        apply_wrap_types: bool,
     ) -> "ConvertedParameters":
         """Apply parameter transformations for a cache hit.
 
@@ -340,7 +341,7 @@ class ParameterProcessor:
             config: Parameter style configuration.
             input_named_parameters: Cached input named parameter order.
             is_many: Whether this is execute_many.
-            wrap_types: Whether to wrap parameters with type metadata.
+            apply_wrap_types: Whether to wrap parameters with type metadata.
 
         Returns:
             Transformed parameters matching the cached SQL's placeholder format.
@@ -351,7 +352,7 @@ class ParameterProcessor:
         processed: ConvertedParameters = parameters  # type: ignore[assignment]
 
         # Step 1: Type wrapping (must happen before coercion)
-        if wrap_types and processed:
+        if apply_wrap_types and processed:
             processed = self._wrap_parameter_types(processed)
 
         # Step 2: Type coercion
@@ -569,7 +570,7 @@ class ParameterProcessor:
                     config,
                     input_named_parameters=cached_result.input_named_parameters,
                     is_many=is_many,
-                    wrap_types=wrap_types,
+                    apply_wrap_types=cached_result.applied_wrap_types,
                 )
                 # Apply output transformer if present (it may further transform params)
                 final_sql = cached_result.sql
@@ -582,6 +583,7 @@ class ParameterProcessor:
                     sqlglot_sql=cached_result.sqlglot_sql,
                     parsed_expression=cached_result.parsed_expression,
                     input_named_parameters=cached_result.input_named_parameters,
+                    applied_wrap_types=cached_result.applied_wrap_types,
                 )
             self._cache_misses += 1
 
@@ -611,6 +613,7 @@ class ParameterProcessor:
                 sqlglot_sql=normalized_sql,
                 parsed_expression=parsed_expression,
                 input_named_parameters=input_named_parameters,
+                applied_wrap_types=False,
             )
             return self._store_cached_result(cache_key, result)
 
@@ -626,8 +629,10 @@ class ParameterProcessor:
                 strict_named_parameters=config.strict_named_parameters,
             )
 
+        applied_wrap_types = False
         if processed_parameters and wrap_types:
             processed_parameters = self._wrap_parameter_types(processed_parameters)
+            applied_wrap_types = True
 
         if config.type_coercion_map and processed_parameters:
             processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
@@ -653,6 +658,7 @@ class ParameterProcessor:
             sqlglot_sql=sqlglot_sql,
             parsed_expression=parsed_expression,
             input_named_parameters=input_named_parameters,
+            applied_wrap_types=applied_wrap_types,
         )
 
         return self._store_cached_result(cache_key, result)
