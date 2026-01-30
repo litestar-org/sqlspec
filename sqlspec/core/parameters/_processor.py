@@ -562,6 +562,19 @@ class ParameterProcessor:
             if cached_result is not None:
                 self._cache.move_to_end(cache_key)
                 self._cache_hits += 1
+                # For static script compilation, parameters are embedded directly in SQL.
+                # Cache key includes parameter values, so a hit means same SQL with same values.
+                # Return None for parameters since the driver shouldn't receive any.
+                if config.needs_static_script_compilation:
+                    return ParameterProcessingResult(
+                        cached_result.sql,
+                        None,
+                        cached_result.parameter_profile,
+                        sqlglot_sql=cached_result.sqlglot_sql,
+                        parsed_expression=cached_result.parsed_expression,
+                        input_named_parameters=cached_result.input_named_parameters,
+                        applied_wrap_types=cached_result.applied_wrap_types,
+                    )
                 # Return cached SQL transformation with NEW parameters transformed
                 # to match the cached SQL's placeholder format
                 transformed_params = self._transform_cached_parameters(

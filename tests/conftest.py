@@ -130,3 +130,13 @@ def anyio_backend() -> str:
 @pytest.fixture(autouse=True)
 def disable_sync_to_thread_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITESTAR_WARN_IMPLICIT_SYNC_TO_THREAD", "0")
+
+
+@pytest.fixture(autouse=True)
+def clear_sql_caches() -> Generator[None, None, None]:
+    """Clear SQL caches before each test to ensure isolation."""
+    from sqlspec.core.cache import clear_all_caches
+
+    clear_all_caches()
+    yield
+    clear_all_caches()
