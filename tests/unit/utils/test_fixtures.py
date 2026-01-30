@@ -387,7 +387,7 @@ def test_write_fixture_with_custom_backend(mock_registry: Mock) -> None:
 
     # Verify storage backend was called correctly
     mock_registry.get.assert_called_once_with("s3://bucket", custom_param="value")
-    mock_storage.write_text.assert_called_once()
+    mock_storage.write_text_sync.assert_called_once()
 
 
 async def test_write_fixture_async_dict(tmp_path: Path) -> None:
