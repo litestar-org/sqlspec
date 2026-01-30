@@ -21,7 +21,7 @@ import sqlspec.exceptions
 from sqlspec.core.parameters import (
     ParameterProcessor,
     ParameterProfile,
-    fingerprint_parameters,
+    structural_fingerprint,
     validate_parameter_alignment,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -349,11 +349,26 @@ class SQLProcessor:
         cache_key = self._make_cache_key(sql, parameters, is_many)
 
         if cache_key in self._cache:
-            result = self._cache[cache_key]
+            cached_result = self._cache[cache_key]
             del self._cache[cache_key]
-            self._cache[cache_key] = result
+            self._cache[cache_key] = cached_result
             self._cache_hits += 1
-            return result
+            # Structural fingerprinting means same SQL structure = same cache entry,
+            # but we must still process the caller's actual parameter values
+            dialect_str = str(self._config.dialect) if self._config.dialect else None
+            _, processed_params, _, _ = self._prepare_parameters(sql, parameters, is_many, dialect_str)
+            # Return cached compilation metadata with NEW parameters
+            return CompiledSQL(
+                compiled_sql=cached_result.compiled_sql,
+                execution_parameters=processed_params,
+                operation_type=cached_result.operation_type,
+                expression=cached_result.expression,
+                parameter_style=cached_result.parameter_style,
+                supports_many=cached_result.supports_many,
+                parameter_casts=cached_result.parameter_casts,
+                parameter_profile=cached_result.parameter_profile,
+                operation_profile=cached_result.operation_profile,
+            )
 
         self._cache_misses += 1
         result = self._compile_uncached(sql, parameters, is_many, expression)
@@ -602,6 +617,7 @@ class SQLProcessor:
         if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
             return processed_sql, processed_params, parameter_profile
         if ast_was_transformed and expression is not None:
+            # Pass the transformed expression through the pipeline to avoid re-parsing
             transformed_result = self._parameter_processor.process_for_execution(
                 sql=expression.sql(dialect=dialect_str),
                 parameters=parameters,
@@ -609,6 +625,7 @@ class SQLProcessor:
                 dialect=dialect_str,
                 is_many=is_many,
                 wrap_types=self._config.enable_parameter_type_wrapping,
+                parsed_expression=expression,
             )
             final_sql = transformed_result.sql
             final_params = transformed_result.parameters
@@ -762,20 +779,14 @@ class SQLProcessor:
         Returns:
             Cache key string
         """
-
-        param_fingerprint = fingerprint_parameters(parameters)
+        # Use structural fingerprint (keys + types, not values) for better cache hit rates
+        param_fingerprint = structural_fingerprint(parameters, is_many)
         dialect_str = str(self._config.dialect) if self._config.dialect else None
         param_style = self._config.parameter_config.default_parameter_style.value
 
-        hash_data = (
-            sql,
-            param_fingerprint,
-            param_style,
-            dialect_str,
-            self._config.enable_parsing,
-            self._config.enable_transformations,
-            is_many,
-        )
+        # Exclude enable_parsing and enable_transformations from hash_data as they are
+        # per-config static flags, not per-statement - they belong in pipeline key only
+        hash_data = (sql, param_fingerprint, param_style, dialect_str, is_many)
 
         hash_str = hashlib.blake2b(repr(hash_data).encode("utf-8"), digest_size=8).hexdigest()
         return f"sql_{hash_str}"
@@ -924,7 +935,8 @@ class SQLProcessor:
 
     def _make_parse_cache_key(self, sql: str, dialect: "str | None") -> str:
         dialect_marker = dialect or "default"
-        hash_str = hashlib.sha256(f"{dialect_marker}:{sql}".encode()).hexdigest()[:16]
+        # Use blake2b instead of sha256 for faster hashing (~50% faster)
+        hash_str = hashlib.blake2b(f"{dialect_marker}:{sql}".encode(), digest_size=8).hexdigest()
         return f"parse_{hash_str}"
 
     @property

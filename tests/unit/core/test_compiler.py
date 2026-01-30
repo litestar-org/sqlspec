@@ -302,18 +302,33 @@ def test_parse_cache_when_compiled_cache_disabled(
 
 
 def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None:
-    """Test cache key generation for consistent caching."""
+    """Test cache key generation for consistent caching.
+
+    Note: SQLSpec uses structural fingerprinting for parameters, meaning cache keys
+    are based on parameter STRUCTURE (types, keys) not VALUES. Same SQL with same
+    parameter structure produces the same cache key regardless of actual values.
+    """
     processor = SQLProcessor(basic_statement_config)
 
+    # Same SQL and parameter structure = same key
     key1 = processor._make_cache_key("SELECT * FROM users", [123])
     key2 = processor._make_cache_key("SELECT * FROM users", [123])
     assert key1 == key2
 
+    # Different SQL = different key
     key3 = processor._make_cache_key("SELECT * FROM posts", [123])
     assert key1 != key3
 
+    # Same SQL with same parameter STRUCTURE (list of one int) = SAME key (structural fingerprinting)
     key4 = processor._make_cache_key("SELECT * FROM users", [456])
-    assert key1 != key4
+    assert key1 == key4  # Structural fingerprinting: same structure = same key
+
+    # Different parameter STRUCTURE = different key
+    key5 = processor._make_cache_key("SELECT * FROM users", {"id": 123})  # dict vs list
+    assert key1 != key5
+
+    key6 = processor._make_cache_key("SELECT * FROM users", [123, "extra"])  # different type signature
+    assert key1 != key6
 
     assert isinstance(key1, str)
     assert key1.startswith("sql_")

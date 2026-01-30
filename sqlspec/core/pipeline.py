@@ -1,5 +1,6 @@
 """Shared statement pipeline registry and instrumentation."""
 
+import hashlib
 import os
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Final
@@ -286,7 +287,7 @@ class StatementPipelineRegistry:
             param_config.preserve_parameter_format,
             param_config.preserve_original_params_for_many,
         )
-        fingerprint = hash(finger_components)
+        fingerprint = hashlib.blake2b(repr(finger_components).encode(), digest_size=8).hexdigest()
         return f"pipeline::{fingerprint}"
 
 

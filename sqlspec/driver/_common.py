@@ -26,7 +26,7 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import fingerprint_parameters
+from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
@@ -1365,7 +1365,27 @@ class CommonDriverAttributesMixin:
             cache = get_cache()
             cached_result = cache.get_statement(cache_key, dialect_key)
             if cached_result is not None and isinstance(cached_result, CachedStatement):
-                return cached_result, cached_result.parameters
+                # Structural fingerprinting means same SQL structure = same cache entry,
+                # but we must still use the caller's actual parameter values.
+                # Recompile with the NEW parameters to get correctly processed values.
+                prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
+                _, execution_parameters = prepared_statement.compile()
+                prepared_parameters = self.prepare_driver_parameters(
+                    execution_parameters,
+                    statement_config,
+                    is_many=prepared_statement.is_many,
+                    prepared_statement=prepared_statement,
+                )
+                # Return cached SQL metadata but with newly processed parameters
+                cached_parameters = (
+                    tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
+                )
+                updated_cached = CachedStatement(
+                    compiled_sql=cached_result.compiled_sql,
+                    parameters=cached_parameters,
+                    expression=cached_result.expression,
+                )
+                return updated_cached, cached_parameters
 
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
@@ -1426,7 +1446,7 @@ class CommonDriverAttributesMixin:
             except TypeError:
                 pass
 
-        params_fingerprint = fingerprint_parameters(params)
+        params_fingerprint = structural_fingerprint(params)
         base_hash = hash((statement.sql, params_fingerprint, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 

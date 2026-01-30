@@ -135,19 +135,28 @@ class ParameterConverter:
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
-        converted_sql = sql
+        # Sort by position for forward iteration (O(n) string building)
+        sorted_params = sorted(param_info, key=lambda p: p.position)
         placeholder_text_len_cache: dict[str, int] = {}
-        for param in reversed(param_info):
+        # Build SQL using forward iteration with list join (O(n) vs O(n^2) string slicing)
+        segments: list[str] = []
+        last_end = 0
+
+        is_positional_style = target_style in {
+            ParameterStyle.QMARK,
+            ParameterStyle.NUMERIC,
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.POSITIONAL_COLON,
+        }
+
+        for param in sorted_params:
+            # Cache placeholder text length
             if param.placeholder_text not in placeholder_text_len_cache:
                 placeholder_text_len_cache[param.placeholder_text] = len(param.placeholder_text)
             text_len = placeholder_text_len_cache[param.placeholder_text]
 
-            if target_style in {
-                ParameterStyle.QMARK,
-                ParameterStyle.NUMERIC,
-                ParameterStyle.POSITIONAL_PYFORMAT,
-                ParameterStyle.POSITIONAL_COLON,
-            }:
+            # Generate new placeholder based on target style
+            if is_positional_style:
                 param_key = (
                     f"{param.placeholder_text}_{param.ordinal}"
                     if use_sequential_for_qmark and param.style == ParameterStyle.QMARK
@@ -160,11 +169,14 @@ class ParameterConverter:
                     param_name = f"param_{param.ordinal}"
                 new_placeholder = generator(param_name)
 
-            converted_sql = (
-                converted_sql[: param.position] + new_placeholder + converted_sql[param.position + text_len :]
-            )
+            # Append segment before this placeholder and the new placeholder
+            segments.extend((sql[last_end : param.position], new_placeholder))
+            last_end = param.position + text_len
 
-        return converted_sql
+        # Append remaining SQL after last placeholder
+        segments.append(sql[last_end:])
+
+        return "".join(segments)
 
     def _convert_sequence_to_dict(
         self, parameters: "ParameterSequence", param_info: "list[ParameterInfo]"

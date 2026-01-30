@@ -459,15 +459,21 @@ class ParameterProfile:
 class ParameterProcessingResult:
     """Return container for parameter processing output."""
 
-    __slots__ = ("parameter_profile", "parameters", "sql", "sqlglot_sql")
+    __slots__ = ("parameter_profile", "parameters", "parsed_expression", "sql", "sqlglot_sql")
 
     def __init__(
-        self, sql: str, parameters: Any, parameter_profile: "ParameterProfile", sqlglot_sql: str | None = None
+        self,
+        sql: str,
+        parameters: Any,
+        parameter_profile: "ParameterProfile",
+        sqlglot_sql: str | None = None,
+        parsed_expression: Any = None,
     ) -> None:
         self.sql = sql
         self.parameters = parameters
         self.parameter_profile = parameter_profile
         self.sqlglot_sql = sqlglot_sql or sql
+        self.parsed_expression = parsed_expression
 
     def __iter__(self) -> "Generator[str | Any, Any, None]":
         yield self.sql
