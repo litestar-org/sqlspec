@@ -906,8 +906,22 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @dry_run_option
     @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
     @click.option("--no-database", is_flag=True, help="Skip database record updates")
+    @click.option("--allow-gaps", is_flag=True, help="Allow gaps in version sequence")
+    @click.option(
+        "--output-format",
+        type=click.Choice(["sql", "py"], case_sensitive=False),
+        default="sql",
+        help="Output format for squashed migration (default: sql)",
+    )
     def squash_migrations(
-        bind_key: str | None, version_range: str, message: str, dry_run: bool, yes: bool, no_database: bool
+        bind_key: str | None,
+        version_range: str,
+        message: str,
+        dry_run: bool,
+        yes: bool,
+        no_database: bool,
+        allow_gaps: bool,
+        output_format: str,
     ) -> None:
         """Squash multiple sequential migrations into a single file.
 
@@ -941,6 +955,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 dry_run=dry_run,
                 update_database=not no_database,
                 yes=yes,
+                allow_gaps=allow_gaps,
+                output_format=output_format,
             )
 
         async def async_squash() -> None:
@@ -951,6 +967,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 dry_run=dry_run,
                 update_database=not no_database,
                 yes=yes,
+                allow_gaps=allow_gaps,
+                output_format=output_format,
             )
 
         _execute_for_config(sqlspec_config, sync_squash, async_squash)

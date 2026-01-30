@@ -137,8 +137,10 @@ class TestPlanSquash:
         ]
 
         squasher = MigrationSquasher(tmp_path, runner)
-        plan = squasher.plan_squash("0001", "0003", "release_1")
+        plans = squasher.plan_squash("0001", "0003", "release_1")
 
+        assert len(plans) == 1
+        plan = plans[0]
         assert plan.target_version == "0001"
         assert plan.description == "release_1"
         assert len(plan.source_migrations) == 3
@@ -165,8 +167,10 @@ class TestPlanSquash:
         ]
 
         squasher = MigrationSquasher(tmp_path, runner)
-        plan = squasher.plan_squash("0002", "0003", "feature_users")
+        plans = squasher.plan_squash("0002", "0003", "feature_users")
 
+        assert len(plans) == 1
+        plan = plans[0]
         assert plan.target_version == "0002"
         assert len(plan.source_migrations) == 2
         assert plan.source_versions == ["0002", "0003"]
@@ -247,8 +251,10 @@ class TestPlanSquash:
         runner.get_migration_files.return_value = [("0001", tmp_path / "0001_initial.sql")]
 
         squasher = MigrationSquasher(tmp_path, runner)
-        plan = squasher.plan_squash("0001", "0001", "single")
+        plans = squasher.plan_squash("0001", "0001", "single")
 
+        assert len(plans) == 1
+        plan = plans[0]
         assert len(plan.source_migrations) == 1
         assert plan.source_versions == ["0001"]
 
@@ -499,7 +505,7 @@ class TestApplySquash:
             source_versions=["0001", "0002"],
         )
 
-        squasher.apply_squash(plan, dry_run=True)
+        squasher.apply_squash([plan], dry_run=True)
 
         # Original files should still exist
         assert (tmp_path / "0001_initial.sql").exists()
@@ -538,7 +544,7 @@ class TestApplySquash:
             source_versions=["0001", "0002"],
         )
 
-        squasher.apply_squash(plan, dry_run=False)
+        squasher.apply_squash([plan], dry_run=False)
 
         # Target should be created
         assert (tmp_path / "0001_release.sql").exists()
@@ -577,7 +583,7 @@ class TestApplySquash:
             source_versions=["0001", "0002"],
         )
 
-        squasher.apply_squash(plan, dry_run=False)
+        squasher.apply_squash([plan], dry_run=False)
 
         # Source files should be deleted
         assert not (tmp_path / "0001_initial.sql").exists()
@@ -608,7 +614,7 @@ class TestApplySquash:
             source_versions=["0001"],
         )
 
-        squasher.apply_squash(plan, dry_run=False)
+        squasher.apply_squash([plan], dry_run=False)
 
         # Backup should have been created and cleaned up on success
         # (no backup directory should remain after successful operation)

@@ -34,12 +34,7 @@ class TestSyncMigrationCommandsSquash:
 
         commands = SyncMigrationCommands(config)
 
-        commands.squash(
-            start_version="0001",
-            end_version="0003",
-            description="release_1",
-            dry_run=True,
-        )
+        commands.squash(start_version="0001", end_version="0003", description="release_1", dry_run=True)
 
     def test_squash_invalid_range_raises_error(self, tmp_path: Path) -> None:
         """Test squash raises error when end version is before start."""
@@ -59,11 +54,7 @@ class TestSyncMigrationCommandsSquash:
         commands = SyncMigrationCommands(config)
 
         with pytest.raises(SquashValidationError, match="Invalid range"):
-            commands.squash(
-                start_version="0003",
-                end_version="0001",
-                description="release",
-            )
+            commands.squash(start_version="0003", end_version="0001", description="release")
 
     def test_squash_dry_run_does_not_modify_files(self, tmp_path: Path) -> None:
         """Test dry_run mode previews without modifying files."""
@@ -80,12 +71,7 @@ class TestSyncMigrationCommandsSquash:
         config.get_observability_runtime = Mock(return_value=None)
 
         commands = SyncMigrationCommands(config)
-        commands.squash(
-            start_version="0001",
-            end_version="0002",
-            description="release",
-            dry_run=True,
-        )
+        commands.squash(start_version="0001", end_version="0002", description="release", dry_run=True)
 
         assert (tmp_path / "0001_initial.sql").exists()
         assert (tmp_path / "0002_users.sql").exists()
@@ -107,11 +93,7 @@ class TestSyncMigrationCommandsSquash:
 
         commands = SyncMigrationCommands(config)
         commands.squash(
-            start_version="0001",
-            end_version="0002",
-            description="release",
-            update_database=False,
-            dry_run=True,
+            start_version="0001", end_version="0002", description="release", update_database=False, dry_run=True
         )
 
         config.provide_session.assert_not_called()
@@ -136,12 +118,7 @@ class TestAsyncMigrationCommandsSquash:
 
         commands = AsyncMigrationCommands(config)
 
-        await commands.squash(
-            start_version="0001",
-            end_version="0002",
-            description="release",
-            dry_run=True,
-        )
+        await commands.squash(start_version="0001", end_version="0002", description="release", dry_run=True)
 
     @pytest.mark.anyio
     async def test_async_squash_invalid_range_raises_error(self, tmp_path: Path) -> None:
@@ -161,8 +138,4 @@ class TestAsyncMigrationCommandsSquash:
         commands = AsyncMigrationCommands(config)
 
         with pytest.raises(SquashValidationError, match="Invalid range"):
-            await commands.squash(
-                start_version="0003",
-                end_version="0001",
-                description="release",
-            )
+            await commands.squash(start_version="0003", end_version="0001", description="release")
