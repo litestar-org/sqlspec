@@ -1,5 +1,6 @@
 """SQL statement and configuration management."""
 
+import hashlib
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
@@ -1154,8 +1155,12 @@ class SQL:
         should_prune = prune_columns if prune_columns is not None else self._statement_config.enable_column_pruning
 
         if should_prune:
-            # Generate cache key using expression id to avoid expensive .sql() call
-            cache_key = f"prune:{id(new_expr)}" if self._statement_config.enable_caching else None
+            if self._statement_config.enable_caching:
+                # Use stable content-based key instead of object id (which can be reused after GC)
+                expr_sql = new_expr.sql(dialect=self._dialect)
+                cache_key = f"prune:{hashlib.blake2b(expr_sql.encode(), digest_size=8).hexdigest()}"
+            else:
+                cache_key = None
             new_expr = apply_column_pruning(new_expr, dialect=self._dialect, cache_key=cache_key)
 
         return self._create_modified_copy_with_expression(new_expr)

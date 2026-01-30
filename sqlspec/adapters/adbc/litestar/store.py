@@ -310,10 +310,19 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 INSERT OR REPLACE INTO {self._table_name} (session_id, data, expires_at)
                 VALUES ({p1}, {p2}, {p3})
                 """
-            else:
+            elif dialect in {"postgres", "postgresql"}:
+                # Use explicit CAST for nullable timestamp to avoid Arrow 'na' type mapping issues
                 sql = f"""
                 INSERT INTO {self._table_name} (session_id, data, expires_at)
-                VALUES ({p1}, {p2}, {p3})
+                VALUES ({p1}, {p2}, CAST({p3} AS TIMESTAMPTZ))
+                ON CONFLICT (session_id) DO UPDATE
+                SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at
+                """
+            else:
+                # DuckDB: Use explicit CAST for nullable timestamp to avoid Arrow 'na' type mapping issues
+                sql = f"""
+                INSERT INTO {self._table_name} (session_id, data, expires_at)
+                VALUES ({p1}, {p2}, CAST({p3} AS TIMESTAMP))
                 ON CONFLICT (session_id) DO UPDATE
                 SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at
                 """

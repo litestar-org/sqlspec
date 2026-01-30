@@ -383,12 +383,14 @@ class ParameterProcessor:
                 ParameterStyle.POSITIONAL_PYFORMAT.value,
             }
             if any(style in positional_styles for style in cached_profile.styles):
-                processed = self._map_named_to_positional(processed, input_named_parameters, is_many)
+                processed = self._map_named_to_positional(
+                    processed, input_named_parameters, is_many, strict=config.strict_named_parameters
+                )
 
         return processed
 
     def _map_named_to_positional(
-        self, parameters: "ConvertedParameters", named_order: "tuple[str, ...]", is_many: bool
+        self, parameters: "ConvertedParameters", named_order: "tuple[str, ...]", is_many: bool, strict: bool = False
     ) -> "ConvertedParameters":
         """Map named parameters (dict) to positional (tuple) using cached order.
 
@@ -396,9 +398,13 @@ class ParameterProcessor:
             parameters: Current parameters (dict or sequence).
             named_order: Tuple of parameter names in placeholder order.
             is_many: Whether this is execute_many.
+            strict: Whether to raise an error if required parameters are missing.
 
         Returns:
             Parameters converted to positional tuple if input was dict, else unchanged.
+
+        Raises:
+            SQLSpecError: If strict is True and required parameters are missing.
         """
         if not named_order:
             return parameters
@@ -408,12 +414,26 @@ class ParameterProcessor:
             result: list[Any] = []
             for row in parameters:
                 if isinstance(row, Mapping):
+                    if strict:
+                        missing = [name for name in named_order if name not in row]
+                        if missing:
+                            from sqlspec.exceptions import SQLSpecError
+
+                            msg = f"Missing required parameters: {missing}"
+                            raise SQLSpecError(msg)
                     result.append(tuple(row.get(name) for name in named_order))
                 else:
                     result.append(row)
             return result
 
         if isinstance(parameters, Mapping):
+            if strict:
+                missing = [name for name in named_order if name not in parameters]
+                if missing:
+                    from sqlspec.exceptions import SQLSpecError
+
+                    msg = f"Missing required parameters: {missing}"
+                    raise SQLSpecError(msg)
             return tuple(parameters.get(name) for name in named_order)
 
         return parameters

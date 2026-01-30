@@ -1356,6 +1356,22 @@ class CommonDriverAttributesMixin:
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[CachedStatement, object]":
         """Compile SQL and return cached statement metadata plus prepared parameters."""
+        # Materialize iterators before cache key generation to prevent exhaustion.
+        # If statement.parameters is an iterator (e.g., generator), structural_fingerprint
+        # will consume it during cache key generation, leaving empty parameters for execution.
+        params = statement.parameters
+        if params is not None and not isinstance(params, (list, tuple, dict)):
+            try:
+                materialized = list(params)
+                # Update the statement's internal parameters with materialized values
+                if statement._named_parameters:
+                    # Named parameters are stored as dict, shouldn't be an iterator
+                    pass
+                else:
+                    statement._positional_parameters = materialized
+            except TypeError:
+                pass  # Not iterable, proceed normally
+
         cache_config = get_cache_config()
         dialect_key = str(statement.dialect) if statement.dialect else None
         cache_key = None
