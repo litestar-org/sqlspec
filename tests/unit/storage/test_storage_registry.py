@@ -151,8 +151,8 @@ def test_register_alias_with_base_path(tmp_path: Path) -> None:
     registry.register_alias("test_store", f"file://{tmp_path}/data")
     backend = registry.get("test_store")
 
-    backend.write_text("test.txt", "content")
-    assert backend.exists("test.txt")
+    backend.write_text_sync("test.txt", "content")
+    assert backend.exists_sync("test.txt")
 
 
 def test_register_alias_with_backend_override(tmp_path: Path) -> None:

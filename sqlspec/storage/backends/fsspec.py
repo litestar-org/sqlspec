@@ -68,6 +68,8 @@ class FSSpecBackend:
 
     Implements ObjectStoreProtocol using fsspec for various protocols
     including HTTP, HTTPS, FTP, and cloud storage services.
+
+    All synchronous methods use the *_sync suffix for consistency with async methods.
     """
 
     __slots__ = ("_fs_uri", "backend_type", "base_path", "fs", "protocol")
@@ -155,8 +157,8 @@ class FSSpecBackend:
     def _resolve_path(self, path: str | Path) -> str:
         return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
 
-    def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:
-        """Read bytes from an object."""
+    def read_bytes_sync(self, path: str | Path, **kwargs: Any) -> bytes:
+        """Read bytes from an object synchronously."""
         resolved_path = self._resolve_path(path)
         result = cast(
             "bytes",
@@ -176,8 +178,8 @@ class FSSpecBackend:
         )
         return result
 
-    def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
-        """Write bytes to an object."""
+    def write_bytes_sync(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
+        """Write bytes to an object synchronously."""
         resolved_path = self._resolve_path(path)
 
         if self.protocol == "file":
@@ -199,17 +201,17 @@ class FSSpecBackend:
             path=resolved_path,
         )
 
-    def read_text(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
-        """Read text from an object."""
-        data = self.read_bytes(path, **kwargs)
+    def read_text_sync(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
+        """Read text from an object synchronously."""
+        data = self.read_bytes_sync(path, **kwargs)
         return data.decode(encoding)
 
-    def write_text(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-        """Write text to an object."""
-        self.write_bytes(path, data.encode(encoding), **kwargs)
+    def write_text_sync(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+        """Write text to an object synchronously."""
+        self.write_bytes_sync(path, data.encode(encoding), **kwargs)
 
-    def exists(self, path: str | Path, **kwargs: Any) -> bool:
-        """Check if an object exists."""
+    def exists_sync(self, path: str | Path, **kwargs: Any) -> bool:
+        """Check if an object exists synchronously."""
         resolved_path = self._resolve_path(path)
         exists = bool(self.fs.exists(resolved_path, **kwargs))
         _log_storage_event(
@@ -222,8 +224,8 @@ class FSSpecBackend:
         )
         return exists
 
-    def delete(self, path: str | Path, **kwargs: Any) -> None:
-        """Delete an object."""
+    def delete_sync(self, path: str | Path, **kwargs: Any) -> None:
+        """Delete an object synchronously."""
         resolved_path = self._resolve_path(path)
         execute_sync_storage_operation(
             partial(self.fs.rm, resolved_path, **kwargs),
@@ -239,8 +241,8 @@ class FSSpecBackend:
             path=resolved_path,
         )
 
-    def copy(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
-        """Copy an object."""
+    def copy_sync(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
+        """Copy an object synchronously."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
@@ -258,8 +260,8 @@ class FSSpecBackend:
             destination_path=dest_path,
         )
 
-    def move(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
-        """Move an object."""
+    def move_sync(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
+        """Move an object synchronously."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
@@ -277,8 +279,8 @@ class FSSpecBackend:
             destination_path=dest_path,
         )
 
-    def read_arrow(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
-        """Read an Arrow table from storage."""
+    def read_arrow_sync(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
+        """Read an Arrow table from storage synchronously."""
         pq = import_pyarrow_parquet()
 
         resolved_path = self._resolve_path(path)
@@ -300,8 +302,8 @@ class FSSpecBackend:
         )
         return result
 
-    def write_arrow(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
-        """Write an Arrow table to storage."""
+    def write_arrow_sync(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
+        """Write an Arrow table to storage synchronously."""
         pq = import_pyarrow_parquet()
 
         resolved_path = self._resolve_path(path)
@@ -324,8 +326,8 @@ class FSSpecBackend:
         with self.fs.open(resolved_path, mode="rb", **options) as file_obj:
             return pq.read_table(file_obj)
 
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
-        """List objects with optional prefix."""
+    def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
+        """List objects with optional prefix synchronously."""
         resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=False)
         if recursive:
             results = sorted(self.fs.find(resolved_prefix, **kwargs))
@@ -341,8 +343,8 @@ class FSSpecBackend:
         )
         return results
 
-    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
-        """Find objects matching a glob pattern."""
+    def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
+        """Find objects matching a glob pattern synchronously."""
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
         results = sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
         _log_storage_event(
@@ -355,18 +357,18 @@ class FSSpecBackend:
         )
         return results
 
-    def is_object(self, path: str | Path) -> bool:
-        """Check if path points to an object."""
+    def is_object_sync(self, path: str | Path) -> bool:
+        """Check if path points to an object synchronously."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return self.fs.exists(resolved_path) and not self.fs.isdir(resolved_path)
 
-    def is_path(self, path: str | Path) -> bool:
-        """Check if path points to a prefix (directory-like)."""
+    def is_path_sync(self, path: str | Path) -> bool:
+        """Check if path points to a prefix (directory-like) synchronously."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return self.fs.isdir(resolved_path)  # type: ignore[no-any-return]
 
-    def get_metadata(self, path: str | Path, **kwargs: Any) -> "dict[str, object]":
-        """Get object metadata."""
+    def get_metadata_sync(self, path: str | Path, **kwargs: Any) -> "dict[str, object]":
+        """Get object metadata synchronously."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         try:
             info = self.fs.info(resolved_path, **kwargs)
@@ -422,8 +424,8 @@ class FSSpecBackend:
         )
         raise NotImplementedError(msg)
 
-    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
-        """Stream bytes from storage."""
+    def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes from storage synchronously."""
         resolved_path = self._resolve_path(path)
         chunk_size = chunk_size or 65536
 
@@ -434,8 +436,8 @@ class FSSpecBackend:
                     break
                 yield chunk
 
-    def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
-        """Stream Arrow record batches from storage.
+    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
+        """Stream Arrow record batches from storage synchronously.
 
         Args:
             pattern: The glob pattern to match.
@@ -445,7 +447,7 @@ class FSSpecBackend:
             Arrow record batches from matching files.
         """
         pq = import_pyarrow_parquet()
-        for obj_path in self.glob(pattern, **kwargs):
+        for obj_path in self.glob_sync(pattern, **kwargs):
             file_handle = execute_sync_storage_operation(
                 partial(self.fs.open, obj_path, mode="rb"),
                 backend=self.backend_type,
@@ -463,11 +465,11 @@ class FSSpecBackend:
 
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from storage asynchronously."""
-        return await async_(self.read_bytes)(path, **kwargs)
+        return await async_(self.read_bytes_sync)(path, **kwargs)
 
     async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
         """Write bytes to storage asynchronously."""
-        return await async_(self.write_bytes)(path, data, **kwargs)
+        return await async_(self.write_bytes_sync)(path, data, **kwargs)
 
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
@@ -504,39 +506,39 @@ class FSSpecBackend:
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        return AsyncArrowBatchIterator(self.stream_arrow(pattern, **kwargs))
+        return AsyncArrowBatchIterator(self.stream_arrow_sync(pattern, **kwargs))
 
     async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""
-        return await async_(self.read_text)(path, encoding, **kwargs)
+        return await async_(self.read_text_sync)(path, encoding, **kwargs)
 
     async def write_text_async(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to storage asynchronously."""
-        await async_(self.write_text)(path, data, encoding, **kwargs)
+        await async_(self.write_text_sync)(path, data, encoding, **kwargs)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in storage asynchronously."""
-        return await async_(self.list_objects)(prefix, recursive, **kwargs)
+        return await async_(self.list_objects_sync)(prefix, recursive, **kwargs)
 
     async def exists_async(self, path: str | Path, **kwargs: Any) -> bool:
         """Check if object exists in storage asynchronously."""
-        return await async_(self.exists)(path, **kwargs)
+        return await async_(self.exists_sync)(path, **kwargs)
 
     async def delete_async(self, path: str | Path, **kwargs: Any) -> None:
         """Delete object from storage asynchronously."""
-        await async_(self.delete)(path, **kwargs)
+        await async_(self.delete_sync)(path, **kwargs)
 
     async def copy_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Copy object in storage asynchronously."""
-        await async_(self.copy)(source, destination, **kwargs)
+        await async_(self.copy_sync)(source, destination, **kwargs)
 
     async def move_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Move object in storage asynchronously."""
-        await async_(self.move)(source, destination, **kwargs)
+        await async_(self.move_sync)(source, destination, **kwargs)
 
     async def get_metadata_async(self, path: str | Path, **kwargs: Any) -> "dict[str, object]":
         """Get object metadata from storage asynchronously."""
-        return await async_(self.get_metadata)(path, **kwargs)
+        return await async_(self.get_metadata_sync)(path, **kwargs)
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
@@ -551,9 +553,15 @@ class FSSpecBackend:
         return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]
 
     async def read_arrow_async(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
-        """Read Arrow table from storage asynchronously."""
-        return self.read_arrow(path, **kwargs)
+        """Read Arrow table from storage asynchronously.
+
+        Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
+        """
+        return await async_(self.read_arrow_sync)(path, **kwargs)
 
     async def write_arrow_async(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table to storage asynchronously."""
-        self.write_arrow(path, table, **kwargs)
+        """Write Arrow table to storage asynchronously.
+
+        Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
+        """
+        await async_(self.write_arrow_sync)(path, table, **kwargs)

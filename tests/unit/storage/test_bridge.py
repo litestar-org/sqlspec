@@ -337,7 +337,7 @@ def test_sync_pipeline_write_rows_includes_backend(monkeypatch: pytest.MonkeyPat
         def __init__(self) -> None:
             self.payloads: list[tuple[str, bytes]] = []
 
-        def write_bytes(self, path: str, payload: bytes) -> None:
+        def write_bytes_sync(self, path: str, payload: bytes) -> None:
             self.payloads.append((path, payload))
 
     backend = _Backend()

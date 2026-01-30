@@ -24,6 +24,7 @@ from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_obstore
+from sqlspec.utils.sync_tools import async_
 
 __all__ = ("ObStoreBackend",)
 
@@ -74,6 +75,8 @@ class ObStoreBackend:
     Implements ObjectStoreProtocol using obstore's Rust-based implementation
     for storage operations. Supports AWS S3, Google Cloud Storage, Azure Blob Storage,
     local filesystem, and HTTP endpoints.
+
+    All synchronous methods use the *_sync suffix for consistency with async methods.
     """
 
     __slots__ = (
@@ -196,8 +199,8 @@ class ObStoreBackend:
 
         return str(path)
 
-    def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
-        """Read bytes using obstore."""
+    def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+        """Read bytes using obstore synchronously."""
         resolved_path = self._resolve_path(path)
 
         result = execute_sync_storage_operation(
@@ -215,8 +218,8 @@ class ObStoreBackend:
         )
         return result
 
-    def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Write bytes using obstore."""
+    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        """Write bytes using obstore synchronously."""
         resolved_path = self._resolve_path(path)
 
         execute_sync_storage_operation(
@@ -233,16 +236,16 @@ class ObStoreBackend:
             path=resolved_path,
         )
 
-    def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
-        """Read text using obstore."""
-        return self.read_bytes(path, **kwargs).decode(encoding)
+    def read_text_sync(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
+        """Read text using obstore synchronously."""
+        return self.read_bytes_sync(path, **kwargs).decode(encoding)
 
-    def write_text(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-        """Write text using obstore."""
-        self.write_bytes(path, data.encode(encoding), **kwargs)
+    def write_text_sync(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+        """Write text using obstore synchronously."""
+        self.write_bytes_sync(path, data.encode(encoding), **kwargs)
 
-    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
-        """List objects using obstore."""
+    def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
+        """List objects using obstore synchronously."""
         # For LocalStore, the base_path is already included in the store root,
         # so we use empty prefix when none is given. For cloud stores, use base_path.
         if prefix:
@@ -263,8 +266,8 @@ class ObStoreBackend:
         )
         return paths
 
-    def exists(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
-        """Check if object exists using obstore."""
+    def exists_sync(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
+        """Check if object exists using obstore synchronously."""
         try:
             resolved_path = self._resolve_path(path)
             self.store.head(resolved_path)  # pyright: ignore[reportUnknownMemberType]
@@ -288,8 +291,8 @@ class ObStoreBackend:
         )
         return True
 
-    def delete(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Delete object using obstore."""
+    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        """Delete object using obstore synchronously."""
         resolved_path = self._resolve_path(path)
         execute_sync_storage_operation(
             partial(self.store.delete, resolved_path), backend=self.backend_type, operation="delete", path=resolved_path
@@ -302,8 +305,8 @@ class ObStoreBackend:
             path=resolved_path,
         )
 
-    def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Copy object using obstore."""
+    def copy_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        """Copy object using obstore synchronously."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
@@ -321,8 +324,8 @@ class ObStoreBackend:
             destination_path=dest_path,
         )
 
-    def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Move object using obstore."""
+    def move_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        """Move object using obstore synchronously."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
@@ -340,14 +343,14 @@ class ObStoreBackend:
             destination_path=dest_path,
         )
 
-    def glob(self, pattern: str, **kwargs: Any) -> "list[str]":
-        """Find objects matching pattern.
+    def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
+        """Find objects matching pattern synchronously.
 
         Lists all objects and filters them client-side using the pattern.
         """
 
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
-        all_objects = self.list_objects(recursive=True, **kwargs)
+        all_objects = self.list_objects_sync(recursive=True, **kwargs)
 
         if "**" in pattern:
             matching_objects = []
@@ -377,8 +380,8 @@ class ObStoreBackend:
         )
         return results
 
-    def get_metadata(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
-        """Get object metadata using obstore."""
+    def get_metadata_sync(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
+        """Get object metadata using obstore synchronously."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         try:
@@ -413,29 +416,29 @@ class ObStoreBackend:
 
             return result
 
-    def is_object(self, path: "str | Path") -> bool:
-        """Check if path is an object using obstore."""
+    def is_object_sync(self, path: "str | Path") -> bool:
+        """Check if path is an object using obstore synchronously."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        return self.exists(path) and not resolved_path.endswith("/")
+        return self.exists_sync(path) and not resolved_path.endswith("/")
 
-    def is_path(self, path: "str | Path") -> bool:
-        """Check if path is a prefix/directory using obstore."""
+    def is_path_sync(self, path: "str | Path") -> bool:
+        """Check if path is a prefix/directory using obstore synchronously."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         if resolved_path.endswith("/"):
             return True
 
         try:
-            objects = self.list_objects(prefix=str(path), recursive=True)
+            objects = self.list_objects_sync(prefix=str(path), recursive=True)
             return len(objects) > 0
         except Exception:
             return False
 
-    def read_arrow(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
-        """Read Arrow table using obstore."""
+    def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
+        """Read Arrow table using obstore synchronously."""
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        data = self.read_bytes(resolved_path)
+        data = self.read_bytes_sync(resolved_path)
         result = cast(
             "ArrowTable",
             execute_sync_storage_operation(
@@ -454,8 +457,8 @@ class ObStoreBackend:
         )
         return result
 
-    def write_arrow(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
-        """Write Arrow table using obstore."""
+    def write_arrow_sync(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
+        """Write Arrow table using obstore synchronously."""
         pa = import_pyarrow()
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
@@ -483,7 +486,7 @@ class ObStoreBackend:
             path=resolved_path,
         )
         buffer.seek(0)
-        self.write_bytes(resolved_path, buffer.read())
+        self.write_bytes_sync(resolved_path, buffer.read())
         _log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
@@ -492,44 +495,51 @@ class ObStoreBackend:
             path=resolved_path,
         )
 
-    def stream_read(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
-        """Stream bytes using obstore.
+    def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+        """Stream bytes using obstore's native streaming synchronously.
 
-        Note:
-            For remote backends, this currently performs a full read and yields chunks
-            as obstore's sync client doesn't expose a streaming iterator.
-            Use stream_read_async for true streaming.
+        Uses obstore's sync streaming iterator which yields chunks without
+        loading the entire file into memory, for both local and remote backends.
         """
         resolved_path = self._resolve_path(path)
-        data = self.read_bytes(resolved_path)
+        chunk_size = chunk_size or 65536
 
-        if chunk_size:
-            for i in range(0, len(data), chunk_size):
-                yield data[i : i + chunk_size]
-        else:
-            yield data
+        result = execute_sync_storage_operation(
+            partial(self.store.get, resolved_path),
+            backend=self.backend_type,
+            operation="stream_read",
+            path=resolved_path,
+        )
 
-    def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
-        """Stream Arrow record batches.
+        # Use obstore's native streaming - yields Buffer objects
+        # GetResult.stream(min_chunk_size) returns an iterator of chunks
+        for chunk in result.stream(min_chunk_size=chunk_size):
+            yield bytes(chunk)  # Convert Buffer to bytes
 
-        Yields:
-            Iterator of Arrow record batches from matching objects.
+    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
+        """Stream Arrow record batches using obstore's native streaming synchronously.
+
+        For each matching file, streams data through a buffered wrapper
+        that PyArrow can read directly without loading the entire file.
         """
         pq = import_pyarrow_parquet()
-        for obj_path in self.glob(pattern, **kwargs):
+        for obj_path in self.glob_sync(pattern, **kwargs):
             resolved_path = resolve_storage_path(obj_path, self.base_path, self.protocol, strip_file_scheme=True)
             result = execute_sync_storage_operation(
                 partial(self.store.get, resolved_path),
                 backend=self.backend_type,
-                operation="stream_read",
+                operation="stream_arrow",
                 path=resolved_path,
             )
-            bytes_obj = result.bytes()
-            data = bytes_obj.to_bytes()
-            buffer = io.BytesIO(data)
-            parquet_file = execute_sync_storage_operation(
-                partial(pq.ParquetFile, buffer), backend=self.backend_type, operation="stream_arrow", path=resolved_path
-            )
+
+            # Create a file-like object that streams from obstore
+            # PyArrow's ParquetFile needs a seekable file, so we buffer the stream
+            buffer = io.BytesIO()
+            for chunk in result.stream():
+                buffer.write(chunk)
+            buffer.seek(0)
+
+            parquet_file = pq.ParquetFile(buffer)
             yield from parquet_file.iter_batches()
 
     @property
@@ -814,11 +824,17 @@ class ObStoreBackend:
             return result
 
     async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
-        """Read Arrow table from storage asynchronously."""
+        """Read Arrow table from storage asynchronously.
+
+        Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
+        """
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         data = await self.read_bytes_async(resolved_path)
-        result = cast("ArrowTable", pq.read_table(io.BytesIO(data), **kwargs))
+
+        # Offload PyArrow parsing to thread pool
+        result = await async_(pq.read_table)(io.BytesIO(data), **kwargs)
+
         _log_storage_event(
             "storage.read",
             backend_type=self.backend_type,
@@ -827,16 +843,26 @@ class ObStoreBackend:
             mode="async",
             path=resolved_path,
         )
-        return result
+        return cast("ArrowTable", result)
 
     async def write_arrow_async(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
-        """Write Arrow table to storage asynchronously."""
+        """Write Arrow table to storage asynchronously.
+
+        Uses async_() with storage limiter to offload blocking PyArrow serialization
+        to thread pool, preventing event loop blocking.
+        """
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        buffer = io.BytesIO()
-        pq.write_table(table, buffer, **kwargs)
-        buffer.seek(0)
-        await self.write_bytes_async(resolved_path, buffer.read())
+
+        def _serialize() -> bytes:
+            buffer = io.BytesIO()
+            pq.write_table(table, buffer, **kwargs)
+            buffer.seek(0)
+            return buffer.read()
+
+        data = await async_(_serialize)()
+        await self.write_bytes_async(resolved_path, data)
+
         _log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
@@ -851,13 +877,13 @@ class ObStoreBackend:
 
         Args:
             pattern: Glob pattern to match files.
-            **kwargs: Additional arguments passed to stream_arrow().
+            **kwargs: Additional arguments passed to stream_arrow_sync().
 
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
-        return AsyncArrowBatchIterator(self.stream_arrow(resolved_pattern, **kwargs))
+        return AsyncArrowBatchIterator(self.stream_arrow_sync(resolved_pattern, **kwargs))
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...

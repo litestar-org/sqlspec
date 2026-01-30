@@ -52,7 +52,7 @@ def test_obstore_s3_supports_signing(obstore_s3_backend: "ObjectStoreProtocol") 
 def test_obstore_s3_sign_sync_single_path_returns_string(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync with single path returns a string URL."""
     test_path = "signing_test/single_path.txt"
-    obstore_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
+    obstore_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
     signed_url = obstore_s3_backend.sign_sync(test_path)
 
@@ -67,7 +67,7 @@ def test_obstore_s3_sign_sync_list_paths_returns_list(obstore_s3_backend: "Objec
     """Test sign_sync with list of paths returns list of URLs."""
     test_paths = ["signing_test/list_path1.txt", "signing_test/list_path2.txt"]
     for path in test_paths:
-        obstore_s3_backend.write_text(path, TEST_TEXT_CONTENT)
+        obstore_s3_backend.write_text_sync(path, TEST_TEXT_CONTENT)
 
     signed_urls = obstore_s3_backend.sign_sync(test_paths)
 
@@ -93,7 +93,7 @@ def test_obstore_s3_sign_sync_empty_list_returns_empty_list(obstore_s3_backend: 
 def test_obstore_s3_sign_sync_with_custom_expires_in(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync with custom expiration time."""
     test_path = "signing_test/custom_expires.txt"
-    obstore_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
+    obstore_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
     signed_url = obstore_s3_backend.sign_sync(test_path, expires_in=7200)
 
@@ -118,7 +118,7 @@ def test_obstore_s3_sign_sync_for_upload(obstore_s3_backend: "ObjectStoreProtoco
 def test_obstore_s3_sign_sync_max_expires_validation(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync raises ValueError when expires_in exceeds maximum."""
     test_path = "signing_test/max_expires.txt"
-    obstore_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
+    obstore_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
     max_expires = 604800  # 7 days
     with pytest.raises(ValueError, match="exceed"):
@@ -191,7 +191,7 @@ async def test_obstore_s3_sign_async_max_expires_validation(obstore_s3_backend: 
 def test_obstore_s3_signed_url_contains_signature_params(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test that signed URL contains AWS signature parameters."""
     test_path = "signing_test/sig_params.txt"
-    obstore_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
+    obstore_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
     signed_url = obstore_s3_backend.sign_sync(test_path)
 
@@ -204,7 +204,7 @@ def test_obstore_s3_different_paths_produce_different_urls(obstore_s3_backend: "
     """Test that different paths produce different signed URLs."""
     paths = ["signing_test/path_a.txt", "signing_test/path_b.txt"]
     for path in paths:
-        obstore_s3_backend.write_text(path, TEST_TEXT_CONTENT)
+        obstore_s3_backend.write_text_sync(path, TEST_TEXT_CONTENT)
 
     url_a = obstore_s3_backend.sign_sync(paths[0])
     url_b = obstore_s3_backend.sign_sync(paths[1])
@@ -220,7 +220,7 @@ def test_obstore_s3_sign_preserves_path_order_in_list(obstore_s3_backend: "Objec
     """Test that signed URLs preserve order of input paths."""
     paths = [f"signing_test/order_{i}.txt" for i in range(5)]
     for path in paths:
-        obstore_s3_backend.write_text(path, TEST_TEXT_CONTENT)
+        obstore_s3_backend.write_text_sync(path, TEST_TEXT_CONTENT)
 
     signed_urls = obstore_s3_backend.sign_sync(paths)
 
@@ -233,7 +233,7 @@ def test_obstore_s3_sign_preserves_path_order_in_list(obstore_s3_backend: "Objec
 def test_obstore_s3_sign_with_special_characters_in_path(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test signing paths with special characters."""
     test_path = "signing_test/file with spaces.txt"
-    obstore_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
+    obstore_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
     signed_url = obstore_s3_backend.sign_sync(test_path)
 
@@ -246,7 +246,7 @@ def test_obstore_s3_sign_with_special_characters_in_path(obstore_s3_backend: "Ob
 def test_obstore_s3_sign_with_nested_path(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test signing deeply nested paths."""
     test_path = "signing_test/level1/level2/level3/deep_file.txt"
-    obstore_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
+    obstore_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
     signed_url = obstore_s3_backend.sign_sync(test_path)
 

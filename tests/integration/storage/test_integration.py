@@ -105,14 +105,14 @@ def test_local_store_file_operations(local_test_setup: Path) -> None:
     store = LocalStore(str(local_test_setup))
 
     # Test exists
-    assert store.exists("test.txt")
-    assert not store.exists("nonexistent.txt")
+    assert store.exists_sync("test.txt")
+    assert not store.exists_sync("nonexistent.txt")
 
     # Test read operations
-    text_content = store.read_text("test.txt")
+    text_content = store.read_text_sync("test.txt")
     assert text_content == TEST_TEXT_CONTENT
 
-    binary_content = store.read_bytes("test.bin")
+    binary_content = store.read_bytes_sync("test.bin")
     assert binary_content == TEST_BINARY_CONTENT
 
 
@@ -125,13 +125,13 @@ def test_local_store_write_operations(local_test_setup: Path) -> None:
 
     # Test write text
     new_text = "New text content"
-    store.write_text("new.txt", new_text)
-    assert store.read_text("new.txt") == new_text
+    store.write_text_sync("new.txt", new_text)
+    assert store.read_text_sync("new.txt") == new_text
 
     # Test write bytes
     new_bytes = b"New binary content"
-    store.write_bytes("new.bin", new_bytes)
-    assert store.read_bytes("new.bin") == new_bytes
+    store.write_bytes_sync("new.bin", new_bytes)
+    assert store.read_bytes_sync("new.bin") == new_bytes
 
 
 @pytest.mark.xdist_group("storage")
@@ -142,7 +142,7 @@ def test_local_store_listing_operations(local_test_setup: Path) -> None:
     store = LocalStore(str(local_test_setup))
 
     # Test list_objects
-    objects = store.list_objects()
+    objects = store.list_objects_sync()
     assert "test.txt" in objects
     assert "test.bin" in objects
     assert "subdir/nested.txt" in objects
@@ -218,14 +218,14 @@ def test_fsspec_s3_basic_operations(
 
     # Test write and read text
     test_path = "integration_test/test.txt"
-    fsspec_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
+    fsspec_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
-    content = fsspec_s3_backend.read_text(test_path)
+    content = fsspec_s3_backend.read_text_sync(test_path)
     assert content == TEST_TEXT_CONTENT
 
     # Test exists
-    assert fsspec_s3_backend.exists(test_path)
-    assert not fsspec_s3_backend.exists("nonexistent.txt")
+    assert fsspec_s3_backend.exists_sync(test_path)
+    assert not fsspec_s3_backend.exists_sync("nonexistent.txt")
 
 
 @pytest.mark.xdist_group("storage")
@@ -233,9 +233,9 @@ def test_fsspec_s3_basic_operations(
 def test_fsspec_s3_binary_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend binary operations."""
     test_path = "integration_test/binary.bin"
-    fsspec_s3_backend.write_bytes(test_path, TEST_BINARY_CONTENT)
+    fsspec_s3_backend.write_bytes_sync(test_path, TEST_BINARY_CONTENT)
 
-    content = fsspec_s3_backend.read_bytes(test_path)
+    content = fsspec_s3_backend.read_bytes_sync(test_path)
     assert content == TEST_BINARY_CONTENT
 
 
@@ -262,10 +262,10 @@ def test_fsspec_s3_listing_operations(fsspec_s3_backend: "ObjectStoreProtocol") 
     # Write multiple test files
     test_files = ["list_test/file1.txt", "list_test/file2.txt", "list_test/subdir/file3.txt"]
     for file_path in test_files:
-        fsspec_s3_backend.write_text(file_path, f"Content of {file_path}")
+        fsspec_s3_backend.write_text_sync(file_path, f"Content of {file_path}")
 
     # Test list_objects
-    objects = fsspec_s3_backend.list_objects("list_test/")
+    objects = fsspec_s3_backend.list_objects_sync("list_test/")
     assert len(objects) >= 3
     assert any("file1.txt" in obj for obj in objects)
     assert any("file2.txt" in obj for obj in objects)
@@ -282,20 +282,20 @@ def test_fsspec_s3_copy_move_operations(fsspec_s3_backend: "ObjectStoreProtocol"
     move_source_path = "move_test/source.txt"
     move_dest_path = "move_test/moved.txt"
 
-    fsspec_s3_backend.write_text(source_path, TEST_TEXT_CONTENT)
-    fsspec_s3_backend.write_text(move_source_path, TEST_TEXT_CONTENT)
+    fsspec_s3_backend.write_text_sync(source_path, TEST_TEXT_CONTENT)
+    fsspec_s3_backend.write_text_sync(move_source_path, TEST_TEXT_CONTENT)
 
     # Test copy
-    fsspec_s3_backend.copy(source_path, copy_path)
-    assert fsspec_s3_backend.exists(source_path)  # Original should still exist
-    assert fsspec_s3_backend.exists(copy_path)
-    assert fsspec_s3_backend.read_text(copy_path) == TEST_TEXT_CONTENT
+    fsspec_s3_backend.copy_sync(source_path, copy_path)
+    assert fsspec_s3_backend.exists_sync(source_path)  # Original should still exist
+    assert fsspec_s3_backend.exists_sync(copy_path)
+    assert fsspec_s3_backend.read_text_sync(copy_path) == TEST_TEXT_CONTENT
 
     # Test move
-    fsspec_s3_backend.move(move_source_path, move_dest_path)
-    assert not fsspec_s3_backend.exists(move_source_path)  # Original should be gone
-    assert fsspec_s3_backend.exists(move_dest_path)
-    assert fsspec_s3_backend.read_text(move_dest_path) == TEST_TEXT_CONTENT
+    fsspec_s3_backend.move_sync(move_source_path, move_dest_path)
+    assert not fsspec_s3_backend.exists_sync(move_source_path)  # Original should be gone
+    assert fsspec_s3_backend.exists_sync(move_dest_path)
+    assert fsspec_s3_backend.read_text_sync(move_dest_path) == TEST_TEXT_CONTENT
 
 
 # ObStore S3 backend tests
@@ -315,12 +315,12 @@ def test_obstore_s3_basic_operations(
     test_path = "integration_test/obstore_test.txt"
 
     # Test write and read
-    obstore_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
-    content = obstore_s3_backend.read_text(test_path)
+    obstore_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
+    content = obstore_s3_backend.read_text_sync(test_path)
     assert content == TEST_TEXT_CONTENT
 
     # Test exists
-    assert obstore_s3_backend.exists(test_path)
+    assert obstore_s3_backend.exists_sync(test_path)
 
 
 @pytest.mark.xdist_group("storage")
@@ -329,8 +329,8 @@ def test_obstore_s3_binary_operations(obstore_s3_backend: "ObjectStoreProtocol")
     """Test ObStore S3 backend binary operations."""
     test_path = "integration_test/obstore_binary.bin"
 
-    obstore_s3_backend.write_bytes(test_path, TEST_BINARY_CONTENT)
-    content = obstore_s3_backend.read_bytes(test_path)
+    obstore_s3_backend.write_bytes_sync(test_path, TEST_BINARY_CONTENT)
+    content = obstore_s3_backend.read_bytes_sync(test_path)
     assert content == TEST_BINARY_CONTENT
 
 
@@ -356,10 +356,10 @@ def test_obstore_s3_listing_operations(obstore_s3_backend: "ObjectStoreProtocol"
     # Write test files in different paths
     test_files = ["obstore_list/file1.txt", "obstore_list/file2.txt", "obstore_list/subdir/file3.txt"]
     for file_path in test_files:
-        obstore_s3_backend.write_text(file_path, f"ObStore content of {file_path}")
+        obstore_s3_backend.write_text_sync(file_path, f"ObStore content of {file_path}")
 
     # Test list_objects
-    objects = obstore_s3_backend.list_objects("obstore_list/")
+    objects = obstore_s3_backend.list_objects_sync("obstore_list/")
     assert len(objects) >= 3
     assert any("file1.txt" in obj for obj in objects)
     assert any("file2.txt" in obj for obj in objects)
@@ -384,7 +384,7 @@ def test_registry_uri_resolution_local(tmp_path: "Path") -> None:
     # Registry prefers obstore for file:// URIs when available, otherwise LocalStore
     assert isinstance(backend, (ObStoreBackend, LocalStore))
 
-    content = backend.read_text("registry_test.txt")
+    content = backend.read_text_sync("registry_test.txt")
     assert content == TEST_TEXT_CONTENT
 
 
@@ -402,7 +402,7 @@ def test_registry_path_resolution(tmp_path: "Path") -> None:
     # Registry prefers obstore for local paths when available, otherwise LocalStore
     assert isinstance(backend, (ObStoreBackend, LocalStore))
 
-    content = backend.read_text("path_test.txt")
+    content = backend.read_text_sync("path_test.txt")
     assert content == TEST_TEXT_CONTENT
 
 
@@ -432,8 +432,8 @@ def test_registry_s3_fsspec_resolution(
 
     # Test basic operations
     test_path = "registry_fsspec_test.txt"
-    backend.write_text(test_path, TEST_TEXT_CONTENT)
-    content = backend.read_text(test_path)
+    backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
+    content = backend.read_text_sync(test_path)
     assert content == TEST_TEXT_CONTENT
 
 
@@ -459,8 +459,8 @@ def test_registry_alias_registration(
         assert isinstance(backend, (ObStoreBackend, LocalStore))
 
         # Create test data
-        backend.write_text("alias_test.txt", TEST_TEXT_CONTENT)
-        content = backend.read_text("alias_test.txt")
+        backend.write_text_sync("alias_test.txt", TEST_TEXT_CONTENT)
+        content = backend.read_text_sync("alias_test.txt")
         assert content == TEST_TEXT_CONTENT
 
         # Register S3 alias if fsspec available
@@ -482,8 +482,8 @@ def test_registry_alias_registration(
             assert isinstance(s3_backend, FSSpecBackend)
 
             # Test S3 alias operations
-            s3_backend.write_text("s3_alias_test.txt", TEST_TEXT_CONTENT)
-            s3_content = s3_backend.read_text("s3_alias_test.txt")
+            s3_backend.write_text_sync("s3_alias_test.txt", TEST_TEXT_CONTENT)
+            s3_content = s3_backend.read_text_sync("s3_alias_test.txt")
             assert s3_content == TEST_TEXT_CONTENT
 
     finally:
@@ -557,12 +557,12 @@ def test_backend_consistency(request: pytest.FixtureRequest, backend_name: str) 
     test_path = f"consistency_test_{backend_name}.txt"
 
     # Test write/read consistency
-    backend.write_text(test_path, TEST_TEXT_CONTENT)
-    content = backend.read_text(test_path)
+    backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
+    content = backend.read_text_sync(test_path)
     assert content == TEST_TEXT_CONTENT
 
     # Test exists consistency
-    assert backend.exists(test_path)
+    assert backend.exists_sync(test_path)
 
     # Test URL signing consistency (only for backends that support signing)
     if backend.supports_signing:
@@ -606,10 +606,10 @@ def test_local_backend_error_handling(tmp_path: "Path") -> None:
 
     # Test reading nonexistent file
     with pytest.raises(FileNotFoundError):
-        backend.read_text("nonexistent.txt")
+        backend.read_text_sync("nonexistent.txt")
 
     with pytest.raises(FileNotFoundError):
-        backend.read_bytes("nonexistent.txt")
+        backend.read_bytes_sync("nonexistent.txt")
 
 
 @pytest.mark.xdist_group("storage")
@@ -633,7 +633,7 @@ def test_fsspec_s3_error_handling(
 
     # Test reading nonexistent file
     with pytest.raises(FileNotFoundInStorageError):
-        backend.read_text("nonexistent.txt")
+        backend.read_text_sync("nonexistent.txt")
 
 
 @pytest.mark.xdist_group("storage")
@@ -769,13 +769,13 @@ def test_local_arrow_operations(tmp_path: "Path") -> None:
 
     # Test write/read Arrow table
     arrow_path = "arrow_test.parquet"
-    backend.write_arrow(arrow_path, table)
+    backend.write_arrow_sync(arrow_path, table)
 
-    read_table = backend.read_arrow(arrow_path)
+    read_table = backend.read_arrow_sync(arrow_path)
     assert read_table.equals(table)
 
     # Test exists for Arrow file
-    assert backend.exists(arrow_path)
+    assert backend.exists_sync(arrow_path)
 
 
 @pytest.mark.xdist_group("storage")
@@ -811,9 +811,9 @@ def test_fsspec_s3_arrow_operations(
 
     # Test S3 Arrow operations
     s3_arrow_path = "s3_arrow_test.parquet"
-    backend.write_arrow(s3_arrow_path, table)
+    backend.write_arrow_sync(s3_arrow_path, table)
 
-    read_table = backend.read_arrow(s3_arrow_path)
+    read_table = backend.read_arrow_sync(s3_arrow_path)
     assert read_table.equals(table)
 
 
@@ -833,15 +833,15 @@ def test_local_backend_large_file_operations(tmp_path: "Path") -> None:
 
     # Test large text operations
     large_text_path = "large_test.txt"
-    backend.write_text(large_text_path, large_text)
-    read_content = backend.read_text(large_text_path)
+    backend.write_text_sync(large_text_path, large_text)
+    read_content = backend.read_text_sync(large_text_path)
     assert read_content == large_text
     assert len(read_content) == len(large_text)
 
     # Test large binary operations
     large_binary_path = "large_test.bin"
-    backend.write_bytes(large_binary_path, large_binary)
-    read_binary = backend.read_bytes(large_binary_path)
+    backend.write_bytes_sync(large_binary_path, large_binary)
+    read_binary = backend.read_bytes_sync(large_binary_path)
     assert read_binary == large_binary
     assert len(read_binary) == len(large_binary)
 
@@ -871,7 +871,7 @@ async def test_concurrent_storage_operations(tmp_path: "Path") -> None:
 
     # Verify all files exist
     for i in range(10):
-        assert backend.exists(f"concurrent_test_{i}.txt")
+        assert backend.exists_sync(f"concurrent_test_{i}.txt")
 
 
 # Metadata tests
@@ -886,19 +886,19 @@ def test_local_metadata_operations(tmp_path: "Path") -> None:
 
     # Create test file
     test_path = "metadata_test.txt"
-    backend.write_text(test_path, TEST_TEXT_CONTENT)
+    backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
     # Test metadata retrieval
-    metadata = backend.get_metadata(test_path)
+    metadata = backend.get_metadata_sync(test_path)
     assert metadata is not None
     assert "size" in metadata
     assert metadata["size"] == len(TEST_TEXT_CONTENT.encode())
 
     # Test metadata for binary file
     binary_path = "metadata_binary.bin"
-    backend.write_bytes(binary_path, TEST_BINARY_CONTENT)
+    backend.write_bytes_sync(binary_path, TEST_BINARY_CONTENT)
 
-    binary_metadata = backend.get_metadata(binary_path)
+    binary_metadata = backend.get_metadata_sync(binary_path)
     assert binary_metadata is not None
     assert binary_metadata["size"] == len(TEST_BINARY_CONTENT)
 
@@ -924,8 +924,8 @@ def test_fsspec_s3_metadata_operations(
 
     # Test S3 metadata
     test_path = "s3_metadata_test.txt"
-    backend.write_text(test_path, TEST_TEXT_CONTENT)
+    backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
 
-    metadata = backend.get_metadata(test_path)
+    metadata = backend.get_metadata_sync(test_path)
     assert metadata is not None
     assert "size" in metadata

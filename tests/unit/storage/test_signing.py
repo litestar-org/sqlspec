@@ -75,7 +75,7 @@ def test_obstore_file_sign_sync_raises_not_implemented(tmp_path: Path) -> None:
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
     store = ObStoreBackend(f"file://{tmp_path}")
-    store.write_text("test.txt", "content")
+    store.write_text_sync("test.txt", "content")
 
     with pytest.raises(NotImplementedError) as excinfo:
         store.sign_sync("test.txt")
@@ -90,7 +90,7 @@ def test_obstore_memory_sign_sync_raises_not_implemented() -> None:
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
     store = ObStoreBackend("memory://")
-    store.write_text("test.txt", "content")
+    store.write_text_sync("test.txt", "content")
 
     with pytest.raises(NotImplementedError) as excinfo:
         store.sign_sync("test.txt")
@@ -133,7 +133,7 @@ def test_fsspec_sign_sync_raises_not_implemented(tmp_path: Path) -> None:
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     store = FSSpecBackend("file", base_path=str(tmp_path))
-    store.write_text("test.txt", "content")
+    store.write_text_sync("test.txt", "content")
 
     with pytest.raises(NotImplementedError) as excinfo:
         store.sign_sync("test.txt")
@@ -161,7 +161,7 @@ def test_local_store_sign_sync_raises_not_implemented(tmp_path: Path) -> None:
     from sqlspec.storage.backends.local import LocalStore
 
     store = LocalStore(str(tmp_path))
-    store.write_text("test.txt", "content")
+    store.write_text_sync("test.txt", "content")
 
     with pytest.raises(NotImplementedError) as excinfo:
         store.sign_sync("test.txt")
@@ -188,8 +188,8 @@ def test_obstore_sign_sync_with_list_paths_raises_not_implemented(tmp_path: Path
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
     store = ObStoreBackend(f"file://{tmp_path}")
-    store.write_text("test1.txt", "content1")
-    store.write_text("test2.txt", "content2")
+    store.write_text_sync("test1.txt", "content1")
+    store.write_text_sync("test2.txt", "content2")
 
     with pytest.raises(NotImplementedError):
         store.sign_sync(["test1.txt", "test2.txt"])
@@ -201,8 +201,8 @@ def test_fsspec_sign_sync_with_list_paths_raises_not_implemented(tmp_path: Path)
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     store = FSSpecBackend("file", base_path=str(tmp_path))
-    store.write_text("test1.txt", "content1")
-    store.write_text("test2.txt", "content2")
+    store.write_text_sync("test1.txt", "content1")
+    store.write_text_sync("test2.txt", "content2")
 
     with pytest.raises(NotImplementedError):
         store.sign_sync(["test1.txt", "test2.txt"])
@@ -213,8 +213,8 @@ def test_local_store_sign_sync_with_list_paths_raises_not_implemented(tmp_path: 
     from sqlspec.storage.backends.local import LocalStore
 
     store = LocalStore(str(tmp_path))
-    store.write_text("test1.txt", "content1")
-    store.write_text("test2.txt", "content2")
+    store.write_text_sync("test1.txt", "content1")
+    store.write_text_sync("test2.txt", "content2")
 
     with pytest.raises(NotImplementedError):
         store.sign_sync(["test1.txt", "test2.txt"])
@@ -370,6 +370,7 @@ def test_obstore_error_message_suggests_cloud_backends(tmp_path: Path) -> None:
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
     store = ObStoreBackend(f"file://{tmp_path}")
+    store.write_text_sync("test.txt", "content")
 
     with pytest.raises(NotImplementedError) as excinfo:
         store.sign_sync("test.txt")
@@ -386,6 +387,7 @@ def test_fsspec_error_message_suggests_obstore_alternative(tmp_path: Path) -> No
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     store = FSSpecBackend("file", base_path=str(tmp_path))
+    store.write_text_sync("test.txt", "content")
 
     with pytest.raises(NotImplementedError) as excinfo:
         store.sign_sync("test.txt")
@@ -399,6 +401,7 @@ def test_local_store_error_message_mentions_file_uri(tmp_path: Path) -> None:
     from sqlspec.storage.backends.local import LocalStore
 
     store = LocalStore(str(tmp_path))
+    store.write_text_sync("test.txt", "content")
 
     with pytest.raises(NotImplementedError) as excinfo:
         store.sign_sync("test.txt")
