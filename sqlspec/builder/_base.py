@@ -559,12 +559,17 @@ class QueryBuilder(ABC):
         if self._expression is None:
             self._expression = self._create_base_expression()
 
-        expr_sql: str = self._expression.sql() if self._expression else "None"
+        if self._expression:
+            expr_sql = self._expression.sql()
+            expr_hash = hashlib.blake2b(expr_sql.encode(), digest_size=8).hexdigest()
+        else:
+            expr_hash = "None"
+
         parameters_snapshot = sorted(self._parameters.items())
         parameters_hash = hashlib.sha256(str(parameters_snapshot).encode()).hexdigest()[:8]
 
         state_parts = [
-            f"expression:{expr_sql}",
+            f"expression_hash:{expr_hash}",
             f"parameters_hash:{parameters_hash}",
             f"ctes:{sorted(self._with_ctes.keys())}",
             f"dialect:{dialect_name}",

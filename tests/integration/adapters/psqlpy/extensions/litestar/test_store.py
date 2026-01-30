@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psqlpy, pytest.ma
 @pytest.fixture
 async def psqlpy_store(psqlpy_config: PsqlpyConfig) -> "AsyncGenerator[PsqlpyStore, None]":
     """Create Psqlpy store with test database."""
-    psqlpy_config.extension_config = {"litestar": {"session_table": "test_psqlpy_sessions"}}
+    psqlpy_config.extension_config = {"litestar": {"session_table": "test_psqlpy_sessions_psqlpy"}}
     store = PsqlpyStore(psqlpy_config)
     await store.create_table()
     try:
@@ -29,7 +29,7 @@ async def psqlpy_store(psqlpy_config: PsqlpyConfig) -> "AsyncGenerator[PsqlpySto
 
 async def test_store_create_table(psqlpy_store: PsqlpyStore) -> None:
     """Test table creation."""
-    assert psqlpy_store.table_name == "test_psqlpy_sessions"
+    assert psqlpy_store.table_name == "test_psqlpy_sessions_psqlpy"
 
 
 async def test_store_set_and_get(psqlpy_store: PsqlpyStore) -> None:

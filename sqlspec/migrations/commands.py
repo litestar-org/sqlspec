@@ -692,6 +692,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         db_system: str | None = None
         error: Exception | None = None
         ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, summary_only)
+        self.runner.set_use_logger(ul)
         self.runner.set_summary_only(summary_value)
         self.tracker.set_output_policy(use_logger=ul, echo=echo_value, summary_only=summary_value)
         output_info = functools.partial(_output_info, ul, echo_value, summary_value)
@@ -828,6 +829,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         db_system: str | None = None
         error: Exception | None = None
         ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, summary_only)
+        self.runner.set_use_logger(ul)
         self.runner.set_summary_only(summary_value)
         self.tracker.set_output_policy(use_logger=ul, echo=echo_value, summary_only=summary_value)
         output_info = functools.partial(_output_info, ul, echo_value, summary_value)
@@ -1507,6 +1509,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         db_system: str | None = None
         error: Exception | None = None
         ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, summary_only)
+        self.runner.set_use_logger(ul)
         self.runner.set_summary_only(summary_value)
         self.tracker.set_output_policy(use_logger=ul, echo=echo_value, summary_only=summary_value)
         output_info = functools.partial(_output_info, ul, echo_value, summary_value)
@@ -1645,6 +1648,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         db_system: str | None = None
         error: Exception | None = None
         ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, summary_only)
+        self.runner.set_use_logger(ul)
         self.runner.set_summary_only(summary_value)
         self.tracker.set_output_policy(use_logger=ul, echo=echo_value, summary_only=summary_value)
         output_info = functools.partial(_output_info, ul, echo_value, summary_value)

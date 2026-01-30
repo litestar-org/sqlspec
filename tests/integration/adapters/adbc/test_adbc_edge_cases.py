@@ -42,7 +42,7 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test NULL parameter handling edge cases with ADBC."""
 
     adbc_postgresql_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS null_param_test (
+        CREATE TABLE IF NOT EXISTS null_param_test_adbc (
             id SERIAL PRIMARY KEY,
             nullable_text TEXT,
             nullable_int INTEGER,
@@ -61,7 +61,7 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
     for text_val, int_val, bool_val, required_val in test_cases:
         result = adbc_postgresql_session.execute(
             """
-            INSERT INTO null_param_test (nullable_text, nullable_int, nullable_bool, required_text)
+            INSERT INTO null_param_test_adbc (nullable_text, nullable_int, nullable_bool, required_text)
             VALUES ($1, $2, $3, $4)
         """,
             (text_val, int_val, bool_val, required_val),
@@ -71,7 +71,7 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
         assert result.rows_affected in (-1, 0, 1)
 
     null_text_result = adbc_postgresql_session.execute("""
-        SELECT * FROM null_param_test WHERE nullable_text IS NULL
+        SELECT * FROM null_param_test_adbc WHERE nullable_text IS NULL
     """)
     assert isinstance(null_text_result, SQLResult)
     assert null_text_result.data is not None
@@ -79,7 +79,7 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
 
     null_where_result = adbc_postgresql_session.execute(
         """
-        SELECT * FROM null_param_test
+        SELECT * FROM null_param_test_adbc
         WHERE (nullable_text = $1 OR ($1 IS NULL AND nullable_text IS NULL))
     """,
         (None,),
@@ -90,7 +90,7 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
 
     many_result = adbc_postgresql_session.execute_many(
         """
-        INSERT INTO null_param_test (nullable_text, nullable_int, required_text)
+        INSERT INTO null_param_test_adbc (nullable_text, nullable_int, required_text)
         VALUES ($1, $2, $3)
     """,
         null_many_data,
@@ -98,7 +98,7 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
     assert isinstance(many_result, SQLResult)
     assert many_result.rows_affected == 3
 
-    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS null_param_test")
+    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS null_param_test_adbc")
 
 
 @pytest.mark.xdist_group("postgres")
@@ -107,7 +107,7 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
     """Test parameter style handling variations with ADBC."""
 
     adbc_postgresql_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS param_style_test (
+        CREATE TABLE IF NOT EXISTS param_style_test_adbc (
             id SERIAL PRIMARY KEY,
             name TEXT,
             value INTEGER,
@@ -117,7 +117,7 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
 
     result1 = adbc_postgresql_session.execute(
         """
-        INSERT INTO param_style_test (name, value, flag) VALUES ($1, $2, $3)
+        INSERT INTO param_style_test_adbc (name, value, flag) VALUES ($1, $2, $3)
     """,
         ("param_test1", 100, True),
     )
@@ -125,7 +125,7 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
 
     result2 = adbc_postgresql_session.execute(
         """
-        INSERT INTO param_style_test (name) VALUES ($1)
+        INSERT INTO param_style_test_adbc (name) VALUES ($1)
     """,
         ("single_param",),
     )
@@ -133,7 +133,7 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
 
     result3 = adbc_postgresql_session.execute(
         """
-        INSERT INTO param_style_test (name, value, flag)
+        INSERT INTO param_style_test_adbc (name, value, flag)
         VALUES ($1, $2, $2 > 0)  -- $2 used twice in different contexts
     """,
         ("repeat_param", 42),
@@ -146,7 +146,7 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
             name,
             value,
             CASE WHEN value = $1 THEN 'match' ELSE 'no_match' END as match_status
-        FROM param_style_test
+        FROM param_style_test_adbc
         WHERE name LIKE $2 || '%' AND value IS NOT NULL
         ORDER BY id
     """,
@@ -155,7 +155,7 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
     assert isinstance(complex_result, SQLResult)
     assert complex_result.data is not None
 
-    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS param_style_test")
+    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS param_style_test_adbc")
 
 
 @pytest.mark.xdist_group("postgres")
@@ -164,25 +164,25 @@ def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     """Test execute_script edge cases with ADBC."""
 
     mixed_script = """
-        CREATE TABLE IF NOT EXISTS script_test (
+        CREATE TABLE IF NOT EXISTS script_test_adbc (
             id SERIAL PRIMARY KEY,
             data TEXT
         );
 
-        INSERT INTO script_test (data) VALUES ('script_data1');
-        INSERT INTO script_test (data) VALUES ('script_data2');
+        INSERT INTO script_test_adbc (data) VALUES ('script_data1');
+        INSERT INTO script_test_adbc (data) VALUES ('script_data2');
 
-        UPDATE script_test SET data = 'updated_' || data WHERE id = 1;
+        UPDATE script_test_adbc SET data = 'updated_' || data WHERE id = 1;
 
         -- Comment in script
-        SELECT COUNT(*) FROM script_test;
+        SELECT COUNT(*) FROM script_test_adbc;
     """
 
     result = adbc_postgresql_session.execute_script(mixed_script)
 
     assert result is None or isinstance(result, (str, SQLResult))
 
-    verify_result = adbc_postgresql_session.execute("SELECT * FROM script_test ORDER BY id")
+    verify_result = adbc_postgresql_session.execute("SELECT * FROM script_test_adbc ORDER BY id")
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 2
@@ -193,7 +193,7 @@ def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
         -- This is a comment
         ;  -- Empty statement
 
-        INSERT INTO script_test (data) VALUES ('comment_test');
+        INSERT INTO script_test_adbc (data) VALUES ('comment_test');
 
         ; -- Another empty statement
         -- Final comment
@@ -204,20 +204,20 @@ def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
 
     transaction_script = """
         BEGIN;
-        INSERT INTO script_test (data) VALUES ('transaction_test1');
-        INSERT INTO script_test (data) VALUES ('transaction_test2');
+        INSERT INTO script_test_adbc (data) VALUES ('transaction_test1');
+        INSERT INTO script_test_adbc (data) VALUES ('transaction_test2');
         COMMIT;
     """
 
     trans_result = adbc_postgresql_session.execute_script(transaction_script)
     assert trans_result is None or isinstance(trans_result, (str, SQLResult))
 
-    final_count = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM script_test")
+    final_count = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM script_test_adbc")
     assert isinstance(final_count, SQLResult)
     assert final_count.data is not None
     assert final_count.data[0]["count"] >= 4
 
-    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS script_test")
+    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS script_test_adbc")
 
 
 @pytest.mark.xdist_group("postgres")
@@ -226,7 +226,7 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     """Test RETURNING clause support with ADBC."""
 
     adbc_postgresql_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS returning_test (
+        CREATE TABLE IF NOT EXISTS returning_test_adbc (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -235,9 +235,9 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
 
     insert_returning = adbc_postgresql_session.execute(
         """
-        INSERT INTO returning_test (name) VALUES ($1) RETURNING id, name, created_at
+        INSERT INTO returning_test_adbc (name) VALUES ($1) RETURNING id, name, created_at
     """,
-        ("returning_test1",),
+        ("returning_test_adbc1",),
     )
 
     assert isinstance(insert_returning, SQLResult)
@@ -246,17 +246,17 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
 
     returned_row = insert_returning.data[0]
     assert returned_row["id"] is not None
-    assert returned_row["name"] == "returning_test1"
+    assert returned_row["name"] == "returning_test_adbc1"
     assert returned_row["created_at"] is not None
 
     update_returning = adbc_postgresql_session.execute(
         """
-        UPDATE returning_test
+        UPDATE returning_test_adbc
         SET name = $1
         WHERE name = $2
         RETURNING id, name
     """,
-        ("updated_name", "returning_test1"),
+        ("updated_name", "returning_test_adbc1"),
     )
 
     assert isinstance(update_returning, SQLResult)
@@ -266,7 +266,7 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
 
     delete_returning = adbc_postgresql_session.execute(
         """
-        DELETE FROM returning_test
+        DELETE FROM returning_test_adbc
         WHERE name = $1
         RETURNING id, name
     """,
@@ -278,12 +278,12 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     assert len(delete_returning.data) == 1
     assert delete_returning.data[0]["name"] == "updated_name"
 
-    count_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM returning_test")
+    count_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM returning_test_adbc")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
     assert count_result.data[0]["count"] == 0
 
-    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS returning_test")
+    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS returning_test_adbc")
 
 
 @pytest.mark.xdist_group("postgres")
@@ -292,7 +292,7 @@ def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     """Test edge cases in data type handling with ADBC."""
 
     adbc_postgresql_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS data_type_edge_test (
+        CREATE TABLE IF NOT EXISTS data_type_edge_test_adbc (
             id SERIAL PRIMARY KEY,
             big_integer BIGINT,
             small_integer SMALLINT,
@@ -334,7 +334,7 @@ def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     for big_int, small_int, real_val, double_val, char_val, varchar_val, text_val, bytea_val in edge_cases:
         result = adbc_postgresql_session.execute(
             """
-            INSERT INTO data_type_edge_test
+            INSERT INTO data_type_edge_test_adbc
             (big_integer, small_integer, real_number, double_number, char_fixed, varchar_var, text_unlimited, bytea_binary)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         """,
@@ -343,7 +343,7 @@ def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
 
         assert isinstance(result, SQLResult)
 
-    edge_result = adbc_postgresql_session.execute("SELECT * FROM data_type_edge_test ORDER BY id")
+    edge_result = adbc_postgresql_session.execute("SELECT * FROM data_type_edge_test_adbc ORDER BY id")
     assert isinstance(edge_result, SQLResult)
     assert edge_result.data is not None
     assert len(edge_result.data) == len(edge_cases)
@@ -356,7 +356,7 @@ def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     assert min_row["big_integer"] == -9223372036854775808
     assert min_row["small_integer"] == -32768
 
-    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS data_type_edge_test")
+    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS data_type_edge_test_adbc")
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -365,7 +365,7 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
     """Test SQLite-specific edge cases with ADBC."""
 
     adbc_sqlite_session.execute_script("""
-        CREATE TABLE dynamic_type_test (
+        CREATE TABLE dynamic_type_test_adbc (
             id INTEGER PRIMARY KEY,
             flexible_column
         )
@@ -376,7 +376,7 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
     for row_id, value in flexible_data:
         result = adbc_sqlite_session.execute(
             """
-            INSERT INTO dynamic_type_test (id, flexible_column) VALUES (?, ?)
+            INSERT INTO dynamic_type_test_adbc (id, flexible_column) VALUES (?, ?)
         """,
             (row_id, value),
         )
@@ -387,7 +387,7 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
             id,
             flexible_column,
             typeof(flexible_column) as column_type
-        FROM dynamic_type_test
+        FROM dynamic_type_test_adbc
         ORDER BY id
     """)
 
@@ -406,7 +406,7 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
             COUNT(flexible_column) as non_null_count,
             GROUP_CONCAT(DISTINCT typeof(flexible_column)) as all_types,
             sqlite_version() as sqlite_ver
-        FROM dynamic_type_test
+        FROM dynamic_type_test_adbc
     """)
 
     assert isinstance(func_result, SQLResult)
@@ -427,7 +427,7 @@ def test_duckdb_specific_edge_cases() -> None:
 
     with config.provide_session() as session:
         session.execute_script("""
-            CREATE TABLE advanced_types_test (
+            CREATE TABLE advanced_types_test_adbc (
                 id INTEGER,
                 complex_array INTEGER[][],
                 nested_struct STRUCT(
@@ -440,7 +440,7 @@ def test_duckdb_specific_edge_cases() -> None:
         """)
 
         result = session.execute("""
-            INSERT INTO advanced_types_test VALUES (
+            INSERT INTO advanced_types_test_adbc VALUES (
                 1,
                 [[1, 2], [3, 4], [5, 6]],
                 {'name': 'complex_test', 'scores': [95, 87, 92], 'metadata': {'created': '2024-01-15T10:00:00', 'active': true}},
@@ -458,7 +458,7 @@ def test_duckdb_specific_edge_cases() -> None:
                 array_length(complex_array, 1) as array_depth1_length,
                 nested_struct.name as struct_name,
                 list_avg(nested_struct.scores) as avg_score
-            FROM advanced_types_test
+            FROM advanced_types_test_adbc
         """)
 
         assert isinstance(complex_result, SQLResult)
@@ -487,20 +487,20 @@ def test_connection_resilience(adbc_postgresql_session: AdbcDriver) -> None:
     assert recovery_result.data[0]["recovery_test"] == 1
 
     adbc_postgresql_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS constraint_test (
+        CREATE TABLE IF NOT EXISTS constraint_test_adbc (
             id SERIAL PRIMARY KEY,
             unique_value TEXT UNIQUE
         )
     """)
 
-    adbc_postgresql_session.execute("INSERT INTO constraint_test (unique_value) VALUES ($1)", ("unique1",))
+    adbc_postgresql_session.execute("INSERT INTO constraint_test_adbc (unique_value) VALUES ($1)", ("unique1",))
 
     with pytest.raises(Exception):
-        adbc_postgresql_session.execute("INSERT INTO constraint_test (unique_value) VALUES ($1)", ("unique1",))
+        adbc_postgresql_session.execute("INSERT INTO constraint_test_adbc (unique_value) VALUES ($1)", ("unique1",))
 
-    post_error_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM constraint_test")
+    post_error_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM constraint_test_adbc")
     assert isinstance(post_error_result, SQLResult)
     assert post_error_result.data is not None
     assert post_error_result.data[0]["count"] == 1
 
-    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS constraint_test")
+    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS constraint_test_adbc")

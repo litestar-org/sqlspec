@@ -24,7 +24,7 @@ def psycopg_bulk_session(psycopg_sync_config) -> Generator[PsycopgSyncDriver, No
     """Create test tables for bulk MERGE tests."""
     with psycopg_sync_config.provide_session() as session:
         session.execute("""
-            CREATE TABLE IF NOT EXISTS products (
+            CREATE TABLE IF NOT EXISTS products_psycopg_sync (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 price NUMERIC(10, 2),
@@ -37,7 +37,7 @@ def psycopg_bulk_session(psycopg_sync_config) -> Generator[PsycopgSyncDriver, No
         yield session
 
         try:
-            session.execute("DROP TABLE IF EXISTS products CASCADE")
+            session.execute("DROP TABLE IF EXISTS products_psycopg_sync CASCADE")
             session.commit()
         except Exception:
             pass
@@ -53,7 +53,7 @@ def test_psycopg_merge_bulk_10_rows(psycopg_bulk_session: PsycopgSyncDriver) -> 
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psycopg_sync", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -65,10 +65,10 @@ def test_psycopg_merge_bulk_10_rows(psycopg_bulk_session: PsycopgSyncDriver) -> 
     result = psycopg_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products_psycopg_sync")
     assert verify_result[0]["count"] == 10
 
-    verify_product = psycopg_bulk_session.execute("SELECT * FROM products WHERE id = %s", [5])
+    verify_product = psycopg_bulk_session.execute("SELECT * FROM products_psycopg_sync WHERE id = %s", [5])
     assert verify_product[0]["name"] == "Product 5"
     assert float(verify_product[0]["price"]) == 15.99
     assert verify_product[0]["stock"] == 50
@@ -91,7 +91,7 @@ def test_psycopg_merge_bulk_100_rows(psycopg_bulk_session: PsycopgSyncDriver) ->
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psycopg_sync", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -103,10 +103,12 @@ def test_psycopg_merge_bulk_100_rows(psycopg_bulk_session: PsycopgSyncDriver) ->
     result = psycopg_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products_psycopg_sync")
     assert verify_result[0]["count"] == 100
 
-    verify_bulk = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products WHERE category = %s", ["bulk"])
+    verify_bulk = psycopg_bulk_session.execute(
+        "SELECT COUNT(*) as count FROM products_psycopg_sync WHERE category = %s", ["bulk"]
+    )
     assert verify_bulk[0]["count"] == 50
 
 
@@ -120,7 +122,7 @@ def test_psycopg_merge_bulk_500_rows(psycopg_bulk_session: PsycopgSyncDriver) ->
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psycopg_sync", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -132,7 +134,7 @@ def test_psycopg_merge_bulk_500_rows(psycopg_bulk_session: PsycopgSyncDriver) ->
     result = psycopg_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products_psycopg_sync")
     assert verify_result[0]["count"] == 500
 
 
@@ -152,7 +154,7 @@ def test_psycopg_merge_bulk_1000_rows(psycopg_bulk_session: PsycopgSyncDriver) -
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psycopg_sync", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -164,7 +166,7 @@ def test_psycopg_merge_bulk_1000_rows(psycopg_bulk_session: PsycopgSyncDriver) -
     result = psycopg_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products_psycopg_sync")
     assert verify_result[0]["count"] == 1000
 
 
@@ -180,7 +182,7 @@ def test_psycopg_merge_bulk_with_nulls(psycopg_bulk_session: PsycopgSyncDriver) 
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psycopg_sync", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -192,14 +194,14 @@ def test_psycopg_merge_bulk_with_nulls(psycopg_bulk_session: PsycopgSyncDriver) 
     result = psycopg_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = psycopg_bulk_session.execute("SELECT * FROM products WHERE id = %s", [2])
+    verify_result = psycopg_bulk_session.execute("SELECT * FROM products_psycopg_sync WHERE id = %s", [2])
     assert verify_result[0]["price"] is None
     assert verify_result[0]["category"] is None
 
-    verify_result = psycopg_bulk_session.execute("SELECT * FROM products WHERE id = %s", [3])
+    verify_result = psycopg_bulk_session.execute("SELECT * FROM products_psycopg_sync WHERE id = %s", [3])
     assert verify_result[0]["stock"] is None
 
-    verify_result = psycopg_bulk_session.execute("SELECT * FROM products WHERE id = %s", [4])
+    verify_result = psycopg_bulk_session.execute("SELECT * FROM products_psycopg_sync WHERE id = %s", [4])
     assert verify_result[0]["price"] is None
     assert verify_result[0]["stock"] is None
     assert verify_result[0]["category"] is None
@@ -208,11 +210,11 @@ def test_psycopg_merge_bulk_with_nulls(psycopg_bulk_session: PsycopgSyncDriver) 
 def test_psycopg_merge_bulk_update_existing(psycopg_bulk_session: PsycopgSyncDriver) -> None:
     """Test bulk MERGE updates existing rows."""
     psycopg_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES (%s, %s, %s, %s, %s)",
+        "INSERT INTO products_psycopg_sync (id, name, price, stock, category) VALUES (%s, %s, %s, %s, %s)",
         [1, "Old Product 1", Decimal("5.00"), 100, "old"],
     )
     psycopg_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES (%s, %s, %s, %s, %s)",
+        "INSERT INTO products_psycopg_sync (id, name, price, stock, category) VALUES (%s, %s, %s, %s, %s)",
         [2, "Old Product 2", Decimal("10.00"), 200, "old"],
     )
 
@@ -224,7 +226,7 @@ def test_psycopg_merge_bulk_update_existing(psycopg_bulk_session: PsycopgSyncDri
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psycopg_sync", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -236,7 +238,7 @@ def test_psycopg_merge_bulk_update_existing(psycopg_bulk_session: PsycopgSyncDri
     result = psycopg_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = psycopg_bulk_session.execute("SELECT * FROM products WHERE id = %s", [1])
+    verify_result = psycopg_bulk_session.execute("SELECT * FROM products_psycopg_sync WHERE id = %s", [1])
     assert verify_result[0]["name"] == "Updated Product 1"
     assert float(verify_result[0]["price"]) == 15.00
     assert verify_result[0]["stock"] == 50
@@ -246,7 +248,7 @@ def test_psycopg_merge_bulk_update_existing(psycopg_bulk_session: PsycopgSyncDri
 def test_psycopg_merge_bulk_mixed_operations(psycopg_bulk_session: PsycopgSyncDriver) -> None:
     """Test bulk MERGE with mixed insert and update operations."""
     psycopg_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES (%s, %s, %s, %s, %s)",
+        "INSERT INTO products_psycopg_sync (id, name, price, stock, category) VALUES (%s, %s, %s, %s, %s)",
         [1, "Existing Product", Decimal("20.00"), 50, "existing"],
     )
 
@@ -259,7 +261,7 @@ def test_psycopg_merge_bulk_mixed_operations(psycopg_bulk_session: PsycopgSyncDr
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psycopg_sync", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -271,12 +273,14 @@ def test_psycopg_merge_bulk_mixed_operations(psycopg_bulk_session: PsycopgSyncDr
     result = psycopg_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_count = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_count = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products_psycopg_sync")
     assert verify_count[0]["count"] == 3
 
-    verify_updated = psycopg_bulk_session.execute("SELECT * FROM products WHERE id = %s", [1])
+    verify_updated = psycopg_bulk_session.execute("SELECT * FROM products_psycopg_sync WHERE id = %s", [1])
     assert verify_updated[0]["name"] == "Updated Existing"
     assert verify_updated[0]["category"] == "updated"
 
-    verify_new = psycopg_bulk_session.execute("SELECT COUNT(*) as count FROM products WHERE category = %s", ["new"])
+    verify_new = psycopg_bulk_session.execute(
+        "SELECT COUNT(*) as count FROM products_psycopg_sync WHERE category = %s", ["new"]
+    )
     assert verify_new[0]["count"] == 2

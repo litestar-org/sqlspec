@@ -26,7 +26,7 @@ async def oracle_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[Or
             "min": 1,
             "max": 5,
         },
-        extension_config={"litestar": {"session_table": "test_sessions"}},
+        extension_config={"litestar": {"session_table": "test_sessions_oracledb_async"}},
     )
     store = OracleAsyncStore(config)
     try:
@@ -40,7 +40,7 @@ async def oracle_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[Or
 
 async def test_store_create_table(oracle_store: OracleAsyncStore) -> None:
     """Test table creation."""
-    assert oracle_store.table_name == "test_sessions"
+    assert oracle_store.table_name == "test_sessions_oracledb_async"
 
 
 async def test_store_set_and_get(oracle_store: OracleAsyncStore) -> None:

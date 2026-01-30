@@ -517,5 +517,5 @@ class FunctionColumn:
         return exp.Ordered(this=self._expression, desc=True)
 
     def __hash__(self) -> int:
-        """Hash based on the SQL expression."""
-        return hash(self._expression.sql())
+        """Hash based on the expression identity."""
+        return hash(id(self._expression))

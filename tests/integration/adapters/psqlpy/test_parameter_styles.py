@@ -111,37 +111,37 @@ async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> No
     """Test parameter handling in CRUD operations."""
 
     insert_result = await psqlpy_session.execute(
-        "INSERT INTO test_table (name) VALUES ($1) RETURNING id", ("param_test",)
+        "INSERT INTO test_table_psqlpy (name) VALUES ($1) RETURNING id", ("param_test",)
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.data is not None
     assert len(insert_result.data) == 1
     record_id = insert_result.data[0]["id"]
 
-    select_result = await psqlpy_session.execute("SELECT name FROM test_table WHERE id = $1", (record_id,))
+    select_result = await psqlpy_session.execute("SELECT name FROM test_table_psqlpy WHERE id = $1", (record_id,))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     assert select_result.data[0]["name"] == "param_test"
 
     update_result = await psqlpy_session.execute(
-        "UPDATE test_table SET name = $1 WHERE id = $2", ("updated_param", record_id)
+        "UPDATE test_table_psqlpy SET name = $1 WHERE id = $2", ("updated_param", record_id)
     )
     assert isinstance(update_result, SQLResult)
 
-    verify_result = await psqlpy_session.execute("SELECT name FROM test_table WHERE id = $1", (record_id,))
+    verify_result = await psqlpy_session.execute("SELECT name FROM test_table_psqlpy WHERE id = $1", (record_id,))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["name"] == "updated_param"
 
-    delete_result = await psqlpy_session.execute("DELETE FROM test_table WHERE id = $1", (record_id,))
+    delete_result = await psqlpy_session.execute("DELETE FROM test_table_psqlpy WHERE id = $1", (record_id,))
     assert isinstance(delete_result, SQLResult)
 
 
 async def test_parameters_with_sql_object(psqlpy_session: PsqlpyDriver) -> None:
     """Test parameter handling with SQL objects."""
 
-    sql_obj = SQL("INSERT INTO test_table (name) VALUES ($1) RETURNING id, name", ("sql_object_test",))
+    sql_obj = SQL("INSERT INTO test_table_psqlpy (name) VALUES ($1) RETURNING id, name", ("sql_object_test",))
 
     result = await psqlpy_session.execute(sql_obj)
     assert isinstance(result, SQLResult)
@@ -204,17 +204,19 @@ async def test_execute_many_parameter_handling(psqlpy_session: PsqlpyDriver, bat
 
     parameters_list = [(f"batch_item_{i}",) for i in range(batch_size)]
 
-    result = await psqlpy_session.execute_many("INSERT INTO test_table (name) VALUES ($1)", parameters_list)
+    result = await psqlpy_session.execute_many("INSERT INTO test_table_psqlpy (name) VALUES ($1)", parameters_list)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == batch_size
 
-    count_result = await psqlpy_session.execute("SELECT COUNT(*) as count FROM test_table")
+    count_result = await psqlpy_session.execute("SELECT COUNT(*) as count FROM test_table_psqlpy")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
     assert count_result.data[0]["count"] == batch_size
 
     for i in range(batch_size):
-        check_result = await psqlpy_session.execute("SELECT name FROM test_table WHERE name = $1", (f"batch_item_{i}",))
+        check_result = await psqlpy_session.execute(
+            "SELECT name FROM test_table_psqlpy WHERE name = $1", (f"batch_item_{i}",)
+        )
         assert isinstance(check_result, SQLResult)
         assert check_result.data is not None
         assert len(check_result.data) == 1
@@ -225,7 +227,7 @@ async def test_comprehensive_none_parameters(psqlpy_session: PsqlpyDriver) -> No
     """Test comprehensive None parameter handling scenarios."""
 
     await psqlpy_session.execute("""
-        CREATE TABLE IF NOT EXISTS test_none_comprehensive (
+        CREATE TABLE IF NOT EXISTS test_none_comprehensive_psqlpy (
             id SERIAL PRIMARY KEY,
             text_col TEXT,
             nullable_text TEXT,
@@ -239,7 +241,7 @@ async def test_comprehensive_none_parameters(psqlpy_session: PsqlpyDriver) -> No
 
     # Test positional parameters with some None values
     result1 = await psqlpy_session.execute(
-        """INSERT INTO test_none_comprehensive (text_col, nullable_text, int_col, nullable_int, bool_col, nullable_bool, json_col)
+        """INSERT INTO test_none_comprehensive_psqlpy (text_col, nullable_text, int_col, nullable_int, bool_col, nullable_bool, json_col)
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, text_col, nullable_text, int_col, nullable_int, bool_col, nullable_bool""",
         ("test_value", None, 42, None, True, None, {"key": "value"}),
     )
@@ -257,7 +259,7 @@ async def test_comprehensive_none_parameters(psqlpy_session: PsqlpyDriver) -> No
 
     # Test named parameters with some None values
     result2 = await psqlpy_session.execute(
-        """INSERT INTO test_none_comprehensive (text_col, nullable_text, int_col, nullable_int, bool_col, nullable_bool, json_col)
+        """INSERT INTO test_none_comprehensive_psqlpy (text_col, nullable_text, int_col, nullable_int, bool_col, nullable_bool, json_col)
            VALUES (:text_col, :nullable_text, :int_col, :nullable_int, :bool_col, :nullable_bool, :json_col)
            RETURNING id, text_col, nullable_text""",
         {
@@ -305,7 +307,7 @@ async def test_none_values_with_execute_many(psqlpy_session: PsqlpyDriver) -> No
     """Test None values with execute_many operations."""
 
     await psqlpy_session.execute("""
-        CREATE TABLE IF NOT EXISTS test_many_none (
+        CREATE TABLE IF NOT EXISTS test_many_none_psqlpy (
             id SERIAL PRIMARY KEY,
             name TEXT,
             description TEXT,
@@ -323,13 +325,15 @@ async def test_none_values_with_execute_many(psqlpy_session: PsqlpyDriver) -> No
     ]
 
     result = await psqlpy_session.execute_many(
-        "INSERT INTO test_many_none (name, description, value) VALUES ($1, $2, $3)", parameters_list
+        "INSERT INTO test_many_none_psqlpy (name, description, value) VALUES ($1, $2, $3)", parameters_list
     )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 5
 
     # Verify the data was inserted correctly
-    verify_result = await psqlpy_session.execute("SELECT name, description, value FROM test_many_none ORDER BY id")
+    verify_result = await psqlpy_session.execute(
+        "SELECT name, description, value FROM test_many_none_psqlpy ORDER BY id"
+    )
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 5
@@ -388,7 +392,7 @@ async def test_none_parameters_in_where_clauses(psqlpy_session: PsqlpyDriver) ->
     """Test None parameters in WHERE clauses and comparisons."""
 
     await psqlpy_session.execute("""
-        CREATE TABLE IF NOT EXISTS test_where_none (
+        CREATE TABLE IF NOT EXISTS test_where_none_psqlpy (
             id SERIAL PRIMARY KEY,
             name TEXT,
             category TEXT,
@@ -398,18 +402,18 @@ async def test_none_parameters_in_where_clauses(psqlpy_session: PsqlpyDriver) ->
 
     # Insert test data
     await psqlpy_session.execute_many(
-        "INSERT INTO test_where_none (name, category, value) VALUES ($1, $2, $3)",
+        "INSERT INTO test_where_none_psqlpy (name, category, value) VALUES ($1, $2, $3)",
         [("item1", "A", 100), ("item2", None, 200), ("item3", "B", None), (None, "C", 300)],
     )
 
     # Test WHERE with None parameter (should not match anything due to SQL NULL semantics)
-    result1 = await psqlpy_session.execute("SELECT * FROM test_where_none WHERE category = $1", (None,))
+    result1 = await psqlpy_session.execute("SELECT * FROM test_where_none_psqlpy WHERE category = $1", (None,))
     assert isinstance(result1, SQLResult)
     assert result1.data is not None
     assert len(result1.data) == 0  # None doesn't equal NULL in SQL
 
     # Test IS NULL with parameter (need to use IS NULL syntax)
-    result2 = await psqlpy_session.execute("SELECT * FROM test_where_none WHERE category IS NULL")
+    result2 = await psqlpy_session.execute("SELECT * FROM test_where_none_psqlpy WHERE category IS NULL")
     assert isinstance(result2, SQLResult)
     assert result2.data is not None
     assert len(result2.data) == 1
@@ -417,7 +421,7 @@ async def test_none_parameters_in_where_clauses(psqlpy_session: PsqlpyDriver) ->
 
     # Test COALESCE with None parameter
     result3 = await psqlpy_session.execute(
-        "SELECT name, COALESCE(category, $1) as category FROM test_where_none WHERE name = $2",
+        "SELECT name, COALESCE(category, $1) as category FROM test_where_none_psqlpy WHERE name = $2",
         ("default_category", "item2"),
     )
     assert isinstance(result3, SQLResult)
@@ -430,7 +434,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     """Test JSONB column None parameter handling comprehensively."""
 
     await psqlpy_session.execute("""
-        CREATE TABLE IF NOT EXISTS test_jsonb_none (
+        CREATE TABLE IF NOT EXISTS test_jsonb_none_psqlpy (
             id SERIAL PRIMARY KEY,
             name TEXT,
             metadata JSONB,
@@ -441,7 +445,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
 
     # Test 1: Insert None values into JSONB columns using positional parameters
     result1 = await psqlpy_session.execute(
-        "INSERT INTO test_jsonb_none (name, metadata, config, tags) VALUES ($1, $2, $3, $4) RETURNING id, name, metadata, config, tags",
+        "INSERT INTO test_jsonb_none_psqlpy (name, metadata, config, tags) VALUES ($1, $2, $3, $4) RETURNING id, name, metadata, config, tags",
         ("test_none_jsonb", None, None, None),
     )
 
@@ -458,7 +462,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     complex_json = {"items": [{"id": 1, "name": "item1"}, {"id": 2, "name": "item2"}], "total": 2}
 
     result2 = await psqlpy_session.execute(
-        "INSERT INTO test_jsonb_none (name, metadata, config, tags) VALUES ($1, $2, $3, $4) RETURNING id, metadata, config, tags",
+        "INSERT INTO test_jsonb_none_psqlpy (name, metadata, config, tags) VALUES ($1, $2, $3, $4) RETURNING id, metadata, config, tags",
         ("test_mixed_jsonb", json_data, None, complex_json),
     )
 
@@ -473,7 +477,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert result2.data[0]["tags"]["total"] == 2
 
     # Test 3: Query JSONB columns with None values
-    result3 = await psqlpy_session.execute("SELECT * FROM test_jsonb_none WHERE metadata IS NULL")
+    result3 = await psqlpy_session.execute("SELECT * FROM test_jsonb_none_psqlpy WHERE metadata IS NULL")
 
     assert isinstance(result3, SQLResult)
     assert result3.data is not None
@@ -481,7 +485,9 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert result3.data[0]["name"] == "test_none_jsonb"
 
     # Test 4: Query JSONB columns filtering by JSON content using positional parameters
-    result4 = await psqlpy_session.execute("SELECT * FROM test_jsonb_none WHERE metadata->>'user_id' = $1", ("123",))
+    result4 = await psqlpy_session.execute(
+        "SELECT * FROM test_jsonb_none_psqlpy WHERE metadata->>'user_id' = $1", ("123",)
+    )
 
     assert isinstance(result4, SQLResult)
     assert result4.data is not None
@@ -494,7 +500,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     params = {"name": "named_jsonb_test", "metadata": {"type": "test", "version": "1.0"}, "config": None}
 
     result5 = await psqlpy_session.execute(
-        """INSERT INTO test_jsonb_none (name, metadata, config)
+        """INSERT INTO test_jsonb_none_psqlpy (name, metadata, config)
            VALUES ($name, $metadata, $config)
            RETURNING name, metadata, config""",
         params,
@@ -509,12 +515,12 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
 
     # Test 6: Update JSONB columns with None values using positional parameters
     await psqlpy_session.execute(
-        "UPDATE test_jsonb_none SET metadata = $1, config = $2 WHERE name = $3",
+        "UPDATE test_jsonb_none_psqlpy SET metadata = $1, config = $2 WHERE name = $3",
         (None, {"updated": True}, "named_jsonb_test"),
     )
 
     result6 = await psqlpy_session.execute(
-        "SELECT metadata, config FROM test_jsonb_none WHERE name = $1", ("named_jsonb_test",)
+        "SELECT metadata, config FROM test_jsonb_none_psqlpy WHERE name = $1", ("named_jsonb_test",)
     )
 
     assert isinstance(result6, SQLResult)
@@ -525,12 +531,12 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
 
     # Test 7: Update JSONB columns with None values using named parameters
     await psqlpy_session.execute(
-        "UPDATE test_jsonb_none SET tags = $new_tags WHERE name = $target_name",
+        "UPDATE test_jsonb_none_psqlpy SET tags = $new_tags WHERE name = $target_name",
         {"new_tags": None, "target_name": "test_mixed_jsonb"},
     )
 
     result7 = await psqlpy_session.execute(
-        "SELECT name, tags FROM test_jsonb_none WHERE name = $name", {"name": "test_mixed_jsonb"}
+        "SELECT name, tags FROM test_jsonb_none_psqlpy WHERE name = $name", {"name": "test_mixed_jsonb"}
     )
 
     assert isinstance(result7, SQLResult)
@@ -540,7 +546,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
 
     # Test 8: Test JSONB operations with None parameters
     result8 = await psqlpy_session.execute(
-        "SELECT name FROM test_jsonb_none WHERE metadata IS NULL AND config IS NOT NULL"
+        "SELECT name FROM test_jsonb_none_psqlpy WHERE metadata IS NULL AND config IS NOT NULL"
     )
 
     assert isinstance(result8, SQLResult)
@@ -550,7 +556,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
 
     # Test 9: Test COALESCE with JSONB and None values
     result9 = await psqlpy_session.execute(
-        "SELECT name, COALESCE(metadata, $1::jsonb) as metadata_or_default FROM test_jsonb_none WHERE name = $2",
+        "SELECT name, COALESCE(metadata, $1::jsonb) as metadata_or_default FROM test_jsonb_none_psqlpy WHERE name = $2",
         ({"default": "value"}, "test_none_jsonb"),
     )
 
@@ -568,7 +574,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     ]
 
     result10 = await psqlpy_session.execute_many(
-        "INSERT INTO test_jsonb_none (name, metadata, config, tags) VALUES ($1, $2, $3, $4)", batch_data
+        "INSERT INTO test_jsonb_none_psqlpy (name, metadata, config, tags) VALUES ($1, $2, $3, $4)", batch_data
     )
 
     assert isinstance(result10, SQLResult)
@@ -576,7 +582,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
 
     # Verify batch insert
     result11 = await psqlpy_session.execute(
-        "SELECT name, metadata, config, tags FROM test_jsonb_none WHERE name LIKE $1 ORDER BY name", ("batch%",)
+        "SELECT name, metadata, config, tags FROM test_jsonb_none_psqlpy WHERE name LIKE $1 ORDER BY name", ("batch%",)
     )
 
     assert isinstance(result11, SQLResult)
@@ -604,12 +610,12 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     # Test 11: Test JSONB array operations with None values
     # Note: Using dicts instead of direct arrays to avoid psqlpy list expansion issues
     await psqlpy_session.execute(
-        "INSERT INTO test_jsonb_none (name, metadata, config, tags) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO test_jsonb_none_psqlpy (name, metadata, config, tags) VALUES ($1, $2, $3, $4)",
         ("array_test", {"numbers": [1, 2, 3]}, None, {"array": [None, "value", None]}),
     )
 
     result12 = await psqlpy_session.execute(
-        "SELECT metadata, tags FROM test_jsonb_none WHERE name = $1", ("array_test",)
+        "SELECT metadata, tags FROM test_jsonb_none_psqlpy WHERE name = $1", ("array_test",)
     )
 
     assert isinstance(result12, SQLResult)
@@ -619,7 +625,9 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert result12.data[0]["tags"]["array"] == [None, "value", None]
 
     # Test 12: Test checking for NULL JSONB fields (simplified to avoid path operator issues)
-    result13 = await psqlpy_session.execute("SELECT name FROM test_jsonb_none WHERE metadata IS NULL OR config IS NULL")
+    result13 = await psqlpy_session.execute(
+        "SELECT name FROM test_jsonb_none_psqlpy WHERE metadata IS NULL OR config IS NULL"
+    )
 
     assert isinstance(result13, SQLResult)
     assert result13.data is not None
@@ -632,7 +640,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
                   metadata IS NULL as metadata_is_null,
                   config IS NULL as config_is_null,
                   tags IS NULL as tags_is_null
-           FROM test_jsonb_none
+           FROM test_jsonb_none_psqlpy
            WHERE name IN (:name1, :name2, :name3)
            ORDER BY name""",
         {"name1": "test_none_jsonb", "name2": "named_jsonb_test", "name3": "batch3"},
@@ -656,6 +664,6 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     # Test 14: Verify parameter count validation still works with JSONB None values
     with pytest.raises(Exception):  # Should raise some kind of parameter error
         await psqlpy_session.execute(
-            "INSERT INTO test_jsonb_none (name, metadata, config, tags) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO test_jsonb_none_psqlpy (name, metadata, config, tags) VALUES ($1, $2, $3, $4)",
             ("incomplete", None, None),  # Missing 4th parameter
         )

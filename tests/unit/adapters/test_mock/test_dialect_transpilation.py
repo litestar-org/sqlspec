@@ -69,6 +69,7 @@ def test_postgres_boolean_type() -> None:
     config = MockSyncConfig(target_dialect="postgres")
 
     with config.provide_session() as session:
+        session.execute("DROP TABLE IF EXISTS bool_test")
         session.execute(
             """
             CREATE TABLE bool_test (

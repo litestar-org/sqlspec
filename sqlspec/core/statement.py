@@ -1,5 +1,6 @@
 """SQL statement and configuration management."""
 
+import hashlib
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
@@ -614,11 +615,21 @@ class SQL:
     def _get_or_parse_expression(self) -> exp.Expression:
         """Get the current expression or parse the raw SQL.
 
+        Prefers cached parsed expression over re-parsing raw SQL.
+
         Returns:
             The SQLGlot expression for this statement
         """
+        # First check processed state for parsed expression
+        if self._processed_state is not Empty and self._processed_state.parsed_expression is not None:
+            return self._processed_state.parsed_expression.copy()
+        # Then check statement_expression (from compilation)
         if self.statement_expression is not None:
             return self.statement_expression.copy()
+        # Then check raw_expression (from construction)
+        if self._raw_expression is not None:
+            return self._raw_expression.copy()
+        # Fall back to parsing if enabled
         if not self._statement_config.enable_parsing:
             return exp.Select().from_(f"({self._raw_sql})")
         try:
@@ -1144,8 +1155,12 @@ class SQL:
         should_prune = prune_columns if prune_columns is not None else self._statement_config.enable_column_pruning
 
         if should_prune:
-            # Generate cache key from expression SQL representation
-            cache_key = f"prune:{new_expr.sql()}" if self._statement_config.enable_caching else None
+            if self._statement_config.enable_caching:
+                # Use stable content-based key instead of object id (which can be reused after GC)
+                expr_sql = new_expr.sql(dialect=self._dialect)
+                cache_key = f"prune:{hashlib.blake2b(expr_sql.encode(), digest_size=8).hexdigest()}"
+            else:
+                cache_key = None
             new_expr = apply_column_pruning(new_expr, dialect=self._dialect, cache_key=cache_key)
 
         return self._create_modified_copy_with_expression(new_expr)

@@ -17,10 +17,13 @@ def sqlite_config() -> Generator[SqliteConfig, None, None]:
 
 
 @pytest.fixture
-def sqlite_session(sqlite_config: SqliteConfig) -> Generator[SqliteDriver, None, None]:
-    """Create SQLite session for testing."""
-    with sqlite_config.provide_session() as session:
+def sqlite_session() -> Generator[SqliteDriver, None, None]:
+    """Create SQLite session for testing with completely isolated database."""
+    # Create fresh config for each test to ensure complete isolation
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as session:
         yield session
+    config.close_pool()
 
 
 def test_tracker_creates_full_schema_on_fresh_install(sqlite_session: SqliteDriver) -> None:

@@ -46,7 +46,7 @@ async def asyncmy_pooled_session(mysql_service: MySQLService) -> AsyncGenerator[
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        await session.execute_script("TRUNCATE TABLE concurrent_test")
+        await session.execute_script("DELETE FROM concurrent_test")
 
         yield session
 
@@ -97,7 +97,7 @@ async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: Async
             status ENUM('active', 'inactive', 'pending') DEFAULT 'pending',
             tags SET('urgent', 'important', 'normal', 'low') DEFAULT 'normal'
         );
-        TRUNCATE TABLE mysql_features;
+        DELETE FROM mysql_features;
     """)
 
     await driver.execute(

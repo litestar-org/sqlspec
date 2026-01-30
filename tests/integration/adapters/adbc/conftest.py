@@ -80,7 +80,7 @@ def adbc_postgresql_session(adbc_postgresql_config: "AdbcConfig") -> "Generator[
     with adbc_postgresql_config.provide_session() as session:
         session.execute_script(
             """
-                CREATE TABLE IF NOT EXISTS test_table (
+                CREATE TABLE IF NOT EXISTS test_table_adbc (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     value INTEGER DEFAULT 0,
@@ -88,14 +88,14 @@ def adbc_postgresql_session(adbc_postgresql_config: "AdbcConfig") -> "Generator[
                 )
             """
         )
-        session.execute("TRUNCATE TABLE test_table")
+        session.execute("DELETE FROM test_table_adbc")
         yield session
         try:
-            session.execute_script("DROP TABLE IF EXISTS test_table")
+            session.execute_script("DROP TABLE IF EXISTS test_table_adbc")
         except Exception:  # pragma: no cover - defensive cleanup
             try:
                 session.execute("ROLLBACK")
-                session.execute_script("DROP TABLE IF EXISTS test_table")
+                session.execute_script("DROP TABLE IF EXISTS test_table_adbc")
             except Exception:
                 pass
 
@@ -118,7 +118,7 @@ def adbc_sqlite_session(adbc_sqlite_config: "AdbcConfig") -> "Generator[AdbcDriv
     with adbc_sqlite_config.provide_session() as session:
         session.execute_script(
             """
-                CREATE TABLE IF NOT EXISTS test_table (
+                CREATE TABLE IF NOT EXISTS test_table_adbc (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
                     value INTEGER DEFAULT 0,
@@ -126,7 +126,7 @@ def adbc_sqlite_session(adbc_sqlite_config: "AdbcConfig") -> "Generator[AdbcDriv
                 )
             """
         )
-        session.execute("DELETE FROM test_table")
+        session.execute("DELETE FROM test_table_adbc")
         yield session
 
 
@@ -149,7 +149,7 @@ def adbc_duckdb_session(adbc_duckdb_config: "AdbcConfig") -> "Generator[AdbcDriv
         with adbc_duckdb_config.provide_session() as session:
             session.execute_script(
                 """
-                    CREATE TABLE IF NOT EXISTS test_table (
+                    CREATE TABLE IF NOT EXISTS test_table_adbc (
                         id INTEGER PRIMARY KEY,
                         name TEXT NOT NULL,
                         value INTEGER DEFAULT 0,
@@ -157,7 +157,7 @@ def adbc_duckdb_session(adbc_duckdb_config: "AdbcConfig") -> "Generator[AdbcDriv
                     )
                 """
             )
-            session.execute("DELETE FROM test_table")
+            session.execute("DELETE FROM test_table_adbc")
             yield session
     except Exception as exc:
         if (

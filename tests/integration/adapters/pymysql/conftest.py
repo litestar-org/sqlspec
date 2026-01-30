@@ -28,6 +28,26 @@ def pymysql_config(mysql_service: "MySQLService") -> "Generator[PyMysqlConfig, N
         config.close_pool()
 
 
+@pytest.fixture(scope="function")
+def pymysql_transaction_config(mysql_service: "MySQLService") -> "Generator[PyMysqlConfig, None, None]":
+    """Create PyMySQL config for transaction testing (autocommit=False)."""
+    config = PyMysqlConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": False,
+        },
+        statement_config=default_statement_config,
+    )
+    yield config
+
+    if config.connection_instance:
+        config.close_pool()
+
+
 @pytest.fixture
 def pymysql_driver(pymysql_config: PyMysqlConfig) -> "Generator[PyMysqlDriver, None, None]":
     """Create PyMySQL driver instance for testing."""
@@ -41,22 +61,23 @@ def pymysql_clean_driver(pymysql_config: PyMysqlConfig) -> "Generator[PyMysqlDri
     with pymysql_config.provide_session() as driver:
         driver.execute("SET sql_notes = 0")
         cleanup_tables = [
-            "test_table",
-            "data_types_test",
-            "user_profiles",
-            "test_parameter_conversion",
-            "transaction_test",
-            "concurrent_test",
-            "arrow_users",
-            "arrow_table_test",
-            "arrow_batch_test",
-            "arrow_params_test",
-            "arrow_empty_test",
-            "arrow_null_test",
-            "arrow_polars_test",
-            "arrow_large_test",
-            "arrow_types_test",
-            "arrow_json_test",
+            "test_table_pymysql",
+            "data_types_test_pymysql",
+            "user_profiles_pymysql",
+            "test_parameter_conversion_pymysql",
+            "transaction_test_pymysql",
+            "concurrent_test_pymysql",
+            "arrow_users_pymysql",
+            "arrow_table_test_pymysql",
+            "arrow_batch_test_pymysql",
+            "arrow_params_test_pymysql",
+            "arrow_empty_test_pymysql",
+            "arrow_null_test_pymysql",
+            "arrow_polars_test_pymysql",
+            "arrow_large_test_pymysql",
+            "arrow_types_test_pymysql",
+            "arrow_json_test_pymysql",
+            "driver_feature_test_pymysql",
         ]
 
         for table in cleanup_tables:

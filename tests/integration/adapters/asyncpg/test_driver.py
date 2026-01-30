@@ -26,7 +26,7 @@ async def asyncpg_session(asyncpg_async_driver: "AsyncpgDriver") -> "AsyncGenera
     try:
         await asyncpg_async_driver.execute_script(
             """
-                CREATE TABLE IF NOT EXISTS test_table (
+                CREATE TABLE IF NOT EXISTS test_table_asyncpg (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     value INTEGER DEFAULT 0,
@@ -34,10 +34,10 @@ async def asyncpg_session(asyncpg_async_driver: "AsyncpgDriver") -> "AsyncGenera
                 )
             """
         )
-        await asyncpg_async_driver.execute_script("TRUNCATE TABLE test_table")
+        await asyncpg_async_driver.execute_script("DELETE FROM test_table_asyncpg")
         yield asyncpg_async_driver
     finally:
-        await asyncpg_async_driver.execute_script("DROP TABLE IF EXISTS test_table")
+        await asyncpg_async_driver.execute_script("DROP TABLE IF EXISTS test_table_asyncpg")
 
 
 async def test_asyncpg_connection_components(postgres_service: "PostgresService") -> None:
@@ -68,12 +68,14 @@ async def test_asyncpg_basic_crud(asyncpg_session: "AsyncpgDriver") -> None:
     """Test basic CRUD operations."""
 
     insert_result = await asyncpg_session.execute(
-        "INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_name", 42)
+        "INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("test_name", 42)
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    select_result = await asyncpg_session.execute("SELECT name, value FROM test_table WHERE name = $1", ("test_name",))
+    select_result = await asyncpg_session.execute(
+        "SELECT name, value FROM test_table_asyncpg WHERE name = $1", ("test_name",)
+    )
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
     assert len(select_result) == 1
@@ -81,21 +83,23 @@ async def test_asyncpg_basic_crud(asyncpg_session: "AsyncpgDriver") -> None:
     assert select_result[0]["value"] == 42
 
     update_result = await asyncpg_session.execute(
-        "UPDATE test_table SET value = $1 WHERE name = $2", (100, "test_name")
+        "UPDATE test_table_asyncpg SET value = $1 WHERE name = $2", (100, "test_name")
     )
     assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
-    verify_result = await asyncpg_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
+    verify_result = await asyncpg_session.execute(
+        "SELECT value FROM test_table_asyncpg WHERE name = $1", ("test_name",)
+    )
     assert isinstance(verify_result, SQLResult)
     assert verify_result is not None
     assert verify_result[0]["value"] == 100
 
-    delete_result = await asyncpg_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
+    delete_result = await asyncpg_session.execute("DELETE FROM test_table_asyncpg WHERE name = $1", ("test_name",))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
-    empty_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table")
+    empty_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table_asyncpg")
     assert isinstance(empty_result, SQLResult)
     assert empty_result is not None
     assert empty_result[0]["count"] == 0
@@ -111,13 +115,13 @@ async def test_asyncpg_basic_crud(asyncpg_session: "AsyncpgDriver") -> None:
 async def test_asyncpg_parameter_styles(asyncpg_session: "AsyncpgDriver", parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
 
-    await asyncpg_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value",))
+    await asyncpg_session.execute("INSERT INTO test_table_asyncpg (name) VALUES ($1)", ("test_value",))
 
     if style == "tuple_binds":
-        sql = "SELECT name FROM test_table WHERE name = $1"
+        sql = "SELECT name FROM test_table_asyncpg WHERE name = $1"
         result = await asyncpg_session.execute(sql, parameters)
     else:
-        sql = "SELECT name FROM test_table WHERE name = $1"
+        sql = "SELECT name FROM test_table_asyncpg WHERE name = $1"
 
         result = await asyncpg_session.execute(sql, (parameters["name"],))
     assert isinstance(result, SQLResult)
@@ -130,16 +134,18 @@ async def test_asyncpg_execute_many(asyncpg_session: "AsyncpgDriver") -> None:
     """Test execute_many functionality."""
     parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = await asyncpg_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", parameters_list)
+    result = await asyncpg_session.execute_many(
+        "INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", parameters_list
+    )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(parameters_list)
 
-    select_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table")
+    select_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table_asyncpg")
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
     assert select_result[0]["count"] == len(parameters_list)
 
-    ordered_result = await asyncpg_session.execute("SELECT name, value FROM test_table ORDER BY name")
+    ordered_result = await asyncpg_session.execute("SELECT name, value FROM test_table_asyncpg ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result is not None
     assert len(ordered_result) == 3
@@ -154,12 +160,12 @@ async def test_asyncpg_execute_script(asyncpg_session: "AsyncpgDriver") -> None:
     test_name1 = f"script_test1_{test_suffix}"
     test_name2 = f"script_test2_{test_suffix}"
 
-    await asyncpg_session.execute(f"DELETE FROM test_table WHERE name LIKE 'script_test%_{test_suffix}'")
+    await asyncpg_session.execute(f"DELETE FROM test_table_asyncpg WHERE name LIKE 'script_test%_{test_suffix}'")
 
     script = f"""
-        INSERT INTO test_table (name, value) VALUES ('{test_name1}', 999);
-        INSERT INTO test_table (name, value) VALUES ('{test_name2}', 888);
-        UPDATE test_table SET value = 1000 WHERE name = '{test_name1}';
+        INSERT INTO test_table_asyncpg (name, value) VALUES ('{test_name1}', 999);
+        INSERT INTO test_table_asyncpg (name, value) VALUES ('{test_name2}', 888);
+        UPDATE test_table_asyncpg SET value = 1000 WHERE name = '{test_name1}';
     """
 
     result = await asyncpg_session.execute_script(script)
@@ -168,7 +174,7 @@ async def test_asyncpg_execute_script(asyncpg_session: "AsyncpgDriver") -> None:
     assert result.operation_type == "SCRIPT"
 
     select_result = await asyncpg_session.execute(
-        f"SELECT name, value FROM test_table WHERE name LIKE 'script_test%_{test_suffix}' ORDER BY name"
+        f"SELECT name, value FROM test_table_asyncpg WHERE name LIKE 'script_test%_{test_suffix}' ORDER BY name"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
@@ -178,17 +184,18 @@ async def test_asyncpg_execute_script(asyncpg_session: "AsyncpgDriver") -> None:
     assert select_result[1]["name"] == test_name2
     assert select_result[1]["value"] == 888
 
-    await asyncpg_session.execute(f"DELETE FROM test_table WHERE name LIKE 'script_test%_{test_suffix}'")
+    await asyncpg_session.execute(f"DELETE FROM test_table_asyncpg WHERE name LIKE 'script_test%_{test_suffix}'")
 
 
 async def test_asyncpg_result_methods(asyncpg_session: "AsyncpgDriver") -> None:
     """Test SQLResult methods."""
 
     await asyncpg_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES ($1, $2)", [("result1", 10), ("result2", 20), ("result3", 30)]
+        "INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)",
+        [("result1", 10), ("result2", 20), ("result3", 30)],
     )
 
-    result = await asyncpg_session.execute("SELECT * FROM test_table ORDER BY name")
+    result = await asyncpg_session.execute("SELECT * FROM test_table_asyncpg ORDER BY name")
     assert isinstance(result, SQLResult)
 
     first_row = result.get_first()
@@ -199,7 +206,7 @@ async def test_asyncpg_result_methods(asyncpg_session: "AsyncpgDriver") -> None:
 
     assert not result.is_empty()
 
-    empty_result = await asyncpg_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent",))
+    empty_result = await asyncpg_session.execute("SELECT * FROM test_table_asyncpg WHERE name = $1", ("nonexistent",))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -211,17 +218,17 @@ async def test_asyncpg_error_handling(asyncpg_session: "AsyncpgDriver") -> None:
     with pytest.raises(Exception):
         await asyncpg_session.execute("INVALID SQL STATEMENT")
 
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("unique_test", 1))
+    await asyncpg_session.execute("INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("unique_test", 1))
 
     with pytest.raises(Exception):
-        await asyncpg_session.execute("SELECT nonexistent_column FROM test_table")
+        await asyncpg_session.execute("SELECT nonexistent_column FROM test_table_asyncpg")
 
 
 async def test_asyncpg_data_types(asyncpg_session: "AsyncpgDriver") -> None:
     """Test PostgreSQL data type handling."""
 
     await asyncpg_session.execute_script("""
-        CREATE TABLE asyncpg_data_types_test (
+        CREATE TABLE data_types_test_asyncpg (
             id SERIAL PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -237,7 +244,7 @@ async def test_asyncpg_data_types(asyncpg_session: "AsyncpgDriver") -> None:
 
     await asyncpg_session.execute(
         """
-        INSERT INTO asyncpg_data_types_test (
+        INSERT INTO data_types_test_asyncpg (
             text_col, integer_col, numeric_col, boolean_col, json_col,
             array_col, date_col, timestamp_col, uuid_col
         ) VALUES (
@@ -258,7 +265,7 @@ async def test_asyncpg_data_types(asyncpg_session: "AsyncpgDriver") -> None:
     )
 
     select_result = await asyncpg_session.execute(
-        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM asyncpg_data_types_test"
+        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM data_types_test_asyncpg"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
@@ -270,16 +277,18 @@ async def test_asyncpg_data_types(asyncpg_session: "AsyncpgDriver") -> None:
     assert row["boolean_col"] is True
     assert row["array_col"] == [1, 2, 3]
 
-    await asyncpg_session.execute_script("DROP TABLE asyncpg_data_types_test")
+    await asyncpg_session.execute_script("DROP TABLE data_types_test_asyncpg")
 
 
 async def test_asyncpg_transactions(asyncpg_session: "AsyncpgDriver") -> None:
     """Test transaction behavior."""
 
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("transaction_test", 100))
+    await asyncpg_session.execute(
+        "INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("transaction_test", 100)
+    )
 
     result = await asyncpg_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = $1", ("transaction_test",)
+        "SELECT COUNT(*) as count FROM test_table_asyncpg WHERE name = $1", ("transaction_test",)
     )
     assert isinstance(result, SQLResult)
     assert result is not None
@@ -291,12 +300,12 @@ async def test_asyncpg_complex_queries(asyncpg_session: "AsyncpgDriver") -> None
 
     test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
-    await asyncpg_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
+    await asyncpg_session.execute_many("INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", test_data)
 
     join_result = await asyncpg_session.execute("""
         SELECT t1.name as name1, t2.name as name2, t1.value as value1, t2.value as value2
-        FROM test_table t1
-        CROSS JOIN test_table t2
+        FROM test_table_asyncpg t1
+        CROSS JOIN test_table_asyncpg t2
         WHERE t1.value < t2.value
         ORDER BY t1.name, t2.name
         LIMIT 3
@@ -311,7 +320,7 @@ async def test_asyncpg_complex_queries(asyncpg_session: "AsyncpgDriver") -> None
             AVG(value) as avg_value,
             MIN(value) as min_value,
             MAX(value) as max_value
-        FROM test_table
+        FROM test_table_asyncpg
     """)
     assert isinstance(agg_result, SQLResult)
     assert agg_result is not None
@@ -322,8 +331,8 @@ async def test_asyncpg_complex_queries(asyncpg_session: "AsyncpgDriver") -> None
 
     subquery_result = await asyncpg_session.execute("""
         SELECT name, value
-        FROM test_table
-        WHERE value > (SELECT AVG(value) FROM test_table)
+        FROM test_table_asyncpg
+        WHERE value > (SELECT AVG(value) FROM test_table_asyncpg)
         ORDER BY value
     """)
     assert isinstance(subquery_result, SQLResult)
@@ -337,7 +346,7 @@ async def test_asyncpg_schema_operations(asyncpg_session: "AsyncpgDriver") -> No
     """Test schema operations (DDL)."""
 
     await asyncpg_session.execute_script("""
-        CREATE TABLE schema_test (
+        CREATE TABLE schema_test_asyncpg (
             id SERIAL PRIMARY KEY,
             description TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -345,7 +354,7 @@ async def test_asyncpg_schema_operations(asyncpg_session: "AsyncpgDriver") -> No
     """)
 
     insert_result = await asyncpg_session.execute(
-        "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
+        "INSERT INTO schema_test_asyncpg (description) VALUES ($1)", ("test description",)
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
@@ -353,23 +362,25 @@ async def test_asyncpg_schema_operations(asyncpg_session: "AsyncpgDriver") -> No
     info_result = await asyncpg_session.execute("""
         SELECT column_name, data_type
         FROM information_schema.columns
-        WHERE table_name = 'schema_test'
+        WHERE table_name = 'schema_test_asyncpg'
         ORDER BY ordinal_position
     """)
     assert isinstance(info_result, SQLResult)
     assert info_result is not None
     assert len(info_result) == 3
 
-    await asyncpg_session.execute_script("DROP TABLE schema_test")
+    await asyncpg_session.execute_script("DROP TABLE schema_test_asyncpg")
 
 
 async def test_asyncpg_column_names_and_metadata(asyncpg_session: "AsyncpgDriver") -> None:
     """Test column names and result metadata."""
 
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("metadata_test", 123))
+    await asyncpg_session.execute(
+        "INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("metadata_test", 123)
+    )
 
     result = await asyncpg_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
+        "SELECT id, name, value, created_at FROM test_table_asyncpg WHERE name = $1", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -388,19 +399,21 @@ async def test_asyncpg_performance_bulk_operations(asyncpg_session: "AsyncpgDriv
 
     bulk_data = [(f"bulk_user_{i}", i * 10) for i in range(100)]
 
-    result = await asyncpg_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", bulk_data)
+    result = await asyncpg_session.execute_many(
+        "INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", bulk_data
+    )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 100
 
     select_result = await asyncpg_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'"
+        "SELECT COUNT(*) as count FROM test_table_asyncpg WHERE name LIKE 'bulk_user_%'"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
     assert select_result[0]["count"] == 100
 
     page_result = await asyncpg_session.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
+        "SELECT name, value FROM test_table_asyncpg WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
     )
     assert isinstance(page_result, SQLResult)
     assert page_result is not None
@@ -412,7 +425,7 @@ async def test_asyncpg_postgresql_specific_features(asyncpg_session: "AsyncpgDri
     """Test PostgreSQL-specific features."""
 
     returning_result = await asyncpg_session.execute(
-        "INSERT INTO test_table (name, value) VALUES ($1, $2) RETURNING id, name", ("returning_test", 999)
+        "INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2) RETURNING id, name", ("returning_test", 999)
     )
     assert isinstance(returning_result, SQLResult)
     assert returning_result is not None
@@ -420,7 +433,8 @@ async def test_asyncpg_postgresql_specific_features(asyncpg_session: "AsyncpgDri
     assert returning_result[0]["name"] == "returning_test"
 
     await asyncpg_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES ($1, $2)", [("window1", 10), ("window2", 20), ("window3", 30)]
+        "INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)",
+        [("window1", 10), ("window2", 20), ("window3", 30)],
     )
 
     window_result = await asyncpg_session.execute("""
@@ -429,7 +443,7 @@ async def test_asyncpg_postgresql_specific_features(asyncpg_session: "AsyncpgDri
             value,
             ROW_NUMBER() OVER (ORDER BY value) as row_num,
             LAG(value) OVER (ORDER BY value) as prev_value
-        FROM test_table
+        FROM test_table_asyncpg
         WHERE name LIKE 'window%'
         ORDER BY value
     """)
@@ -444,23 +458,25 @@ async def test_asyncpg_json_operations(asyncpg_session: "AsyncpgDriver") -> None
     """Test PostgreSQL JSON operations."""
 
     await asyncpg_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS json_test (
+        CREATE TABLE IF NOT EXISTS json_test_asyncpg (
             id SERIAL PRIMARY KEY,
             data JSONB
         );
-        DELETE FROM json_test;
+        DELETE FROM json_test_asyncpg;
     """)
 
     json_data = {"name": "test", "age": 30, "tags": ["postgres", "json"]}
-    await asyncpg_session.execute("INSERT INTO json_test (data) VALUES ($1)", (json_data,))
+    await asyncpg_session.execute("INSERT INTO json_test_asyncpg (data) VALUES ($1)", (json_data,))
 
-    json_result = await asyncpg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")
+    json_result = await asyncpg_session.execute(
+        "SELECT data->>'name' as name, data->>'age' as age FROM json_test_asyncpg"
+    )
     assert isinstance(json_result, SQLResult)
     assert json_result is not None
     assert json_result[0]["name"] == "test"
     assert json_result[0]["age"] == "30"
 
-    await asyncpg_session.execute_script("DROP TABLE json_test")
+    await asyncpg_session.execute_script("DROP TABLE json_test_asyncpg")
 
 
 async def test_asset_maintenance_alert_complex_query(asyncpg_session: "AsyncpgDriver") -> None:
@@ -646,14 +662,14 @@ async def test_for_update_locking(asyncpg_session: "AsyncpgDriver") -> None:
     """Test FOR UPDATE row locking."""
 
     # Insert test data
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_lock", 100))
+    await asyncpg_session.execute("INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("test_lock", 100))
 
     try:
         await asyncpg_session.begin()
 
         # Test basic FOR UPDATE
         result = await asyncpg_session.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "test_lock").for_update()
+            sql.select("id", "name", "value").from_("test_table_asyncpg").where_eq("name", "test_lock").for_update()
         )
         assert result is not None
         assert result["name"] == "test_lock"
@@ -684,14 +700,14 @@ async def test_for_update_skip_locked(postgres_service: "PostgresService") -> No
             async with config.provide_session() as session2:
                 # Setup test data in session1
                 await session1.execute_script("""
-                    DROP TABLE IF EXISTS test_lock_table;
-                    CREATE TABLE test_lock_table (
+                    DROP TABLE IF EXISTS test_lock_table_asyncpg;
+                    CREATE TABLE test_lock_table_asyncpg (
                         id SERIAL PRIMARY KEY,
                         name TEXT NOT NULL UNIQUE,
                         status TEXT DEFAULT 'pending'
                     );
                 """)
-                await session1.execute("INSERT INTO test_lock_table (name) VALUES ($1)", ("lock_test",))
+                await session1.execute("INSERT INTO test_lock_table_asyncpg (name) VALUES ($1)", ("lock_test",))
 
                 try:
                     # Verify test works with a simpler approach:
@@ -702,7 +718,7 @@ async def test_for_update_skip_locked(postgres_service: "PostgresService") -> No
                         session1.select_one_or_none(
                             sql
                             .select("*")
-                            .from_("test_lock_table")
+                            .from_("test_lock_table_asyncpg")
                             .where_eq("name", "nonexistent")
                             .for_update(skip_locked=True)
                         ),
@@ -717,7 +733,7 @@ async def test_for_update_skip_locked(postgres_service: "PostgresService") -> No
                     # Instead of expecting SKIP LOCKED to work, just test NOWAIT
                     await session1.begin()
                     locked = await session1.select_one(
-                        sql.select("*").from_("test_lock_table").where_eq("name", "lock_test").for_update()
+                        sql.select("*").from_("test_lock_table_asyncpg").where_eq("name", "lock_test").for_update()
                     )
                     assert locked is not None
 
@@ -729,7 +745,7 @@ async def test_for_update_skip_locked(postgres_service: "PostgresService") -> No
                             session2.select_one(
                                 sql
                                 .select("*")
-                                .from_("test_lock_table")
+                                .from_("test_lock_table_asyncpg")
                                 .where_eq("name", "lock_test")
                                 .for_update(nowait=True)
                             ),
@@ -751,7 +767,7 @@ async def test_for_update_skip_locked(postgres_service: "PostgresService") -> No
                         pass
                     raise
                 finally:
-                    await session1.execute_script("DROP TABLE IF EXISTS test_lock_table")
+                    await session1.execute_script("DROP TABLE IF EXISTS test_lock_table_asyncpg")
     finally:
         await config.close_pool()
 
@@ -761,14 +777,14 @@ async def test_for_update_nowait(asyncpg_session: "AsyncpgDriver") -> None:
     """Test FOR UPDATE NOWAIT."""
 
     # Insert test data
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_nowait", 200))
+    await asyncpg_session.execute("INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("test_nowait", 200))
 
     try:
         await asyncpg_session.begin()
 
         # Test FOR UPDATE NOWAIT
         result = await asyncpg_session.select_one(
-            sql.select("*").from_("test_table").where_eq("name", "test_nowait").for_update(nowait=True)
+            sql.select("*").from_("test_table_asyncpg").where_eq("name", "test_nowait").for_update(nowait=True)
         )
         assert result is not None
         assert result["name"] == "test_nowait"
@@ -784,14 +800,14 @@ async def test_for_share_locking(asyncpg_session: "AsyncpgDriver") -> None:
     """Test FOR SHARE row locking."""
 
     # Insert test data
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_share", 300))
+    await asyncpg_session.execute("INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("test_share", 300))
 
     try:
         await asyncpg_session.begin()
 
         # Test basic FOR SHARE
         result = await asyncpg_session.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "test_share").for_share()
+            sql.select("id", "name", "value").from_("test_table_asyncpg").where_eq("name", "test_share").for_share()
         )
         assert result is not None
         assert result["name"] == "test_share"
@@ -809,14 +825,14 @@ async def test_for_update_of_tables(asyncpg_session: "AsyncpgDriver") -> None:
 
     # Create additional table for join
     await asyncpg_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS test_users (
+        CREATE TABLE IF NOT EXISTS test_users_asyncpg (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL
         )
     """)
 
-    await asyncpg_session.execute("INSERT INTO test_users (name) VALUES ($1)", ("user1",))
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("join_test", 400))
+    await asyncpg_session.execute("INSERT INTO test_users_asyncpg (name) VALUES ($1)", ("user1",))
+    await asyncpg_session.execute("INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("join_test", 400))
 
     try:
         await asyncpg_session.begin()
@@ -825,10 +841,10 @@ async def test_for_update_of_tables(asyncpg_session: "AsyncpgDriver") -> None:
         result = await asyncpg_session.select_one(
             sql
             .select("t.id", "t.name", "u.name")
-            .from_("test_table t")
-            .join("test_users u", "t.id = u.id")
+            .from_("test_table_asyncpg t")
+            .join("test_users_asyncpg u", "t.id = u.id")
             .where_eq("t.name", "join_test")
-            .for_update(of=["t"])  # Only lock test_table, not test_users
+            .for_update(of=["t"])  # Only lock test_table, not test_users_asyncpg
         )
         assert result is not None
 
@@ -837,19 +853,19 @@ async def test_for_update_of_tables(asyncpg_session: "AsyncpgDriver") -> None:
         await asyncpg_session.rollback()
         raise
     finally:
-        await asyncpg_session.execute_script("DROP TABLE IF EXISTS test_users")
+        await asyncpg_session.execute_script("DROP TABLE IF EXISTS test_users_asyncpg")
 
 
 async def test_asyncpg_statement_stack_batch(asyncpg_session: "AsyncpgDriver") -> None:
     """Ensure StatementStack batches operations under asyncpg native path."""
 
-    await asyncpg_session.execute_script("TRUNCATE TABLE test_table RESTART IDENTITY")
+    await asyncpg_session.execute_script("DELETE FROM test_table_asyncpg")
 
     stack = (
         StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "stack-one", 10))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (2, "stack-two", 20))
-        .push_execute("SELECT COUNT(*) AS total_rows FROM test_table WHERE name LIKE $1", ("stack-%",))
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "stack-one", 10))
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (2, "stack-two", 20))
+        .push_execute("SELECT COUNT(*) AS total_rows FROM test_table_asyncpg WHERE name LIKE $1", ("stack-%",))
     )
 
     results = await asyncpg_session.execute_stack(stack)
@@ -866,13 +882,15 @@ async def test_asyncpg_statement_stack_batch(asyncpg_session: "AsyncpgDriver") -
 async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: "AsyncpgDriver") -> None:
     """Stack execution should surface errors while continuing operations when requested."""
 
-    await asyncpg_session.execute_script("TRUNCATE TABLE test_table RESTART IDENTITY")
+    await asyncpg_session.execute_script("DELETE FROM test_table_asyncpg")
 
     stack = (
         StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "stack-initial", 5))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "stack-duplicate", 10))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (2, "stack-final", 15))
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "stack-initial", 5))
+        .push_execute(
+            "INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "stack-duplicate", 10)
+        )
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (2, "stack-final", 15))
     )
 
     results = await asyncpg_session.execute_stack(stack, continue_on_error=True)
@@ -882,7 +900,7 @@ async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: "Async
     assert results[1].error is not None
     assert results[2].rows_affected == 1
 
-    verify = await asyncpg_session.execute("SELECT COUNT(*) AS total FROM test_table")
+    verify = await asyncpg_session.execute("SELECT COUNT(*) AS total FROM test_table_asyncpg")
     assert verify.data is not None
     assert verify.data[0]["total"] == 2
 
@@ -890,12 +908,12 @@ async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: "Async
 async def test_asyncpg_statement_stack_marks_prepared(asyncpg_session: "AsyncpgDriver") -> None:
     """Prepared statement metadata should be attached to stack results."""
 
-    await asyncpg_session.execute_script("TRUNCATE TABLE test_table RESTART IDENTITY")
+    await asyncpg_session.execute_script("DELETE FROM test_table_asyncpg")
 
     stack = (
         StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "stack-prepared", 50))
-        .push_execute("SELECT value FROM test_table WHERE id = $1", (1,))
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "stack-prepared", 50))
+        .push_execute("SELECT value FROM test_table_asyncpg WHERE id = $1", (1,))
     )
 
     results = await asyncpg_session.execute_stack(stack)

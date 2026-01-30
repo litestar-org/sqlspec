@@ -38,7 +38,7 @@ async def psqlpy_vector_session(psqlpy_driver: PsqlpyDriver) -> AsyncGenerator[P
             """
         )
 
-        await psqlpy_driver.execute_script("TRUNCATE TABLE vector_docs_psqlpy")
+        await psqlpy_driver.execute_script("DELETE FROM vector_docs_psqlpy")
 
         await psqlpy_driver.execute(
             "INSERT INTO vector_docs_psqlpy (content, embedding) VALUES ($1, $2)", ("doc1", "[0.1, 0.2, 0.3]")

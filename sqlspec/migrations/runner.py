@@ -68,6 +68,7 @@ class BaseMigrationRunner(ABC):
         runtime: "ObservabilityRuntime | None" = None,
         description_hints: "TemplateDescriptionHints | None" = None,
         summary_only: bool = False,
+        use_logger: bool = False,
     ) -> None:
         """Initialize the migration runner.
 
@@ -79,6 +80,7 @@ class BaseMigrationRunner(ABC):
             runtime: Observability runtime shared with command/context consumers.
             description_hints: Hints for extracting migration descriptions.
             summary_only: Whether summary-only logging is enabled.
+            use_logger: Whether to emit log output. Defaults to False (CLI mode).
         """
         self.migrations_path = migrations_path
         self.extension_migrations = extension_migrations or {}
@@ -93,13 +95,24 @@ class BaseMigrationRunner(ABC):
         self._metadata_cache: dict[str, _CachedMigrationMetadata] = {}
         self.description_hints = description_hints or TemplateDescriptionHints()
         self.summary_only = summary_only
+        self.use_logger = use_logger
 
     def set_summary_only(self, value: bool) -> None:
         """Set summary-only logging behavior for migration runner."""
         self.summary_only = value
 
+    def set_use_logger(self, value: bool) -> None:
+        """Set whether to emit log output.
+
+        Args:
+            value: True to enable logging, False for silent mode (CLI default).
+        """
+        self.use_logger = value
+
     def _log_migration_event(self, level: int, event: str, **extra_fields: Any) -> None:
-        """Log migration events, suppressing info logs in summary-only mode."""
+        """Log migration events, respecting use_logger and summary_only settings."""
+        if not self.use_logger:
+            return
         if self.summary_only and level == logging.INFO:
             return
         log_with_context(logger, level, event, **extra_fields)
@@ -192,11 +205,12 @@ class BaseMigrationRunner(ABC):
         added = curr_keys - prev_keys
         removed = prev_keys - curr_keys
         modified = {key for key in prev_keys & curr_keys if previous[key] != current[key]}
-        logger.info(
-            "Migration listing cache invalidated (added=%d, removed=%d, modified=%d)",
-            len(added),
-            len(removed),
-            len(modified),
+        self._log_migration_event(
+            logging.INFO,
+            "migration.listing.invalidated",
+            added_count=len(added),
+            removed_count=len(removed),
+            modified_count=len(modified),
         )
         self._metric("migrations.listing.cache_invalidations")
         if added:
@@ -272,7 +286,7 @@ class BaseMigrationRunner(ABC):
         if cached_listing is not None and self._listing_digest == digest:
             self._metric("migrations.listing.cache_hit")
             self._metric("migrations.listing.files_cached", float(len(cached_listing)))
-            logger.debug("Migration listing cache hit (%d files)", len(cached_listing))
+            self._log_migration_event(logging.DEBUG, "migration.listing.cache_hit", file_count=len(cached_listing))
             return cached_listing
 
         files = self._build_sorted_listing(entries)
@@ -287,7 +301,7 @@ class BaseMigrationRunner(ABC):
         self._listing_digest = digest
 
         if previous_digest is None:
-            logger.debug("Primed migration listing cache with %d files", len(files))
+            self._log_migration_event(logging.DEBUG, "migration.listing.cache_primed", file_count=len(files))
         else:
             self._log_listing_invalidation(previous_signatures, signatures)
 
@@ -316,7 +330,7 @@ class BaseMigrationRunner(ABC):
             and cached_metadata.size == stat_result.st_size
         ):
             self._metric("migrations.metadata.cache_hit")
-            logger.debug("Migration metadata cache hit: %s", cache_key)
+            self._log_migration_event(logging.DEBUG, "migration.metadata.cache_hit", file_path=cache_key)
             metadata = cached_metadata.clone()
             metadata["file_path"] = file_path
             return metadata
@@ -351,9 +365,9 @@ class BaseMigrationRunner(ABC):
             metadata=dict(metadata), mtime_ns=stat_result.st_mtime_ns, size=stat_result.st_size
         )
         if cached_metadata:
-            logger.debug("Migration metadata cache invalidated: %s", cache_key)
+            self._log_migration_event(logging.DEBUG, "migration.metadata.cache_invalidated", file_path=cache_key)
         else:
-            logger.debug("Cached migration metadata: %s", cache_key)
+            self._log_migration_event(logging.DEBUG, "migration.metadata.cached", file_path=cache_key)
         return metadata
 
     def _extract_description(self, content: str, file_path: Path) -> str:
@@ -723,7 +737,9 @@ class SyncMigrationRunner(BaseMigrationRunner):
         # don't raise/warn - just proceed to check if the method exists
         if f"has_{direction}grade" in migration and not migration.get(f"has_{direction}grade"):
             if direction == "down":
-                logger.warning("Migration %s has no downgrade query", migration.get("version"))
+                self._log_migration_event(
+                    logging.WARNING, "migration.downgrade.missing", version=migration.get("version")
+                )
                 return None
             msg = f"Migration {migration.get('version')} has no upgrade query"
             raise ValueError(msg)
@@ -740,7 +756,9 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         except Exception as e:
             if direction == "down":
-                logger.warning("Failed to load downgrade for migration %s: %s", migration.get("version"), e)
+                self._log_migration_event(
+                    logging.WARNING, "migration.downgrade.load_failed", version=migration.get("version"), error=str(e)
+                )
                 return None
             msg = f"Failed to load upgrade for migration {migration.get('version')}: {e}"
             raise ValueError(msg) from e
@@ -778,7 +796,9 @@ class SyncMigrationRunner(BaseMigrationRunner):
                         all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
 
                 except Exception as e:
-                    logger.debug("Failed to load Python migration %s: %s", file_path, e)
+                    self._log_migration_event(
+                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
+                    )
 
         return all_queries
 
@@ -1047,7 +1067,9 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         # don't raise/warn - just proceed to check if the method exists
         if f"has_{direction}grade" in migration and not migration.get(f"has_{direction}grade"):
             if direction == "down":
-                logger.warning("Migration %s has no downgrade query", migration.get("version"))
+                self._log_migration_event(
+                    logging.WARNING, "migration.downgrade.missing", version=migration.get("version")
+                )
                 return None
             msg = f"Migration {migration.get('version')} has no upgrade query"
             raise ValueError(msg)
@@ -1060,7 +1082,9 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         except Exception as e:
             if direction == "down":
-                logger.warning("Failed to load downgrade for migration %s: %s", migration.get("version"), e)
+                self._log_migration_event(
+                    logging.WARNING, "migration.downgrade.load_failed", version=migration.get("version"), error=str(e)
+                )
                 return None
             msg = f"Failed to load upgrade for migration {migration.get('version')}: {e}"
             raise ValueError(msg) from e
@@ -1098,7 +1122,9 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                         all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
 
                 except Exception as e:
-                    logger.debug("Failed to load Python migration %s: %s", file_path, e)
+                    self._log_migration_event(
+                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
+                    )
 
         return all_queries
 

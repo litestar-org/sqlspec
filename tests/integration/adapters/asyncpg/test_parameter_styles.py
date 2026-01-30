@@ -260,7 +260,7 @@ async def test_asyncpg_parameter_with_json(asyncpg_parameters_session: AsyncpgDr
             name TEXT,
             metadata JSONB
         );
-        TRUNCATE TABLE test_json RESTART IDENTITY;
+        DELETE FROM test_json;
     """)
 
     json_data = [
@@ -293,7 +293,7 @@ async def test_asyncpg_parameter_with_arrays(asyncpg_parameters_session: Asyncpg
             tags TEXT[],
             scores INTEGER[]
         );
-        TRUNCATE TABLE test_arrays RESTART IDENTITY;
+        DELETE FROM test_arrays;
     """)
 
     array_data = [

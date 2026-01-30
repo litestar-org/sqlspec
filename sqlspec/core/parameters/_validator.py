@@ -1,5 +1,6 @@
 """Parameter extraction utilities."""
 
+import hashlib
 import re
 from collections import OrderedDict
 
@@ -90,9 +91,11 @@ class ParameterValidator:
         if self._cache_max_size <= 0:
             return self._extract_parameters_uncached(sql)
 
-        cached_result = self._parameter_cache.get(sql)
+        # Use blake2b hash of SQL string as cache key for memory efficiency
+        cache_key = hashlib.blake2b(sql.encode(), digest_size=8).hexdigest()
+        cached_result = self._parameter_cache.get(cache_key)
         if cached_result is not None:
-            self._parameter_cache.move_to_end(sql)
+            self._parameter_cache.move_to_end(cache_key)
             self._cache_hits += 1
             return cached_result
         self._cache_misses += 1
@@ -100,7 +103,7 @@ class ParameterValidator:
         if not any(c in sql for c in ("?", "%", ":", "@", "$")):
             if len(self._parameter_cache) >= self._cache_max_size:
                 self._parameter_cache.popitem(last=False)
-            self._parameter_cache[sql] = []
+            self._parameter_cache[cache_key] = []
             return []
 
         parameters: list[ParameterInfo] = []
@@ -129,7 +132,7 @@ class ParameterValidator:
 
         if len(self._parameter_cache) >= self._cache_max_size:
             self._parameter_cache.popitem(last=False)
-        self._parameter_cache[sql] = parameters
+        self._parameter_cache[cache_key] = parameters
         return parameters
 
     def _extract_parameters_uncached(self, sql: str) -> "list[ParameterInfo]":

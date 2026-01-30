@@ -58,7 +58,7 @@ def duckdb_session() -> Generator[AdbcDriver, None, None]:
 def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL-specific features with ADBC."""
     postgresql_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS pg_test (
+        CREATE TABLE IF NOT EXISTS pg_test_adbc (
             id SERIAL PRIMARY KEY,
             jsonb_col JSONB,
             array_col INTEGER[],
@@ -70,7 +70,7 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
 
     postgresql_session.execute(
         """
-        INSERT INTO pg_test (jsonb_col, array_col, inet_col, tsvector_col)
+        INSERT INTO pg_test_adbc (jsonb_col, array_col, inet_col, tsvector_col)
         VALUES ($1::jsonb, $2, $3::inet, to_tsvector($4))
     """,
         (
@@ -81,7 +81,7 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
         ),
     )
 
-    result = postgresql_session.execute("SELECT * FROM pg_test")
+    result = postgresql_session.execute("SELECT * FROM pg_test_adbc")
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
@@ -98,7 +98,7 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
             jsonb_col ->> 'name' as name,
             jsonb_col ->> 'age' as age,
             array_length(array_col, 1) as array_len
-        FROM pg_test
+        FROM pg_test_adbc
     """)
 
     assert json_query.data is not None
@@ -106,15 +106,15 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
     assert json_query.data[0]["age"] == "30"
     assert json_query.data[0]["array_len"] == 5
 
-    postgresql_session.execute_script("DROP TABLE IF EXISTS pg_test")
+    postgresql_session.execute_script("DROP TABLE IF EXISTS pg_test_adbc")
 
 
 @pytest.mark.xdist_group("sqlite")
 @pytest.mark.adbc
-def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
+def test_sqlite_adbc_specific_features(sqlite_session: AdbcDriver) -> None:
     """Test SQLite-specific features with ADBC."""
     sqlite_session.execute_script("""
-        CREATE TABLE test_sqlite (
+        CREATE TABLE test_sqlite_adbc (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             data BLOB,
@@ -126,7 +126,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
     test_blob = b"SQLite binary data test"
     sqlite_session.execute_many(
         """
-        INSERT INTO test_sqlite (name, data, value) VALUES (?, ?, ?)
+        INSERT INTO test_sqlite_adbc (name, data, value) VALUES (?, ?, ?)
     """,
         [("test1", test_blob, math.pi), ("test2", None, math.e), ("test3", b"another blob", 1.41421)],
     )
@@ -136,7 +136,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
             *,
             length(data) as blob_length,
             typeof(value) as value_type
-        FROM test_sqlite
+        FROM test_sqlite_adbc
         ORDER BY id
     """)
 
@@ -160,7 +160,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
             AVG(value) as avg_value,
             GROUP_CONCAT(name) as all_names,
             sqlite_version() as version
-        FROM test_sqlite
+        FROM test_sqlite_adbc
     """)
 
     assert func_result.data is not None
@@ -176,7 +176,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
 def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
     """Test DuckDB-specific features with ADBC."""
     duckdb_session.execute_script("""
-        CREATE TABLE duckdb_test (
+        CREATE TABLE duckdb_test_adbc (
             id INTEGER PRIMARY KEY,
             name TEXT,
             numbers INTEGER[],
@@ -188,7 +188,7 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
     """)
 
     duckdb_session.execute("""
-        INSERT INTO duckdb_test VALUES (
+        INSERT INTO duckdb_test_adbc VALUES (
             1,
             'DuckDB Test',
             [1, 2, 3, 4, 5],
@@ -199,7 +199,7 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
         )
     """)
 
-    result = duckdb_session.execute("SELECT * FROM duckdb_test")
+    result = duckdb_session.execute("SELECT * FROM duckdb_test_adbc")
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
@@ -219,7 +219,7 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
             array_length(numbers) as array_len,
             list_sum(numbers) as numbers_sum,
             json_extract_string(json_col, '$.type') as json_type
-        FROM duckdb_test
+        FROM duckdb_test_adbc
     """)
 
     assert analytical_result.data is not None
@@ -243,15 +243,15 @@ def test_postgresql_dialect_detection(postgresql_session: AdbcDriver) -> None:
 
 @pytest.mark.xdist_group("sqlite")
 @pytest.mark.adbc
-def test_sqlite_dialect_detection(sqlite_session: AdbcDriver) -> None:
+def test_sqlite_adbc_dialect_detection(sqlite_session: AdbcDriver) -> None:
     """Test SQLite dialect detection in ADBC driver."""
     assert hasattr(sqlite_session, "dialect")
     assert sqlite_session.dialect == "sqlite"
 
-    result = sqlite_session.execute("SELECT ? as param_value", ("test_sqlite",))
+    result = sqlite_session.execute("SELECT ? as param_value", ("test_sqlite_adbc",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["param_value"] == "test_sqlite"
+    assert result.data[0]["param_value"] == "test_sqlite_adbc"
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -263,7 +263,7 @@ def test_duckdb_dialect_detection(duckdb_session: AdbcDriver) -> None:
     assert hasattr(duckdb_session, "dialect")
     assert duckdb_session.dialect == "duckdb"
 
-    result = duckdb_session.execute("SELECT ? as param_value", ("duckdb_test",))
+    result = duckdb_session.execute("SELECT ? as param_value", ("duckdb_test_adbc",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["param_value"] == "duckdb_test"
+    assert result.data[0]["param_value"] == "duckdb_test_adbc"

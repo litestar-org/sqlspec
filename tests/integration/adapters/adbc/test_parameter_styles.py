@@ -34,8 +34,8 @@ def adbc_postgresql_session(postgres_service: "PostgresService") -> "Generator[A
     with config.provide_session() as session:
         # Create test tables for parameter testing
         session.execute_script("""
-            DROP TABLE IF EXISTS test_parameters CASCADE;
-            CREATE TABLE test_parameters (
+            DROP TABLE IF EXISTS test_parameters_adbc CASCADE;
+            CREATE TABLE test_parameters_adbc (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 value INTEGER DEFAULT 0,
@@ -46,8 +46,8 @@ def adbc_postgresql_session(postgres_service: "PostgresService") -> "Generator[A
                 metadata JSONB
             );
 
-            DROP TABLE IF EXISTS test_none_handling CASCADE;
-            CREATE TABLE test_none_handling (
+            DROP TABLE IF EXISTS test_none_handling_adbc CASCADE;
+            CREATE TABLE test_none_handling_adbc (
                 id INTEGER PRIMARY KEY,
                 text_col TEXT,
                 int_col INTEGER,
@@ -67,7 +67,7 @@ def test_adbc_numeric_parameter_style_basic(adbc_postgresql_session: AdbcDriver)
     """Test basic PostgreSQL numeric parameter style with ADBC."""
     # Insert test data
     result = adbc_postgresql_session.execute(
-        "INSERT INTO test_parameters (name, value, description) VALUES ($1, $2, $3)",
+        "INSERT INTO test_parameters_adbc (name, value, description) VALUES ($1, $2, $3)",
         ("basic_test", 100, "Basic description"),
     )
 
@@ -75,7 +75,9 @@ def test_adbc_numeric_parameter_style_basic(adbc_postgresql_session: AdbcDriver)
     assert result.rows_affected in (-1, 0, 1)
 
     # Query with numeric parameters
-    select_result = adbc_postgresql_session.execute("SELECT * FROM test_parameters WHERE name = $1", ("basic_test",))
+    select_result = adbc_postgresql_session.execute(
+        "SELECT * FROM test_parameters_adbc WHERE name = $1", ("basic_test",)
+    )
 
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -93,14 +95,14 @@ def test_adbc_none_parameters_single_none(adbc_postgresql_session: AdbcDriver) -
     """
     # Insert with single None parameter
     result = adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col, int_col) VALUES ($1, $2, $3)", (1, None, 42)
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col) VALUES ($1, $2, $3)", (1, None, 42)
     )
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected in (-1, 0, 1)
 
     # Verify the None was properly stored as NULL
-    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling WHERE id = $1", (1,))
+    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling_adbc WHERE id = $1", (1,))
 
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
@@ -120,7 +122,7 @@ def test_adbc_none_parameters_multiple_none(adbc_postgresql_session: AdbcDriver)
     """
     # Insert with multiple None parameters
     result = adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col, int_col, bool_col, real_col) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col, bool_col, real_col) VALUES ($1, $2, $3, $4, $5)",
         (2, None, None, True, None),
     )
 
@@ -128,7 +130,7 @@ def test_adbc_none_parameters_multiple_none(adbc_postgresql_session: AdbcDriver)
     assert result.rows_affected in (-1, 0, 1)
 
     # Verify all None values were properly handled
-    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling WHERE id = $1", (2,))
+    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling_adbc WHERE id = $1", (2,))
 
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
@@ -150,7 +152,7 @@ def test_adbc_all_none_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     """
     # Insert with all optional parameters as None
     result = adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col, int_col, bool_col, date_col, real_col, json_col) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col, bool_col, date_col, real_col, json_col) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         (3, None, None, None, None, None, None),
     )
 
@@ -158,7 +160,7 @@ def test_adbc_all_none_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     assert result.rows_affected in (-1, 0, 1)
 
     # Verify the row exists and all values are NULL
-    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling WHERE id = $1", (3,))
+    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling_adbc WHERE id = $1", (3,))
 
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
@@ -190,12 +192,12 @@ def test_adbc_none_in_where_clause(adbc_postgresql_session: AdbcDriver) -> None:
 
     for row_data in test_data:
         adbc_postgresql_session.execute(
-            "INSERT INTO test_none_handling (id, text_col, int_col, bool_col) VALUES ($1, $2, $3, $4)", row_data
+            "INSERT INTO test_none_handling_adbc (id, text_col, int_col, bool_col) VALUES ($1, $2, $3, $4)", row_data
         )
 
     # Query using None parameter with IS NULL comparison
     result = adbc_postgresql_session.execute(
-        "SELECT * FROM test_none_handling WHERE text_col IS NULL AND id >= $1", (10,)
+        "SELECT * FROM test_none_handling_adbc WHERE text_col IS NULL AND id >= $1", (10,)
     )
 
     assert isinstance(result, SQLResult)
@@ -223,7 +225,7 @@ def test_adbc_none_with_execute_many(adbc_postgresql_session: AdbcDriver) -> Non
     ]
 
     result = adbc_postgresql_session.execute_many(
-        "INSERT INTO test_none_handling (id, text_col, int_col, bool_col, date_col) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col, bool_col, date_col) VALUES ($1, $2, $3, $4, $5)",
         many_data,
     )
 
@@ -232,7 +234,7 @@ def test_adbc_none_with_execute_many(adbc_postgresql_session: AdbcDriver) -> Non
 
     # Verify all rows were inserted correctly
     verify_result = adbc_postgresql_session.execute(
-        "SELECT * FROM test_none_handling WHERE id >= $1 ORDER BY id", (20,)
+        "SELECT * FROM test_none_handling_adbc WHERE id >= $1 ORDER BY id", (20,)
     )
 
     assert isinstance(verify_result, SQLResult)
@@ -255,13 +257,13 @@ def test_adbc_none_parameter_reuse(adbc_postgresql_session: AdbcDriver) -> None:
     """
     # Insert test data first
     adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col, int_col) VALUES ($1, $2, $3)", (30, "reuse_test", 100)
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col) VALUES ($1, $2, $3)", (30, "reuse_test", 100)
     )
 
     # Query with parameter reuse where one instance might be None
     result = adbc_postgresql_session.execute(
         """
-        SELECT * FROM test_none_handling
+        SELECT * FROM test_none_handling_adbc
         WHERE (text_col = $1 OR $1 IS NULL)
         AND (int_col = $2 OR $2 IS NULL)
         AND id = $3
@@ -286,7 +288,7 @@ def test_adbc_mixed_none_and_complex_types(adbc_postgresql_session: AdbcDriver) 
     """
     result = adbc_postgresql_session.execute(
         """
-        INSERT INTO test_none_handling
+        INSERT INTO test_none_handling_adbc
         (id, text_col, int_col, bool_col, date_col, timestamp_col, real_col)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         """,
@@ -305,7 +307,7 @@ def test_adbc_mixed_none_and_complex_types(adbc_postgresql_session: AdbcDriver) 
     assert result.rows_affected in (-1, 0, 1)
 
     # Verify the complex insert worked
-    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling WHERE id = $1", (40,))
+    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling_adbc WHERE id = $1", (40,))
 
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
@@ -330,7 +332,7 @@ def test_adbc_parameter_count_validation_with_none(adbc_postgresql_session: Adbc
     # Test: Too many parameters should raise an error
     with pytest.raises(Exception) as exc_info:
         adbc_postgresql_session.execute(
-            "INSERT INTO test_none_handling (id, text_col) VALUES ($1, $2)",  # 2 placeholders
+            "INSERT INTO test_none_handling_adbc (id, text_col) VALUES ($1, $2)",  # 2 placeholders
             (50, None, "extra_param"),  # 3 parameters
         )
 
@@ -341,7 +343,7 @@ def test_adbc_parameter_count_validation_with_none(adbc_postgresql_session: Adbc
     # Test: Too few parameters should raise an error
     with pytest.raises(Exception) as exc_info:
         adbc_postgresql_session.execute(
-            "INSERT INTO test_none_handling (id, text_col, int_col) VALUES ($1, $2, $3)",  # 3 placeholders
+            "INSERT INTO test_none_handling_adbc (id, text_col, int_col) VALUES ($1, $2, $3)",  # 3 placeholders
             (51, None),  # Only 2 parameters
         )
 
@@ -351,13 +353,13 @@ def test_adbc_parameter_count_validation_with_none(adbc_postgresql_session: Adbc
 
     # Test: Correct count with None should work fine
     result = adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col, int_col) VALUES ($1, $2, $3)", (52, None, None)
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col) VALUES ($1, $2, $3)", (52, None, None)
     )
     assert isinstance(result, SQLResult)
     assert result.rows_affected in (-1, 0, 1)
 
     # Verify this one worked
-    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling WHERE id = $1", (52,))
+    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling_adbc WHERE id = $1", (52,))
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
     assert verify_result.data[0]["id"] == 52
@@ -372,21 +374,21 @@ def test_adbc_none_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     """
     # Edge case 1: None as first parameter
     result1 = adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col, int_col) VALUES ($1, $2, $3)", (60, None, 100)
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col) VALUES ($1, $2, $3)", (60, None, 100)
     )
     assert isinstance(result1, SQLResult)
     assert result1.rows_affected in (-1, 0, 1)
 
     # Edge case 2: None as last parameter
     result2 = adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col, int_col) VALUES ($1, $2, $3)", (61, "test", None)
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col) VALUES ($1, $2, $3)", (61, "test", None)
     )
     assert isinstance(result2, SQLResult)
     assert result2.rows_affected in (-1, 0, 1)
 
     # Edge case 3: Multiple consecutive None parameters
     result3 = adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col, int_col, bool_col, real_col) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO test_none_handling_adbc (id, text_col, int_col, bool_col, real_col) VALUES ($1, $2, $3, $4, $5)",
         (62, None, None, None, 1.5),
     )
     assert isinstance(result3, SQLResult)
@@ -394,14 +396,14 @@ def test_adbc_none_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Edge case 4: Single None parameter
     result4 = adbc_postgresql_session.execute(
-        "INSERT INTO test_none_handling (id, text_col) VALUES ($1, $2)", (63, None)
+        "INSERT INTO test_none_handling_adbc (id, text_col) VALUES ($1, $2)", (63, None)
     )
     assert isinstance(result4, SQLResult)
     assert result4.rows_affected in (-1, 0, 1)
 
     # Verify all edge cases worked
     count_result = adbc_postgresql_session.execute(
-        "SELECT COUNT(*) as count FROM test_none_handling WHERE id >= $1", (60,)
+        "SELECT COUNT(*) as count FROM test_none_handling_adbc WHERE id >= $1", (60,)
     )
     assert count_result.data[0]["count"] == 4
 
@@ -415,7 +417,7 @@ def test_adbc_none_with_returning_clause(adbc_postgresql_session: AdbcDriver) ->
     """
     result = adbc_postgresql_session.execute(
         """
-        INSERT INTO test_none_handling (id, text_col, int_col, bool_col)
+        INSERT INTO test_none_handling_adbc (id, text_col, int_col, bool_col)
         VALUES ($1, $2, $3, $4)
         RETURNING id, text_col, int_col, bool_col
         """,
@@ -446,7 +448,7 @@ def test_adbc_sqlite_none_parameters() -> None:
     with config.provide_session() as session:
         # Create test table
         session.execute("""
-            CREATE TABLE test_sqlite_none (
+            CREATE TABLE test_sqlite_none_adbc (
                 id INTEGER PRIMARY KEY,
                 name TEXT,
                 value INTEGER,
@@ -456,14 +458,14 @@ def test_adbc_sqlite_none_parameters() -> None:
 
         # Test None parameters with SQLite (uses QMARK style)
         result = session.execute(
-            "INSERT INTO test_sqlite_none (id, name, value, flag) VALUES (?, ?, ?, ?)", (1, None, None, True)
+            "INSERT INTO test_sqlite_none_adbc (id, name, value, flag) VALUES (?, ?, ?, ?)", (1, None, None, True)
         )
 
         assert isinstance(result, SQLResult)
         assert result.rows_affected in (-1, 0, 1)  # ADBC SQLite may return -1
 
         # Verify the None values were handled correctly
-        verify_result = session.execute("SELECT * FROM test_sqlite_none WHERE id = ?", (1,))
+        verify_result = session.execute("SELECT * FROM test_sqlite_none_adbc WHERE id = ?", (1,))
 
         assert isinstance(verify_result, SQLResult)
         assert verify_result.data is not None
@@ -486,12 +488,12 @@ def test_adbc_parameter_style_consistency(adbc_postgresql_session: AdbcDriver) -
 
     for row in setup_data:
         adbc_postgresql_session.execute(
-            "INSERT INTO test_none_handling (id, text_col, int_col, bool_col) VALUES ($1, $2, $3, $4)", row
+            "INSERT INTO test_none_handling_adbc (id, text_col, int_col, bool_col) VALUES ($1, $2, $3, $4)", row
         )
 
     # Test SELECT with None parameter
     select_result = adbc_postgresql_session.execute(
-        "SELECT * FROM test_none_handling WHERE bool_col = $1 OR $1 IS NULL", (None,)
+        "SELECT * FROM test_none_handling_adbc WHERE bool_col = $1 OR $1 IS NULL", (None,)
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -500,26 +502,26 @@ def test_adbc_parameter_style_consistency(adbc_postgresql_session: AdbcDriver) -
 
     # Test UPDATE with None parameters
     update_result = adbc_postgresql_session.execute(
-        "UPDATE test_none_handling SET text_col = $1, int_col = $2 WHERE id = $3", (None, None, 81)
+        "UPDATE test_none_handling_adbc SET text_col = $1, int_col = $2 WHERE id = $3", (None, None, 81)
     )
     assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected in (-1, 0, 1)
 
     # Verify the update worked
-    verify_update = adbc_postgresql_session.execute("SELECT * FROM test_none_handling WHERE id = $1", (81,))
+    verify_update = adbc_postgresql_session.execute("SELECT * FROM test_none_handling_adbc WHERE id = $1", (81,))
     assert verify_update.data[0]["text_col"] is None
     assert verify_update.data[0]["int_col"] is None
 
     # Test DELETE with None parameter in WHERE clause
     delete_result = adbc_postgresql_session.execute(
-        "DELETE FROM test_none_handling WHERE id = $1 AND ($2 IS NULL OR text_col = $2)", (82, None)
+        "DELETE FROM test_none_handling_adbc WHERE id = $1 AND ($2 IS NULL OR text_col = $2)", (82, None)
     )
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected in (-1, 0, 1)
 
     # Verify the delete worked
     verify_delete = adbc_postgresql_session.execute(
-        "SELECT COUNT(*) as count FROM test_none_handling WHERE id = $1", (82,)
+        "SELECT COUNT(*) as count FROM test_none_handling_adbc WHERE id = $1", (82,)
     )
     assert verify_delete.data[0]["count"] == 0
 
@@ -537,7 +539,7 @@ def test_adbc_parameter_count_validation_fixed(adbc_postgresql_session: AdbcDriv
     """
     # Setup test table
     adbc_postgresql_session.execute("""
-        CREATE TEMP TABLE bug_test (
+        CREATE TEMP TABLE bug_test_adbc (
             id INTEGER PRIMARY KEY,
             col1 TEXT,
             col2 TEXT
@@ -547,7 +549,7 @@ def test_adbc_parameter_count_validation_fixed(adbc_postgresql_session: AdbcDriv
     # FIXED BEHAVIOR: This now correctly fails with parameter count mismatch
     with pytest.raises(SQLSpecError) as exc_info:
         adbc_postgresql_session.execute(
-            "INSERT INTO bug_test (id, col1) VALUES ($1, $2)",  # 2 placeholders
+            "INSERT INTO bug_test_adbc (id, col1) VALUES ($1, $2)",  # 2 placeholders
             (1, None, "this_extra_param_should_cause_error"),  # 3 parameters - SHOULD FAIL!
         )
 
@@ -557,14 +559,14 @@ def test_adbc_parameter_count_validation_fixed(adbc_postgresql_session: AdbcDriv
 
     # Verify that correct parameter count works fine
     result = adbc_postgresql_session.execute(
-        "INSERT INTO bug_test (id, col1) VALUES ($1, $2)",  # 2 placeholders
+        "INSERT INTO bug_test_adbc (id, col1) VALUES ($1, $2)",  # 2 placeholders
         (1, None),  # 2 parameters - SHOULD SUCCEED!
     )
     assert isinstance(result, SQLResult)
     assert result.rows_affected in (-1, 0, 1)
 
     # Verify the data was inserted correctly
-    verify_result = adbc_postgresql_session.execute("SELECT * FROM bug_test WHERE id = $1", (1,))
+    verify_result = adbc_postgresql_session.execute("SELECT * FROM bug_test_adbc WHERE id = $1", (1,))
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
     row = verify_result.data[0]
@@ -583,7 +585,7 @@ def test_adbc_ast_transformer_validation_fixed(adbc_postgresql_session: AdbcDriv
     from sqlglot import parse_one
 
     # Create a test case with parameter count mismatch
-    original_sql = "INSERT INTO bug_test (id, col1) VALUES ($1, $2)"
+    original_sql = "INSERT INTO bug_test_adbc (id, col1) VALUES ($1, $2)"
     original_params = (200, None, "extra_param")  # 3 params for 2 placeholders
 
     # Parse the SQL
@@ -625,7 +627,7 @@ def test_adbc_repeated_parameter_handling(adbc_postgresql_session: AdbcDriver) -
     """
     # Setup test table
     adbc_postgresql_session.execute("""
-        CREATE TEMP TABLE param_test (
+        CREATE TEMP TABLE param_test_adbc (
             id INTEGER PRIMARY KEY,
             name TEXT,
             value INTEGER
@@ -633,13 +635,15 @@ def test_adbc_repeated_parameter_handling(adbc_postgresql_session: AdbcDriver) -
     """)
 
     # Insert test data
-    adbc_postgresql_session.execute("INSERT INTO param_test (id, name, value) VALUES ($1, $2, $3)", (1, "test", 100))
-    adbc_postgresql_session.execute("INSERT INTO param_test (id, name, value) VALUES ($1, $2, $3)", (2, None, 200))
+    adbc_postgresql_session.execute(
+        "INSERT INTO param_test_adbc (id, name, value) VALUES ($1, $2, $3)", (1, "test", 100)
+    )
+    adbc_postgresql_session.execute("INSERT INTO param_test_adbc (id, name, value) VALUES ($1, $2, $3)", (2, None, 200))
 
     # Test query with repeated parameter - this should work correctly now
     result = adbc_postgresql_session.execute(
         """
-        SELECT * FROM param_test
+        SELECT * FROM param_test_adbc
         WHERE (name = $1 OR ($1 IS NULL AND name IS NULL))
         """,
         (None,),  # 1 parameter used in 2 places

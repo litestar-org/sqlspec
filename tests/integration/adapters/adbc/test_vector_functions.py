@@ -40,7 +40,7 @@ def adbc_postgres_vector_session(adbc_sync_driver: AdbcDriver) -> Generator[Adbc
             """
         )
 
-        adbc_sync_driver.execute_script("TRUNCATE TABLE vector_docs_adbc_pg")
+        adbc_sync_driver.execute_script("DELETE FROM vector_docs_adbc_pg")
 
         adbc_sync_driver.execute(
             "INSERT INTO vector_docs_adbc_pg (content, embedding) VALUES (?, ?)", ("doc1", "[0.1, 0.2, 0.3]")

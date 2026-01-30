@@ -23,7 +23,7 @@ pytestmark = [pytest.mark.oracle, pytest.mark.integration, pytest.mark.xdist_gro
 async def oracle_bulk_session(oracle_async_session: OracleAsyncDriver) -> AsyncGenerator[OracleAsyncDriver, None]:
     """Create test tables for bulk MERGE tests."""
     await oracle_async_session.execute("""
-        CREATE TABLE products (
+        CREATE TABLE products_oracledb_async (
             id NUMBER PRIMARY KEY,
             name VARCHAR2(100) NOT NULL,
             price NUMBER(10, 2),
@@ -34,7 +34,7 @@ async def oracle_bulk_session(oracle_async_session: OracleAsyncDriver) -> AsyncG
 
     yield oracle_async_session
 
-    await oracle_async_session.execute("DROP TABLE products PURGE")
+    await oracle_async_session.execute("DROP TABLE products_oracledb_async PURGE")
 
 
 async def test_oracle_merge_bulk_10_rows(oracle_bulk_session: OracleAsyncDriver) -> None:
@@ -47,7 +47,7 @@ async def test_oracle_merge_bulk_10_rows(oracle_bulk_session: OracleAsyncDriver)
     merge_query = (
         sql
         .merge(dialect="oracle")
-        .into("products", alias="t")
+        .into("products_oracledb_async", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -59,10 +59,10 @@ async def test_oracle_merge_bulk_10_rows(oracle_bulk_session: OracleAsyncDriver)
     result = await oracle_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products_oracledb_async")
     assert verify_result[0]["count"] == 10
 
-    verify_product = await oracle_bulk_session.execute("SELECT * FROM products WHERE id = :1", [5])
+    verify_product = await oracle_bulk_session.execute("SELECT * FROM products_oracledb_async WHERE id = :1", [5])
     assert verify_product[0]["name"] == "Product 5"
     assert float(verify_product[0]["price"]) == 15.99
     assert verify_product[0]["stock"] == 50
@@ -85,7 +85,7 @@ async def test_oracle_merge_bulk_100_rows(oracle_bulk_session: OracleAsyncDriver
     merge_query = (
         sql
         .merge(dialect="oracle")
-        .into("products", alias="t")
+        .into("products_oracledb_async", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -97,11 +97,11 @@ async def test_oracle_merge_bulk_100_rows(oracle_bulk_session: OracleAsyncDriver
     result = await oracle_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products_oracledb_async")
     assert verify_result[0]["count"] == 100
 
     verify_bulk = await oracle_bulk_session.execute(
-        "SELECT COUNT(*) as count FROM products WHERE category = :1", ["bulk"]
+        "SELECT COUNT(*) as count FROM products_oracledb_async WHERE category = :1", ["bulk"]
     )
     assert verify_bulk[0]["count"] == 50
 
@@ -116,7 +116,7 @@ async def test_oracle_merge_bulk_500_rows(oracle_bulk_session: OracleAsyncDriver
     merge_query = (
         sql
         .merge(dialect="oracle")
-        .into("products", alias="t")
+        .into("products_oracledb_async", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -128,7 +128,7 @@ async def test_oracle_merge_bulk_500_rows(oracle_bulk_session: OracleAsyncDriver
     result = await oracle_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products_oracledb_async")
     assert verify_result[0]["count"] == 500
 
 
@@ -148,7 +148,7 @@ async def test_oracle_merge_bulk_1000_rows(oracle_bulk_session: OracleAsyncDrive
     merge_query = (
         sql
         .merge(dialect="oracle")
-        .into("products", alias="t")
+        .into("products_oracledb_async", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -160,7 +160,7 @@ async def test_oracle_merge_bulk_1000_rows(oracle_bulk_session: OracleAsyncDrive
     result = await oracle_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products_oracledb_async")
     assert verify_result[0]["count"] == 1000
 
 
@@ -176,7 +176,7 @@ async def test_oracle_merge_bulk_with_nulls(oracle_bulk_session: OracleAsyncDriv
     merge_query = (
         sql
         .merge(dialect="oracle")
-        .into("products", alias="t")
+        .into("products_oracledb_async", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -188,14 +188,14 @@ async def test_oracle_merge_bulk_with_nulls(oracle_bulk_session: OracleAsyncDriv
     result = await oracle_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_bulk_session.execute("SELECT * FROM products WHERE id = :1", [2])
+    verify_result = await oracle_bulk_session.execute("SELECT * FROM products_oracledb_async WHERE id = :1", [2])
     assert verify_result[0]["price"] is None
     assert verify_result[0]["category"] is None
 
-    verify_result = await oracle_bulk_session.execute("SELECT * FROM products WHERE id = :1", [3])
+    verify_result = await oracle_bulk_session.execute("SELECT * FROM products_oracledb_async WHERE id = :1", [3])
     assert verify_result[0]["stock"] is None
 
-    verify_result = await oracle_bulk_session.execute("SELECT * FROM products WHERE id = :1", [4])
+    verify_result = await oracle_bulk_session.execute("SELECT * FROM products_oracledb_async WHERE id = :1", [4])
     assert verify_result[0]["price"] is None
     assert verify_result[0]["stock"] is None
     assert verify_result[0]["category"] is None
@@ -204,11 +204,11 @@ async def test_oracle_merge_bulk_with_nulls(oracle_bulk_session: OracleAsyncDriv
 async def test_oracle_merge_bulk_update_existing(oracle_bulk_session: OracleAsyncDriver) -> None:
     """Test bulk MERGE updates existing rows."""
     await oracle_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES (:1, :2, :3, :4, :5)",
+        "INSERT INTO products_oracledb_async (id, name, price, stock, category) VALUES (:1, :2, :3, :4, :5)",
         [1, "Old Product 1", Decimal("5.00"), 100, "old"],
     )
     await oracle_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES (:1, :2, :3, :4, :5)",
+        "INSERT INTO products_oracledb_async (id, name, price, stock, category) VALUES (:1, :2, :3, :4, :5)",
         [2, "Old Product 2", Decimal("10.00"), 200, "old"],
     )
 
@@ -220,7 +220,7 @@ async def test_oracle_merge_bulk_update_existing(oracle_bulk_session: OracleAsyn
     merge_query = (
         sql
         .merge(dialect="oracle")
-        .into("products", alias="t")
+        .into("products_oracledb_async", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -232,7 +232,7 @@ async def test_oracle_merge_bulk_update_existing(oracle_bulk_session: OracleAsyn
     result = await oracle_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_bulk_session.execute("SELECT * FROM products WHERE id = :1", [1])
+    verify_result = await oracle_bulk_session.execute("SELECT * FROM products_oracledb_async WHERE id = :1", [1])
     assert verify_result[0]["name"] == "Updated Product 1"
     assert float(verify_result[0]["price"]) == 15.00
     assert verify_result[0]["stock"] == 50
@@ -242,7 +242,7 @@ async def test_oracle_merge_bulk_update_existing(oracle_bulk_session: OracleAsyn
 async def test_oracle_merge_bulk_mixed_operations(oracle_bulk_session: OracleAsyncDriver) -> None:
     """Test bulk MERGE with mixed insert and update operations."""
     await oracle_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES (:1, :2, :3, :4, :5)",
+        "INSERT INTO products_oracledb_async (id, name, price, stock, category) VALUES (:1, :2, :3, :4, :5)",
         [1, "Existing Product", Decimal("20.00"), 50, "existing"],
     )
 
@@ -255,7 +255,7 @@ async def test_oracle_merge_bulk_mixed_operations(oracle_bulk_session: OracleAsy
     merge_query = (
         sql
         .merge(dialect="oracle")
-        .into("products", alias="t")
+        .into("products_oracledb_async", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -267,15 +267,15 @@ async def test_oracle_merge_bulk_mixed_operations(oracle_bulk_session: OracleAsy
     result = await oracle_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_count = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_count = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products_oracledb_async")
     assert verify_count[0]["count"] == 3
 
-    verify_updated = await oracle_bulk_session.execute("SELECT * FROM products WHERE id = :1", [1])
+    verify_updated = await oracle_bulk_session.execute("SELECT * FROM products_oracledb_async WHERE id = :1", [1])
     assert verify_updated[0]["name"] == "Updated Existing"
     assert verify_updated[0]["category"] == "updated"
 
     verify_new = await oracle_bulk_session.execute(
-        "SELECT COUNT(*) as count FROM products WHERE category = :1", ["new"]
+        "SELECT COUNT(*) as count FROM products_oracledb_async WHERE category = :1", ["new"]
     )
     assert verify_new[0]["count"] == 2
 
@@ -296,7 +296,7 @@ async def test_oracle_merge_bulk_5000_rows(oracle_bulk_session: OracleAsyncDrive
     merge_query = (
         sql
         .merge(dialect="oracle")
-        .into("products", alias="t")
+        .into("products_oracledb_async", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -308,5 +308,5 @@ async def test_oracle_merge_bulk_5000_rows(oracle_bulk_session: OracleAsyncDrive
     result = await oracle_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await oracle_bulk_session.execute("SELECT COUNT(*) as count FROM products_oracledb_async")
     assert verify_result[0]["count"] == 5000

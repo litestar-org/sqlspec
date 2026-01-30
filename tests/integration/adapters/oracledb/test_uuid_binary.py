@@ -38,7 +38,7 @@ async def test_create_uuid_table(oracle_async_session: OracleAsyncDriver) -> Non
     """Test creating table with RAW(16) UUID columns."""
     await oracle_async_session.execute_script("""
         BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_uuid_binary';
+            EXECUTE IMMEDIATE 'DROP TABLE test_uuid_binary_oracledb_async';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -942 THEN RAISE; END IF;
@@ -46,7 +46,7 @@ async def test_create_uuid_table(oracle_async_session: OracleAsyncDriver) -> Non
     """)
 
     await oracle_async_session.execute("""
-        CREATE TABLE test_uuid_binary (
+        CREATE TABLE test_uuid_binary_oracledb_async (
             id NUMBER PRIMARY KEY,
             user_id RAW(16) NOT NULL,
             session_id RAW(16),
@@ -55,7 +55,7 @@ async def test_create_uuid_table(oracle_async_session: OracleAsyncDriver) -> Non
     """)
 
     result = await oracle_async_session.select_value(
-        "SELECT COUNT(*) FROM user_tab_columns WHERE table_name = 'TEST_UUID_BINARY'"
+        "SELECT COUNT(*) FROM user_tab_columns WHERE table_name = 'TEST_UUID_BINARY_ORACLEDB_ASYNC'"
     )
     assert result == 4
 
@@ -65,7 +65,7 @@ async def test_uuid_roundtrip_async(oracle_uuid_async_config: OracleAsyncConfig)
     async with oracle_uuid_async_config.provide_session() as session:
         await session.execute_script("""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_async';
+                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_async_oracledb_async';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -942 THEN RAISE; END IF;
@@ -73,16 +73,16 @@ async def test_uuid_roundtrip_async(oracle_uuid_async_config: OracleAsyncConfig)
         """)
 
         await session.execute("""
-            CREATE TABLE test_uuid_async (
+            CREATE TABLE test_uuid_async_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 uuid_col RAW(16) NOT NULL
             )
         """)
 
         test_uuid = uuid.uuid4()
-        await session.execute("INSERT INTO test_uuid_async VALUES (:1, :2)", (1, test_uuid))
+        await session.execute("INSERT INTO test_uuid_async_oracledb_async VALUES (:1, :2)", (1, test_uuid))
 
-        result = await session.select_one("SELECT * FROM test_uuid_async WHERE id = :1", (1,))
+        result = await session.select_one("SELECT * FROM test_uuid_async_oracledb_async WHERE id = :1", (1,))
 
         assert result is not None
         retrieved_uuid = result["uuid_col"]
@@ -127,7 +127,7 @@ async def test_uuid_null_handling(oracle_uuid_async_config: OracleAsyncConfig) -
     async with oracle_uuid_async_config.provide_session() as session:
         await session.execute_script("""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_null';
+                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_null_oracledb_async';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -942 THEN RAISE; END IF;
@@ -135,15 +135,15 @@ async def test_uuid_null_handling(oracle_uuid_async_config: OracleAsyncConfig) -
         """)
 
         await session.execute("""
-            CREATE TABLE test_uuid_null (
+            CREATE TABLE test_uuid_null_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 uuid_col RAW(16)
             )
         """)
 
-        await session.execute("INSERT INTO test_uuid_null VALUES (:1, :2)", (1, None))
+        await session.execute("INSERT INTO test_uuid_null_oracledb_async VALUES (:1, :2)", (1, None))
 
-        result = await session.select_one("SELECT * FROM test_uuid_null WHERE id = :1", (1,))
+        result = await session.select_one("SELECT * FROM test_uuid_null_oracledb_async WHERE id = :1", (1,))
 
         assert result is not None
         assert result["uuid_col"] is None
@@ -154,7 +154,7 @@ async def test_uuid_variants(oracle_uuid_async_config: OracleAsyncConfig) -> Non
     async with oracle_uuid_async_config.provide_session() as session:
         await session.execute_script("""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_variants';
+                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_variants_oracledb_async';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -942 THEN RAISE; END IF;
@@ -162,7 +162,7 @@ async def test_uuid_variants(oracle_uuid_async_config: OracleAsyncConfig) -> Non
         """)
 
         await session.execute("""
-            CREATE TABLE test_uuid_variants (
+            CREATE TABLE test_uuid_variants_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 uuid_col RAW(16) NOT NULL
             )
@@ -171,9 +171,9 @@ async def test_uuid_variants(oracle_uuid_async_config: OracleAsyncConfig) -> Non
         test_uuids = [(1, uuid.uuid1()), (2, uuid.uuid4()), (3, uuid.uuid5(uuid.NAMESPACE_DNS, "example.com"))]
 
         for row_id, test_uuid in test_uuids:
-            await session.execute("INSERT INTO test_uuid_variants VALUES (:1, :2)", (row_id, test_uuid))
+            await session.execute("INSERT INTO test_uuid_variants_oracledb_async VALUES (:1, :2)", (row_id, test_uuid))
 
-        results = await session.select("SELECT * FROM test_uuid_variants ORDER BY id")
+        results = await session.select("SELECT * FROM test_uuid_variants_oracledb_async ORDER BY id")
 
         assert len(results) == 3
         for result, (row_id, original_uuid) in zip(results, test_uuids):
@@ -187,7 +187,7 @@ async def test_uuid_executemany(oracle_uuid_async_config: OracleAsyncConfig) -> 
     async with oracle_uuid_async_config.provide_session() as session:
         await session.execute_script("""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_bulk';
+                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_bulk_oracledb_async';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -942 THEN RAISE; END IF;
@@ -195,7 +195,7 @@ async def test_uuid_executemany(oracle_uuid_async_config: OracleAsyncConfig) -> 
         """)
 
         await session.execute("""
-            CREATE TABLE test_uuid_bulk (
+            CREATE TABLE test_uuid_bulk_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 uuid_col RAW(16) NOT NULL
             )
@@ -203,12 +203,12 @@ async def test_uuid_executemany(oracle_uuid_async_config: OracleAsyncConfig) -> 
 
         test_data = [(i, uuid.uuid4()) for i in range(1, 101)]
 
-        await session.execute_many("INSERT INTO test_uuid_bulk VALUES (:1, :2)", test_data)
+        await session.execute_many("INSERT INTO test_uuid_bulk_oracledb_async VALUES (:1, :2)", test_data)
 
-        count = await session.select_value("SELECT COUNT(*) FROM test_uuid_bulk")
+        count = await session.select_value("SELECT COUNT(*) FROM test_uuid_bulk_oracledb_async")
         assert count == 100
 
-        results = await session.select("SELECT * FROM test_uuid_bulk ORDER BY id")
+        results = await session.select("SELECT * FROM test_uuid_bulk_oracledb_async ORDER BY id")
         assert len(results) == 100
 
         for result, (row_id, original_uuid) in zip(results, test_data):
@@ -230,7 +230,7 @@ async def test_uuid_numpy_coexistence(oracle_async_config: OracleAsyncConfig) ->
     async with config.provide_session() as session:
         await session.execute_script("""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE test_mixed';
+                EXECUTE IMMEDIATE 'DROP TABLE test_mixed_oracledb_async';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -942 THEN RAISE; END IF;
@@ -238,7 +238,7 @@ async def test_uuid_numpy_coexistence(oracle_async_config: OracleAsyncConfig) ->
         """)
 
         await session.execute("""
-            CREATE TABLE test_mixed (
+            CREATE TABLE test_mixed_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 uuid_col RAW(16) NOT NULL,
                 vector_col VECTOR(128, FLOAT32)
@@ -249,9 +249,9 @@ async def test_uuid_numpy_coexistence(oracle_async_config: OracleAsyncConfig) ->
         rng = np.random.default_rng(42)
         test_vector = rng.random(128).astype(np.float32)
 
-        await session.execute("INSERT INTO test_mixed VALUES (:1, :2, :3)", (1, test_uuid, test_vector))
+        await session.execute("INSERT INTO test_mixed_oracledb_async VALUES (:1, :2, :3)", (1, test_uuid, test_vector))
 
-        result = await session.select_one("SELECT * FROM test_mixed WHERE id = :1", (1,))
+        result = await session.select_one("SELECT * FROM test_mixed_oracledb_async WHERE id = :1", (1,))
 
         assert result is not None
         assert isinstance(result["uuid_col"], uuid.UUID)
@@ -265,7 +265,7 @@ async def test_uuid_disable(oracle_uuid_disabled_async_config: OracleAsyncConfig
     async with oracle_uuid_disabled_async_config.provide_session() as session:
         await session.execute_script("""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_disabled';
+                EXECUTE IMMEDIATE 'DROP TABLE test_uuid_disabled_oracledb_async';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -942 THEN RAISE; END IF;
@@ -273,16 +273,16 @@ async def test_uuid_disable(oracle_uuid_disabled_async_config: OracleAsyncConfig
         """)
 
         await session.execute("""
-            CREATE TABLE test_uuid_disabled (
+            CREATE TABLE test_uuid_disabled_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 uuid_col RAW(16) NOT NULL
             )
         """)
 
         test_uuid = uuid.uuid4()
-        await session.execute("INSERT INTO test_uuid_disabled VALUES (:1, :2)", (1, test_uuid.bytes))
+        await session.execute("INSERT INTO test_uuid_disabled_oracledb_async VALUES (:1, :2)", (1, test_uuid.bytes))
 
-        result = await session.select_one("SELECT * FROM test_uuid_disabled WHERE id = :1", (1,))
+        result = await session.select_one("SELECT * FROM test_uuid_disabled_oracledb_async WHERE id = :1", (1,))
 
         assert result is not None
         retrieved_value = result["uuid_col"]
@@ -296,7 +296,7 @@ async def test_raw32_untouched(oracle_uuid_async_config: OracleAsyncConfig) -> N
     async with oracle_uuid_async_config.provide_session() as session:
         await session.execute_script("""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE test_raw32';
+                EXECUTE IMMEDIATE 'DROP TABLE test_raw32_oracledb_async';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -942 THEN RAISE; END IF;
@@ -304,16 +304,16 @@ async def test_raw32_untouched(oracle_uuid_async_config: OracleAsyncConfig) -> N
         """)
 
         await session.execute("""
-            CREATE TABLE test_raw32 (
+            CREATE TABLE test_raw32_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 binary_col RAW(32) NOT NULL
             )
         """)
 
         test_bytes = b"12345678901234567890123456789012"
-        await session.execute("INSERT INTO test_raw32 VALUES (:1, :2)", (1, test_bytes))
+        await session.execute("INSERT INTO test_raw32_oracledb_async VALUES (:1, :2)", (1, test_bytes))
 
-        result = await session.select_one("SELECT * FROM test_raw32 WHERE id = :1", (1,))
+        result = await session.select_one("SELECT * FROM test_raw32_oracledb_async WHERE id = :1", (1,))
 
         assert result is not None
         retrieved_value = result["binary_col"]
@@ -327,7 +327,7 @@ async def test_varchar_uuid_untouched(oracle_uuid_async_config: OracleAsyncConfi
     async with oracle_uuid_async_config.provide_session() as session:
         await session.execute_script("""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE test_varchar_uuid';
+                EXECUTE IMMEDIATE 'DROP TABLE test_varchar_uuid_oracledb_async';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -942 THEN RAISE; END IF;
@@ -335,7 +335,7 @@ async def test_varchar_uuid_untouched(oracle_uuid_async_config: OracleAsyncConfi
         """)
 
         await session.execute("""
-            CREATE TABLE test_varchar_uuid (
+            CREATE TABLE test_varchar_uuid_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 uuid_str VARCHAR2(36) NOT NULL
             )
@@ -343,9 +343,9 @@ async def test_varchar_uuid_untouched(oracle_uuid_async_config: OracleAsyncConfi
 
         test_uuid = uuid.uuid4()
         uuid_str = str(test_uuid)
-        await session.execute("INSERT INTO test_varchar_uuid VALUES (:1, :2)", (1, uuid_str))
+        await session.execute("INSERT INTO test_varchar_uuid_oracledb_async VALUES (:1, :2)", (1, uuid_str))
 
-        result = await session.select_one("SELECT * FROM test_varchar_uuid WHERE id = :1", (1,))
+        result = await session.select_one("SELECT * FROM test_varchar_uuid_oracledb_async WHERE id = :1", (1,))
 
         assert result is not None
         retrieved_value = result["uuid_str"]

@@ -37,7 +37,7 @@ async def asyncpg_vector_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncGe
             """
         )
 
-        await asyncpg_async_driver.execute_script("TRUNCATE TABLE vector_docs")
+        await asyncpg_async_driver.execute_script("DELETE FROM vector_docs")
 
         await asyncpg_async_driver.execute(
             "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc1", "[0.1, 0.2, 0.3]")

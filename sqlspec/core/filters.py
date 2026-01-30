@@ -582,8 +582,12 @@ class LimitOffsetFilter(PaginationFilter):
         limit_placeholder = exp.Placeholder(this=limit_param_name)
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
+        # Prefer cached expression to avoid re-parsing
+        current_statement: exp.Expression
         if statement.statement_expression is not None:
             current_statement = statement.statement_expression.copy()
+        elif statement.raw_expression is not None:
+            current_statement = statement.raw_expression.copy()
         elif not statement.statement_config.enable_parsing:
             current_statement = exp.Select().from_(f"({statement.raw_sql})")
         else:
@@ -638,8 +642,12 @@ class OrderByFilter(StatementFilter):
         col_expr = exp.column(self.field_name)
         order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
+        # Prefer cached expression to avoid re-parsing
+        current_statement: exp.Expression
         if statement.statement_expression is not None:
             current_statement = statement.statement_expression.copy()
+        elif statement.raw_expression is not None:
+            current_statement = statement.raw_expression.copy()
         elif not statement.statement_config.enable_parsing:
             current_statement = exp.Select().from_(f"({statement.raw_sql})")
         else:

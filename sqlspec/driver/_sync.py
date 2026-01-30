@@ -961,24 +961,26 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             result = self.dispatch_statement_execution(modified_sql, self.connection)
             rows = result.all()
 
-            total = 0
-            if rows:
+            # Batch-level type detection: check first row type once, use specialized list comprehension
+            # All rows from a result set share the same type, so checking first_row is sufficient
+            if not rows:
+                total = 0
+                data: list[dict[str, Any]] = []
+            else:
                 first_row = rows[0]
+                # Extract total count from first row
                 if is_dict_row(first_row):
                     total = first_row.get("_total_count", 0)
-                else:
+                    data = [{k: v for k, v in row.items() if k != "_total_count"} for row in rows]
+                elif is_mapping_like(first_row):
+                    total = dict(first_row).get("_total_count", 0)
+                    data = [{k: v for k, v in dict(row).items() if k != "_total_count"} for row in rows]
+                elif has_asdict_method(first_row):
                     total = getattr(first_row, "_total_count", 0)
-
-            data: list[dict[str, Any]] = []
-            for row in rows:
-                if is_dict_row(row):
-                    data.append({k: v for k, v in row.items() if k != "_total_count"})
-                elif is_mapping_like(row):
-                    data.append({k: v for k, v in dict(row).items() if k != "_total_count"})
-                elif has_asdict_method(row):
-                    data.append({k: v for k, v in row._asdict().items() if k != "_total_count"})  # pyright: ignore[reportPrivateUsage]
+                    data = [{k: v for k, v in row._asdict().items() if k != "_total_count"} for row in rows]  # type: ignore[attr-defined]
                 else:
-                    data.append({})
+                    total = 0
+                    data = [{} for _ in rows]
 
             if schema_type is not None:
                 return ([schema_type(**r) for r in data], total)

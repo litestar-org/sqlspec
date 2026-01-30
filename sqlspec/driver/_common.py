@@ -26,7 +26,7 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import fingerprint_parameters
+from sqlspec.core.parameters import structural_fingerprint, value_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
@@ -1356,6 +1356,19 @@ class CommonDriverAttributesMixin:
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[CachedStatement, object]":
         """Compile SQL and return cached statement metadata plus prepared parameters."""
+        # Materialize iterators before cache key generation to prevent exhaustion.
+        # If statement.parameters is an iterator (e.g., generator), structural_fingerprint
+        # will consume it during cache key generation, leaving empty parameters for execution.
+        params = statement.parameters
+        if params is not None and not isinstance(params, (list, tuple, dict)):
+            try:
+                materialized = list(params)
+                # Create a copy of the statement with materialized parameters
+                # to avoid consuming the iterator during cache key generation
+                statement = statement.copy(parameters=materialized)
+            except TypeError:
+                pass  # Not iterable, proceed normally
+
         cache_config = get_cache_config()
         dialect_key = str(statement.dialect) if statement.dialect else None
         cache_key = None
@@ -1365,7 +1378,25 @@ class CommonDriverAttributesMixin:
             cache = get_cache()
             cached_result = cache.get_statement(cache_key, dialect_key)
             if cached_result is not None and isinstance(cached_result, CachedStatement):
-                return cached_result, cached_result.parameters
+                # Structural fingerprinting means same SQL structure = same cache entry,
+                # but we must still use the caller's actual parameter values.
+                # Recompile with the NEW parameters to get correctly processed values.
+                prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
+                _, execution_parameters = prepared_statement.compile()
+                prepared_parameters = self.prepare_driver_parameters(
+                    execution_parameters,
+                    statement_config,
+                    is_many=prepared_statement.is_many,
+                    prepared_statement=prepared_statement,
+                )
+                # Return cached SQL metadata but with newly processed parameters
+                # Preserve list type for execute_many operations (some drivers require list, not tuple)
+                updated_cached = CachedStatement(
+                    compiled_sql=cached_result.compiled_sql,
+                    parameters=prepared_parameters,
+                    expression=cached_result.expression,
+                )
+                return updated_cached, prepared_parameters
 
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
@@ -1426,7 +1457,13 @@ class CommonDriverAttributesMixin:
             except TypeError:
                 pass
 
-        params_fingerprint = fingerprint_parameters(params)
+        # For static script compilation, parameter VALUES are embedded in the SQL string,
+        # so different values produce different compiled SQL. Must use value_fingerprint
+        # to avoid returning cached SQL with stale embedded values.
+        if config.parameter_config.needs_static_script_compilation:
+            params_fingerprint = value_fingerprint(params)
+        else:
+            params_fingerprint = structural_fingerprint(params)
         base_hash = hash((statement.sql, params_fingerprint, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 

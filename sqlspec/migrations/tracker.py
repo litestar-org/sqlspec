@@ -307,6 +307,10 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
 
         Args:
             driver: The database driver to use.
+
+        Raises:
+            Exception: Re-raises non-autocommit related exceptions to prevent
+                silent failures (e.g., SQLite isolation errors).
         """
         if driver.driver_features.get("autocommit", False):
             return
@@ -314,16 +318,22 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         try:
             driver.commit()
         except Exception as exc:
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "migration.track",
-                db_system=resolve_db_system(type(driver).__name__),
-                operation="commit",
-                status="skipped",
-                reason="autocommit",
-                error_type=type(exc).__name__,
-            )
+            # Only suppress autocommit-related exceptions
+            exc_str = str(exc).lower()
+            if "autocommit" in exc_str or "cannot commit" in exc_str:
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.track",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    operation="commit",
+                    status="skipped",
+                    reason="autocommit",
+                    error_type=type(exc).__name__,
+                )
+            else:
+                # Re-raise non-autocommit exceptions to prevent silent failures
+                raise
 
 
 class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
@@ -596,6 +606,10 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
 
         Args:
             driver: The database driver to use.
+
+        Raises:
+            Exception: Re-raises non-autocommit related exceptions to prevent
+                silent failures (e.g., SQLite isolation errors).
         """
         if driver.driver_features.get("autocommit", False):
             return
@@ -603,13 +617,19 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         try:
             await driver.commit()
         except Exception as exc:
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "migration.track",
-                db_system=resolve_db_system(type(driver).__name__),
-                operation="commit",
-                status="skipped",
-                reason="autocommit",
-                error_type=type(exc).__name__,
-            )
+            # Only suppress autocommit-related exceptions
+            exc_str = str(exc).lower()
+            if "autocommit" in exc_str or "cannot commit" in exc_str:
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "migration.track",
+                    db_system=resolve_db_system(type(driver).__name__),
+                    operation="commit",
+                    status="skipped",
+                    reason="autocommit",
+                    error_type=type(exc).__name__,
+                )
+            else:
+                # Re-raise non-autocommit exceptions to prevent silent failures
+                raise

@@ -26,7 +26,7 @@ async def asyncmy_driver(asyncmy_clean_driver: AsyncmyDriver) -> AsyncmyDriver:
     """Create and manage test table lifecycle."""
 
     create_sql = """
-        CREATE TABLE IF NOT EXISTS test_table (
+        CREATE TABLE IF NOT EXISTS test_table_asyncmy (
             id INT AUTO_INCREMENT PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
             value INT DEFAULT 0,
@@ -34,7 +34,7 @@ async def asyncmy_driver(asyncmy_clean_driver: AsyncmyDriver) -> AsyncmyDriver:
         )
     """
     await asyncmy_clean_driver.execute_script(create_sql)
-    await asyncmy_clean_driver.execute_script("TRUNCATE TABLE test_table")
+    await asyncmy_clean_driver.execute_script("DELETE FROM test_table_asyncmy")
 
     return asyncmy_clean_driver
 
@@ -43,26 +43,30 @@ async def test_asyncmy_basic_crud(asyncmy_driver: AsyncmyDriver) -> None:
     """Test basic CRUD operations."""
     driver = asyncmy_driver
 
-    insert_result = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_user", 42))
+    insert_result = await driver.execute(
+        "INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("test_user", 42)
+    )
     assert insert_result.num_rows == 1
 
-    select_result = await driver.execute("SELECT * FROM test_table WHERE name = ?", ("test_user",))
+    select_result = await driver.execute("SELECT * FROM test_table_asyncmy WHERE name = ?", ("test_user",))
     assert select_result.num_rows == 1
     assert len(select_result.get_data()) == 1
     row = select_result.get_data()[0]
     assert row["name"] == "test_user"
     assert row["value"] == 42
 
-    update_result = await driver.execute("UPDATE test_table SET value = ? WHERE name = ?", (100, "test_user"))
+    update_result = await driver.execute("UPDATE test_table_asyncmy SET value = ? WHERE name = ?", (100, "test_user"))
     assert update_result.num_rows == 1
 
-    updated_result = await driver.execute("SELECT value FROM test_table WHERE name = ?", ("test_user",))
+    updated_result = await driver.execute("SELECT value FROM test_table_asyncmy WHERE name = ?", ("test_user",))
     assert updated_result.get_data()[0]["value"] == 100
 
-    delete_result = await driver.execute("DELETE FROM test_table WHERE name = ?", ("test_user",))
+    delete_result = await driver.execute("DELETE FROM test_table_asyncmy WHERE name = ?", ("test_user",))
     assert delete_result.num_rows == 1
 
-    verify_result = await driver.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("test_user",))
+    verify_result = await driver.execute(
+        "SELECT COUNT(*) as count FROM test_table_asyncmy WHERE name = ?", ("test_user",)
+    )
     assert verify_result.get_data()[0]["count"] == 0
 
 
@@ -70,13 +74,13 @@ async def test_asyncmy_parameter_styles(asyncmy_driver: AsyncmyDriver) -> None:
     """Test different parameter binding styles."""
     driver = asyncmy_driver
 
-    result1 = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("user1", 10))
+    result1 = await driver.execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("user1", 10))
     assert result1.num_rows == 1
 
-    result2 = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ["user2", 20])
+    result2 = await driver.execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ["user2", 20])
     assert result2.num_rows == 1
 
-    select_result = await driver.execute("SELECT name, value FROM test_table ORDER BY name")
+    select_result = await driver.execute("SELECT name, value FROM test_table_asyncmy ORDER BY name")
     assert len(select_result.get_data()) == 2
     assert select_result.get_data()[0]["name"] == "user1"
     assert select_result.get_data()[0]["value"] == 10
@@ -90,11 +94,11 @@ async def test_asyncmy_execute_many(asyncmy_driver: AsyncmyDriver) -> None:
 
     data = [("batch_user_1", 100), ("batch_user_2", 200), ("batch_user_3", 300)]
 
-    result = await driver.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", data)
+    result = await driver.execute_many("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", data)
     assert result.num_rows == 3
 
     select_result = await driver.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE ? ORDER BY name", ("batch_user_%",)
+        "SELECT name, value FROM test_table_asyncmy WHERE name LIKE ? ORDER BY name", ("batch_user_%",)
     )
     assert len(select_result.get_data()) == 3
     assert select_result.get_data()[0]["name"] == "batch_user_1"
@@ -106,16 +110,16 @@ async def test_asyncmy_execute_script(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     script = """
-        INSERT INTO test_table (name, value) VALUES ('script_user_1', 1000);
-        INSERT INTO test_table (name, value) VALUES ('script_user_2', 2000);
-        UPDATE test_table SET value = value * 2 WHERE name LIKE 'script_user_%';
+        INSERT INTO test_table_asyncmy (name, value) VALUES ('script_user_1', 1000);
+        INSERT INTO test_table_asyncmy (name, value) VALUES ('script_user_2', 2000);
+        UPDATE test_table_asyncmy SET value = value * 2 WHERE name LIKE 'script_user_%';
     """
 
     result = await driver.execute_script(script)
     assert result.operation_type == "SCRIPT"
 
     select_result = await driver.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE ? ORDER BY name", ("script_user_%",)
+        "SELECT name, value FROM test_table_asyncmy WHERE name LIKE ? ORDER BY name", ("script_user_%",)
     )
     assert len(select_result.get_data()) == 2
     assert select_result.get_data()[0]["value"] == 2000
@@ -127,7 +131,7 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     await driver.execute_script("""
-        CREATE TABLE IF NOT EXISTS asyncmy_data_types_test (
+        CREATE TABLE IF NOT EXISTS data_types_test_asyncmy (
             id INT AUTO_INCREMENT PRIMARY KEY,
             text_col VARCHAR(255),
             int_col INT,
@@ -144,7 +148,7 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     test_data = ("test_string", 42, math.pi, True, date(2023, 1, 1), datetime(2023, 1, 1, 12, 0, 0), '{"key": "value"}')
 
     result = await driver.execute(
-        """INSERT INTO asyncmy_data_types_test
+        """INSERT INTO data_types_test_asyncmy
            (text_col, int_col, float_col, bool_col, date_col, datetime_col, json_col)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         test_data,
@@ -152,7 +156,7 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     assert result.rows_affected == 1
 
     select_result = await driver.execute(
-        "SELECT * FROM asyncmy_data_types_test WHERE text_col = ? AND int_col = ?", ("test_string", 42)
+        "SELECT * FROM data_types_test_asyncmy WHERE text_col = ? AND int_col = ?", ("test_string", 42)
     )
     assert len(select_result.get_data()) == 1
     row = select_result.get_data()[0]
@@ -167,13 +171,13 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
 async def test_asyncmy_statement_stack_sequential(asyncmy_driver: AsyncmyDriver) -> None:
     """StatementStack should execute sequentially for asyncmy (no native batching)."""
 
-    await asyncmy_driver.execute_script("TRUNCATE TABLE test_table")
+    await asyncmy_driver.execute_script("DELETE FROM test_table_asyncmy")
 
     stack = (
         StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "mysql-stack-one", 11))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (2, "mysql-stack-two", 22))
-        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("mysql-stack-%",))
+        .push_execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("mysql-stack-one", 11))
+        .push_execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("mysql-stack-two", 22))
+        .push_execute("SELECT COUNT(*) AS total FROM test_table_asyncmy WHERE name LIKE ?", ("mysql-stack-%",))
     )
 
     results = await asyncmy_driver.execute_stack(stack)
@@ -192,13 +196,13 @@ async def test_asyncmy_statement_stack_sequential(asyncmy_driver: AsyncmyDriver)
 async def test_asyncmy_statement_stack_continue_on_error(asyncmy_driver: AsyncmyDriver) -> None:
     """Continue-on-error should still work with sequential fallback."""
 
-    await asyncmy_driver.execute_script("TRUNCATE TABLE test_table")
+    await asyncmy_driver.execute_script("DELETE FROM test_table_asyncmy")
 
     stack = (
         StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "mysql-initial", 5))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "mysql-duplicate", 15))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (2, "mysql-final", 25))
+        .push_execute("INSERT INTO test_table_asyncmy (id, name, value) VALUES (?, ?, ?)", (1, "mysql-initial", 5))
+        .push_execute("INSERT INTO test_table_asyncmy (id, name, value) VALUES (?, ?, ?)", (1, "mysql-duplicate", 15))
+        .push_execute("INSERT INTO test_table_asyncmy (id, name, value) VALUES (?, ?, ?)", (2, "mysql-final", 25))
     )
 
     results = await asyncmy_driver.execute_stack(stack, continue_on_error=True)
@@ -208,7 +212,9 @@ async def test_asyncmy_statement_stack_continue_on_error(asyncmy_driver: Asyncmy
     assert results[1].error is not None
     assert results[2].rows_affected == 1
 
-    verify = await asyncmy_driver.execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("mysql-%",))
+    verify = await asyncmy_driver.execute(
+        "SELECT COUNT(*) AS total FROM test_table_asyncmy WHERE name LIKE ?", ("mysql-%",)
+    )
     assert verify.get_data()[0]["total"] == 2
 
 
@@ -242,21 +248,23 @@ async def test_asyncmy_driver_features_custom_serializers(mysql_service: MySQLSe
     async with config.provide_session() as session:
         await session.execute_script(
             """
-            CREATE TABLE IF NOT EXISTS driver_feature_test (
+            CREATE TABLE IF NOT EXISTS driver_feature_test_asyncmy (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 payload JSON
             );
-            TRUNCATE TABLE driver_feature_test;
+            DELETE FROM driver_feature_test_asyncmy;
             """
         )
 
         payload = {"foo": "bar"}
-        await session.execute("INSERT INTO driver_feature_test (payload) VALUES (?)", (payload,))
+        await session.execute("INSERT INTO driver_feature_test_asyncmy (payload) VALUES (?)", (payload,))
 
         assert serializer_calls
         assert serializer_calls[0] == payload
 
-        select_result = await session.execute("SELECT payload FROM driver_feature_test ORDER BY id DESC LIMIT 1")
+        select_result = await session.execute(
+            "SELECT payload FROM driver_feature_test_asyncmy ORDER BY id DESC LIMIT 1"
+        )
         stored_row = select_result.get_data()[0]
         assert stored_row["payload"]["foo"] == "bar"
         assert stored_row["payload"]["extra_marker"] is True
@@ -267,17 +275,17 @@ async def test_asyncmy_transaction_management(asyncmy_driver: AsyncmyDriver) -> 
     driver = asyncmy_driver
 
     await driver.begin()
-    await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("tx_user_1", 100))
+    await driver.execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("tx_user_1", 100))
     await driver.commit()
 
-    result = await driver.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("tx_user_1",))
+    result = await driver.execute("SELECT COUNT(*) as count FROM test_table_asyncmy WHERE name = ?", ("tx_user_1",))
     assert result.get_data()[0]["count"] == 1
 
     await driver.begin()
-    await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("tx_user_2", 200))
+    await driver.execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("tx_user_2", 200))
     await driver.rollback()
 
-    result = await driver.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("tx_user_2",))
+    result = await driver.execute("SELECT COUNT(*) as count FROM test_table_asyncmy WHERE name = ?", ("tx_user_2",))
     assert result.get_data()[0]["count"] == 0
 
 
@@ -285,10 +293,10 @@ async def test_asyncmy_null_parameters(asyncmy_driver: AsyncmyDriver) -> None:
     """Test handling of NULL parameters."""
     driver = asyncmy_driver
 
-    result = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("null_test", None))
+    result = await driver.execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("null_test", None))
     assert result.num_rows == 1
 
-    select_result = await driver.execute("SELECT name, value FROM test_table WHERE name = ?", ("null_test",))
+    select_result = await driver.execute("SELECT name, value FROM test_table_asyncmy WHERE name = ?", ("null_test",))
     assert len(select_result.get_data()) == 1
     assert select_result.get_data()[0]["name"] == "null_test"
     assert select_result.get_data()[0]["value"] is None
@@ -301,10 +309,10 @@ async def test_asyncmy_error_handling(asyncmy_driver: AsyncmyDriver) -> None:
     with pytest.raises(Exception):
         await driver.execute("INVALID SQL STATEMENT")
 
-    await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "user1", 100))
+    await driver.execute("INSERT INTO test_table_asyncmy (id, name, value) VALUES (?, ?, ?)", (1, "user1", 100))
 
     with pytest.raises(Exception):
-        await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "user2", 200))
+        await driver.execute("INSERT INTO test_table_asyncmy (id, name, value) VALUES (?, ?, ?)", (1, "user2", 200))
 
 
 async def test_asyncmy_large_result_set(asyncmy_driver: AsyncmyDriver) -> None:
@@ -312,9 +320,9 @@ async def test_asyncmy_large_result_set(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     batch_data = [(f"user_{i}", i * 10) for i in range(100)]
-    await driver.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", batch_data)
+    await driver.execute_many("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", batch_data)
 
-    result = await driver.execute("SELECT * FROM test_table ORDER BY value")
+    result = await driver.execute("SELECT * FROM test_table_asyncmy ORDER BY value")
     assert result.num_rows == 100
     assert len(result.get_data()) == 100
     assert result.get_data()[0]["name"] == "user_0"
@@ -325,15 +333,17 @@ async def test_asyncmy_mysql_specific_features(asyncmy_driver: AsyncmyDriver) ->
     """Test MySQL-specific features and SQL constructs."""
     driver = asyncmy_driver
 
-    await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duplicate_test", 100))
+    await driver.execute(
+        "INSERT INTO test_table_asyncmy (id, name, value) VALUES (?, ?, ?)", (1, "duplicate_test", 100)
+    )
 
     _ = await driver.execute(
-        """INSERT INTO test_table (id, name, value) VALUES (?, ?, ?) AS new
+        """INSERT INTO test_table_asyncmy (id, name, value) VALUES (?, ?, ?) AS new
            ON DUPLICATE KEY UPDATE value = new.value + 50""",
         (1, "duplicate_test_updated", 200),
     )
 
-    select_result = await driver.execute("SELECT name, value FROM test_table WHERE id = ?", (1,))
+    select_result = await driver.execute("SELECT name, value FROM test_table_asyncmy WHERE id = ?", (1,))
     assert select_result.get_data()[0]["value"] == 250
 
 
@@ -342,23 +352,23 @@ async def test_asyncmy_complex_queries(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     await driver.execute_script("""
-        CREATE TABLE IF NOT EXISTS user_profiles (
+        CREATE TABLE IF NOT EXISTS user_profiles_asyncmy (
             user_id INT PRIMARY KEY,
             email VARCHAR(255),
             age INT
         )
     """)
 
-    await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "john_doe", 100))
+    await driver.execute("INSERT INTO test_table_asyncmy (id, name, value) VALUES (?, ?, ?)", (1, "john_doe", 100))
     await driver.execute(
-        "INSERT INTO user_profiles (user_id, email, age) VALUES (?, ?, ?)", (1, "john@example.com", 30)
+        "INSERT INTO user_profiles_asyncmy (user_id, email, age) VALUES (?, ?, ?)", (1, "john@example.com", 30)
     )
 
     result = await driver.execute(
         """
         SELECT t.name, t.value, p.email, p.age
-        FROM test_table t
-        JOIN user_profiles p ON t.id = p.user_id
+        FROM test_table_asyncmy t
+        JOIN user_profiles_asyncmy p ON t.id = p.user_id
         WHERE t.name = ?
     """,
         ("john_doe",),
@@ -384,11 +394,11 @@ async def test_asyncmy_edge_cases(asyncmy_driver: AsyncmyDriver) -> None:
 
     data_with_nulls = [("user1", 100), ("user2", None), ("user3", 300)]
 
-    result = await driver.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", data_with_nulls)
+    result = await driver.execute_many("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", data_with_nulls)
     assert result.num_rows == 3
 
     select_result = await driver.execute(
-        "SELECT name, value FROM test_table WHERE name IN (?, ?, ?) ORDER BY name", ("user1", "user2", "user3")
+        "SELECT name, value FROM test_table_asyncmy WHERE name IN (?, ?, ?) ORDER BY name", ("user1", "user2", "user3")
     )
     assert len(select_result.get_data()) == 3
     assert select_result.get_data()[1]["value"] is None
@@ -398,18 +408,22 @@ async def test_asyncmy_result_metadata(asyncmy_driver: AsyncmyDriver) -> None:
     """Test SQL result metadata and properties."""
     driver = asyncmy_driver
 
-    insert_result = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("metadata_test", 500))
+    insert_result = await driver.execute(
+        "INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("metadata_test", 500)
+    )
     assert insert_result.num_rows == 1
     assert insert_result.operation_type == "INSERT"
     assert insert_result.column_names is None or len(insert_result.column_names) == 0
 
-    select_result = await driver.execute("SELECT id, name, value FROM test_table WHERE name = ?", ("metadata_test",))
+    select_result = await driver.execute(
+        "SELECT id, name, value FROM test_table_asyncmy WHERE name = ?", ("metadata_test",)
+    )
     assert select_result.num_rows == 1
     assert select_result.operation_type == "SELECT"
     assert select_result.column_names == ["id", "name", "value"]
     assert len(select_result.get_data()) == 1
 
-    empty_result = await driver.execute("SELECT * FROM test_table WHERE name = ?", ("nonexistent",))
+    empty_result = await driver.execute("SELECT * FROM test_table_asyncmy WHERE name = ?", ("nonexistent",))
     assert empty_result.num_rows == 0
     assert empty_result.operation_type == "SELECT"
     assert len(empty_result.get_data()) == 0
@@ -419,17 +433,17 @@ async def test_asyncmy_sql_object_execution(asyncmy_driver: AsyncmyDriver) -> No
     """Test execution of SQL objects."""
     driver = asyncmy_driver
 
-    sql_obj = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)", "sql_obj_test", 999)
+    sql_obj = SQL("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", "sql_obj_test", 999)
     result = await driver.execute(sql_obj)
     assert isinstance(result, SQLResult)
     assert result.num_rows == 1
 
-    verify_result = await driver.execute("SELECT name, value FROM test_table WHERE name = ?", ("sql_obj_test",))
+    verify_result = await driver.execute("SELECT name, value FROM test_table_asyncmy WHERE name = ?", ("sql_obj_test",))
     assert len(verify_result.get_data()) == 1
     assert verify_result.get_data()[0]["name"] == "sql_obj_test"
     assert verify_result.get_data()[0]["value"] == 999
 
-    select_sql = SQL("SELECT * FROM test_table WHERE value > ?", 500)
+    select_sql = SQL("SELECT * FROM test_table_asyncmy WHERE value > ?", 500)
     select_result = await driver.execute(select_sql)
     assert isinstance(select_result, SQLResult)
     assert select_result.num_rows >= 1
@@ -442,14 +456,14 @@ async def test_asyncmy_for_update_locking(asyncmy_driver: AsyncmyDriver) -> None
     driver = asyncmy_driver
 
     # Insert test data
-    await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("mysql_lock", 100))
+    await driver.execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("mysql_lock", 100))
 
     try:
         await driver.begin()
 
         # Test basic FOR UPDATE
         result = await driver.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "mysql_lock").for_update()
+            sql.select("id", "name", "value").from_("test_table_asyncmy").where_eq("name", "mysql_lock").for_update()
         )
         assert result is not None
         assert result["name"] == "mysql_lock"
@@ -467,14 +481,14 @@ async def test_asyncmy_for_update_skip_locked(asyncmy_driver: AsyncmyDriver) -> 
     driver = asyncmy_driver
 
     # Insert test data
-    await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("mysql_skip", 200))
+    await driver.execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("mysql_skip", 200))
 
     try:
         await driver.begin()
 
         # Test FOR UPDATE SKIP LOCKED
         result = await driver.select_one(
-            sql.select("*").from_("test_table").where_eq("name", "mysql_skip").for_update(skip_locked=True)
+            sql.select("*").from_("test_table_asyncmy").where_eq("name", "mysql_skip").for_update(skip_locked=True)
         )
         assert result is not None
         assert result["name"] == "mysql_skip"
@@ -491,14 +505,14 @@ async def test_asyncmy_for_share_locking(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     # Insert test data
-    await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("mysql_share", 300))
+    await driver.execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("mysql_share", 300))
 
     try:
         await driver.begin()
 
         # Test basic FOR SHARE (MySQL uses FOR SHARE syntax like PostgreSQL)
         result = await driver.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "mysql_share").for_share()
+            sql.select("id", "name", "value").from_("test_table_asyncmy").where_eq("name", "mysql_share").for_share()
         )
         assert result is not None
         assert result["name"] == "mysql_share"

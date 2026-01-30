@@ -48,7 +48,7 @@ async def asyncmy_parameter_session(mysql_service: MySQLService) -> AsyncGenerat
             )
         """)
 
-        await session.execute_script("TRUNCATE TABLE test_parameter_conversion")
+        await session.execute_script("DELETE FROM test_parameter_conversion")
 
         await session.execute(
             "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
@@ -328,7 +328,7 @@ async def test_asyncmy_none_parameters_pyformat(asyncmy_parameter_session: Async
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_none_values")
+    await driver.execute_script("DELETE FROM test_none_values")
 
     params = ("test_none", None, "Test with None value", None, None)
     result = await driver.execute(
@@ -364,7 +364,7 @@ async def test_asyncmy_none_parameters_qmark(asyncmy_parameter_session: AsyncmyD
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_none_qmark")
+    await driver.execute_script("DELETE FROM test_none_qmark")
 
     params = ("qmark_test", None, None)
     result = await driver.execute("INSERT INTO test_none_qmark (name, value, optional_field) VALUES (?, ?, ?)", params)
@@ -397,7 +397,7 @@ async def test_asyncmy_none_parameters_named_pyformat(asyncmy_parameter_session:
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_none_named")
+    await driver.execute_script("DELETE FROM test_none_named")
 
     params = {"title": "Named test", "status": None, "priority": 5, "metadata": None}
 
@@ -440,7 +440,7 @@ async def test_asyncmy_all_none_parameters(asyncmy_parameter_session: AsyncmyDri
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_all_none")
+    await driver.execute_script("DELETE FROM test_all_none")
 
     params = (None, None, None, None)
     result = await driver.execute("INSERT INTO test_all_none (col1, col2, col3, col4) VALUES (?, ?, ?, ?)", params)
@@ -476,7 +476,7 @@ async def test_asyncmy_none_with_execute_many(asyncmy_parameter_session: Asyncmy
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_none_many")
+    await driver.execute_script("DELETE FROM test_none_many")
 
     batch_data = [
         ("item1", 100, "A"),
@@ -522,7 +522,7 @@ async def test_asyncmy_none_parameter_count_validation(asyncmy_parameter_session
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_param_validation")
+    await driver.execute_script("DELETE FROM test_param_validation")
 
     # Test: Correct parameter count with None should work
     result = await driver.execute("INSERT INTO test_param_validation (col1, col2) VALUES (?, ?)", ("valid", None))
@@ -566,7 +566,7 @@ async def test_asyncmy_none_in_where_clauses(asyncmy_parameter_session: AsyncmyD
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_none_where")
+    await driver.execute_script("DELETE FROM test_none_where")
 
     test_data = [
         ("item1", "A", "active"),
@@ -613,7 +613,7 @@ async def test_asyncmy_none_complex_scenarios(asyncmy_parameter_session: Asyncmy
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_complex_none")
+    await driver.execute_script("DELETE FROM test_complex_none")
 
     # Test complex insert with mixed None and valid values
     params = {
@@ -668,7 +668,7 @@ async def test_asyncmy_none_edge_cases(asyncmy_parameter_session: AsyncmyDriver)
         )
     """)
 
-    await driver.execute_script("TRUNCATE TABLE test_edge_cases")
+    await driver.execute_script("DELETE FROM test_edge_cases")
 
     # Test 1: Single None parameter
     await driver.execute("INSERT INTO test_edge_cases (a) VALUES (?)", (None,))

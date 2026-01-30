@@ -21,9 +21,9 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psqlpy, pytest.ma
 @pytest.fixture
 async def psqlpy_bulk_session(psqlpy_session: PsqlpyDriver) -> AsyncGenerator[PsqlpyDriver, None]:
     """Create test tables for bulk MERGE tests."""
-    await psqlpy_session.execute("DROP TABLE IF EXISTS products CASCADE")
+    await psqlpy_session.execute("DROP TABLE IF EXISTS products_psqlpy CASCADE")
     await psqlpy_session.execute("""
-        CREATE TABLE IF NOT EXISTS products (
+        CREATE TABLE IF NOT EXISTS products_psqlpy (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             price NUMERIC(10, 2),
@@ -34,7 +34,7 @@ async def psqlpy_bulk_session(psqlpy_session: PsqlpyDriver) -> AsyncGenerator[Ps
 
     yield psqlpy_session
 
-    await psqlpy_session.execute("DROP TABLE IF EXISTS products CASCADE")
+    await psqlpy_session.execute("DROP TABLE IF EXISTS products_psqlpy CASCADE")
 
 
 async def test_psqlpy_merge_bulk_10_rows(psqlpy_bulk_session: PsqlpyDriver) -> None:
@@ -47,7 +47,7 @@ async def test_psqlpy_merge_bulk_10_rows(psqlpy_bulk_session: PsqlpyDriver) -> N
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psqlpy", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -59,10 +59,10 @@ async def test_psqlpy_merge_bulk_10_rows(psqlpy_bulk_session: PsqlpyDriver) -> N
     result = await psqlpy_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products_psqlpy")
     assert verify_result[0]["count"] == 10
 
-    verify_product = await psqlpy_bulk_session.execute("SELECT * FROM products WHERE id = $1", [5])
+    verify_product = await psqlpy_bulk_session.execute("SELECT * FROM products_psqlpy WHERE id = $1", [5])
     assert verify_product[0]["name"] == "Product 5"
     assert float(verify_product[0]["price"]) == 15.99
     assert verify_product[0]["stock"] == 50
@@ -85,7 +85,7 @@ async def test_psqlpy_merge_bulk_100_rows(psqlpy_bulk_session: PsqlpyDriver) -> 
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psqlpy", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -97,11 +97,11 @@ async def test_psqlpy_merge_bulk_100_rows(psqlpy_bulk_session: PsqlpyDriver) -> 
     result = await psqlpy_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products_psqlpy")
     assert verify_result[0]["count"] == 100
 
     verify_bulk = await psqlpy_bulk_session.execute(
-        "SELECT COUNT(*) as count FROM products WHERE category = $1", ["bulk"]
+        "SELECT COUNT(*) as count FROM products_psqlpy WHERE category = $1", ["bulk"]
     )
     assert verify_bulk[0]["count"] == 50
 
@@ -116,7 +116,7 @@ async def test_psqlpy_merge_bulk_500_rows(psqlpy_bulk_session: PsqlpyDriver) -> 
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psqlpy", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -128,7 +128,7 @@ async def test_psqlpy_merge_bulk_500_rows(psqlpy_bulk_session: PsqlpyDriver) -> 
     result = await psqlpy_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products_psqlpy")
     assert verify_result[0]["count"] == 500
 
 
@@ -148,7 +148,7 @@ async def test_psqlpy_merge_bulk_1000_rows(psqlpy_bulk_session: PsqlpyDriver) ->
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psqlpy", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -160,7 +160,7 @@ async def test_psqlpy_merge_bulk_1000_rows(psqlpy_bulk_session: PsqlpyDriver) ->
     result = await psqlpy_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_result = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products_psqlpy")
     assert verify_result[0]["count"] == 1000
 
 
@@ -176,7 +176,7 @@ async def test_psqlpy_merge_bulk_with_nulls(psqlpy_bulk_session: PsqlpyDriver) -
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psqlpy", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -188,14 +188,14 @@ async def test_psqlpy_merge_bulk_with_nulls(psqlpy_bulk_session: PsqlpyDriver) -
     result = await psqlpy_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await psqlpy_bulk_session.execute("SELECT * FROM products WHERE id = $1", [2])
+    verify_result = await psqlpy_bulk_session.execute("SELECT * FROM products_psqlpy WHERE id = $1", [2])
     assert verify_result[0]["price"] is None
     assert verify_result[0]["category"] is None
 
-    verify_result = await psqlpy_bulk_session.execute("SELECT * FROM products WHERE id = $1", [3])
+    verify_result = await psqlpy_bulk_session.execute("SELECT * FROM products_psqlpy WHERE id = $1", [3])
     assert verify_result[0]["stock"] is None
 
-    verify_result = await psqlpy_bulk_session.execute("SELECT * FROM products WHERE id = $1", [4])
+    verify_result = await psqlpy_bulk_session.execute("SELECT * FROM products_psqlpy WHERE id = $1", [4])
     assert verify_result[0]["price"] is None
     assert verify_result[0]["stock"] is None
     assert verify_result[0]["category"] is None
@@ -204,11 +204,11 @@ async def test_psqlpy_merge_bulk_with_nulls(psqlpy_bulk_session: PsqlpyDriver) -
 async def test_psqlpy_merge_bulk_update_existing(psqlpy_bulk_session: PsqlpyDriver) -> None:
     """Test bulk MERGE updates existing rows."""
     await psqlpy_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO products_psqlpy (id, name, price, stock, category) VALUES ($1, $2, $3, $4, $5)",
         [1, "Old Product 1", 5.00, 100, "old"],
     )
     await psqlpy_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO products_psqlpy (id, name, price, stock, category) VALUES ($1, $2, $3, $4, $5)",
         [2, "Old Product 2", 10.00, 200, "old"],
     )
 
@@ -220,7 +220,7 @@ async def test_psqlpy_merge_bulk_update_existing(psqlpy_bulk_session: PsqlpyDriv
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psqlpy", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -232,7 +232,7 @@ async def test_psqlpy_merge_bulk_update_existing(psqlpy_bulk_session: PsqlpyDriv
     result = await psqlpy_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await psqlpy_bulk_session.execute("SELECT * FROM products WHERE id = $1", [1])
+    verify_result = await psqlpy_bulk_session.execute("SELECT * FROM products_psqlpy WHERE id = $1", [1])
     assert verify_result[0]["name"] == "Updated Product 1"
     assert float(verify_result[0]["price"]) == 15.00
     assert verify_result[0]["stock"] == 50
@@ -242,7 +242,7 @@ async def test_psqlpy_merge_bulk_update_existing(psqlpy_bulk_session: PsqlpyDriv
 async def test_psqlpy_merge_bulk_mixed_operations(psqlpy_bulk_session: PsqlpyDriver) -> None:
     """Test bulk MERGE with mixed insert and update operations."""
     await psqlpy_bulk_session.execute(
-        "INSERT INTO products (id, name, price, stock, category) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO products_psqlpy (id, name, price, stock, category) VALUES ($1, $2, $3, $4, $5)",
         [1, "Existing Product", 20.00, 50, "existing"],
     )
 
@@ -255,7 +255,7 @@ async def test_psqlpy_merge_bulk_mixed_operations(psqlpy_bulk_session: PsqlpyDri
     merge_query = (
         sql
         .merge(dialect="postgres")
-        .into("products", alias="t")
+        .into("products_psqlpy", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
@@ -267,14 +267,14 @@ async def test_psqlpy_merge_bulk_mixed_operations(psqlpy_bulk_session: PsqlpyDri
     result = await psqlpy_bulk_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_count = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products")
+    verify_count = await psqlpy_bulk_session.execute("SELECT COUNT(*) as count FROM products_psqlpy")
     assert verify_count[0]["count"] == 3
 
-    verify_updated = await psqlpy_bulk_session.execute("SELECT * FROM products WHERE id = $1", [1])
+    verify_updated = await psqlpy_bulk_session.execute("SELECT * FROM products_psqlpy WHERE id = $1", [1])
     assert verify_updated[0]["name"] == "Updated Existing"
     assert verify_updated[0]["category"] == "updated"
 
     verify_new = await psqlpy_bulk_session.execute(
-        "SELECT COUNT(*) as count FROM products WHERE category = $1", ["new"]
+        "SELECT COUNT(*) as count FROM products_psqlpy WHERE category = $1", ["new"]
     )
     assert verify_new[0]["count"] == 2

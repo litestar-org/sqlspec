@@ -310,7 +310,39 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 INSERT OR REPLACE INTO {self._table_name} (session_id, data, expires_at)
                 VALUES ({p1}, {p2}, {p3})
                 """
+            elif dialect in {"postgres", "postgresql"}:
+                # ADBC Arrow driver cannot infer type from Python None, causing 'na' type error.
+                # Use separate SQL statements for NULL vs non-NULL expires_at to avoid the issue.
+                if expires_at is None:
+                    sql = f"""
+                    INSERT INTO {self._table_name} (session_id, data, expires_at)
+                    VALUES ({p1}, {p2}, NULL)
+                    ON CONFLICT (session_id) DO UPDATE
+                    SET data = EXCLUDED.data, expires_at = NULL
+                    """
+                    with self._config.provide_session() as driver:
+                        driver.execute(sql, key, data)
+                        driver.commit()
+                    return
+                sql = f"""
+                INSERT INTO {self._table_name} (session_id, data, expires_at)
+                VALUES ({p1}, {p2}, {p3})
+                ON CONFLICT (session_id) DO UPDATE
+                SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at
+                """
             else:
+                # DuckDB: Same issue with Arrow 'na' type for None values
+                if expires_at is None:
+                    sql = f"""
+                    INSERT INTO {self._table_name} (session_id, data, expires_at)
+                    VALUES ({p1}, {p2}, NULL)
+                    ON CONFLICT (session_id) DO UPDATE
+                    SET data = EXCLUDED.data, expires_at = NULL
+                    """
+                    with self._config.provide_session() as driver:
+                        driver.execute(sql, key, data)
+                        driver.commit()
+                    return
                 sql = f"""
                 INSERT INTO {self._table_name} (session_id, data, expires_at)
                 VALUES ({p1}, {p2}, {p3})

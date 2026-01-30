@@ -31,7 +31,7 @@ def psycopg_vector_session(psycopg_sync_config: PsycopgSyncConfig) -> Generator[
         try:
             session.execute_script(
                 """
-                CREATE TABLE IF NOT EXISTS vector_docs_psycopg (
+                CREATE TABLE IF NOT EXISTS vector_docs_psycopg_sync (
                     id SERIAL PRIMARY KEY,
                     content TEXT NOT NULL,
                     embedding vector(3)
@@ -39,21 +39,21 @@ def psycopg_vector_session(psycopg_sync_config: PsycopgSyncConfig) -> Generator[
                 """
             )
 
-            session.execute_script("TRUNCATE TABLE vector_docs_psycopg")
+            session.execute_script("DELETE FROM vector_docs_psycopg_sync")
 
             session.execute(
-                "INSERT INTO vector_docs_psycopg (content, embedding) VALUES (%s, %s)", ("doc1", "[0.1, 0.2, 0.3]")
+                "INSERT INTO vector_docs_psycopg_sync (content, embedding) VALUES (%s, %s)", ("doc1", "[0.1, 0.2, 0.3]")
             )
             session.execute(
-                "INSERT INTO vector_docs_psycopg (content, embedding) VALUES (%s, %s)", ("doc2", "[0.4, 0.5, 0.6]")
+                "INSERT INTO vector_docs_psycopg_sync (content, embedding) VALUES (%s, %s)", ("doc2", "[0.4, 0.5, 0.6]")
             )
             session.execute(
-                "INSERT INTO vector_docs_psycopg (content, embedding) VALUES (%s, %s)", ("doc3", "[0.7, 0.8, 0.9]")
+                "INSERT INTO vector_docs_psycopg_sync (content, embedding) VALUES (%s, %s)", ("doc3", "[0.7, 0.8, 0.9]")
             )
 
             yield session
         finally:
-            session.execute_script("DROP TABLE IF EXISTS vector_docs_psycopg")
+            session.execute_script("DROP TABLE IF EXISTS vector_docs_psycopg_sync")
 
 
 def test_psycopg_euclidean_distance_execution(psycopg_vector_session: PsycopgSyncDriver) -> None:
@@ -61,7 +61,7 @@ def test_psycopg_euclidean_distance_execution(psycopg_vector_session: PsycopgSyn
     query = (
         sql
         .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .order_by("distance")
     )
 
@@ -81,7 +81,7 @@ def test_psycopg_euclidean_distance_threshold(psycopg_vector_session: PsycopgSyn
     query = (
         sql
         .select("content")
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
     )
 
@@ -96,7 +96,7 @@ def test_psycopg_cosine_distance_execution(psycopg_vector_session: PsycopgSyncDr
     query = (
         sql
         .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .order_by("distance")
     )
 
@@ -114,7 +114,7 @@ def test_psycopg_inner_product_execution(psycopg_vector_session: PsycopgSyncDriv
             "content",
             sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
         )
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .order_by("distance")
     )
 
@@ -128,7 +128,7 @@ def test_psycopg_cosine_similarity_execution(psycopg_vector_session: PsycopgSync
     query = (
         sql
         .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .order_by(sql.column("score").desc())
     )
 
@@ -146,7 +146,7 @@ def test_psycopg_similarity_top_k_results(psycopg_vector_session: PsycopgSyncDri
     query = (
         sql
         .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .order_by(sql.column("score").desc())
         .limit(2)
     )
@@ -164,7 +164,7 @@ def test_psycopg_multiple_distance_metrics(psycopg_vector_session: PsycopgSyncDr
         "content",
         sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean").alias("euclidean_dist"),
         sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("cosine_dist"),
-    ).from_("vector_docs_psycopg")
+    ).from_("vector_docs_psycopg_sync")
 
     result = psycopg_vector_session.execute(query)
 
@@ -179,13 +179,13 @@ def test_psycopg_multiple_distance_metrics(psycopg_vector_session: PsycopgSyncDr
 def test_psycopg_distance_with_null_vectors(psycopg_vector_session: PsycopgSyncDriver) -> None:
     """Test vector distance handles NULL vectors correctly."""
     psycopg_vector_session.execute(
-        "INSERT INTO vector_docs_psycopg (content, embedding) VALUES (%s, NULL)", ("doc_null",)
+        "INSERT INTO vector_docs_psycopg_sync (content, embedding) VALUES (%s, NULL)", ("doc_null",)
     )
 
     query = (
         sql
         .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .where(sql.column("embedding").is_not_null())
         .order_by("distance")
     )
@@ -201,7 +201,7 @@ def test_psycopg_combined_filters_and_distance(psycopg_vector_session: PsycopgSy
     query = (
         sql
         .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .where((Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0) & (Column("content").in_(["doc1", "doc2"])))
         .order_by("distance")
     )
@@ -216,7 +216,7 @@ def test_psycopg_combined_filters_and_distance(psycopg_vector_session: PsycopgSy
 def test_psycopg_similarity_score_range(psycopg_vector_session: PsycopgSyncDriver) -> None:
     """Test cosine similarity returns values in expected range."""
     query = sql.select("content", Column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score")).from_(
-        "vector_docs_psycopg"
+        "vector_docs_psycopg_sync"
     )
 
     result = psycopg_vector_session.execute(query)
@@ -231,7 +231,7 @@ def test_psycopg_distance_with_cast(psycopg_vector_session: PsycopgSyncDriver) -
     query = (
         sql
         .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).cast("FLOAT").alias("distance"))
-        .from_("vector_docs_psycopg")
+        .from_("vector_docs_psycopg_sync")
         .order_by("distance")
     )
 

@@ -105,6 +105,28 @@ class BaseJSONSerializer(ABC):
         ...
 
 
+# Module-level singleton fallback serializers for performance
+# These avoid creating new instances on every fallback call in MsgspecSerializer
+_orjson_fallback: "OrjsonSerializer | None" = None
+_stdlib_fallback: "StandardLibSerializer | None" = None
+
+
+def _get_orjson_fallback() -> "OrjsonSerializer":
+    """Get singleton OrjsonSerializer instance for fallback use."""
+    global _orjson_fallback
+    if _orjson_fallback is None:
+        _orjson_fallback = OrjsonSerializer()
+    return _orjson_fallback
+
+
+def _get_stdlib_fallback() -> "StandardLibSerializer":
+    """Get singleton StandardLibSerializer instance for fallback use."""
+    global _stdlib_fallback
+    if _stdlib_fallback is None:
+        _stdlib_fallback = StandardLibSerializer()
+    return _stdlib_fallback
+
+
 class MsgspecSerializer(BaseJSONSerializer):
     """Msgspec-based JSON serializer."""
 
@@ -125,8 +147,8 @@ class MsgspecSerializer(BaseJSONSerializer):
             return self._encoder.encode(data).decode("utf-8")
         except (TypeError, ValueError):
             if ORJSON_INSTALLED:
-                return OrjsonSerializer().encode(data, as_bytes=as_bytes)
-            return StandardLibSerializer().encode(data, as_bytes=as_bytes)
+                return _get_orjson_fallback().encode(data, as_bytes=as_bytes)
+            return _get_stdlib_fallback().encode(data, as_bytes=as_bytes)
 
     def decode(self, data: str | bytes, *, decode_bytes: bool = True) -> Any:
         """Decode data using msgspec."""
@@ -136,16 +158,16 @@ class MsgspecSerializer(BaseJSONSerializer):
                     return self._decoder.decode(data)
                 except (TypeError, ValueError):
                     if ORJSON_INSTALLED:
-                        return OrjsonSerializer().decode(data, decode_bytes=decode_bytes)
-                    return StandardLibSerializer().decode(data, decode_bytes=decode_bytes)
+                        return _get_orjson_fallback().decode(data, decode_bytes=decode_bytes)
+                    return _get_stdlib_fallback().decode(data, decode_bytes=decode_bytes)
             return data
 
         try:
             return self._decoder.decode(data.encode("utf-8"))
         except (TypeError, ValueError):
             if ORJSON_INSTALLED:
-                return OrjsonSerializer().decode(data, decode_bytes=decode_bytes)
-            return StandardLibSerializer().decode(data, decode_bytes=decode_bytes)
+                return _get_orjson_fallback().decode(data, decode_bytes=decode_bytes)
+            return _get_stdlib_fallback().decode(data, decode_bytes=decode_bytes)
 
 
 class OrjsonSerializer(BaseJSONSerializer):

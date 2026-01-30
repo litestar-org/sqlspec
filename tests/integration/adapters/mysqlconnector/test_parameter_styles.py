@@ -62,7 +62,7 @@ def mysqlconnector_sync_parameter_session(
             )
         """)
 
-        session.execute_script("TRUNCATE TABLE test_parameter_conversion")
+        session.execute_script("DELETE FROM test_parameter_conversion")
 
         session.execute(
             "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
@@ -109,7 +109,7 @@ async def mysqlconnector_async_parameter_session(
             )
         """)
 
-        await session.execute_script("TRUNCATE TABLE test_parameter_conversion_async")
+        await session.execute_script("DELETE FROM test_parameter_conversion_async")
 
         await session.execute(
             "INSERT INTO test_parameter_conversion_async (name, value, description) VALUES (?, ?, ?)",

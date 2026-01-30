@@ -187,12 +187,12 @@ def test_adbc_migration_current_command(tmp_path: Path) -> None:
 
 def up():
     """Create test table."""
-    return ["CREATE TABLE test_table (id INTEGER PRIMARY KEY)"]
+    return ["CREATE TABLE test_table_adbc (id INTEGER PRIMARY KEY)"]
 
 
 def down():
     """Drop test table."""
-    return ["DROP TABLE IF EXISTS test_table"]
+    return ["DROP TABLE IF EXISTS test_table_adbc"]
 '''
 
     (migration_dir / "0001_test.py").write_text(migration_content)

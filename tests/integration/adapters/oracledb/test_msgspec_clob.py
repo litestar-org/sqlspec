@@ -63,21 +63,23 @@ async def test_oracle_async_clob_msgspec_hydration(oracle_async_session: OracleA
     preventing AsyncLOB handle leakage.
     """
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_clob_msgspec'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_clob_msgspec_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_clob_msgspec (
+        CREATE TABLE test_clob_msgspec_oracledb_async (
             id NUMBER PRIMARY KEY,
             content CLOB
         )
     """)
 
     await oracle_async_session.execute(
-        "INSERT INTO test_clob_msgspec (id, content) VALUES (:1, :2)", (1, LARGE_TEXT_CONTENT)
+        "INSERT INTO test_clob_msgspec_oracledb_async (id, content) VALUES (:1, :2)", (1, LARGE_TEXT_CONTENT)
     )
 
-    result = await oracle_async_session.execute("SELECT id, content FROM test_clob_msgspec WHERE id = :1", (1,))
+    result = await oracle_async_session.execute(
+        "SELECT id, content FROM test_clob_msgspec_oracledb_async WHERE id = :1", (1,)
+    )
 
     hydrated = result.get_first(schema_type=DocumentRecord)
     assert hydrated is not None
@@ -88,7 +90,7 @@ async def test_oracle_async_clob_msgspec_hydration(oracle_async_session: OracleA
     assert len(hydrated.content) == 5000
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_clob_msgspec'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_clob_msgspec_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
 
 
@@ -135,11 +137,11 @@ async def test_oracle_async_mixed_clob_varchar2_msgspec(oracle_async_session: Or
     Verifies that both VARCHAR2 and CLOB columns work correctly in the same struct.
     """
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_types'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_types_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_mixed_types (
+        CREATE TABLE test_mixed_types_oracledb_async (
             id NUMBER PRIMARY KEY,
             title VARCHAR2(200),
             body CLOB
@@ -147,10 +149,13 @@ async def test_oracle_async_mixed_clob_varchar2_msgspec(oracle_async_session: Or
     """)
 
     await oracle_async_session.execute(
-        "INSERT INTO test_mixed_types (id, title, body) VALUES (:1, :2, :3)", (1, "Short Title", LARGE_TEXT_CONTENT)
+        "INSERT INTO test_mixed_types_oracledb_async (id, title, body) VALUES (:1, :2, :3)",
+        (1, "Short Title", LARGE_TEXT_CONTENT),
     )
 
-    result = await oracle_async_session.execute("SELECT id, title, body FROM test_mixed_types WHERE id = :1", (1,))
+    result = await oracle_async_session.execute(
+        "SELECT id, title, body FROM test_mixed_types_oracledb_async WHERE id = :1", (1,)
+    )
 
     hydrated = result.get_first(schema_type=ArticleRecord)
     assert hydrated is not None
@@ -161,7 +166,7 @@ async def test_oracle_async_mixed_clob_varchar2_msgspec(oracle_async_session: Or
     assert hydrated.body == LARGE_TEXT_CONTENT
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_types'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_types_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
 
 
@@ -209,20 +214,24 @@ async def test_oracle_async_json_in_clob_detection(oracle_async_session: OracleA
     then successfully hydrated into msgspec struct.
     """
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_json_clob (
+        CREATE TABLE test_json_clob_oracledb_async (
             id NUMBER PRIMARY KEY,
             metadata CLOB
         )
     """)
 
     json_text = json.dumps(LARGE_JSON_CONTENT)
-    await oracle_async_session.execute("INSERT INTO test_json_clob (id, metadata) VALUES (:1, :2)", (1, json_text))
+    await oracle_async_session.execute(
+        "INSERT INTO test_json_clob_oracledb_async (id, metadata) VALUES (:1, :2)", (1, json_text)
+    )
 
-    result = await oracle_async_session.execute("SELECT id, metadata FROM test_json_clob WHERE id = :1", (1,))
+    result = await oracle_async_session.execute(
+        "SELECT id, metadata FROM test_json_clob_oracledb_async WHERE id = :1", (1,)
+    )
 
     hydrated = result.get_first(schema_type=JsonDocumentRecord)
     assert hydrated is not None
@@ -234,7 +243,7 @@ async def test_oracle_async_json_in_clob_detection(oracle_async_session: OracleA
     assert len(hydrated.metadata["nested"]["data"]) == 5000
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
 
 
@@ -282,21 +291,23 @@ async def test_oracle_async_blob_remains_bytes(oracle_async_session: OracleAsync
     converted to strings.
     """
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_blob_msgspec'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_blob_msgspec_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_blob_msgspec (
+        CREATE TABLE test_blob_msgspec_oracledb_async (
             id NUMBER PRIMARY KEY,
             data BLOB
         )
     """)
 
     await oracle_async_session.execute(
-        "INSERT INTO test_blob_msgspec (id, data) VALUES (:1, :2)", (1, LARGE_BINARY_CONTENT)
+        "INSERT INTO test_blob_msgspec_oracledb_async (id, data) VALUES (:1, :2)", (1, LARGE_BINARY_CONTENT)
     )
 
-    result = await oracle_async_session.execute("SELECT id, data FROM test_blob_msgspec WHERE id = :1", (1,))
+    result = await oracle_async_session.execute(
+        "SELECT id, data FROM test_blob_msgspec_oracledb_async WHERE id = :1", (1,)
+    )
 
     hydrated = result.get_first(schema_type=BinaryDocumentRecord)
     assert hydrated is not None
@@ -307,7 +318,7 @@ async def test_oracle_async_blob_remains_bytes(oracle_async_session: OracleAsync
     assert len(hydrated.data) == 8000
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_blob_msgspec'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_blob_msgspec_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
 
 
@@ -359,11 +370,11 @@ async def test_oracle_async_multiple_clob_columns(oracle_async_session: OracleAs
         content3: str
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_multi_clob'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_multi_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_multi_clob (
+        CREATE TABLE test_multi_clob_oracledb_async (
             id NUMBER PRIMARY KEY,
             content1 CLOB,
             content2 CLOB,
@@ -376,12 +387,12 @@ async def test_oracle_async_multiple_clob_columns(oracle_async_session: OracleAs
     content3 = "c" * 7000
 
     await oracle_async_session.execute(
-        "INSERT INTO test_multi_clob (id, content1, content2, content3) VALUES (:1, :2, :3, :4)",
+        "INSERT INTO test_multi_clob_oracledb_async (id, content1, content2, content3) VALUES (:1, :2, :3, :4)",
         (1, content1, content2, content3),
     )
 
     result = await oracle_async_session.execute(
-        "SELECT id, content1, content2, content3 FROM test_multi_clob WHERE id = :1", (1,)
+        "SELECT id, content1, content2, content3 FROM test_multi_clob_oracledb_async WHERE id = :1", (1,)
     )
 
     hydrated = result.get_first(schema_type=MultiClobRecord)
@@ -399,7 +410,7 @@ async def test_oracle_async_multiple_clob_columns(oracle_async_session: OracleAs
     assert len(hydrated.content3) == 7000
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_multi_clob'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_multi_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
 
 
@@ -468,19 +479,23 @@ async def test_oracle_async_empty_clob_msgspec(oracle_async_session: OracleAsync
     empty string CLOBs.
     """
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_empty_clob'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_empty_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_empty_clob (
+        CREATE TABLE test_empty_clob_oracledb_async (
             id NUMBER PRIMARY KEY,
             content CLOB
         )
     """)
 
-    await oracle_async_session.execute("INSERT INTO test_empty_clob (id, content) VALUES (:1, :2)", (1, ""))
+    await oracle_async_session.execute(
+        "INSERT INTO test_empty_clob_oracledb_async (id, content) VALUES (:1, :2)", (1, "")
+    )
 
-    result = await oracle_async_session.execute("SELECT id, content FROM test_empty_clob WHERE id = :1", (1,))
+    result = await oracle_async_session.execute(
+        "SELECT id, content FROM test_empty_clob_oracledb_async WHERE id = :1", (1,)
+    )
 
     hydrated = result.get_first(schema_type=NullableDocumentRecord)
     assert hydrated is not None
@@ -489,7 +504,7 @@ async def test_oracle_async_empty_clob_msgspec(oracle_async_session: OracleAsync
     assert hydrated.content is None
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_empty_clob'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_empty_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
 
 

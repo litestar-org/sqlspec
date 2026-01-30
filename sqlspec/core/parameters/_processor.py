@@ -22,54 +22,129 @@ from sqlspec.core.parameters._types import (
 )
 from sqlspec.core.parameters._validator import ParameterValidator
 
-__all__ = ("ParameterProcessor", "fingerprint_parameters")
+__all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
+
+# Threshold for sampling execute_many parameters instead of full iteration
+_EXECUTE_MANY_SAMPLE_THRESHOLD = 10
+# Number of records to sample for type signatures
+_EXECUTE_MANY_SAMPLE_SIZE = 3
 
 
-def _mapping_item_sort_key(item: "tuple[object, object]") -> str:
-    return repr(item[0])
+def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> str:
+    """Return a structural fingerprint for caching parameter payloads.
 
+    This fingerprint is based on parameter STRUCTURE (keys, types, count) only,
+    NOT on actual values. This dramatically improves cache hit rates since
+    queries with identical structure but different values will share cache entries.
 
-def _fingerprint_parameters(parameters: "ParameterPayload") -> str:
-    """Return a stable fingerprint for caching parameter payloads.
+    For large execute_many operations (>10 records), only the first 3 records
+    are sampled for structure detection, combined with the total count.
 
     Args:
         parameters: Original parameter payload supplied by the caller.
+        is_many: Whether this is for execute_many operation.
 
     Returns:
-        Deterministic fingerprint string derived from the parameter payload.
+        Deterministic fingerprint string derived from parameter structure.
     """
     if parameters is None:
         return "none"
 
     if isinstance(parameters, Mapping):
         if not parameters:
-            return f"{type(parameters).__name__}:empty"
-        try:
-            items = sorted(parameters.items(), key=_mapping_item_sort_key)
-        except Exception:
-            items = list(parameters.items())
-        data = repr(tuple(items))
-    elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+            return "dict:empty"
+        sorted_keys = tuple(sorted(parameters.keys()))
+        type_sig = tuple(type(v).__name__ for k, v in sorted(parameters.items()))
+        return f"dict:{hash((sorted_keys, type_sig))}"
+
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
         if not parameters:
-            return f"{type(parameters).__name__}:empty"
-        data = repr(tuple(parameters))
-    else:
-        data = repr(parameters)
+            return "seq:empty"
 
-    digest = hashlib.blake2b(data.encode("utf-8"), digest_size=8).hexdigest()
-    return f"{type(parameters).__name__}:{digest}"
+        if is_many:
+            # For large execute_many, sample first few records + count
+            param_count = len(parameters)
+            sample_size = (
+                min(_EXECUTE_MANY_SAMPLE_SIZE, param_count)
+                if param_count > _EXECUTE_MANY_SAMPLE_THRESHOLD
+                else param_count
+            )
+            first = parameters[0] if parameters else None
+
+            if isinstance(first, Mapping):
+                sorted_keys = tuple(sorted(first.keys()))
+                type_sig = tuple(type(v).__name__ for k, v in sorted(first.items()))
+                return f"many_dict:{hash((sorted_keys, type_sig, param_count))}"
+
+            if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
+                # Sample types from first few records for consistency check
+                type_sigs: list[tuple[str, ...]] = []
+                for i in range(sample_size):
+                    param_item: Any = parameters[i]
+                    type_sigs.append(tuple(type(v).__name__ for v in param_item))
+                return f"many_seq:{hash((tuple(type_sigs), param_count))}"
+
+            # Scalar values in sequence for execute_many
+            type_sig = tuple(type(parameters[i]).__name__ for i in range(sample_size))
+            return f"many_scalar:{hash((type_sig, param_count))}"
+
+        # Single execution with sequence parameters
+        type_sig = tuple(type(v).__name__ for v in parameters)
+        return f"seq:{hash(type_sig)}"
+
+    # Scalar parameter
+    return f"scalar:{type(parameters).__name__}"
 
 
-def fingerprint_parameters(parameters: "ParameterPayload") -> str:
-    """Return a stable fingerprint for parameter payloads.
+def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> str:
+    """Return a structural fingerprint for parameter payloads.
+
+    This fingerprint is based on parameter STRUCTURE (keys, types, count) only,
+    NOT on actual values. This improves cache hit rates for repeated queries
+    with different parameter values.
+
+    Args:
+        parameters: Original parameter payload supplied by the caller.
+        is_many: Whether this is for execute_many operation.
+
+    Returns:
+        Deterministic fingerprint string derived from parameter structure.
+    """
+    return _structural_fingerprint(parameters, is_many)
+
+
+def value_fingerprint(parameters: "ParameterPayload") -> str:
+    """Return a value-based fingerprint for parameter payloads.
+
+    Unlike structural_fingerprint, this includes actual parameter VALUES in the hash.
+    Used for static script compilation where SQL has values embedded directly.
 
     Args:
         parameters: Original parameter payload supplied by the caller.
 
     Returns:
-        Deterministic fingerprint string derived from the parameter payload.
+        Deterministic fingerprint string including parameter values.
     """
-    return _fingerprint_parameters(parameters)
+    return _value_fingerprint(parameters)
+
+
+def _value_fingerprint(parameters: "ParameterPayload") -> str:
+    """Return a value-based fingerprint for parameter payloads.
+
+    Unlike structural_fingerprint, this includes actual parameter VALUES in the hash.
+    Used for static script compilation where SQL has values embedded directly.
+
+    Args:
+        parameters: Original parameter payload supplied by the caller.
+
+    Returns:
+        Deterministic fingerprint string including parameter values.
+    """
+    if parameters is None:
+        return "none"
+
+    # Use repr for value-based hashing - includes both structure and values
+    return f"values:{hash(repr(parameters))}"
 
 
 def _coerce_nested_value(value: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
@@ -191,7 +266,13 @@ class ParameterProcessor:
         return stats
 
     def _compile_static_script(
-        self, sql: str, parameters: "ParameterPayload", config: "ParameterStyleConfig", is_many: bool, cache_key: str
+        self,
+        sql: str,
+        parameters: "ParameterPayload",
+        config: "ParameterStyleConfig",
+        is_many: bool,
+        cache_key: str,
+        input_named_parameters: "tuple[str, ...]",
     ) -> "ParameterProcessingResult":
         coerced_params = parameters
         if config.type_coercion_map and parameters:
@@ -200,7 +281,14 @@ class ParameterProcessor:
         static_sql, static_params = self._converter.convert_placeholder_style(
             sql, coerced_params, ParameterStyle.STATIC, is_many, strict_named_parameters=config.strict_named_parameters
         )
-        result = ParameterProcessingResult(static_sql, static_params, ParameterProfile.empty(), sqlglot_sql=static_sql)
+        result = ParameterProcessingResult(
+            static_sql,
+            static_params,
+            ParameterProfile.empty(),
+            sqlglot_sql=static_sql,
+            input_named_parameters=input_named_parameters,
+            applied_wrap_types=False,
+        )
         return self._store_cached_result(cache_key, result)
 
     def _select_execution_style(
@@ -245,6 +333,110 @@ class ParameterProcessor:
         if len(self._cache) > self._cache_max_size:
             self._cache.popitem(last=False)
         return result
+
+    def _transform_cached_parameters(
+        self,
+        parameters: "ParameterPayload",
+        cached_profile: "ParameterProfile",
+        config: "ParameterStyleConfig",
+        *,
+        input_named_parameters: "tuple[str, ...]",
+        is_many: bool,
+        apply_wrap_types: bool,
+    ) -> "ConvertedParameters":
+        """Apply parameter transformations for a cache hit.
+
+        Uses cached metadata to efficiently transform parameters without re-parsing SQL.
+        This ensures new parameter values undergo the same transformations as the original
+        cached request (type wrapping, coercion, named-to-positional mapping).
+
+        Args:
+            parameters: New parameter payload to transform.
+            cached_profile: Cached ParameterProfile with execution parameter metadata.
+            config: Parameter style configuration.
+            input_named_parameters: Cached input named parameter order.
+            is_many: Whether this is execute_many.
+            apply_wrap_types: Whether to wrap parameters with type metadata.
+
+        Returns:
+            Transformed parameters matching the cached SQL's placeholder format.
+        """
+        if parameters is None:
+            return None
+
+        processed: ConvertedParameters = parameters  # type: ignore[assignment]
+
+        # Step 1: Type wrapping (must happen before coercion)
+        if apply_wrap_types and processed:
+            processed = self._wrap_parameter_types(processed)
+
+        # Step 2: Type coercion
+        if config.type_coercion_map and processed:
+            processed = self._coerce_parameter_types(processed, config.type_coercion_map, is_many)
+
+        # Step 3: Named-to-positional mapping only when cached SQL uses positional placeholders.
+        if input_named_parameters and processed:
+            positional_styles = {
+                ParameterStyle.QMARK.value,
+                ParameterStyle.NUMERIC.value,
+                ParameterStyle.POSITIONAL_COLON.value,
+                ParameterStyle.POSITIONAL_PYFORMAT.value,
+            }
+            if any(style in positional_styles for style in cached_profile.styles):
+                processed = self._map_named_to_positional(
+                    processed, input_named_parameters, is_many, strict=config.strict_named_parameters
+                )
+
+        return processed
+
+    def _map_named_to_positional(
+        self, parameters: "ConvertedParameters", named_order: "tuple[str, ...]", is_many: bool, strict: bool = False
+    ) -> "ConvertedParameters":
+        """Map named parameters (dict) to positional (tuple) using cached order.
+
+        Args:
+            parameters: Current parameters (dict or sequence).
+            named_order: Tuple of parameter names in placeholder order.
+            is_many: Whether this is execute_many.
+            strict: Whether to raise an error if required parameters are missing.
+
+        Returns:
+            Parameters converted to positional tuple if input was dict, else unchanged.
+
+        Raises:
+            SQLSpecError: If strict is True and required parameters are missing.
+        """
+        if not named_order:
+            return parameters
+
+        if is_many and isinstance(parameters, (list, tuple)):
+            # Process each row in execute_many
+            result: list[Any] = []
+            for row in parameters:
+                if isinstance(row, Mapping):
+                    if strict:
+                        missing = [name for name in named_order if name not in row]
+                        if missing:
+                            from sqlspec.exceptions import SQLSpecError
+
+                            msg = f"Missing required parameters: {missing}"
+                            raise SQLSpecError(msg)
+                    result.append(tuple(row.get(name) for name in named_order))
+                else:
+                    result.append(row)
+            return result
+
+        if isinstance(parameters, Mapping):
+            if strict:
+                missing = [name for name in named_order if name not in parameters]
+                if missing:
+                    from sqlspec.exceptions import SQLSpecError
+
+                    msg = f"Missing required parameters: {missing}"
+                    raise SQLSpecError(msg)
+            return tuple(parameters.get(name) for name in named_order)
+
+        return parameters
 
     def _needs_mapping_normalization(
         self, payload: "ParameterPayload", param_info: "list[ParameterInfo]", is_many: bool
@@ -310,12 +502,32 @@ class ParameterProcessor:
         wrap_types: bool,
         normalize_for_parsing: bool,
     ) -> str:
-        param_fingerprint = _fingerprint_parameters(parameters)
+        # For static script compilation, we must include actual values in the fingerprint
+        # because the SQL will have values embedded directly (e.g., VALUES (1, 'foo'))
+        if config.needs_static_script_compilation:
+            param_fingerprint = _value_fingerprint(parameters)
+        else:
+            # Use structural fingerprint (keys + types, not values) for better cache hit rates
+            param_fingerprint = _structural_fingerprint(parameters, is_many)
         dialect_marker = dialect or "default"
-        default_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
-        return (
-            f"{sql}:{param_fingerprint}:{default_style}:{is_many}:{dialect_marker}:{wrap_types}:{normalize_for_parsing}"
+        # Include both input and execution parameter styles to avoid cache collisions
+        # (e.g., MySQL asyncmy uses ? for input but %s for execution)
+        input_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
+        exec_style = (
+            config.default_execution_parameter_style.value if config.default_execution_parameter_style else input_style
         )
+        # Use blake2b hash of tuple components for compact, deterministic cache keys
+        hash_data = (
+            sql,
+            param_fingerprint,
+            input_style,
+            exec_style,
+            is_many,
+            dialect_marker,
+            wrap_types,
+            normalize_for_parsing,
+        )
+        return hashlib.blake2b(repr(hash_data).encode(), digest_size=16).hexdigest()
 
     def process(
         self,
@@ -338,6 +550,7 @@ class ParameterProcessor:
         dialect: str | None = None,
         is_many: bool = False,
         wrap_types: bool = True,
+        parsed_expression: Any = None,
     ) -> "ParameterProcessingResult":
         """Process parameters for execution without parse normalization.
 
@@ -348,6 +561,7 @@ class ParameterProcessor:
             dialect: Optional SQL dialect.
             is_many: Whether this is execute_many.
             wrap_types: Whether to wrap parameters with type metadata.
+            parsed_expression: Pre-parsed SQLGlot expression to preserve through pipeline.
 
         Returns:
             ParameterProcessingResult with execution SQL and parameters.
@@ -360,6 +574,7 @@ class ParameterProcessor:
             is_many=is_many,
             wrap_types=wrap_types,
             normalize_for_parsing=False,
+            parsed_expression=parsed_expression,
         )
 
     def _process_internal(
@@ -372,6 +587,7 @@ class ParameterProcessor:
         is_many: bool,
         wrap_types: bool,
         normalize_for_parsing: bool,
+        parsed_expression: Any = None,
     ) -> "ParameterProcessingResult":
         cache_key = self._make_processor_cache_key(
             sql, parameters, config, is_many, dialect, wrap_types, normalize_for_parsing
@@ -381,15 +597,54 @@ class ParameterProcessor:
             if cached_result is not None:
                 self._cache.move_to_end(cache_key)
                 self._cache_hits += 1
-                return cached_result
+                # For static script compilation, parameters are embedded directly in SQL.
+                # Cache key includes parameter values, so a hit means same SQL with same values.
+                # Return None for parameters since the driver shouldn't receive any.
+                if config.needs_static_script_compilation:
+                    return ParameterProcessingResult(
+                        cached_result.sql,
+                        None,
+                        cached_result.parameter_profile,
+                        sqlglot_sql=cached_result.sqlglot_sql,
+                        parsed_expression=cached_result.parsed_expression,
+                        input_named_parameters=cached_result.input_named_parameters,
+                        applied_wrap_types=cached_result.applied_wrap_types,
+                    )
+                # Return cached SQL transformation with NEW parameters transformed
+                # to match the cached SQL's placeholder format
+                transformed_params = self._transform_cached_parameters(
+                    parameters,
+                    cached_result.parameter_profile,
+                    config,
+                    input_named_parameters=cached_result.input_named_parameters,
+                    is_many=is_many,
+                    apply_wrap_types=cached_result.applied_wrap_types,
+                )
+                # Apply output transformer if present (it may further transform params)
+                final_sql = cached_result.sql
+                if config.output_transformer:
+                    final_sql, transformed_params = config.output_transformer(final_sql, transformed_params)
+                return ParameterProcessingResult(
+                    final_sql,
+                    transformed_params,
+                    cached_result.parameter_profile,
+                    sqlglot_sql=cached_result.sqlglot_sql,
+                    parsed_expression=cached_result.parsed_expression,
+                    input_named_parameters=cached_result.input_named_parameters,
+                    applied_wrap_types=cached_result.applied_wrap_types,
+                )
             self._cache_misses += 1
 
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
         needs_execution_conversion = self._needs_execution_placeholder_conversion(param_info, config)
 
+        input_named_parameters = tuple(p.name for p in param_info if p.name is not None)
+
         if config.needs_static_script_compilation and param_info and parameters and not is_many:
-            return self._compile_static_script(sql, parameters, config, is_many, cache_key)
+            return self._compile_static_script(
+                sql, parameters, config, is_many, cache_key, input_named_parameters=input_named_parameters
+            )
 
         requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
         if (
@@ -400,7 +655,13 @@ class ParameterProcessor:
         ):
             normalized_sql = self._normalize_sql_for_parsing(sql, param_info, config) if normalize_for_parsing else sql
             result = ParameterProcessingResult(
-                sql, parameters, ParameterProfile(param_info), sqlglot_sql=normalized_sql
+                sql,
+                parameters,
+                ParameterProfile(param_info),
+                sqlglot_sql=normalized_sql,
+                parsed_expression=parsed_expression,
+                input_named_parameters=input_named_parameters,
+                applied_wrap_types=False,
             )
             return self._store_cached_result(cache_key, result)
 
@@ -416,8 +677,10 @@ class ParameterProcessor:
                 strict_named_parameters=config.strict_named_parameters,
             )
 
+        applied_wrap_types = False
         if processed_parameters and wrap_types:
             processed_parameters = self._wrap_parameter_types(processed_parameters)
+            applied_wrap_types = True
 
         if config.type_coercion_map and processed_parameters:
             processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
@@ -436,7 +699,15 @@ class ParameterProcessor:
             if normalize_for_parsing
             else processed_sql
         )
-        result = ParameterProcessingResult(processed_sql, processed_parameters, final_profile, sqlglot_sql=sqlglot_sql)
+        result = ParameterProcessingResult(
+            processed_sql,
+            processed_parameters,
+            final_profile,
+            sqlglot_sql=sqlglot_sql,
+            parsed_expression=parsed_expression,
+            input_named_parameters=input_named_parameters,
+            applied_wrap_types=applied_wrap_types,
+        )
 
         return self._store_cached_result(cache_key, result)
 

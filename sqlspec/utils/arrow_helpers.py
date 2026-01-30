@@ -107,9 +107,7 @@ def convert_dict_to_arrow(
             return batches[0] if batches else pa.RecordBatch.from_pydict({})
 
         return empty_table
-
-    columns: dict[str, list[Any]] = {key: [row.get(key) for row in data] for key in data[0]}
-    arrow_table = pa.Table.from_pydict(columns)
+    arrow_table = pa.Table.from_pylist(data)
 
     if return_format == "reader":
         batches = arrow_table.to_batches(max_chunksize=batch_size)
@@ -255,11 +253,17 @@ def arrow_table_to_rows(
     if not resolved_columns:
         msg = "Arrow table has no columns to import"
         raise ValueError(msg)
-    batches = table.to_pylist()
-    records: list[tuple[Any, ...]] = []
-    for row in batches:
-        record = tuple(row.get(col) for col in resolved_columns)
-        records.append(record)
+
+    # Use column-oriented access with zip transpose (O(n) vs O(n*m) row iteration)
+    # Extract columns as Python lists and transpose to rows
+    col_data = [table.column(col).to_pylist() for col in resolved_columns]
+
+    # Handle empty table case
+    if not col_data or not col_data[0]:
+        return resolved_columns, []
+
+    # Transpose columns to rows using zip
+    records: list[tuple[Any, ...]] = [tuple(row) for row in zip(*col_data, strict=False)]
     return resolved_columns, records
 
 
