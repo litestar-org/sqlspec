@@ -23,10 +23,7 @@ class TestSquashPlan:
         from sqlspec.migrations.squash import SquashPlan
 
         plan = SquashPlan(
-            source_migrations=[
-                ("0001", tmp_path / "0001_initial.sql"),
-                ("0002", tmp_path / "0002_users.sql"),
-            ],
+            source_migrations=[("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_users.sql")],
             target_version="0001",
             target_path=tmp_path / "0001_release.sql",
             description="Release 1.0",
@@ -87,10 +84,7 @@ class TestMigrationSquasher:
         from sqlspec.migrations.squash import MigrationSquasher
 
         runner = Mock()
-        squasher = MigrationSquasher(
-            migrations_path=tmp_path,
-            runner=runner,
-        )
+        squasher = MigrationSquasher(migrations_path=tmp_path, runner=runner)
 
         assert squasher.migrations_path == tmp_path
         assert squasher.runner == runner
@@ -105,11 +99,7 @@ class TestMigrationSquasher:
         runner = Mock()
         template_settings = Mock(spec=MigrationTemplateSettings)
 
-        squasher = MigrationSquasher(
-            migrations_path=tmp_path,
-            runner=runner,
-            template_settings=template_settings,
-        )
+        squasher = MigrationSquasher(migrations_path=tmp_path, runner=runner, template_settings=template_settings)
 
         assert squasher.template_settings == template_settings
 
@@ -254,9 +244,7 @@ class TestPlanSquash:
         (tmp_path / "0001_initial.sql").write_text("-- migration 1")
 
         runner = Mock()
-        runner.get_migration_files.return_value = [
-            ("0001", tmp_path / "0001_initial.sql"),
-        ]
+        runner.get_migration_files.return_value = [("0001", tmp_path / "0001_initial.sql")]
 
         squasher = MigrationSquasher(tmp_path, runner)
         plan = squasher.plan_squash("0001", "0001", "single")
@@ -276,27 +264,16 @@ class TestExtractSQL:
 
         runner = Mock()
         # Mock load_migration to return loader with get_up_sql
-        migration1 = {
-            "version": "0001",
-            "loader": Mock(),
-            "file_path": tmp_path / "0001_initial.sql",
-        }
+        migration1 = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
         migration1["loader"].get_up_sql.return_value = ["CREATE TABLE users (id INT);"]
 
-        migration2 = {
-            "version": "0002",
-            "loader": Mock(),
-            "file_path": tmp_path / "0002_posts.sql",
-        }
+        migration2 = {"version": "0002", "loader": Mock(), "file_path": tmp_path / "0002_posts.sql"}
         migration2["loader"].get_up_sql.return_value = ["CREATE TABLE posts (id INT);"]
 
         runner.load_migration.side_effect = [migration1, migration2]
 
         squasher = MigrationSquasher(tmp_path, runner)
-        migrations = [
-            ("0001", tmp_path / "0001_initial.sql"),
-            ("0002", tmp_path / "0002_posts.sql"),
-        ]
+        migrations = [("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_posts.sql")]
 
         up_sql, _down_sql = squasher.extract_sql(migrations)
 
@@ -309,29 +286,18 @@ class TestExtractSQL:
         from sqlspec.migrations.squash import MigrationSquasher
 
         runner = Mock()
-        migration1 = {
-            "version": "0001",
-            "loader": Mock(),
-            "file_path": tmp_path / "0001_initial.sql",
-        }
+        migration1 = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
         migration1["loader"].get_up_sql.return_value = ["CREATE TABLE users (id INT);"]
         migration1["loader"].get_down_sql.return_value = ["DROP TABLE users;"]
 
-        migration2 = {
-            "version": "0002",
-            "loader": Mock(),
-            "file_path": tmp_path / "0002_posts.sql",
-        }
+        migration2 = {"version": "0002", "loader": Mock(), "file_path": tmp_path / "0002_posts.sql"}
         migration2["loader"].get_up_sql.return_value = ["CREATE TABLE posts (id INT);"]
         migration2["loader"].get_down_sql.return_value = ["DROP TABLE posts;"]
 
         runner.load_migration.side_effect = [migration1, migration2]
 
         squasher = MigrationSquasher(tmp_path, runner)
-        migrations = [
-            ("0001", tmp_path / "0001_initial.sql"),
-            ("0002", tmp_path / "0002_posts.sql"),
-        ]
+        migrations = [("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_posts.sql")]
 
         _up_sql, down_sql = squasher.extract_sql(migrations)
 
@@ -345,11 +311,7 @@ class TestExtractSQL:
         from sqlspec.migrations.squash import MigrationSquasher
 
         runner = Mock()
-        migration1 = {
-            "version": "0001",
-            "loader": Mock(),
-            "file_path": tmp_path / "0001_initial.sql",
-        }
+        migration1 = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
         migration1["loader"].get_up_sql.return_value = ["CREATE TABLE users (id INT);"]
         migration1["loader"].get_down_sql.return_value = None  # No DOWN
 
@@ -370,19 +332,12 @@ class TestExtractSQL:
         from sqlspec.migrations.squash import MigrationSquasher
 
         runner = Mock()
-        migration = {
-            "version": "0001",
-            "loader": Mock(),
-            "file_path": tmp_path / "0001_initial.sql",
-        }
+        migration = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
         migration["loader"].get_up_sql.return_value = [
             "CREATE TABLE users (id INT);",
             "CREATE INDEX idx_users ON users(id);",
         ]
-        migration["loader"].get_down_sql.return_value = [
-            "DROP INDEX idx_users;",
-            "DROP TABLE users;",
-        ]
+        migration["loader"].get_down_sql.return_value = ["DROP INDEX idx_users;", "DROP TABLE users;"]
 
         runner.load_migration.return_value = migration
 
@@ -408,10 +363,7 @@ class TestGenerateSquashedContent:
         squasher = MigrationSquasher(tmp_path, runner)
 
         plan = SquashPlan(
-            source_migrations=[
-                ("0001", tmp_path / "0001_initial.sql"),
-                ("0002", tmp_path / "0002_users.sql"),
-            ],
+            source_migrations=[("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_users.sql")],
             target_version="0001",
             target_path=tmp_path / "0001_release.sql",
             description="release",
@@ -499,9 +451,7 @@ class TestGenerateSquashedContent:
 
         # Create custom template settings
         sql_template = SQLTemplateDefinition(
-            header="-- Custom Header: {title}",
-            metadata=["-- Version: {version}"],
-            body="",
+            header="-- Custom Header: {title}", metadata=["-- Version: {version}"], body=""
         )
         python_template = PythonTemplateDefinition(docstring="", body="")
         profile = MigrationTemplateProfile(
@@ -542,10 +492,7 @@ class TestApplySquash:
         squasher = MigrationSquasher(tmp_path, runner)
 
         plan = SquashPlan(
-            source_migrations=[
-                ("0001", tmp_path / "0001_initial.sql"),
-                ("0002", tmp_path / "0002_users.sql"),
-            ],
+            source_migrations=[("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_users.sql")],
             target_version="0001",
             target_path=tmp_path / "0001_release.sql",
             description="release",
@@ -571,19 +518,11 @@ class TestApplySquash:
         (tmp_path / "0002_users.sql").write_text("-- migration 2")
 
         runner = Mock()
-        migration1 = {
-            "version": "0001",
-            "loader": Mock(),
-            "file_path": tmp_path / "0001_initial.sql",
-        }
+        migration1 = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
         migration1["loader"].get_up_sql.return_value = ["CREATE TABLE t1 (id INT);"]
         migration1["loader"].get_down_sql.return_value = ["DROP TABLE t1;"]
 
-        migration2 = {
-            "version": "0002",
-            "loader": Mock(),
-            "file_path": tmp_path / "0002_users.sql",
-        }
+        migration2 = {"version": "0002", "loader": Mock(), "file_path": tmp_path / "0002_users.sql"}
         migration2["loader"].get_up_sql.return_value = ["CREATE TABLE t2 (id INT);"]
         migration2["loader"].get_down_sql.return_value = ["DROP TABLE t2;"]
 
@@ -592,10 +531,7 @@ class TestApplySquash:
         squasher = MigrationSquasher(tmp_path, runner)
 
         plan = SquashPlan(
-            source_migrations=[
-                ("0001", tmp_path / "0001_initial.sql"),
-                ("0002", tmp_path / "0002_users.sql"),
-            ],
+            source_migrations=[("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_users.sql")],
             target_version="0001",
             target_path=tmp_path / "0001_release.sql",
             description="release",
@@ -634,10 +570,7 @@ class TestApplySquash:
         squasher = MigrationSquasher(tmp_path, runner)
 
         plan = SquashPlan(
-            source_migrations=[
-                ("0001", tmp_path / "0001_initial.sql"),
-                ("0002", tmp_path / "0002_users.sql"),
-            ],
+            source_migrations=[("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_users.sql")],
             target_version="0001",
             target_path=tmp_path / "0001_release.sql",
             description="release",

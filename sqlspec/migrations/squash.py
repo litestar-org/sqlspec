@@ -68,12 +68,7 @@ class MigrationSquasher:
         self.template_settings = template_settings
         self.backup_path: Path | None = None
 
-    def plan_squash(
-        self,
-        start_version: str,
-        end_version: str,
-        description: str,
-    ) -> SquashPlan:
+    def plan_squash(self, start_version: str, end_version: str, description: str) -> SquashPlan:
         """Plan a squash operation for a range of migrations.
 
         Args:
@@ -123,7 +118,7 @@ class MigrationSquasher:
             source_versions_int = sorted(int(v) for v, _ in source_migrations)
             for i in range(1, len(source_versions_int)):
                 if source_versions_int[i] - source_versions_int[i - 1] != 1:
-                    msg = f"Gap detected in version sequence between {source_versions_int[i-1]:04d} and {source_versions_int[i]:04d}"
+                    msg = f"Gap detected in version sequence between {source_versions_int[i - 1]:04d} and {source_versions_int[i]:04d}"
                     raise SquashValidationError(msg)
 
         # Build plan
@@ -138,10 +133,7 @@ class MigrationSquasher:
             source_versions=source_versions,
         )
 
-    def extract_sql(
-        self,
-        migrations: list[tuple[str, Path]],
-    ) -> tuple[list[str], list[str]]:
+    def extract_sql(self, migrations: list[tuple[str, Path]]) -> tuple[list[str], list[str]]:
         """Extract UP and DOWN SQL statements from migrations.
 
         UP statements are accumulated in version order.
@@ -187,12 +179,7 @@ class MigrationSquasher:
 
         return up_statements, down_statements
 
-    def generate_squashed_content(
-        self,
-        plan: SquashPlan,
-        up_sql: list[str],
-        down_sql: list[str],
-    ) -> str:
+    def generate_squashed_content(self, plan: SquashPlan, up_sql: list[str], down_sql: list[str]) -> str:
         """Generate the content for a squashed migration file.
 
         Args:
@@ -232,12 +219,7 @@ class MigrationSquasher:
 
         return "\n".join(lines)
 
-    def apply_squash(
-        self,
-        plan: SquashPlan,
-        *,
-        dry_run: bool = False,
-    ) -> None:
+    def apply_squash(self, plan: SquashPlan, *, dry_run: bool = False) -> None:
         """Apply the squash operation.
 
         Creates backup, writes squashed file, deletes source migrations,
