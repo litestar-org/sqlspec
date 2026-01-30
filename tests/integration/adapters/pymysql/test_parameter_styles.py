@@ -49,7 +49,7 @@ def pymysql_parameter_session(mysql_service: MySQLService) -> Generator[PyMysqlD
             )
         """)
 
-        session.execute_script("TRUNCATE TABLE test_parameter_conversion")
+        session.execute_script("DELETE FROM test_parameter_conversion")
 
         session.execute(
             "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",

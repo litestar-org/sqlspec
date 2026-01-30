@@ -13,12 +13,12 @@ async def test_psqlpy_performance_features(psqlpy_session: PsqlpyDriver) -> None
 
     bulk_data = [(f"perf_test_{i}",) for i in range(1000)]
 
-    result = await psqlpy_session.execute_many("INSERT INTO test_table (name) VALUES ($1)", bulk_data)
+    result = await psqlpy_session.execute_many("INSERT INTO test_table_psqlpy (name) VALUES ($1)", bulk_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1000
 
     select_result = await psqlpy_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'perf_test_%'"
+        "SELECT COUNT(*) as count FROM test_table_psqlpy WHERE name LIKE 'perf_test_%'"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -43,7 +43,7 @@ async def test_psqlpy_advanced_postgresql_types(psqlpy_session: PsqlpyDriver) ->
     """Test PSQLPy handling of advanced PostgreSQL data types."""
 
     await psqlpy_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS psqlpy_types_test (
+        CREATE TABLE IF NOT EXISTS psqlpy_types_test_psqlpy (
             id SERIAL PRIMARY KEY,
             json_col JSON,
             jsonb_col JSONB,
@@ -56,7 +56,7 @@ async def test_psqlpy_advanced_postgresql_types(psqlpy_session: PsqlpyDriver) ->
 
     insert_result = await psqlpy_session.execute(
         """
-        INSERT INTO psqlpy_types_test
+        INSERT INTO psqlpy_types_test_psqlpy
         (json_col, jsonb_col, array_col, uuid_col, inet_col, timestamp_col)
         VALUES ($1::json, $2::jsonb, $3::integer[], $4::uuid, $5::inet, $6::timestamptz)
         RETURNING id
@@ -75,7 +75,7 @@ async def test_psqlpy_advanced_postgresql_types(psqlpy_session: PsqlpyDriver) ->
     assert insert_result.data is not None
     record_id = insert_result.data[0]["id"]
 
-    select_result = await psqlpy_session.execute("SELECT * FROM psqlpy_types_test WHERE id = $1", (record_id,))
+    select_result = await psqlpy_session.execute("SELECT * FROM psqlpy_types_test_psqlpy WHERE id = $1", (record_id,))
 
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -88,7 +88,7 @@ async def test_psqlpy_advanced_postgresql_types(psqlpy_session: PsqlpyDriver) ->
     assert row["jsonb_col"] is not None
     assert row["uuid_col"] is not None
 
-    await psqlpy_session.execute("DROP TABLE IF EXISTS psqlpy_types_test")
+    await psqlpy_session.execute("DROP TABLE IF EXISTS psqlpy_types_test_psqlpy")
 
 
 async def test_psqlpy_error_handling(psqlpy_session: PsqlpyDriver) -> None:
@@ -99,7 +99,7 @@ async def test_psqlpy_error_handling(psqlpy_session: PsqlpyDriver) -> None:
 
     assert "syntax" in str(exc_info.value).lower() or "error" in str(exc_info.value).lower()
 
-    await psqlpy_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("constraint_test",))
+    await psqlpy_session.execute("INSERT INTO test_table_psqlpy (name) VALUES ($1)", ("constraint_test",))
 
     result = await psqlpy_session.execute("SELECT 'recovery_test'::text as status")
     assert isinstance(result, SQLResult)
@@ -111,9 +111,11 @@ async def test_psqlpy_large_result_sets(psqlpy_session: PsqlpyDriver) -> None:
     """Test PSQLPy handling of large result sets."""
 
     bulk_data = [(f"large_result_{i}",) for i in range(100)]
-    await psqlpy_session.execute_many("INSERT INTO test_table (name) VALUES ($1)", bulk_data)
+    await psqlpy_session.execute_many("INSERT INTO test_table_psqlpy (name) VALUES ($1)", bulk_data)
 
-    result = await psqlpy_session.execute("SELECT * FROM test_table WHERE name LIKE 'large_result_%' ORDER BY id")
+    result = await psqlpy_session.execute(
+        "SELECT * FROM test_table_psqlpy WHERE name LIKE 'large_result_%' ORDER BY id"
+    )
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -128,10 +130,10 @@ async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None
 
     await psqlpy_session.execute("BEGIN")
 
-    await psqlpy_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("transaction_test",))
+    await psqlpy_session.execute("INSERT INTO test_table_psqlpy (name) VALUES ($1)", ("transaction_test",))
 
     result = await psqlpy_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = $1", ("transaction_test",)
+        "SELECT COUNT(*) as count FROM test_table_psqlpy WHERE name = $1", ("transaction_test",)
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -140,7 +142,7 @@ async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None
     await psqlpy_session.execute("COMMIT")
 
     committed_result = await psqlpy_session.execute(
-        "SELECT name FROM test_table WHERE name = $1", ("transaction_test",)
+        "SELECT name FROM test_table_psqlpy WHERE name = $1", ("transaction_test",)
     )
     assert isinstance(committed_result, SQLResult)
     assert committed_result.data is not None
@@ -214,7 +216,7 @@ async def test_psqlpy_rust_performance_indicators(psqlpy_session: PsqlpyDriver) 
 
     bulk_params = [(i, f"bulk_{i}") for i in range(100)]
     await psqlpy_session.execute_many(
-        "INSERT INTO test_table (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING", bulk_params
+        "INSERT INTO test_table_psqlpy (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING", bulk_params
     )
 
     bulk_elapsed = time.time() - bulk_start

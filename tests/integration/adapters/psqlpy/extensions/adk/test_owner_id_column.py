@@ -15,8 +15,8 @@ async def psqlpy_store_with_fk(psqlpy_config: PsqlpyConfig) -> "AsyncGenerator[P
     """Create Psqlpy ADK store with owner_id_column configured."""
     psqlpy_config.extension_config = {
         "adk": {
-            "session_table": "test_sessions_fk",
-            "events_table": "test_events_fk",
+            "session_table": "test_sessions_fk_psqlpy",
+            "events_table": "test_events_fk_psqlpy",
             "owner_id_column": "tenant_id INTEGER NOT NULL",
         }
     }
@@ -25,8 +25,8 @@ async def psqlpy_store_with_fk(psqlpy_config: PsqlpyConfig) -> "AsyncGenerator[P
     yield store
 
     async with psqlpy_config.provide_connection() as conn:
-        await conn.execute("DROP TABLE IF EXISTS test_events_fk CASCADE", [])
-        await conn.execute("DROP TABLE IF EXISTS test_sessions_fk CASCADE", [])
+        await conn.execute("DROP TABLE IF EXISTS test_events_fk_psqlpy CASCADE", [])
+        await conn.execute("DROP TABLE IF EXISTS test_sessions_fk_psqlpy CASCADE", [])
 
 
 async def test_store_owner_id_column_initialization(psqlpy_store_with_fk: PsqlpyADKStore) -> None:
@@ -39,8 +39,8 @@ async def test_store_inherits_owner_id_column(psqlpy_config: PsqlpyConfig) -> No
     """Test that store correctly inherits owner_id_column from base class."""
     psqlpy_config.extension_config = {
         "adk": {
-            "session_table": "test_inherit",
-            "events_table": "test_events_inherit",
+            "session_table": "test_inherit_psqlpy",
+            "events_table": "test_events_inherit_psqlpy",
             "owner_id_column": "org_id UUID",
         }
     }
@@ -54,7 +54,9 @@ async def test_store_inherits_owner_id_column(psqlpy_config: PsqlpyConfig) -> No
 
 async def test_store_without_owner_id_column(psqlpy_config: PsqlpyConfig) -> None:
     """Test that store works without owner_id_column (default behavior)."""
-    psqlpy_config.extension_config = {"adk": {"session_table": "test_no_fk", "events_table": "test_events_no_fk"}}
+    psqlpy_config.extension_config = {
+        "adk": {"session_table": "test_no_fk_psqlpy", "events_table": "test_events_no_fk_psqlpy"}
+    }
     store = PsqlpyADKStore(psqlpy_config)
 
     assert store.owner_id_column_ddl is None
@@ -95,7 +97,7 @@ async def test_table_has_owner_id_column(psqlpy_store_with_fk: PsqlpyADKStore) -
             JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relname = $1 AND n.nspname = 'public' AND a.attname = $2 AND a.attnum > 0 AND NOT a.attisdropped
             """,
-            ["test_sessions_fk", "tenant_id"],
+            ["test_sessions_fk_psqlpy", "tenant_id"],
         )
         rows = result.result() if result else []
 

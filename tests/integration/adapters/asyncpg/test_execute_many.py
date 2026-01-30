@@ -22,7 +22,7 @@ async def asyncpg_batch_session(asyncpg_async_driver: AsyncpgDriver) -> "AsyncGe
                 value INTEGER DEFAULT 0,
                 category TEXT
             );
-            TRUNCATE TABLE test_batch RESTART IDENTITY
+            DELETE FROM test_batch
         """
     )
     try:
@@ -214,7 +214,7 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
             tags TEXT[],
             scores INTEGER[]
         );
-        TRUNCATE TABLE test_arrays RESTART IDENTITY;
+        DELETE FROM test_arrays;
     """)
 
     parameters = [
@@ -246,7 +246,7 @@ async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriv
             name TEXT,
             metadata JSONB
         );
-        TRUNCATE TABLE test_json RESTART IDENTITY;
+        DELETE FROM test_json;
     """)
 
     parameters = [

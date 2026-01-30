@@ -22,7 +22,7 @@ def adbc_postgresql_session(postgres_service: "PostgresService") -> "Generator[A
 
     with config.provide_session() as session:
         session.execute_script("""
-            CREATE TABLE IF NOT EXISTS result_test (
+            CREATE TABLE IF NOT EXISTS result_test_adbc (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 value INTEGER,
@@ -42,7 +42,7 @@ def adbc_postgresql_session(postgres_service: "PostgresService") -> "Generator[A
 
         session.execute_many(
             """
-            INSERT INTO result_test (name, value, price, is_active, tags, metadata)
+            INSERT INTO result_test_adbc (name, value, price, is_active, tags, metadata)
             VALUES ($1, $2, $3, $4, $5, $6::jsonb)
         """,
             test_data,
@@ -51,7 +51,7 @@ def adbc_postgresql_session(postgres_service: "PostgresService") -> "Generator[A
         yield session
 
         try:
-            session.execute_script("DROP TABLE IF EXISTS result_test")
+            session.execute_script("DROP TABLE IF EXISTS result_test_adbc")
         except Exception:
             pass
 
@@ -60,7 +60,7 @@ def adbc_postgresql_session(postgres_service: "PostgresService") -> "Generator[A
 @pytest.mark.adbc
 def test_sql_result_basic_operations(adbc_postgresql_session: AdbcDriver) -> None:
     """Test basic SQLResult operations with ADBC."""
-    result = adbc_postgresql_session.execute("SELECT * FROM result_test ORDER BY name")
+    result = adbc_postgresql_session.execute("SELECT * FROM result_test_adbc ORDER BY name")
     assert isinstance(result, SQLResult)
 
     assert result.data is not None
@@ -93,7 +93,7 @@ def test_sql_result_arrow_data_types(adbc_postgresql_session: AdbcDriver) -> Non
             tags,
             created_at,
             metadata
-        FROM result_test
+        FROM result_test_adbc
         WHERE name = $1
     """,
         ("Product A",),
@@ -132,7 +132,7 @@ def test_sql_result_arrow_data_types(adbc_postgresql_session: AdbcDriver) -> Non
 @pytest.mark.adbc
 def test_sql_result_empty_results(adbc_postgresql_session: AdbcDriver) -> None:
     """Test SQLResult empty result handling with ADBC."""
-    result = adbc_postgresql_session.execute("SELECT * FROM result_test WHERE name = $1", ("NonExistent",))
+    result = adbc_postgresql_session.execute("SELECT * FROM result_test_adbc WHERE name = $1", ("NonExistent",))
     assert isinstance(result, SQLResult)
 
     assert result.is_empty()
@@ -149,13 +149,13 @@ def test_sql_result_null_value_handling(adbc_postgresql_session: AdbcDriver) -> 
 
     adbc_postgresql_session.execute(
         """
-        INSERT INTO result_test (name, value, price, is_active, tags, metadata)
+        INSERT INTO result_test_adbc (name, value, price, is_active, tags, metadata)
         VALUES ($1, NULL, NULL, NULL, NULL, NULL)
     """,
         ("Null Product",),
     )
 
-    result = adbc_postgresql_session.execute("SELECT * FROM result_test WHERE name = $1", ("Null Product",))
+    result = adbc_postgresql_session.execute("SELECT * FROM result_test_adbc WHERE name = $1", ("Null Product",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
@@ -181,7 +181,7 @@ def test_sql_result_aggregation_results(adbc_postgresql_session: AdbcDriver) -> 
             MAX(price) as max_price,
             SUM(value) as total_value,
             COUNT(CASE WHEN is_active THEN 1 END) as active_count
-        FROM result_test
+        FROM result_test_adbc
     """)
 
     assert isinstance(result, SQLResult)
@@ -213,7 +213,7 @@ def test_sql_result_complex_queries(adbc_postgresql_session: AdbcDriver) -> None
                 ELSE 'low'
             END as value_category,
             array_length(r.tags, 1) as tag_count
-        FROM result_test r
+        FROM result_test_adbc r
         WHERE r.is_active = true
         ORDER BY r.value DESC
     """)
@@ -246,7 +246,7 @@ def test_sql_result_column_name_handling(adbc_postgresql_session: AdbcDriver) ->
             value as product_value,
             price as product_price,
             is_active as is_available
-        FROM result_test
+        FROM result_test_adbc
         WHERE name = $1
     """,
         ("Product A",),
@@ -275,19 +275,19 @@ def test_sql_result_large_result_handling(adbc_postgresql_session: AdbcDriver) -
     bulk_data = [(f"Bulk Product {i}", i * 10, i * 2.5, i % 2 == 0) for i in range(1, 101)]
     adbc_postgresql_session.execute_many(
         """
-        INSERT INTO result_test (name, value, price, is_active)
+        INSERT INTO result_test_adbc (name, value, price, is_active)
         VALUES ($1, $2, $3, $4)
     """,
         bulk_data,
     )
 
-    result = adbc_postgresql_session.execute("SELECT * FROM result_test ORDER BY id")
+    result = adbc_postgresql_session.execute("SELECT * FROM result_test_adbc ORDER BY id")
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() >= 100
 
     page_result = adbc_postgresql_session.execute("""
-        SELECT name, value FROM result_test
+        SELECT name, value FROM result_test_adbc
         WHERE name LIKE 'Bulk Product%'
         ORDER BY value
         LIMIT 10 OFFSET 20
@@ -307,7 +307,7 @@ def adbc_sqlite_session() -> "Generator[AdbcDriver, None, None]":
 
     with config.provide_session() as session:
         session.execute_script("""
-            CREATE TABLE arrow_test (
+            CREATE TABLE arrow_test_adbc (
                 id INTEGER PRIMARY KEY,
                 name TEXT,
                 data BLOB,
@@ -317,7 +317,7 @@ def adbc_sqlite_session() -> "Generator[AdbcDriver, None, None]":
 
         session.execute_many(
             """
-            INSERT INTO arrow_test (name, data) VALUES (?, ?)
+            INSERT INTO arrow_test_adbc (name, data) VALUES (?, ?)
         """,
             [("test1", b"binary_data_1"), ("test2", b"binary_data_2"), ("test3", None)],
         )
@@ -329,7 +329,7 @@ def adbc_sqlite_session() -> "Generator[AdbcDriver, None, None]":
 @pytest.mark.adbc
 def test_sql_result_arrow_sqlite_types(adbc_sqlite_session: AdbcDriver) -> None:
     """Test SQLResult Arrow type handling with SQLite."""
-    result = adbc_sqlite_session.execute("SELECT * FROM arrow_test ORDER BY id")
+    result = adbc_sqlite_session.execute("SELECT * FROM arrow_test_adbc ORDER BY id")
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 3

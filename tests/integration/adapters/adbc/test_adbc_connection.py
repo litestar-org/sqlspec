@@ -129,14 +129,14 @@ def test_sqlite_memory_connection() -> None:
 
     with config.provide_session() as session:
         session.execute_script("""
-            CREATE TABLE memory_test (
+            CREATE TABLE memory_test_adbc (
                 id INTEGER PRIMARY KEY,
                 data TEXT
             )
         """)
 
-        session.execute("INSERT INTO memory_test (data) VALUES (?)", ("test_data",))
-        result = session.execute("SELECT data FROM memory_test")
+        session.execute("INSERT INTO memory_test_adbc (data) VALUES (?)", ("test_data",))
+        result = session.execute("SELECT data FROM memory_test_adbc")
 
         assert result.data is not None
         assert len(result.data) == 1
@@ -179,7 +179,7 @@ def test_connection_transaction_handling(postgres_service: "PostgresService") ->
 
     with config.provide_session() as session:
         session.execute_script("""
-            CREATE TABLE IF NOT EXISTS transaction_test (
+            CREATE TABLE IF NOT EXISTS transaction_test_adbc (
                 id SERIAL PRIMARY KEY,
                 data TEXT
             )
@@ -187,15 +187,15 @@ def test_connection_transaction_handling(postgres_service: "PostgresService") ->
 
         try:
             session.begin()
-            session.execute("INSERT INTO transaction_test (data) VALUES ($1)", ("test_data",))
+            session.execute("INSERT INTO transaction_test_adbc (data) VALUES ($1)", ("test_data",))
             session.commit()
 
-            result = session.execute("SELECT COUNT(*) as count FROM transaction_test")
+            result = session.execute("SELECT COUNT(*) as count FROM transaction_test_adbc")
             assert result.data is not None
             assert result.data[0]["count"] >= 1
 
         finally:
             try:
-                session.execute_script("DROP TABLE IF EXISTS transaction_test")
+                session.execute_script("DROP TABLE IF EXISTS transaction_test_adbc")
             except Exception:
                 pass

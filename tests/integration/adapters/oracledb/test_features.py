@@ -82,14 +82,14 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     """Test creation and execution of PL/SQL stored procedures."""
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_proc_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_proc_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure'; EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-942, -4043) THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-942, -4043) THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_proc_table (
+        CREATE TABLE test_proc_table_oracledb_async (
             id NUMBER PRIMARY KEY,
             input_value NUMBER,
             output_value NUMBER
@@ -97,7 +97,7 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     """)
 
     procedure_sql = """
-    CREATE OR REPLACE PROCEDURE test_procedure(
+    CREATE OR REPLACE PROCEDURE test_procedure_oracledb_async(
         p_input IN NUMBER,
         p_output OUT NUMBER
     ) AS
@@ -106,11 +106,11 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
         p_output := p_input * 2 + 10;
 
         -- Insert a record
-        INSERT INTO test_proc_table (id, input_value, output_value)
+        INSERT INTO test_proc_table_oracledb_async (id, input_value, output_value)
         VALUES (p_input, p_input, p_output);
 
         COMMIT;
-    END test_procedure;
+    END test_procedure_oracledb_async;
     """
 
     await oracle_async_session.execute_script(procedure_sql)
@@ -119,8 +119,8 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     DECLARE
         v_output NUMBER;
     BEGIN
-        test_procedure(5, v_output);
-        test_procedure(10, v_output);
+        test_procedure_oracledb_async(5, v_output);
+        test_procedure_oracledb_async(10, v_output);
     END;
     """
 
@@ -128,7 +128,7 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     assert isinstance(result, SQLResult)
 
     select_result = await oracle_async_session.execute(
-        "SELECT id, input_value, output_value FROM test_proc_table ORDER BY id"
+        "SELECT id, input_value, output_value FROM test_proc_table_oracledb_async ORDER BY id"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -144,10 +144,10 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     assert second_row["output_value"] == 30
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_proc_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_proc_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
 
@@ -204,11 +204,11 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
     """Test Oracle's analytic/window functions."""
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_analytics_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_analytics_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_analytics_table (
+        CREATE TABLE test_analytics_table_oracledb_async (
             id NUMBER PRIMARY KEY,
             department VARCHAR2(50),
             employee_name VARCHAR2(100),
@@ -218,12 +218,12 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
 
     await oracle_async_session.execute_script("""
         INSERT ALL
-            INTO test_analytics_table VALUES (1, 'SALES', 'John Doe', 50000)
-            INTO test_analytics_table VALUES (2, 'SALES', 'Jane Smith', 55000)
-            INTO test_analytics_table VALUES (3, 'SALES', 'Bob Johnson', 48000)
-            INTO test_analytics_table VALUES (4, 'IT', 'Alice Brown', 60000)
-            INTO test_analytics_table VALUES (5, 'IT', 'Charlie Wilson', 65000)
-            INTO test_analytics_table VALUES (6, 'IT', 'Diana Lee', 58000)
+            INTO test_analytics_table_oracledb_async VALUES (1, 'SALES', 'John Doe', 50000)
+            INTO test_analytics_table_oracledb_async VALUES (2, 'SALES', 'Jane Smith', 55000)
+            INTO test_analytics_table_oracledb_async VALUES (3, 'SALES', 'Bob Johnson', 48000)
+            INTO test_analytics_table_oracledb_async VALUES (4, 'IT', 'Alice Brown', 60000)
+            INTO test_analytics_table_oracledb_async VALUES (5, 'IT', 'Charlie Wilson', 65000)
+            INTO test_analytics_table_oracledb_async VALUES (6, 'IT', 'Diana Lee', 58000)
         SELECT * FROM dual
     """)
 
@@ -236,7 +236,7 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
             RANK() OVER (ORDER BY salary DESC) as overall_rank,
             SUM(salary) OVER (PARTITION BY department) as dept_total_salary,
             AVG(salary) OVER () as company_avg_salary
-        FROM test_analytics_table
+        FROM test_analytics_table_oracledb_async
         ORDER BY department, salary DESC
     """
 
@@ -258,7 +258,7 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
         assert emp["dept_total_salary"] == 183000
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_analytics_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_analytics_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
 
@@ -305,11 +305,11 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
     """Test Oracle-specific exception handling in PL/SQL."""
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script(
-        "CREATE TABLE test_exception_table (id NUMBER PRIMARY KEY, name VARCHAR2(50))"
+        "CREATE TABLE test_exception_table_oracledb_async (id NUMBER PRIMARY KEY, name VARCHAR2(50))"
     )
 
     exception_handling_block = """
@@ -319,19 +319,19 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
         PRAGMA EXCEPTION_INIT(duplicate_key, -1);
     BEGIN
         -- Insert first record
-        INSERT INTO test_exception_table VALUES (1, 'First Record');
+        INSERT INTO test_exception_table_oracledb_async VALUES (1, 'First Record');
 
         -- Try to insert duplicate - should raise exception
         BEGIN
-            INSERT INTO test_exception_table VALUES (1, 'Duplicate Record');
+            INSERT INTO test_exception_table_oracledb_async VALUES (1, 'Duplicate Record');
         EXCEPTION
             WHEN duplicate_key THEN
                 -- Handle the duplicate key error
-                INSERT INTO test_exception_table VALUES (2, 'Exception Handled');
+                INSERT INTO test_exception_table_oracledb_async VALUES (2, 'Exception Handled');
         END;
 
         -- This should succeed
-        INSERT INTO test_exception_table VALUES (3, 'Final Record');
+        INSERT INTO test_exception_table_oracledb_async VALUES (3, 'Final Record');
 
         COMMIT;
     EXCEPTION
@@ -345,7 +345,9 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
     result = await oracle_async_session.execute_script(exception_handling_block)
     assert isinstance(result, SQLResult)
 
-    select_result = await oracle_async_session.execute("SELECT id, name FROM test_exception_table ORDER BY id")
+    select_result = await oracle_async_session.execute(
+        "SELECT id, name FROM test_exception_table_oracledb_async ORDER BY id"
+    )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 3
@@ -357,5 +359,5 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
     assert "Duplicate Record" not in names
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )

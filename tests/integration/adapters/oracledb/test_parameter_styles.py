@@ -130,11 +130,11 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     """Test UPDATE operations using mixed parameter styles."""
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_params_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_mixed_params_table (
+        CREATE TABLE test_mixed_params_table_oracledb_async (
             id NUMBER PRIMARY KEY,
             name VARCHAR2(100),
             status VARCHAR2(20),
@@ -143,12 +143,12 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     """)
 
     await oracle_async_session.execute(
-        "INSERT INTO test_mixed_params_table (id, name, status, last_updated) VALUES (:1, :2, :3, SYSDATE)",
+        "INSERT INTO test_mixed_params_table_oracledb_async (id, name, status, last_updated) VALUES (:1, :2, :3, SYSDATE)",
         (1, "Test User", "PENDING"),
     )
 
     update_sql = """
-        UPDATE test_mixed_params_table
+        UPDATE test_mixed_params_table_oracledb_async
         SET name = :new_name, status = :new_status, last_updated = SYSDATE
         WHERE id = :target_id
     """
@@ -160,7 +160,7 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     assert result.rows_affected == 1
 
     select_result = await oracle_async_session.execute(
-        "SELECT name, status FROM test_mixed_params_table WHERE id = :1", (1,)
+        "SELECT name, status FROM test_mixed_params_table_oracledb_async WHERE id = :1", (1,)
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -171,7 +171,7 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     assert row["status"] == "ACTIVE"
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_params_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
 
@@ -221,18 +221,18 @@ async def test_async_oracle_null_parameter_handling(oracle_async_session: Oracle
     """Test handling of NULL parameters in Oracle."""
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_null_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_null_params_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_null_params_table (
+        CREATE TABLE test_null_params_table_oracledb_async (
             id NUMBER PRIMARY KEY,
             name VARCHAR2(100),
             optional_field VARCHAR2(100)
         )
     """)
 
-    insert_sql = "INSERT INTO test_null_params_table (id, name, optional_field) VALUES (:id, :name, :optional_field)"
+    insert_sql = "INSERT INTO test_null_params_table_oracledb_async (id, name, optional_field) VALUES (:id, :name, :optional_field)"
 
     result = await oracle_async_session.execute(insert_sql, {"id": 1, "name": "Test User", "optional_field": None})
     assert isinstance(result, SQLResult)
@@ -244,14 +244,16 @@ async def test_async_oracle_null_parameter_handling(oracle_async_session: Oracle
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
-    select_null_sql = "SELECT id, name FROM test_null_params_table WHERE optional_field IS NULL"
+    select_null_sql = "SELECT id, name FROM test_null_params_table_oracledb_async WHERE optional_field IS NULL"
     null_result = await oracle_async_session.execute(select_null_sql)
     assert isinstance(null_result, SQLResult)
     assert null_result.data is not None
     assert len(null_result.data) == 1
     assert _lower_rows(null_result.data)[0]["id"] == 1
 
-    select_not_null_sql = "SELECT id, name, optional_field FROM test_null_params_table WHERE optional_field IS NOT NULL"
+    select_not_null_sql = (
+        "SELECT id, name, optional_field FROM test_null_params_table_oracledb_async WHERE optional_field IS NOT NULL"
+    )
     not_null_result = await oracle_async_session.execute(select_not_null_sql)
     assert isinstance(not_null_result, SQLResult)
     assert not_null_result.data is not None
@@ -261,7 +263,7 @@ async def test_async_oracle_null_parameter_handling(oracle_async_session: Oracle
     assert not_null_row["optional_field"] == "Not Null"
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_null_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_null_params_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
 
@@ -497,12 +499,12 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
     """Test Oracle LOB (CLOB/RAW) None parameter handling in async operations."""
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_lob_none_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_lob_none_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     # Simplified table without BLOB to avoid parameter binding issues
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_lob_none_table (
+        CREATE TABLE test_lob_none_table_oracledb_async (
             id NUMBER PRIMARY KEY,
             description VARCHAR2(100),
             document_content CLOB,
@@ -512,7 +514,7 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
 
     # Test with None LOB values
     insert_sql = """
-        INSERT INTO test_lob_none_table (id, description, document_content, raw_data)
+        INSERT INTO test_lob_none_table_oracledb_async (id, description, document_content, raw_data)
         VALUES (:id, :description, :document_content, :raw_data)
     """
 
@@ -557,7 +559,7 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
     assert result.rows_affected == 1
 
     # Verify the insertions
-    select_result = await oracle_async_session.execute("SELECT * FROM test_lob_none_table ORDER BY id")
+    select_result = await oracle_async_session.execute("SELECT * FROM test_lob_none_table_oracledb_async ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 3
@@ -592,7 +594,7 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
     assert row3["raw_data"] is None
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_lob_none_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_lob_none_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
 
@@ -600,13 +602,13 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     """Test Oracle JSON column None parameter handling (Oracle 21+ and constraint-based)."""
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_none_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_none_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     # Try Oracle 21+ native JSON type first, fall back to VARCHAR2 with JSON constraint
     try:
         await oracle_async_session.execute_script("""
-            CREATE TABLE test_json_none_table (
+            CREATE TABLE test_json_none_table_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 name VARCHAR2(100),
                 metadata JSON,
@@ -616,7 +618,7 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     except Exception:
         # Fallback to VARCHAR2 with JSON validation constraint (pre-21)
         await oracle_async_session.execute_script("""
-            CREATE TABLE test_json_none_table (
+            CREATE TABLE test_json_none_table_oracledb_async (
                 id NUMBER PRIMARY KEY,
                 name VARCHAR2(100),
                 metadata VARCHAR2(4000) CHECK (metadata IS JSON),
@@ -626,7 +628,7 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
 
     # Test with None JSON values
     insert_sql = """
-        INSERT INTO test_json_none_table (id, name, metadata, settings)
+        INSERT INTO test_json_none_table_oracledb_async (id, name, metadata, settings)
         VALUES (:id, :name, :metadata, :settings)
     """
 
@@ -665,7 +667,7 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     assert result.rows_affected == 1
 
     # Verify the insertions
-    select_result = await oracle_async_session.execute("SELECT * FROM test_json_none_table ORDER BY id")
+    select_result = await oracle_async_session.execute("SELECT * FROM test_json_none_table_oracledb_async ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 3
@@ -699,7 +701,8 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
 
     # Test querying with None JSON parameter
     query_result = await oracle_async_session.execute(
-        "SELECT id, name FROM test_json_none_table WHERE metadata IS NULL OR settings = :param", {"param": None}
+        "SELECT id, name FROM test_json_none_table_oracledb_async WHERE metadata IS NULL OR settings = :param",
+        {"param": None},
     )
     assert isinstance(query_result, SQLResult)
     assert query_result.data is not None
@@ -708,7 +711,7 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     assert len(null_json_ids) >= 1
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_none_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_none_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
 

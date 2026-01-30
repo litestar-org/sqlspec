@@ -72,11 +72,11 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
     """Test execute_many with batch UPDATE operations."""
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_batch_update'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_batch_update_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE TABLE test_batch_update (
+        CREATE TABLE test_batch_update_oracledb_async (
             id NUMBER PRIMARY KEY,
             name VARCHAR2(100),
             status VARCHAR2(20),
@@ -91,10 +91,10 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
         (4, "User 4", "PENDING", 0),
     ]
 
-    insert_sql = "INSERT INTO test_batch_update (id, name, status, score) VALUES (:1, :2, :3, :4)"
+    insert_sql = "INSERT INTO test_batch_update_oracledb_async (id, name, status, score) VALUES (:1, :2, :3, :4)"
     await oracle_async_session.execute_many(insert_sql, initial_data)
 
-    update_sql = "UPDATE test_batch_update SET status = :1, score = :2 WHERE id = :3"
+    update_sql = "UPDATE test_batch_update_oracledb_async SET status = :1, score = :2 WHERE id = :3"
 
     update_data = [("ACTIVE", 85, 1), ("ACTIVE", 92, 2), ("INACTIVE", 78, 3), ("ACTIVE", 95, 4)]
 
@@ -103,7 +103,7 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
     assert result.rows_affected == len(update_data)
 
     select_result = await oracle_async_session.execute(
-        "SELECT id, name, status, score FROM test_batch_update ORDER BY id"
+        "SELECT id, name, status, score FROM test_batch_update_oracledb_async ORDER BY id"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -116,14 +116,14 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
         assert row["score"] == expected_score
 
     active_count_result = await oracle_async_session.execute(
-        "SELECT COUNT(*) as active_count FROM test_batch_update WHERE status = 'ACTIVE'"
+        "SELECT COUNT(*) as active_count FROM test_batch_update_oracledb_async WHERE status = 'ACTIVE'"
     )
     assert isinstance(active_count_result, SQLResult)
     assert active_count_result.data is not None
     assert active_count_result.data[0]["active_count"] == 3
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_batch_update'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_batch_update_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
 
@@ -196,19 +196,19 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
 
     await oracle_async_session.execute_script("""
         BEGIN
-            EXECUTE IMMEDIATE 'DROP SEQUENCE batch_seq';
+            EXECUTE IMMEDIATE 'DROP SEQUENCE batch_seq_oracledb_async';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -2289 THEN RAISE; END IF;
         END;
         """)
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_sequence_batch'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_sequence_batch_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
     await oracle_async_session.execute_script("""
-        CREATE SEQUENCE batch_seq START WITH 1 INCREMENT BY 1;
-        CREATE TABLE test_sequence_batch (
+        CREATE SEQUENCE batch_seq_oracledb_async START WITH 1 INCREMENT BY 1;
+        CREATE TABLE test_sequence_batch_oracledb_async (
             id NUMBER PRIMARY KEY,
             name VARCHAR2(100),
             department VARCHAR2(50),
@@ -216,7 +216,7 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
         )
     """)
 
-    insert_sql = "INSERT INTO test_sequence_batch (id, name, department) VALUES (batch_seq.NEXTVAL, :1, :2)"
+    insert_sql = "INSERT INTO test_sequence_batch_oracledb_async (id, name, department) VALUES (batch_seq_oracledb_async.NEXTVAL, :1, :2)"
 
     employee_data = [
         ("Alice Johnson", "ENGINEERING"),
@@ -231,7 +231,7 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
     assert result.rows_affected == len(employee_data)
 
     select_result = await oracle_async_session.execute(
-        "SELECT id, name, department FROM test_sequence_batch ORDER BY id"
+        "SELECT id, name, department FROM test_sequence_batch_oracledb_async ORDER BY id"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -242,14 +242,16 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
         assert row["name"] == employee_data[i][0]
         assert row["department"] == employee_data[i][1]
 
-    sequence_result = await oracle_async_session.execute("SELECT batch_seq.CURRVAL as current_value FROM dual")
+    sequence_result = await oracle_async_session.execute(
+        "SELECT batch_seq_oracledb_async.CURRVAL as current_value FROM dual"
+    )
     assert isinstance(sequence_result, SQLResult)
     assert sequence_result.data is not None
     assert sequence_result.data[0]["current_value"] == len(employee_data)
 
     dept_result = await oracle_async_session.execute("""
         SELECT department, COUNT(*) as employee_count
-        FROM test_sequence_batch
+        FROM test_sequence_batch_oracledb_async
         GROUP BY department
         ORDER BY department
     """)
@@ -261,8 +263,8 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
 
     await oracle_async_session.execute_script("""
         BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_sequence_batch';
-            EXECUTE IMMEDIATE 'DROP SEQUENCE batch_seq';
+            EXECUTE IMMEDIATE 'DROP TABLE test_sequence_batch_oracledb_async';
+            EXECUTE IMMEDIATE 'DROP SEQUENCE batch_seq_oracledb_async';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -942 AND SQLCODE != -2289 THEN RAISE; END IF;

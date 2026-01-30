@@ -82,31 +82,31 @@ async def test_async_unique_violation(oracle_async_exception_session: OracleAsyn
     """Test unique constraint violation raises UniqueViolationError (async)."""
     await oracle_async_exception_session.execute_script("""
         BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_unique_constraint';
+            EXECUTE IMMEDIATE 'DROP TABLE test_unique_constraint_oracledb_async';
         EXCEPTION
             WHEN OTHERS THEN NULL;
         END;
     """)
 
     await oracle_async_exception_session.execute("""
-        CREATE TABLE test_unique_constraint (
+        CREATE TABLE test_unique_constraint_oracledb_async (
             id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             email VARCHAR2(255) UNIQUE NOT NULL
         )
     """)
 
     await oracle_async_exception_session.execute(
-        "INSERT INTO test_unique_constraint (email) VALUES (:1)", ("test@example.com",)
+        "INSERT INTO test_unique_constraint_oracledb_async (email) VALUES (:1)", ("test@example.com",)
     )
 
     with pytest.raises(UniqueViolationError) as exc_info:
         await oracle_async_exception_session.execute(
-            "INSERT INTO test_unique_constraint (email) VALUES (:1)", ("test@example.com",)
+            "INSERT INTO test_unique_constraint_oracledb_async (email) VALUES (:1)", ("test@example.com",)
         )
 
     assert "unique" in str(exc_info.value).lower() or "00001" in str(exc_info.value)
 
-    await oracle_async_exception_session.execute("DROP TABLE test_unique_constraint")
+    await oracle_async_exception_session.execute("DROP TABLE test_unique_constraint_oracledb_async")
 
 
 def test_sync_not_null_violation(oracle_sync_exception_session: OracleSyncDriver) -> None:

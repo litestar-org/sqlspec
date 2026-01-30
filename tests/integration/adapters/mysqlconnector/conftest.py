@@ -85,28 +85,29 @@ async def mysqlconnector_clean_async_driver(
     async with mysqlconnector_async_config.provide_session() as driver:
         await driver.execute("SET sql_notes = 0")
         cleanup_tables = [
-            "test_table",
-            "data_types_test",
-            "user_profiles",
-            "test_parameter_conversion",
-            "transaction_test",
-            "concurrent_test",
-            "arrow_users",
-            "arrow_table_test",
-            "arrow_batch_test",
-            "arrow_params_test",
-            "arrow_empty_test",
-            "arrow_null_test",
-            "arrow_polars_test",
-            "arrow_large_test",
-            "arrow_types_test",
-            "arrow_json_test",
+            "test_table_mysqlconnector_async",
+            "data_types_test_mysqlconnector_async",
+            "user_profiles_mysqlconnector_async",
+            "test_parameter_conversion_mysqlconnector_async",
+            "transaction_test_mysqlconnector_async",
+            "concurrent_test_mysqlconnector_async",
+            "arrow_users_mysqlconnector_async",
+            "arrow_table_test_mysqlconnector_async",
+            "arrow_batch_test_mysqlconnector_async",
+            "arrow_params_test_mysqlconnector_async",
+            "arrow_empty_test_mysqlconnector_async",
+            "arrow_null_test_mysqlconnector_async",
+            "arrow_polars_test_mysqlconnector_async",
+            "arrow_large_test_mysqlconnector_async",
+            "arrow_types_test_mysqlconnector_async",
+            "arrow_json_test_mysqlconnector_async",
+            "driver_feature_test_mysqlconnector_async",
         ]
 
         for table in cleanup_tables:
             await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
 
-        cleanup_procedures = ["test_procedure", "simple_procedure"]
+        cleanup_procedures = ["test_procedure_mysqlconnector_async", "simple_procedure_mysqlconnector_async"]
 
         for proc in cleanup_procedures:
             await driver.execute_script(f"DROP PROCEDURE IF EXISTS {proc}")
@@ -134,28 +135,29 @@ def mysqlconnector_clean_sync_driver(
     with mysqlconnector_sync_config.provide_session() as driver:
         driver.execute("SET sql_notes = 0")
         cleanup_tables = [
-            "test_table",
-            "data_types_test",
-            "user_profiles",
-            "test_parameter_conversion",
-            "transaction_test",
-            "concurrent_test",
-            "arrow_users",
-            "arrow_table_test",
-            "arrow_batch_test",
-            "arrow_params_test",
-            "arrow_empty_test",
-            "arrow_null_test",
-            "arrow_polars_test",
-            "arrow_large_test",
-            "arrow_types_test",
-            "arrow_json_test",
+            "test_table_mysqlconnector_sync",
+            "data_types_test_mysqlconnector_sync",
+            "user_profiles_mysqlconnector_sync",
+            "test_parameter_conversion_mysqlconnector_sync",
+            "transaction_test_mysqlconnector_sync",
+            "concurrent_test_mysqlconnector_sync",
+            "arrow_users_mysqlconnector_sync",
+            "arrow_table_test_mysqlconnector_sync",
+            "arrow_batch_test_mysqlconnector_sync",
+            "arrow_params_test_mysqlconnector_sync",
+            "arrow_empty_test_mysqlconnector_sync",
+            "arrow_null_test_mysqlconnector_sync",
+            "arrow_polars_test_mysqlconnector_sync",
+            "arrow_large_test_mysqlconnector_sync",
+            "arrow_types_test_mysqlconnector_sync",
+            "arrow_json_test_mysqlconnector_sync",
+            "driver_feature_test_mysqlconnector_sync",
         ]
 
         for table in cleanup_tables:
             driver.execute_script(f"DROP TABLE IF EXISTS {table}")
 
-        cleanup_procedures = ["test_procedure", "simple_procedure"]
+        cleanup_procedures = ["test_procedure_mysqlconnector_sync", "simple_procedure_mysqlconnector_sync"]
 
         for proc in cleanup_procedures:
             driver.execute_script(f"DROP PROCEDURE IF EXISTS {proc}")

@@ -41,7 +41,7 @@ async def psqlpy_session(psqlpy_config: "PsqlpyConfig") -> "AsyncGenerator[Psqlp
     async with psqlpy_config.provide_session() as session:
         await session.execute_script(
             """
-                CREATE TABLE IF NOT EXISTS test_table (
+                CREATE TABLE IF NOT EXISTS test_table_psqlpy (
                     id SERIAL PRIMARY KEY,
                     name VARCHAR(50)
                 );
@@ -52,6 +52,6 @@ async def psqlpy_session(psqlpy_config: "PsqlpyConfig") -> "AsyncGenerator[Psqlp
             yield session
         finally:
             try:
-                await session.execute_script("DROP TABLE IF EXISTS test_table;")
+                await session.execute_script("DROP TABLE IF EXISTS test_table_psqlpy;")
             except Exception:
                 pass

@@ -161,12 +161,7 @@ class PyMysqlConnectionPool:
     @contextmanager
     def get_connection(self) -> "Generator[PyMysqlConnection, None, None]":
         connection = self._get_thread_connection()
-        try:
-            yield connection
-        finally:
-            with contextlib.suppress(Exception):
-                if connection.open and connection.get_autocommit() is False:
-                    connection.commit()
+        yield connection
 
     def close(self) -> None:
         self._close_thread_connection()

@@ -20,10 +20,10 @@ def psycopg_session(psycopg_sync_config: "PsycopgSyncConfig") -> "Generator[Psyc
     """Create a psycopg session with test table."""
 
     with psycopg_sync_config.provide_session() as session:
-        session.execute_script("DROP TABLE IF EXISTS test_table")
+        session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
         session.execute_script(
             """
-                CREATE TABLE IF NOT EXISTS test_table (
+                CREATE TABLE IF NOT EXISTS test_table_psycopg_sync (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     value INTEGER DEFAULT 0,
@@ -42,7 +42,7 @@ def psycopg_session(psycopg_sync_config: "PsycopgSyncConfig") -> "Generator[Psyc
             pass
 
         try:
-            session.execute_script("DROP TABLE IF EXISTS test_table")
+            session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
         except Exception:
             try:
                 session.connection.rollback()
@@ -50,7 +50,7 @@ def psycopg_session(psycopg_sync_config: "PsycopgSyncConfig") -> "Generator[Psyc
                 pass
 
         try:
-            session.execute_script("DROP TABLE IF EXISTS test_table")
+            session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
         except Exception:
             pass
 
@@ -113,31 +113,37 @@ def test_psycopg_sync_connection(postgres_service: "PostgresService") -> None:
 def test_psycopg_basic_crud(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test basic CRUD operations."""
 
-    insert_result = psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", "test_name", 42)
+    insert_result = psycopg_session.execute(
+        "INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", "test_name", 42
+    )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    select_result = psycopg_session.execute("SELECT name, value FROM test_table WHERE name = %s", "test_name")
+    select_result = psycopg_session.execute(
+        "SELECT name, value FROM test_table_psycopg_sync WHERE name = %s", "test_name"
+    )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     assert select_result.data[0]["name"] == "test_name"
     assert select_result.data[0]["value"] == 42
 
-    update_result = psycopg_session.execute("UPDATE test_table SET value = %s WHERE name = %s", 100, "test_name")
+    update_result = psycopg_session.execute(
+        "UPDATE test_table_psycopg_sync SET value = %s WHERE name = %s", 100, "test_name"
+    )
     assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
-    verify_result = psycopg_session.execute("SELECT value FROM test_table WHERE name = %s", "test_name")
+    verify_result = psycopg_session.execute("SELECT value FROM test_table_psycopg_sync WHERE name = %s", "test_name")
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
-    delete_result = psycopg_session.execute("DELETE FROM test_table WHERE name = %s", "test_name")
+    delete_result = psycopg_session.execute("DELETE FROM test_table_psycopg_sync WHERE name = %s", "test_name")
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
-    empty_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table")
+    empty_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table_psycopg_sync")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
@@ -153,14 +159,14 @@ def test_psycopg_basic_crud(psycopg_session: "PsycopgSyncDriver") -> None:
 def test_psycopg_parameter_styles(psycopg_session: "PsycopgSyncDriver", parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
 
-    psycopg_session.execute("INSERT INTO test_table (name) VALUES (%s)", "test_value")
+    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name) VALUES (%s)", "test_value")
 
     if style == "tuple_binds":
-        sql = "SELECT name FROM test_table WHERE name = %s"
+        sql = "SELECT name FROM test_table_psycopg_sync WHERE name = %s"
 
         result = psycopg_session.execute(sql, *parameters)
     else:
-        sql = "SELECT name FROM test_table WHERE name = %(name)s"
+        sql = "SELECT name FROM test_table_psycopg_sync WHERE name = %(name)s"
 
         result = psycopg_session.execute(sql, **parameters)
 
@@ -174,16 +180,18 @@ def test_psycopg_execute_many(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test execute_many functionality."""
     parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters_list)
+    result = psycopg_session.execute_many(
+        "INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", parameters_list
+    )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(parameters_list)
 
-    select_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table")
+    select_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table_psycopg_sync")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == len(parameters_list)
 
-    ordered_result = psycopg_session.execute("SELECT name, value FROM test_table ORDER BY name")
+    ordered_result = psycopg_session.execute("SELECT name, value FROM test_table_psycopg_sync ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
@@ -194,9 +202,9 @@ def test_psycopg_execute_many(psycopg_session: "PsycopgSyncDriver") -> None:
 def test_psycopg_execute_script(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test execute_script functionality."""
     script = """
-        INSERT INTO test_table (name, value) VALUES ('script_test1', 999);
-        INSERT INTO test_table (name, value) VALUES ('script_test2', 888);
-        UPDATE test_table SET value = 1000 WHERE name = 'script_test1';
+        INSERT INTO test_table_psycopg_sync (name, value) VALUES ('script_test1', 999);
+        INSERT INTO test_table_psycopg_sync (name, value) VALUES ('script_test2', 888);
+        UPDATE test_table_psycopg_sync SET value = 1000 WHERE name = 'script_test1';
     """
 
     result = psycopg_session.execute_script(script)
@@ -205,7 +213,7 @@ def test_psycopg_execute_script(psycopg_session: "PsycopgSyncDriver") -> None:
     assert result.operation_type == "SCRIPT"
 
     select_result = psycopg_session.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE 'script_test%' ORDER BY name"
+        "SELECT name, value FROM test_table_psycopg_sync WHERE name LIKE 'script_test%' ORDER BY name"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -220,10 +228,11 @@ def test_psycopg_result_methods(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test SelectResult and ExecuteResult methods."""
 
     psycopg_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (%s, %s)", [("result1", 10), ("result2", 20), ("result3", 30)]
+        "INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)",
+        [("result1", 10), ("result2", 20), ("result3", 30)],
     )
 
-    result = psycopg_session.execute("SELECT * FROM test_table ORDER BY name")
+    result = psycopg_session.execute("SELECT * FROM test_table_psycopg_sync ORDER BY name")
     assert isinstance(result, SQLResult)
 
     first_row = result.get_first()
@@ -234,7 +243,7 @@ def test_psycopg_result_methods(psycopg_session: "PsycopgSyncDriver") -> None:
 
     assert not result.is_empty()
 
-    empty_result = psycopg_session.execute("SELECT * FROM test_table WHERE name = %s", "nonexistent")
+    empty_result = psycopg_session.execute("SELECT * FROM test_table_psycopg_sync WHERE name = %s", "nonexistent")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -249,29 +258,33 @@ def test_psycopg_error_handling(psycopg_session: "PsycopgSyncDriver") -> None:
     psycopg_session.rollback()
     psycopg_session.begin()
 
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", "unique_test", 1)
+    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", "unique_test", 1)
 
     with pytest.raises(Exception):
-        psycopg_session.execute("SELECT nonexistent_column FROM test_table")
+        psycopg_session.execute("SELECT nonexistent_column FROM test_table_psycopg_sync")
 
 
 def test_psycopg_statement_stack_pipeline(psycopg_session: "PsycopgSyncDriver") -> None:
     """StatementStack should leverage psycopg pipeline mode when available."""
 
-    psycopg_session.execute("TRUNCATE TABLE test_table RESTART IDENTITY")
+    psycopg_session.execute("DELETE FROM test_table_psycopg_sync")
 
     stack = (
         StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (1, "sync-stack-one", 5))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (2, "sync-stack-two", 15))
-        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE %s", ("sync-stack-%",))
+        .push_execute(
+            "INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (1, "sync-stack-one", 5)
+        )
+        .push_execute(
+            "INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (2, "sync-stack-two", 15)
+        )
+        .push_execute("SELECT COUNT(*) AS total FROM test_table_psycopg_sync WHERE name LIKE %s", ("sync-stack-%",))
     )
 
     results = psycopg_session.execute_stack(stack)
 
     assert len(results) == 3
     total_result = psycopg_session.execute(
-        "SELECT COUNT(*) AS total FROM test_table WHERE name LIKE %s", "sync-stack-%"
+        "SELECT COUNT(*) AS total FROM test_table_psycopg_sync WHERE name LIKE %s", "sync-stack-%"
     )
     assert total_result.data is not None
     assert total_result.data[0]["total"] == 2
@@ -281,16 +294,20 @@ def test_psycopg_statement_stack_pipeline(psycopg_session: "PsycopgSyncDriver") 
 def test_psycopg_statement_stack_continue_on_error(psycopg_session: "PsycopgSyncDriver") -> None:
     """Pipeline execution should continue when instructed to handle errors."""
 
-    psycopg_session.execute("TRUNCATE TABLE test_table RESTART IDENTITY")
+    psycopg_session.execute("DELETE FROM test_table_psycopg_sync")
     psycopg_session.commit()
 
     stack = (
         StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (1, "sync-initial", 10))
-        .push_execute(  # duplicate PK triggers error
-            "INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (1, "sync-duplicate", 20)
+        .push_execute(
+            "INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (1, "sync-initial", 10)
         )
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (2, "sync-success-final", 30))
+        .push_execute(  # duplicate PK triggers error
+            "INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (1, "sync-duplicate", 20)
+        )
+        .push_execute(
+            "INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (2, "sync-success-final", 30)
+        )
     )
 
     results = psycopg_session.execute_stack(stack, continue_on_error=True)
@@ -300,7 +317,7 @@ def test_psycopg_statement_stack_continue_on_error(psycopg_session: "PsycopgSync
     assert results[0].error is None
     assert results[2].error is None
 
-    verify = psycopg_session.execute("SELECT COUNT(*) AS total FROM test_table")
+    verify = psycopg_session.execute("SELECT COUNT(*) AS total FROM test_table_psycopg_sync")
     assert verify.data is not None
     assert verify.data[0]["total"] == 2
 
@@ -309,7 +326,7 @@ def test_psycopg_data_types(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test PostgreSQL data type handling with psycopg."""
 
     psycopg_session.execute_script("""
-        CREATE TABLE psycopg_data_types_test (
+        CREATE TABLE data_types_test_psycopg_sync (
             id SERIAL PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -325,7 +342,7 @@ def test_psycopg_data_types(psycopg_session: "PsycopgSyncDriver") -> None:
 
     psycopg_session.execute(
         """
-        INSERT INTO psycopg_data_types_test (
+        INSERT INTO data_types_test_psycopg_sync (
             text_col, integer_col, numeric_col, boolean_col, json_col,
             array_col, date_col, timestamp_col, uuid_col
         ) VALUES (
@@ -344,7 +361,7 @@ def test_psycopg_data_types(psycopg_session: "PsycopgSyncDriver") -> None:
     )
 
     select_result = psycopg_session.execute(
-        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM psycopg_data_types_test"
+        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM data_types_test_psycopg_sync"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -356,18 +373,22 @@ def test_psycopg_data_types(psycopg_session: "PsycopgSyncDriver") -> None:
     assert row["boolean_col"] is True
     assert row["array_col"] == [1, 2, 3]
 
-    psycopg_session.execute_script("DROP TABLE psycopg_data_types_test")
+    psycopg_session.execute_script("DROP TABLE data_types_test_psycopg_sync")
 
 
 def test_psycopg_transactions(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test transaction behavior."""
 
-    psycopg_session.execute("TRUNCATE TABLE test_table RESTART IDENTITY")
+    psycopg_session.execute("DELETE FROM test_table_psycopg_sync")
     psycopg_session.commit()
 
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", "transaction_test", 100)
+    psycopg_session.execute(
+        "INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", "transaction_test", 100
+    )
 
-    result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = %s", ("transaction_test"))
+    result = psycopg_session.execute(
+        "SELECT COUNT(*) as count FROM test_table_psycopg_sync WHERE name = %s", ("transaction_test")
+    )
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.data[0]["count"] == 1
@@ -376,17 +397,17 @@ def test_psycopg_transactions(psycopg_session: "PsycopgSyncDriver") -> None:
 def test_psycopg_complex_queries(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test complex SQL queries."""
 
-    psycopg_session.execute("TRUNCATE TABLE test_table RESTART IDENTITY")
+    psycopg_session.execute("DELETE FROM test_table_psycopg_sync")
     psycopg_session.commit()
 
     test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
-    psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", test_data)
+    psycopg_session.execute_many("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", test_data)
 
     join_result = psycopg_session.execute("""
         SELECT t1.name as name1, t2.name as name2, t1.value as value1, t2.value as value2
-        FROM test_table t1
-        CROSS JOIN test_table t2
+        FROM test_table_psycopg_sync t1
+        CROSS JOIN test_table_psycopg_sync t2
         WHERE t1.value < t2.value
         ORDER BY t1.name, t2.name
         LIMIT 3
@@ -401,7 +422,7 @@ def test_psycopg_complex_queries(psycopg_session: "PsycopgSyncDriver") -> None:
             AVG(value) as avg_value,
             MIN(value) as min_value,
             MAX(value) as max_value
-        FROM test_table
+        FROM test_table_psycopg_sync
     """)
     assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
@@ -412,8 +433,8 @@ def test_psycopg_complex_queries(psycopg_session: "PsycopgSyncDriver") -> None:
 
     subquery_result = psycopg_session.execute("""
         SELECT name, value
-        FROM test_table
-        WHERE value > (SELECT AVG(value) FROM test_table)
+        FROM test_table_psycopg_sync
+        WHERE value > (SELECT AVG(value) FROM test_table_psycopg_sync)
         ORDER BY value
     """)
     assert isinstance(subquery_result, SQLResult)
@@ -427,37 +448,39 @@ def test_psycopg_schema_operations(psycopg_session: "PsycopgSyncDriver") -> None
     """Test schema operations (DDL)."""
 
     psycopg_session.execute_script("""
-        CREATE TABLE schema_test (
+        CREATE TABLE schema_test_psycopg_sync (
             id SERIAL PRIMARY KEY,
             description TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    insert_result = psycopg_session.execute("INSERT INTO schema_test (description) VALUES (%s)", "test description")
+    insert_result = psycopg_session.execute(
+        "INSERT INTO schema_test_psycopg_sync (description) VALUES (%s)", "test description"
+    )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
     info_result = psycopg_session.execute("""
         SELECT column_name, data_type
         FROM information_schema.columns
-        WHERE table_name = 'schema_test'
+        WHERE table_name = 'schema_test_psycopg_sync'
         ORDER BY ordinal_position
     """)
     assert isinstance(info_result, SQLResult)
     assert info_result.data is not None
     assert len(info_result.data) == 3
 
-    psycopg_session.execute_script("DROP TABLE schema_test")
+    psycopg_session.execute_script("DROP TABLE schema_test_psycopg_sync")
 
 
 def test_psycopg_column_names_and_metadata(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test column names and result metadata."""
 
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", "metadata_test", 123)
+    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", "metadata_test", 123)
 
     result = psycopg_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test",)
+        "SELECT id, name, value, created_at FROM test_table_psycopg_sync WHERE name = %s", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -476,17 +499,21 @@ def test_psycopg_performance_bulk_operations(psycopg_session: "PsycopgSyncDriver
 
     bulk_data = [(f"bulk_user_{i}", i * 10) for i in range(100)]
 
-    result = psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", bulk_data)
+    result = psycopg_session.execute_many(
+        "INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", bulk_data
+    )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 100
 
-    select_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'")
+    select_result = psycopg_session.execute(
+        "SELECT COUNT(*) as count FROM test_table_psycopg_sync WHERE name LIKE 'bulk_user_%'"
+    )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == 100
 
     page_result = psycopg_session.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
+        "SELECT name, value FROM test_table_psycopg_sync WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
     )
     assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
@@ -498,7 +525,7 @@ def test_psycopg_postgresql_specific_features(psycopg_session: "PsycopgSyncDrive
     """Test PostgreSQL-specific features with psycopg."""
 
     returning_result = psycopg_session.execute(
-        "INSERT INTO test_table (name, value) VALUES (%s, %s) RETURNING id, name", "returning_test", 999
+        "INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s) RETURNING id, name", "returning_test", 999
     )
     assert isinstance(returning_result, SQLResult)
     assert returning_result.data is not None
@@ -506,7 +533,8 @@ def test_psycopg_postgresql_specific_features(psycopg_session: "PsycopgSyncDrive
     assert returning_result.data[0]["name"] == "returning_test"
 
     psycopg_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (%s, %s)", [("window1", 10), ("window2", 20), ("window3", 30)]
+        "INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)",
+        [("window1", 10), ("window2", 20), ("window3", 30)],
     )
 
     window_result = psycopg_session.execute("""
@@ -515,7 +543,7 @@ def test_psycopg_postgresql_specific_features(psycopg_session: "PsycopgSyncDrive
             value,
             ROW_NUMBER() OVER (ORDER BY value) as row_num,
             LAG(value) OVER (ORDER BY value) as prev_value
-        FROM test_table
+        FROM test_table_psycopg_sync
         WHERE name LIKE 'window%'
         ORDER BY value
     """)
@@ -530,31 +558,33 @@ def test_psycopg_json_operations(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test PostgreSQL JSON operations with psycopg."""
 
     psycopg_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS json_test (
+        CREATE TABLE IF NOT EXISTS json_test_psycopg_sync (
             id SERIAL PRIMARY KEY,
             data JSONB
         );
-        DELETE FROM json_test;
+        DELETE FROM json_test_psycopg_sync;
     """)
 
     json_data = {"name": "test", "age": 30, "tags": ["postgres", "json"]}
-    psycopg_session.execute("INSERT INTO json_test (data) VALUES (%s)", (json_data,))
+    psycopg_session.execute("INSERT INTO json_test_psycopg_sync (data) VALUES (%s)", (json_data,))
 
-    json_result = psycopg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")
+    json_result = psycopg_session.execute(
+        "SELECT data->>'name' as name, data->>'age' as age FROM json_test_psycopg_sync"
+    )
     assert isinstance(json_result, SQLResult)
     assert json_result.data is not None
     assert json_result.data[0]["name"] == "test"
     assert json_result.data[0]["age"] == "30"
 
-    psycopg_session.execute_script("DROP TABLE json_test")
+    psycopg_session.execute_script("DROP TABLE json_test_psycopg_sync")
 
 
 def test_psycopg_copy_operations_positional(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test PostgreSQL COPY operations with psycopg using positional parameters."""
 
     psycopg_session.execute_script("""
-        DROP TABLE IF EXISTS copy_test_pos;
-        CREATE TABLE copy_test_pos (
+        DROP TABLE IF EXISTS copy_test_pos_psycopg_sync;
+        CREATE TABLE copy_test_pos_psycopg_sync (
             id INTEGER,
             name TEXT,
             value INTEGER
@@ -562,26 +592,26 @@ def test_psycopg_copy_operations_positional(psycopg_session: "PsycopgSyncDriver"
     """)
 
     copy_data = "1\ttest1\t100\n2\ttest2\t200\n"
-    result = psycopg_session.execute("COPY copy_test_pos FROM STDIN WITH (FORMAT text)", copy_data)
+    result = psycopg_session.execute("COPY copy_test_pos_psycopg_sync FROM STDIN WITH (FORMAT text)", copy_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected >= 0
 
-    verify_result = psycopg_session.execute("SELECT * FROM copy_test_pos ORDER BY id")
+    verify_result = psycopg_session.execute("SELECT * FROM copy_test_pos_psycopg_sync ORDER BY id")
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 2
     assert verify_result.data[0]["name"] == "test1"
     assert verify_result.data[1]["value"] == 200
 
-    psycopg_session.execute_script("DROP TABLE copy_test_pos")
+    psycopg_session.execute_script("DROP TABLE copy_test_pos_psycopg_sync")
 
 
 def test_psycopg_copy_operations_keyword(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test PostgreSQL COPY operations with psycopg using keyword parameters."""
 
     psycopg_session.execute_script("""
-        DROP TABLE IF EXISTS copy_test_kw;
-        CREATE TABLE copy_test_kw (
+        DROP TABLE IF EXISTS copy_test_kw_psycopg_sync;
+        CREATE TABLE copy_test_kw_psycopg_sync (
             id INTEGER,
             name TEXT,
             value INTEGER
@@ -589,26 +619,26 @@ def test_psycopg_copy_operations_keyword(psycopg_session: "PsycopgSyncDriver") -
     """)
 
     copy_data = "3\ttest3\t300\n4\ttest4\t400\n"
-    result = psycopg_session.execute("COPY copy_test_kw FROM STDIN WITH (FORMAT text)", copy_data)
+    result = psycopg_session.execute("COPY copy_test_kw_psycopg_sync FROM STDIN WITH (FORMAT text)", copy_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected >= 0
 
-    verify_result = psycopg_session.execute("SELECT * FROM copy_test_kw ORDER BY id")
+    verify_result = psycopg_session.execute("SELECT * FROM copy_test_kw_psycopg_sync ORDER BY id")
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 2
     assert verify_result.data[0]["name"] == "test3"
     assert verify_result.data[1]["value"] == 400
 
-    psycopg_session.execute_script("DROP TABLE copy_test_kw")
+    psycopg_session.execute_script("DROP TABLE copy_test_kw_psycopg_sync")
 
 
 def test_psycopg_copy_csv_format(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test PostgreSQL COPY operations with CSV format."""
 
     psycopg_session.execute_script("""
-        DROP TABLE IF EXISTS copy_csv_sync;
-        CREATE TABLE copy_csv_sync (
+        DROP TABLE IF EXISTS copy_csv_psycopg_sync;
+        CREATE TABLE copy_csv_psycopg_sync (
             id INTEGER,
             name TEXT,
             value INTEGER
@@ -616,30 +646,30 @@ def test_psycopg_copy_csv_format(psycopg_session: "PsycopgSyncDriver") -> None:
     """)
 
     csv_data = "5,test5,500\n6,test6,600\n7,test7,700\n"
-    result_pos = psycopg_session.execute("COPY copy_csv_sync FROM STDIN WITH (FORMAT csv)", csv_data)
+    result_pos = psycopg_session.execute("COPY copy_csv_psycopg_sync FROM STDIN WITH (FORMAT csv)", csv_data)
     assert isinstance(result_pos, SQLResult)
     assert result_pos.rows_affected == 3
 
-    verify_result = psycopg_session.execute("SELECT * FROM copy_csv_sync ORDER BY id")
+    verify_result = psycopg_session.execute("SELECT * FROM copy_csv_psycopg_sync ORDER BY id")
     assert isinstance(verify_result, SQLResult)
     assert len(verify_result.data) == 3
     assert verify_result.data[0]["name"] == "test5"
     assert verify_result.data[2]["value"] == 700
 
-    psycopg_session.execute_script("TRUNCATE TABLE copy_csv_sync")
+    psycopg_session.execute_script("DELETE FROM copy_csv_psycopg_sync")
 
     csv_data2 = "8,test8,800\n9,test9,900\n"
-    result_kw = psycopg_session.execute("COPY copy_csv_sync FROM STDIN WITH (FORMAT csv)", csv_data2)
+    result_kw = psycopg_session.execute("COPY copy_csv_psycopg_sync FROM STDIN WITH (FORMAT csv)", csv_data2)
     assert isinstance(result_kw, SQLResult)
     assert result_kw.rows_affected == 2
 
-    verify_result2 = psycopg_session.execute("SELECT * FROM copy_csv_sync ORDER BY id")
+    verify_result2 = psycopg_session.execute("SELECT * FROM copy_csv_psycopg_sync ORDER BY id")
     assert isinstance(verify_result2, SQLResult)
     assert len(verify_result2.data) == 2
     assert verify_result2.data[0]["name"] == "test8"
     assert verify_result2.data[1]["value"] == 900
 
-    psycopg_session.execute_script("DROP TABLE copy_csv_sync")
+    psycopg_session.execute_script("DROP TABLE copy_csv_psycopg_sync")
 
 
 @pytest.mark.integration
@@ -655,9 +685,9 @@ def test_psycopg_sync_for_update_locking(psycopg_session: "PsycopgSyncDriver") -
     """Test FOR UPDATE row locking with psycopg (sync)."""
 
     # Setup test table
-    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
     psycopg_session.execute_script("""
-        CREATE TABLE test_table (
+        CREATE TABLE test_table_psycopg_sync (
             id SERIAL PRIMARY KEY,
             name VARCHAR(50),
             value INTEGER
@@ -665,14 +695,18 @@ def test_psycopg_sync_for_update_locking(psycopg_session: "PsycopgSyncDriver") -
     """)
 
     # Insert test data
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("psycopg_lock", 100))
+    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", ("psycopg_lock", 100))
 
     try:
         psycopg_session.begin()
 
         # Test basic FOR UPDATE
         result = psycopg_session.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "psycopg_lock").for_update()
+            sql
+            .select("id", "name", "value")
+            .from_("test_table_psycopg_sync")
+            .where_eq("name", "psycopg_lock")
+            .for_update()
         )
         assert result is not None
         assert result["name"] == "psycopg_lock"
@@ -683,16 +717,16 @@ def test_psycopg_sync_for_update_locking(psycopg_session: "PsycopgSyncDriver") -
         psycopg_session.rollback()
         raise
     finally:
-        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
 
 
 def test_psycopg_sync_for_update_skip_locked(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test FOR UPDATE SKIP LOCKED with psycopg (sync)."""
 
     # Setup test table
-    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
     psycopg_session.execute_script("""
-        CREATE TABLE test_table (
+        CREATE TABLE test_table_psycopg_sync (
             id SERIAL PRIMARY KEY,
             name VARCHAR(50),
             value INTEGER
@@ -700,14 +734,18 @@ def test_psycopg_sync_for_update_skip_locked(psycopg_session: "PsycopgSyncDriver
     """)
 
     # Insert test data
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("psycopg_skip", 200))
+    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", ("psycopg_skip", 200))
 
     try:
         psycopg_session.begin()
 
         # Test FOR UPDATE SKIP LOCKED
         result = psycopg_session.select_one(
-            sql.select("*").from_("test_table").where_eq("name", "psycopg_skip").for_update(skip_locked=True)
+            sql
+            .select("*")
+            .from_("test_table_psycopg_sync")
+            .where_eq("name", "psycopg_skip")
+            .for_update(skip_locked=True)
         )
         assert result is not None
         assert result["name"] == "psycopg_skip"
@@ -717,16 +755,16 @@ def test_psycopg_sync_for_update_skip_locked(psycopg_session: "PsycopgSyncDriver
         psycopg_session.rollback()
         raise
     finally:
-        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
 
 
 def test_psycopg_sync_for_share_locking(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test FOR SHARE row locking with psycopg (sync)."""
 
     # Setup test table
-    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
     psycopg_session.execute_script("""
-        CREATE TABLE test_table (
+        CREATE TABLE test_table_psycopg_sync (
             id SERIAL PRIMARY KEY,
             name VARCHAR(50),
             value INTEGER
@@ -734,14 +772,18 @@ def test_psycopg_sync_for_share_locking(psycopg_session: "PsycopgSyncDriver") ->
     """)
 
     # Insert test data
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("psycopg_share", 300))
+    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", ("psycopg_share", 300))
 
     try:
         psycopg_session.begin()
 
         # Test FOR SHARE
         result = psycopg_session.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "psycopg_share").for_share()
+            sql
+            .select("id", "name", "value")
+            .from_("test_table_psycopg_sync")
+            .where_eq("name", "psycopg_share")
+            .for_share()
         )
         assert result is not None
         assert result["name"] == "psycopg_share"
@@ -752,7 +794,7 @@ def test_psycopg_sync_for_share_locking(psycopg_session: "PsycopgSyncDriver") ->
         psycopg_session.rollback()
         raise
     finally:
-        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
 
 
 def test_psycopg_sync_on_connection_create_hook(postgres_service: "PostgresService") -> None:

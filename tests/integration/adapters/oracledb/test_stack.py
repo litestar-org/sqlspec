@@ -50,7 +50,7 @@ async def test_async_statement_stack_native_pipeline(
     if not await oracle_async_session._pipeline_native_supported():
         pytest.skip("Oracle native pipeline unavailable")
 
-    table_name = "stack_async_pipeline"
+    table_name = "stack_async_pipeline_oracledb_async"
     await _reset_async_table(oracle_async_session, table_name)
 
     call_counter = {"count": 0}
@@ -91,7 +91,7 @@ async def test_async_statement_stack_continue_on_error_pipeline(oracle_async_ses
     if not await oracle_async_session._pipeline_native_supported():
         pytest.skip("Oracle native pipeline unavailable")
 
-    table_name = "stack_async_errors"
+    table_name = "stack_async_errors_oracledb_async"
     await _reset_async_table(oracle_async_session, table_name)
 
     stack = (

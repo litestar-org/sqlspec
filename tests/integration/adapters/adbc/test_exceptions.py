@@ -38,17 +38,19 @@ def adbc_exception_session(postgres_service: "PostgresService") -> Generator[Adb
 def test_unique_violation(adbc_exception_session: AdbcDriver) -> None:
     """Test unique constraint violation raises UniqueViolationError."""
     adbc_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_unique_constraint;
-        CREATE TABLE test_unique_constraint (
+        DROP TABLE IF EXISTS test_unique_constraint_adbc;
+        CREATE TABLE test_unique_constraint_adbc (
             id SERIAL PRIMARY KEY,
             email VARCHAR(255) UNIQUE NOT NULL
         );
     """)
 
-    adbc_exception_session.execute("INSERT INTO test_unique_constraint (email) VALUES ($1)", ("test@example.com",))
+    adbc_exception_session.execute("INSERT INTO test_unique_constraint_adbc (email) VALUES ($1)", ("test@example.com",))
 
     with pytest.raises(UniqueViolationError) as exc_info:
-        adbc_exception_session.execute("INSERT INTO test_unique_constraint (email) VALUES ($1)", ("test@example.com",))
+        adbc_exception_session.execute(
+            "INSERT INTO test_unique_constraint_adbc (email) VALUES ($1)", ("test@example.com",)
+        )
 
     assert "unique" in str(exc_info.value).lower() or "23505" in str(exc_info.value)
 
@@ -56,42 +58,42 @@ def test_unique_violation(adbc_exception_session: AdbcDriver) -> None:
 def test_foreign_key_violation(adbc_exception_session: AdbcDriver) -> None:
     """Test foreign key constraint violation raises ForeignKeyViolationError."""
     adbc_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_fk_child CASCADE;
-        DROP TABLE IF EXISTS test_fk_parent CASCADE;
-        CREATE TABLE test_fk_parent (
+        DROP TABLE IF EXISTS test_fk_child_adbc CASCADE;
+        DROP TABLE IF EXISTS test_fk_parent_adbc CASCADE;
+        CREATE TABLE test_fk_parent_adbc (
             id SERIAL PRIMARY KEY,
             name VARCHAR(100)
         );
-        CREATE TABLE test_fk_child (
+        CREATE TABLE test_fk_child_adbc (
             id SERIAL PRIMARY KEY,
             parent_id INTEGER NOT NULL,
-            FOREIGN KEY (parent_id) REFERENCES test_fk_parent(id)
+            FOREIGN KEY (parent_id) REFERENCES test_fk_parent_adbc(id)
         );
     """)
 
     with pytest.raises(ForeignKeyViolationError) as exc_info:
-        adbc_exception_session.execute("INSERT INTO test_fk_child (parent_id) VALUES ($1)", (999,))
+        adbc_exception_session.execute("INSERT INTO test_fk_child_adbc (parent_id) VALUES ($1)", (999,))
 
     assert "foreign key" in str(exc_info.value).lower() or "23503" in str(exc_info.value)
 
     adbc_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_fk_child CASCADE;
-        DROP TABLE IF EXISTS test_fk_parent CASCADE;
+        DROP TABLE IF EXISTS test_fk_child_adbc CASCADE;
+        DROP TABLE IF EXISTS test_fk_parent_adbc CASCADE;
     """)
 
 
-def test_not_null_violation(adbc_exception_session: AdbcDriver) -> None:
+def test_not_null_adbc_violation(adbc_exception_session: AdbcDriver) -> None:
     """Test NOT NULL constraint violation raises NotNullViolationError."""
     adbc_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_not_null;
-        CREATE TABLE test_not_null (
+        DROP TABLE IF EXISTS test_not_null_adbc;
+        CREATE TABLE test_not_null_adbc (
             id SERIAL PRIMARY KEY,
             required_field VARCHAR(100) NOT NULL
         );
     """)
 
     with pytest.raises(NotNullViolationError) as exc_info:
-        adbc_exception_session.execute("INSERT INTO test_not_null (id) VALUES ($1)", (1,))
+        adbc_exception_session.execute("INSERT INTO test_not_null_adbc (id) VALUES ($1)", (1,))
 
     assert "not null" in str(exc_info.value).lower() or "23502" in str(exc_info.value)
 
@@ -99,15 +101,15 @@ def test_not_null_violation(adbc_exception_session: AdbcDriver) -> None:
 def test_check_violation(adbc_exception_session: AdbcDriver) -> None:
     """Test CHECK constraint violation raises CheckViolationError."""
     adbc_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_check_constraint;
-        CREATE TABLE test_check_constraint (
+        DROP TABLE IF EXISTS test_check_constraint_adbc;
+        CREATE TABLE test_check_constraint_adbc (
             id SERIAL PRIMARY KEY,
             age INTEGER CHECK (age >= 18)
         );
     """)
 
     with pytest.raises(CheckViolationError) as exc_info:
-        adbc_exception_session.execute("INSERT INTO test_check_constraint (age) VALUES ($1)", (15,))
+        adbc_exception_session.execute("INSERT INTO test_check_constraint_adbc (age) VALUES ($1)", (15,))
 
     assert "check" in str(exc_info.value).lower() or "23514" in str(exc_info.value)
 

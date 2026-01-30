@@ -22,7 +22,7 @@ async def oracle_vector_session(oracle_async_session: OracleAsyncDriver) -> Asyn
     try:
         await oracle_async_session.execute_script(
             """
-            CREATE TABLE vector_docs_oracle (
+            CREATE TABLE vector_docs_oracledb_async (
                 id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 content VARCHAR2(100) NOT NULL,
                 embedding VECTOR(3, FLOAT32)
@@ -31,18 +31,18 @@ async def oracle_vector_session(oracle_async_session: OracleAsyncDriver) -> Asyn
         )
 
         await oracle_async_session.execute(
-            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc1", "[0.1, 0.2, 0.3]")
+            "INSERT INTO vector_docs_oracledb_async (content, embedding) VALUES (:1, :2)", ("doc1", "[0.1, 0.2, 0.3]")
         )
         await oracle_async_session.execute(
-            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc2", "[0.4, 0.5, 0.6]")
+            "INSERT INTO vector_docs_oracledb_async (content, embedding) VALUES (:1, :2)", ("doc2", "[0.4, 0.5, 0.6]")
         )
         await oracle_async_session.execute(
-            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc3", "[0.7, 0.8, 0.9]")
+            "INSERT INTO vector_docs_oracledb_async (content, embedding) VALUES (:1, :2)", ("doc3", "[0.7, 0.8, 0.9]")
         )
 
         yield oracle_async_session
     finally:
-        await oracle_async_session.execute_script("DROP TABLE vector_docs_oracle")
+        await oracle_async_session.execute_script("DROP TABLE vector_docs_oracledb_async")
 
 
 async def test_oracle_euclidean_distance_execution(oracle_vector_session: OracleAsyncDriver) -> None:
@@ -50,7 +50,7 @@ async def test_oracle_euclidean_distance_execution(oracle_vector_session: Oracle
     query = (
         sql
         .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .order_by("distance")
     )
 
@@ -70,7 +70,7 @@ async def test_oracle_euclidean_distance_threshold(oracle_vector_session: Oracle
     query = (
         sql
         .select("content")
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
     )
 
@@ -85,7 +85,7 @@ async def test_oracle_cosine_distance_execution(oracle_vector_session: OracleAsy
     query = (
         sql
         .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance"))
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .order_by("distance")
     )
 
@@ -103,7 +103,7 @@ async def test_oracle_inner_product_execution(oracle_vector_session: OracleAsync
             "content",
             sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
         )
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .order_by("distance")
     )
 
@@ -120,7 +120,7 @@ async def test_oracle_euclidean_squared_metric(oracle_vector_session: OracleAsyn
             "content",
             sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean_squared").alias("distance"),
         )
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .order_by("distance")
     )
 
@@ -135,7 +135,7 @@ async def test_oracle_cosine_similarity_execution(oracle_vector_session: OracleA
     query = (
         sql
         .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .order_by(sql.column("score").desc())
     )
 
@@ -153,7 +153,7 @@ async def test_oracle_similarity_top_k_results(oracle_vector_session: OracleAsyn
     query = (
         sql
         .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .order_by(sql.column("score").desc())
     )
     query = query.limit(2)
@@ -172,7 +172,7 @@ async def test_oracle_multiple_distance_metrics(oracle_vector_session: OracleAsy
         sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean").alias("euclidean_dist"),
         sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("cosine_dist"),
         sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean_squared").alias("euclidean_sq"),
-    ).from_("vector_docs_oracle")
+    ).from_("vector_docs_oracledb_async")
 
     result = await oracle_vector_session.execute(query)
 
@@ -189,13 +189,13 @@ async def test_oracle_multiple_distance_metrics(oracle_vector_session: OracleAsy
 async def test_oracle_distance_with_null_vectors(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test vector distance handles NULL vectors correctly."""
     await oracle_vector_session.execute(
-        "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, NULL)", ("doc_null",)
+        "INSERT INTO vector_docs_oracledb_async (content, embedding) VALUES (:1, NULL)", ("doc_null",)
     )
 
     query = (
         sql
         .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .where(sql.column("embedding").is_not_null())
         .order_by("distance")
     )
@@ -211,7 +211,7 @@ async def test_oracle_combined_filters_and_distance(oracle_vector_session: Oracl
     query = (
         sql
         .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
-        .from_("vector_docs_oracle")
+        .from_("vector_docs_oracledb_async")
         .where((Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0) & (Column("content").in_(["doc1", "doc2"])))
         .order_by("distance")
     )
@@ -226,7 +226,7 @@ async def test_oracle_combined_filters_and_distance(oracle_vector_session: Oracl
 async def test_oracle_similarity_score_range(oracle_vector_session: OracleAsyncDriver) -> None:
     """Test cosine similarity returns values in expected range."""
     query = sql.select("content", Column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score")).from_(
-        "vector_docs_oracle"
+        "vector_docs_oracledb_async"
     )
 
     result = await oracle_vector_session.execute(query)

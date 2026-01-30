@@ -33,8 +33,8 @@ def _seed_source(session: AdbcDriver, source: str) -> None:
 
 @pytest.mark.usefixtures("adbc_postgresql_session")
 def test_adbc_postgres_storage_bridge_round_trip(tmp_path: Path, adbc_postgresql_session: AdbcDriver) -> None:
-    source_table = "storage_bridge_adbc_source"
-    target_table = "storage_bridge_adbc_target"
+    source_table = "storage_bridge_source_adbc"
+    target_table = "storage_bridge_target_adbc"
     alias = "adbc_storage_bridge_local"
     storage_registry.register_alias(alias, f"file://{tmp_path}", backend="local")
     destination = f"alias://{alias}/adbc_storage_bridge.parquet"

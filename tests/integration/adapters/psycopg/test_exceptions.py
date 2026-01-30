@@ -58,20 +58,20 @@ async def psycopg_async_exception_session(
 def test_sync_unique_violation(psycopg_sync_exception_session: PsycopgSyncDriver) -> None:
     """Test unique constraint violation raises UniqueViolationError (sync)."""
     psycopg_sync_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_unique_constraint;
-        CREATE TABLE test_unique_constraint (
+        DROP TABLE IF EXISTS test_unique_constraint_psycopg;
+        CREATE TABLE test_unique_constraint_psycopg (
             id SERIAL PRIMARY KEY,
             email VARCHAR(255) UNIQUE NOT NULL
         );
     """)
 
     psycopg_sync_exception_session.execute(
-        "INSERT INTO test_unique_constraint (email) VALUES (%s)", ("test@example.com",)
+        "INSERT INTO test_unique_constraint_psycopg (email) VALUES (%s)", ("test@example.com",)
     )
 
     with pytest.raises(UniqueViolationError) as exc_info:
         psycopg_sync_exception_session.execute(
-            "INSERT INTO test_unique_constraint (email) VALUES (%s)", ("test@example.com",)
+            "INSERT INTO test_unique_constraint_psycopg (email) VALUES (%s)", ("test@example.com",)
         )
 
     assert "unique" in str(exc_info.value).lower() or "23505" in str(exc_info.value)
@@ -80,20 +80,20 @@ def test_sync_unique_violation(psycopg_sync_exception_session: PsycopgSyncDriver
 async def test_async_unique_violation(psycopg_async_exception_session: PsycopgAsyncDriver) -> None:
     """Test unique constraint violation raises UniqueViolationError (async)."""
     await psycopg_async_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_unique_constraint;
-        CREATE TABLE test_unique_constraint (
+        DROP TABLE IF EXISTS test_unique_constraint_psycopg;
+        CREATE TABLE test_unique_constraint_psycopg (
             id SERIAL PRIMARY KEY,
             email VARCHAR(255) UNIQUE NOT NULL
         );
     """)
 
     await psycopg_async_exception_session.execute(
-        "INSERT INTO test_unique_constraint (email) VALUES (%s)", ("test@example.com",)
+        "INSERT INTO test_unique_constraint_psycopg (email) VALUES (%s)", ("test@example.com",)
     )
 
     with pytest.raises(UniqueViolationError) as exc_info:
         await psycopg_async_exception_session.execute(
-            "INSERT INTO test_unique_constraint (email) VALUES (%s)", ("test@example.com",)
+            "INSERT INTO test_unique_constraint_psycopg (email) VALUES (%s)", ("test@example.com",)
         )
 
     assert "unique" in str(exc_info.value).lower() or "23505" in str(exc_info.value)
@@ -102,21 +102,21 @@ async def test_async_unique_violation(psycopg_async_exception_session: PsycopgAs
 def test_sync_foreign_key_violation(psycopg_sync_exception_session: PsycopgSyncDriver) -> None:
     """Test foreign key constraint violation raises ForeignKeyViolationError (sync)."""
     psycopg_sync_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_fk_child CASCADE;
-        DROP TABLE IF EXISTS test_fk_parent CASCADE;
-        CREATE TABLE test_fk_parent (
+        DROP TABLE IF EXISTS test_fk_child_psycopg CASCADE;
+        DROP TABLE IF EXISTS test_fk_parent_psycopg CASCADE;
+        CREATE TABLE test_fk_parent_psycopg (
             id SERIAL PRIMARY KEY,
             name VARCHAR(100)
         );
-        CREATE TABLE test_fk_child (
+        CREATE TABLE test_fk_child_psycopg (
             id SERIAL PRIMARY KEY,
             parent_id INTEGER NOT NULL,
-            FOREIGN KEY (parent_id) REFERENCES test_fk_parent(id)
+            FOREIGN KEY (parent_id) REFERENCES test_fk_parent_psycopg(id)
         );
     """)
 
     with pytest.raises(ForeignKeyViolationError) as exc_info:
-        psycopg_sync_exception_session.execute("INSERT INTO test_fk_child (parent_id) VALUES (%s)", (999,))
+        psycopg_sync_exception_session.execute("INSERT INTO test_fk_child_psycopg (parent_id) VALUES (%s)", (999,))
 
     assert "foreign key" in str(exc_info.value).lower() or "23503" in str(exc_info.value)
 
@@ -124,15 +124,15 @@ def test_sync_foreign_key_violation(psycopg_sync_exception_session: PsycopgSyncD
 def test_sync_not_null_violation(psycopg_sync_exception_session: PsycopgSyncDriver) -> None:
     """Test NOT NULL constraint violation raises NotNullViolationError (sync)."""
     psycopg_sync_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_not_null;
-        CREATE TABLE test_not_null (
+        DROP TABLE IF EXISTS test_not_null_psycopg;
+        CREATE TABLE test_not_null_psycopg (
             id SERIAL PRIMARY KEY,
             required_field VARCHAR(100) NOT NULL
         );
     """)
 
     with pytest.raises(NotNullViolationError) as exc_info:
-        psycopg_sync_exception_session.execute("INSERT INTO test_not_null (id) VALUES (%s)", (1,))
+        psycopg_sync_exception_session.execute("INSERT INTO test_not_null_psycopg (id) VALUES (%s)", (1,))
 
     assert "not null" in str(exc_info.value).lower() or "23502" in str(exc_info.value)
 
@@ -140,15 +140,15 @@ def test_sync_not_null_violation(psycopg_sync_exception_session: PsycopgSyncDriv
 def test_sync_check_violation(psycopg_sync_exception_session: PsycopgSyncDriver) -> None:
     """Test CHECK constraint violation raises CheckViolationError (sync)."""
     psycopg_sync_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_check_constraint;
-        CREATE TABLE test_check_constraint (
+        DROP TABLE IF EXISTS test_check_constraint_psycopg;
+        CREATE TABLE test_check_constraint_psycopg (
             id SERIAL PRIMARY KEY,
             age INTEGER CHECK (age >= 18)
         );
     """)
 
     with pytest.raises(CheckViolationError) as exc_info:
-        psycopg_sync_exception_session.execute("INSERT INTO test_check_constraint (age) VALUES (%s)", (15,))
+        psycopg_sync_exception_session.execute("INSERT INTO test_check_constraint_psycopg (age) VALUES (%s)", (15,))
 
     assert "check" in str(exc_info.value).lower() or "23514" in str(exc_info.value)
 
