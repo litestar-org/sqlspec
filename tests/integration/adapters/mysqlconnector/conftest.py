@@ -59,6 +59,29 @@ def mysqlconnector_sync_config(mysql_service: "MySQLService") -> "Generator[Mysq
         config.close_pool()
 
 
+@pytest.fixture(scope="function")
+def mysqlconnector_sync_transaction_config(
+    mysql_service: "MySQLService",
+) -> "Generator[MysqlConnectorSyncConfig, None, None]":
+    """Create MysqlConnector sync configuration for transaction testing (autocommit=False)."""
+    config = MysqlConnectorSyncConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": False,
+            "use_pure": True,
+        },
+        statement_config=default_statement_config,
+    )
+    yield config
+
+    if config.connection_instance:
+        config.close_pool()
+
+
 @pytest.fixture
 async def mysqlconnector_async_driver(
     mysqlconnector_async_config: "MysqlConnectorAsyncConfig",

@@ -28,6 +28,26 @@ def pymysql_config(mysql_service: "MySQLService") -> "Generator[PyMysqlConfig, N
         config.close_pool()
 
 
+@pytest.fixture(scope="function")
+def pymysql_transaction_config(mysql_service: "MySQLService") -> "Generator[PyMysqlConfig, None, None]":
+    """Create PyMySQL config for transaction testing (autocommit=False)."""
+    config = PyMysqlConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": False,
+        },
+        statement_config=default_statement_config,
+    )
+    yield config
+
+    if config.connection_instance:
+        config.close_pool()
+
+
 @pytest.fixture
 def pymysql_driver(pymysql_config: PyMysqlConfig) -> "Generator[PyMysqlDriver, None, None]":
     """Create PyMySQL driver instance for testing."""
