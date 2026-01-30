@@ -295,7 +295,7 @@ async def test_aiosqlite_on_connection_create_hook() -> None:
         hook_call_count += 1
 
     config = AiosqliteConfig(
-        connection_config={"database": f":memory:{uuid4().hex}"},
+        connection_config={"database": f"file:memory_{uuid4().hex}?mode=memory&cache=private", "uri": True},
         driver_features={"on_connection_create": connection_hook},
     )
 
