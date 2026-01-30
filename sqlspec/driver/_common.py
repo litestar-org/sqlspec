@@ -1390,15 +1390,13 @@ class CommonDriverAttributesMixin:
                     prepared_statement=prepared_statement,
                 )
                 # Return cached SQL metadata but with newly processed parameters
-                cached_parameters = (
-                    tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
-                )
+                # Preserve list type for execute_many operations (some drivers require list, not tuple)
                 updated_cached = CachedStatement(
                     compiled_sql=cached_result.compiled_sql,
-                    parameters=cached_parameters,
+                    parameters=prepared_parameters,
                     expression=cached_result.expression,
                 )
-                return updated_cached, cached_parameters
+                return updated_cached, prepared_parameters
 
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
