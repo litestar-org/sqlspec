@@ -1363,12 +1363,9 @@ class CommonDriverAttributesMixin:
         if params is not None and not isinstance(params, (list, tuple, dict)):
             try:
                 materialized = list(params)
-                # Update the statement's internal parameters with materialized values
-                if statement._named_parameters:
-                    # Named parameters are stored as dict, shouldn't be an iterator
-                    pass
-                else:
-                    statement._positional_parameters = materialized
+                # Create a copy of the statement with materialized parameters
+                # to avoid consuming the iterator during cache key generation
+                statement = statement.copy(parameters=materialized)
             except TypeError:
                 pass  # Not iterable, proceed normally
 
