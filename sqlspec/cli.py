@@ -899,6 +899,62 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         _execute_for_config(sqlspec_config, sync_fix, async_fix)
 
+    @database_group.command(name="squash", help="Squash multiple migrations into a single file.")
+    @bind_key_option
+    @click.argument("version_range", required=True)
+    @click.option("-m", "--message", required=True, help="Description for squashed migration")
+    @dry_run_option
+    @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+    @click.option("--no-database", is_flag=True, help="Skip database record updates")
+    def squash_migrations(
+        bind_key: str | None, version_range: str, message: str, dry_run: bool, yes: bool, no_database: bool
+    ) -> None:
+        """Squash multiple sequential migrations into a single file.
+
+        VERSION_RANGE should be in START:END format, e.g., "0001:0004".
+
+        Examples:
+            sqlspec db squash 0001:0004 -m "v1.0 release"
+            sqlspec db squash 0001:0003 -m "initial schema" --dry-run
+        """
+        from sqlspec.migrations.commands import create_migration_commands
+
+        ctx = _ensure_click_context()
+
+        if ":" not in version_range:
+            console.print("[red]Error: VERSION_RANGE must be in START:END format (e.g., 0001:0004)[/]")
+            raise SystemExit(1)
+
+        start_version, end_version = version_range.split(":", 1)
+        start_version = start_version.strip().zfill(4)
+        end_version = end_version.strip().zfill(4)
+
+        console.rule("[yellow]Migration Squash Command[/]", align="left")
+        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+        migration_commands = create_migration_commands(config=sqlspec_config)
+
+        def sync_squash() -> None:
+            migration_commands.squash(
+                start_version=start_version,
+                end_version=end_version,
+                description=message,
+                dry_run=dry_run,
+                update_database=not no_database,
+                yes=yes,
+            )
+
+        async def async_squash() -> None:
+            await cast("AsyncMigrationCommands[Any]", migration_commands).squash(
+                start_version=start_version,
+                end_version=end_version,
+                description=message,
+                dry_run=dry_run,
+                update_database=not no_database,
+                yes=yes,
+            )
+
+        _execute_for_config(sqlspec_config, sync_squash, async_squash)
+
     @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
     @bind_key_option
     def show_config(bind_key: str | None = None) -> None:  # pyright: ignore[reportUnusedFunction]
