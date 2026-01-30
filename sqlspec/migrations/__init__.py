@@ -13,6 +13,7 @@ from sqlspec.migrations.loaders import (
     get_migration_loader,
 )
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, create_migration_runner
+from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file, drop_all, get_author
 
@@ -22,8 +23,10 @@ __all__ = (
     "AsyncMigrationTracker",
     "BaseMigrationLoader",
     "MigrationLoadError",
+    "MigrationSquasher",
     "PythonFileLoader",
     "SQLFileLoader",
+    "SquashPlan",
     "SyncMigrationCommands",
     "SyncMigrationRunner",
     "SyncMigrationTracker",
