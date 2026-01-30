@@ -516,6 +516,7 @@ ignore = [
   "B903",    # class could be a dataclass or named tuple
   "PLW0603", # Using the global statement to update is discouraged
   "PLW0108", # Replace lambda expression with a def
+  "RUF067",  # ruff - init should only have import statements
 ]
 select = ["ALL"]
 
