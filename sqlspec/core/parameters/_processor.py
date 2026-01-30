@@ -113,6 +113,25 @@ def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False
     return _structural_fingerprint(parameters, is_many)
 
 
+def _value_fingerprint(parameters: "ParameterPayload") -> str:
+    """Return a value-based fingerprint for parameter payloads.
+
+    Unlike structural_fingerprint, this includes actual parameter VALUES in the hash.
+    Used for static script compilation where SQL has values embedded directly.
+
+    Args:
+        parameters: Original parameter payload supplied by the caller.
+
+    Returns:
+        Deterministic fingerprint string including parameter values.
+    """
+    if parameters is None:
+        return "none"
+
+    # Use repr for value-based hashing - includes both structure and values
+    return f"values:{hash(repr(parameters))}"
+
+
 def _coerce_nested_value(value: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
     if isinstance(value, (list, tuple)) and not isinstance(value, (str, bytes)):
         return [_coerce_parameter_value(item, type_coercion_map) for item in value]
@@ -287,6 +306,85 @@ class ParameterProcessor:
             self._cache.popitem(last=False)
         return result
 
+    def _transform_cached_parameters(
+        self,
+        parameters: "ParameterPayload",
+        cached_profile: "ParameterProfile",
+        config: "ParameterStyleConfig",
+        *,
+        is_many: bool,
+        wrap_types: bool,
+    ) -> "ConvertedParameters":
+        """Apply parameter transformations for a cache hit.
+
+        Uses cached metadata to efficiently transform parameters without re-parsing SQL.
+        This ensures new parameter values undergo the same transformations as the original
+        cached request (type wrapping, coercion, named-to-positional mapping).
+
+        Args:
+            parameters: New parameter payload to transform.
+            cached_profile: Cached ParameterProfile with named_parameters order.
+            config: Parameter style configuration.
+            is_many: Whether this is execute_many.
+            wrap_types: Whether to wrap parameters with type metadata.
+
+        Returns:
+            Transformed parameters matching the cached SQL's placeholder format.
+        """
+        if parameters is None:
+            return None
+
+        processed: ConvertedParameters = parameters  # type: ignore[assignment]
+
+        # Step 1: Type wrapping (must happen before coercion)
+        if wrap_types and processed:
+            processed = self._wrap_parameter_types(processed)
+
+        # Step 2: Type coercion
+        if config.type_coercion_map and processed:
+            processed = self._coerce_parameter_types(processed, config.type_coercion_map, is_many)
+
+        # Step 3: Named-to-positional mapping if cached SQL uses positional placeholders
+        # but input is a named dict
+        if cached_profile.named_parameters and processed:
+            processed = self._map_named_to_positional(processed, cached_profile.named_parameters, is_many)
+
+        return processed
+
+    def _map_named_to_positional(
+        self,
+        parameters: "ConvertedParameters",
+        named_order: "tuple[str, ...]",
+        is_many: bool,
+    ) -> "ConvertedParameters":
+        """Map named parameters (dict) to positional (tuple) using cached order.
+
+        Args:
+            parameters: Current parameters (dict or sequence).
+            named_order: Tuple of parameter names in placeholder order.
+            is_many: Whether this is execute_many.
+
+        Returns:
+            Parameters converted to positional tuple if input was dict, else unchanged.
+        """
+        if not named_order:
+            return parameters
+
+        if is_many and isinstance(parameters, (list, tuple)):
+            # Process each row in execute_many
+            result: list[Any] = []
+            for row in parameters:
+                if isinstance(row, Mapping):
+                    result.append(tuple(row.get(name) for name in named_order))
+                else:
+                    result.append(row)
+            return result
+
+        if isinstance(parameters, Mapping):
+            return tuple(parameters.get(name) for name in named_order)
+
+        return parameters
+
     def _needs_mapping_normalization(
         self, payload: "ParameterPayload", param_info: "list[ParameterInfo]", is_many: bool
     ) -> bool:
@@ -351,8 +449,13 @@ class ParameterProcessor:
         wrap_types: bool,
         normalize_for_parsing: bool,
     ) -> str:
-        # Use structural fingerprint (keys + types, not values) for better cache hit rates
-        param_fingerprint = _structural_fingerprint(parameters, is_many)
+        # For static script compilation, we must include actual values in the fingerprint
+        # because the SQL will have values embedded directly (e.g., VALUES (1, 'foo'))
+        if config.needs_static_script_compilation:
+            param_fingerprint = _value_fingerprint(parameters)
+        else:
+            # Use structural fingerprint (keys + types, not values) for better cache hit rates
+            param_fingerprint = _structural_fingerprint(parameters, is_many)
         dialect_marker = dialect or "default"
         # Include both input and execution parameter styles to avoid cache collisions
         # (e.g., MySQL asyncmy uses ? for input but %s for execution)
@@ -441,12 +544,22 @@ class ParameterProcessor:
             if cached_result is not None:
                 self._cache.move_to_end(cache_key)
                 self._cache_hits += 1
-                # Return cached SQL transformation but with NEW parameters
-                # Structural fingerprinting means same SQL structure = same cache entry,
-                # but we must still use the caller's actual parameter values
+                # Return cached SQL transformation with NEW parameters transformed
+                # to match the cached SQL's placeholder format
+                transformed_params = self._transform_cached_parameters(
+                    parameters,
+                    cached_result.parameter_profile,
+                    config,
+                    is_many=is_many,
+                    wrap_types=wrap_types,
+                )
+                # Apply output transformer if present (it may further transform params)
+                final_sql = cached_result.sql
+                if config.output_transformer:
+                    final_sql, transformed_params = config.output_transformer(final_sql, transformed_params)
                 return ParameterProcessingResult(
-                    cached_result.sql,
-                    parameters,  # Use NEW parameters, not cached ones
+                    final_sql,
+                    transformed_params,
                     cached_result.parameter_profile,
                     sqlglot_sql=cached_result.sqlglot_sql,
                     parsed_expression=cached_result.parsed_expression,
