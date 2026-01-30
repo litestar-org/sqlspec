@@ -593,7 +593,8 @@ class CachedStatement:
 
     This class stores compiled SQL and parameters in an immutable format
     that can be safely shared between different parts of the system without
-    risk of mutation. Tuple parameters ensure no copying is needed.
+    risk of mutation. List parameters are preserved for execute_many operations
+    where drivers require list type.
     """
 
     __slots__ = ("compiled_sql", "expression", "parameters")
@@ -601,7 +602,7 @@ class CachedStatement:
     def __init__(
         self,
         compiled_sql: str,
-        parameters: "tuple[Any, ...] | dict[str, Any] | None",
+        parameters: "tuple[Any, ...] | list[Any] | dict[str, Any] | None",
         expression: "exp.Expression | None",
     ) -> None:
         self.compiled_sql = compiled_sql
