@@ -302,6 +302,82 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             status="updated",
         )
 
+    def replace_with_squash(
+        self,
+        driver: "SyncDriverAdapterBase",
+        squashed_version: str,
+        replaced_versions: "list[str]",
+        description: str,
+        checksum: str,
+    ) -> None:
+        """Replace multiple migration records with a single squashed record.
+
+        Deletes all replaced version records and inserts a new record for the
+        squashed migration with metadata about which versions it replaces.
+
+        Args:
+            driver: The database driver to use.
+            squashed_version: Version number of the squashed migration.
+            replaced_versions: List of version strings being replaced.
+            description: Description of the squashed migration.
+            checksum: MD5 checksum of the squashed migration content.
+        """
+        driver.execute(self._get_delete_versions_sql(replaced_versions))
+
+        result = driver.execute(self._get_next_execution_sequence_sql())
+        next_sequence = result.data[0]["next_seq"] if result.data else 1
+
+        parsed_version = parse_version(squashed_version)
+        version_type = parsed_version.type.value
+
+        replaces_str = ",".join(replaced_versions)
+        driver.execute(
+            self._get_record_squashed_migration_sql(
+                squashed_version,
+                version_type,
+                next_sequence,
+                description,
+                0,
+                checksum,
+                os.environ.get("USER", "unknown"),
+                replaces_str,
+            )
+        )
+
+        self._safe_commit(driver)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            squashed_version=squashed_version,
+            replaced_count=len(replaced_versions),
+            operation="squash",
+            status="recorded",
+        )
+
+    def is_squash_already_applied(
+        self, driver: "SyncDriverAdapterBase", squashed_version: str, replaced_versions: "list[str]"
+    ) -> bool:
+        """Check if a squash operation has already been applied.
+
+        Determines if any of the replaced versions exist in the database,
+        indicating that the original migrations were applied before the squash.
+
+        Args:
+            driver: The database driver to use.
+            squashed_version: Version number of the squashed migration (unused but kept for API consistency).
+            replaced_versions: List of version strings that would be replaced.
+
+        Returns:
+            True if any replaced version exists (squash already applied), False otherwise.
+        """
+        result = driver.execute(self._get_applied_migrations_sql())
+        applied_versions = {row["version_num"] for row in result.data} if result.data else set()
+
+        # Check if any replaced version exists in applied migrations
+        return any(version in applied_versions for version in replaced_versions)
+
     def _safe_commit(self, driver: "SyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
 
@@ -600,6 +676,82 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             operation="version_update",
             status="updated",
         )
+
+    async def replace_with_squash(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        squashed_version: str,
+        replaced_versions: "list[str]",
+        description: str,
+        checksum: str,
+    ) -> None:
+        """Replace multiple migration records with a single squashed record.
+
+        Deletes all replaced version records and inserts a new record for the
+        squashed migration with metadata about which versions it replaces.
+
+        Args:
+            driver: The database driver to use.
+            squashed_version: Version number of the squashed migration.
+            replaced_versions: List of version strings being replaced.
+            description: Description of the squashed migration.
+            checksum: MD5 checksum of the squashed migration content.
+        """
+        await driver.execute(self._get_delete_versions_sql(replaced_versions))
+
+        result = await driver.execute(self._get_next_execution_sequence_sql())
+        next_sequence = result.data[0]["next_seq"] if result.data else 1
+
+        parsed_version = parse_version(squashed_version)
+        version_type = parsed_version.type.value
+
+        replaces_str = ",".join(replaced_versions)
+        await driver.execute(
+            self._get_record_squashed_migration_sql(
+                squashed_version,
+                version_type,
+                next_sequence,
+                description,
+                0,
+                checksum,
+                os.environ.get("USER", "unknown"),
+                replaces_str,
+            )
+        )
+
+        await self._safe_commit_async(driver)
+        log_with_context(
+            logger,
+            logging.INFO,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            squashed_version=squashed_version,
+            replaced_count=len(replaced_versions),
+            operation="squash",
+            status="recorded",
+        )
+
+    async def is_squash_already_applied(
+        self, driver: "AsyncDriverAdapterBase", squashed_version: str, replaced_versions: "list[str]"
+    ) -> bool:
+        """Check if a squash operation has already been applied.
+
+        Determines if any of the replaced versions exist in the database,
+        indicating that the original migrations were applied before the squash.
+
+        Args:
+            driver: The database driver to use.
+            squashed_version: Version number of the squashed migration (unused but kept for API consistency).
+            replaced_versions: List of version strings that would be replaced.
+
+        Returns:
+            True if any replaced version exists (squash already applied), False otherwise.
+        """
+        result = await driver.execute(self._get_applied_migrations_sql())
+        applied_versions = {row["version_num"] for row in result.data} if result.data else set()
+
+        # Check if any replaced version exists in applied migrations
+        return any(version in applied_versions for version in replaced_versions)
 
     async def _safe_commit_async(self, driver: "AsyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
