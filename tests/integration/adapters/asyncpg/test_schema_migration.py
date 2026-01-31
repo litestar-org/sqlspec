@@ -50,6 +50,7 @@ async def test_asyncpg_tracker_creates_full_schema(postgres_service: "PostgresSe
                 "execution_time_ms",
                 "checksum",
                 "applied_by",
+                "replaces",
             }
 
             assert columns == expected_columns
