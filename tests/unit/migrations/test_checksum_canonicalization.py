@@ -6,6 +6,7 @@ import pytest
 
 from sqlspec.migrations.runner import SyncMigrationRunner
 
+
 @pytest.fixture
 def temp_migrations_dir(tmp_path: Path) -> Path:
     """Create temporary migrations directory."""
