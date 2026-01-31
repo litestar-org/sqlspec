@@ -18,18 +18,6 @@ from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.storage.registry import StorageRegistry
 
-try:
-    from rich.console import Console
-
-    console = Console()
-except ImportError:
-
-    class MockConsole:
-        def print(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-    console = MockConsole()
-
 pytestmark = pytest.mark.xdist_group("loader")
 
 
@@ -651,13 +639,7 @@ def test_large_fixture_loading_performance(fixtures_path: Path) -> None:
             sql_obj = loader.get_sql(test_query)
             sql_time = time.time() - sql_start
 
-            if sql_time >= 0.1:
-                console.print(
-                    f"[yellow]Warning: SQL object creation slower than optimal ({sql_time:.3f}s > 0.1s) "
-                    f"for {fixture_path}. This might be due to CI environment load.[/yellow]"
-                )
-
-            assert sql_time < 0.5, f"SQL object creation too slow: {sql_time:.3f}s"
+            assert sql_time < 0.1, f"SQL object creation too slow: {sql_time:.3f}s"
             assert isinstance(sql_obj, SQL)
 
 
