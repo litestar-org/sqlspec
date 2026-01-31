@@ -249,7 +249,7 @@ class BaseMigrationRunner(ABC):
 
         return None
 
-    def _calculate_checksum(self, content: str) -> str:
+    def calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
 
         Canonicalizes content by excluding query name headers that change during
@@ -339,7 +339,7 @@ class BaseMigrationRunner(ABC):
         self._metric("migrations.metadata.bytes", float(stat_result.st_size))
 
         content = file_path.read_text(encoding="utf-8")
-        checksum = self._calculate_checksum(content)
+        checksum = self.calculate_checksum(content)
         if version is None:
             version = self._extract_version(file_path.name)
         description = self._extract_description(content, file_path)

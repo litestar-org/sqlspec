@@ -1064,7 +1064,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                             content = squasher.generate_python_squash(plan, up_sql, down_sql)
                         else:
                             content = squasher.generate_squashed_content(plan, up_sql, down_sql)
-                        checksum = self.runner._calculate_checksum(content)
+                        checksum = self.runner.calculate_checksum(content)
 
                         self.tracker.replace_with_squash(
                             driver, plan.target_version, plan.source_versions, description, checksum
@@ -1985,7 +1985,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                             content = squasher.generate_python_squash(plan, up_sql, down_sql)
                         else:
                             content = squasher.generate_squashed_content(plan, up_sql, down_sql)
-                        checksum = sync_runner._calculate_checksum(content)
+                        checksum = sync_runner.calculate_checksum(content)
 
                         await self.tracker.replace_with_squash(
                             driver, plan.target_version, plan.source_versions, description, checksum

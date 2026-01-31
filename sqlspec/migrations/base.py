@@ -389,7 +389,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         parts = stem.split("_", 1)
         return parts[0].zfill(4) if parts and parts[0].isdigit() else None
 
-    def _calculate_checksum(self, content: str) -> str:
+    def calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
 
         Args:
@@ -468,7 +468,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
         loader.validate_migration_file(file_path)
         content = file_path.read_text(encoding="utf-8")
-        checksum = self._calculate_checksum(content)
+        checksum = self.calculate_checksum(content)
         description = self._extract_description(content, file_path)
         if not description:
             description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""

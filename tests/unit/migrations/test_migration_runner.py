@@ -125,14 +125,14 @@ def test_load_migration_metadata_uses_cache(tmp_path: Path, monkeypatch: pytest.
     runner = SyncMigrationRunner(tmp_path, {}, None, {})
 
     checksum_calls = 0
-    original_checksum = runner_module.BaseMigrationRunner._calculate_checksum
+    original_checksum = runner_module.BaseMigrationRunner.calculate_checksum
 
     def _tracked_checksum(self: Any, content: str) -> str:
         nonlocal checksum_calls
         checksum_calls += 1
         return original_checksum(self, content)
 
-    monkeypatch.setattr(runner_module.BaseMigrationRunner, "_calculate_checksum", _tracked_checksum)
+    monkeypatch.setattr(runner_module.BaseMigrationRunner, "calculate_checksum", _tracked_checksum)
 
     runner.load_migration(file_path)
     runner.load_migration(file_path)
@@ -148,14 +148,14 @@ def test_load_migration_metadata_invalidates_on_change(tmp_path: Path, monkeypat
     runner = SyncMigrationRunner(tmp_path, {}, None, {})
 
     checksum_calls = 0
-    original_checksum = runner_module.BaseMigrationRunner._calculate_checksum
+    original_checksum = runner_module.BaseMigrationRunner.calculate_checksum
 
     def _tracked_checksum(self: Any, content: str) -> str:
         nonlocal checksum_calls
         checksum_calls += 1
         return original_checksum(self, content)
 
-    monkeypatch.setattr(runner_module.BaseMigrationRunner, "_calculate_checksum", _tracked_checksum)
+    monkeypatch.setattr(runner_module.BaseMigrationRunner, "calculate_checksum", _tracked_checksum)
 
     runner.load_migration(file_path)
     time.sleep(0.01)

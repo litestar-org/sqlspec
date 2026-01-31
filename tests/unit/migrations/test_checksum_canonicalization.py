@@ -6,9 +6,6 @@ import pytest
 
 from sqlspec.migrations.runner import SyncMigrationRunner
 
-# pyright: reportPrivateUsage=false
-
-
 @pytest.fixture
 def temp_migrations_dir(tmp_path: Path) -> Path:
     """Create temporary migrations directory."""
@@ -28,7 +25,7 @@ CREATE TABLE users (
 );
 """
 
-    checksum = runner._calculate_checksum(content)
+    checksum = runner.calculate_checksum(content)
 
     content_without_header = """
 CREATE TABLE users (
@@ -37,7 +34,7 @@ CREATE TABLE users (
 );
 """
 
-    checksum_without_header = runner._calculate_checksum(content_without_header)
+    checksum_without_header = runner.calculate_checksum(content_without_header)
 
     assert checksum == checksum_without_header
 
@@ -50,13 +47,13 @@ def test_checksum_excludes_timestamp_version_down_header(temp_migrations_dir: Pa
 DROP TABLE users;
 """
 
-    checksum = runner._calculate_checksum(content)
+    checksum = runner.calculate_checksum(content)
 
     content_without_header = """
 DROP TABLE users;
 """
 
-    checksum_without_header = runner._calculate_checksum(content_without_header)
+    checksum_without_header = runner.calculate_checksum(content_without_header)
 
     assert checksum == checksum_without_header
 
@@ -72,7 +69,7 @@ CREATE TABLE users (
 );
 """
 
-    checksum = runner._calculate_checksum(content)
+    checksum = runner.calculate_checksum(content)
 
     content_without_header = """
 CREATE TABLE users (
@@ -81,7 +78,7 @@ CREATE TABLE users (
 );
 """
 
-    checksum_without_header = runner._calculate_checksum(content_without_header)
+    checksum_without_header = runner.calculate_checksum(content_without_header)
 
     assert checksum == checksum_without_header
 
@@ -94,13 +91,13 @@ def test_checksum_excludes_sequential_version_down_header(temp_migrations_dir: P
 DROP TABLE users;
 """
 
-    checksum = runner._calculate_checksum(content)
+    checksum = runner.calculate_checksum(content)
 
     content_without_header = """
 DROP TABLE users;
 """
 
-    checksum_without_header = runner._calculate_checksum(content_without_header)
+    checksum_without_header = runner.calculate_checksum(content_without_header)
 
     assert checksum == checksum_without_header
 
@@ -117,8 +114,8 @@ CREATE TABLE users (id INTEGER);
 CREATE TABLE products (id INTEGER);
 """
 
-    checksum1 = runner._calculate_checksum(content1)
-    checksum2 = runner._calculate_checksum(content2)
+    checksum1 = runner.calculate_checksum(content1)
+    checksum2 = runner.calculate_checksum(content2)
 
     assert checksum1 != checksum2
 
@@ -147,8 +144,8 @@ CREATE TABLE users (
 DROP TABLE users;
 """
 
-    timestamp_checksum = runner._calculate_checksum(timestamp_content)
-    sequential_checksum = runner._calculate_checksum(sequential_content)
+    timestamp_checksum = runner.calculate_checksum(timestamp_content)
+    sequential_checksum = runner.calculate_checksum(sequential_content)
 
     assert timestamp_checksum == sequential_checksum
 
@@ -171,8 +168,8 @@ CREATE TABLE users (id INTEGER);
 DROP TABLE users;
 """
 
-    checksum = runner._calculate_checksum(content)
-    expected_checksum = runner._calculate_checksum(expected_content)
+    checksum = runner.calculate_checksum(content)
+    expected_checksum = runner.calculate_checksum(expected_content)
 
     assert checksum == expected_checksum
 
@@ -189,8 +186,8 @@ SELECT * FROM users;
 SELECT * FROM users;
 """
 
-    checksum1 = runner._calculate_checksum(content1)
-    checksum2 = runner._calculate_checksum(content2)
+    checksum1 = runner.calculate_checksum(content1)
+    checksum2 = runner.calculate_checksum(content2)
 
     assert checksum1 != checksum2
 
@@ -211,9 +208,9 @@ CREATE TABLE users (id INTEGER);
 CREATE TABLE users (id INTEGER);
 """
 
-    checksum1 = runner._calculate_checksum(content1)
-    checksum2 = runner._calculate_checksum(content2)
-    checksum3 = runner._calculate_checksum(content3)
+    checksum1 = runner.calculate_checksum(content1)
+    checksum2 = runner.calculate_checksum(content2)
+    checksum3 = runner.calculate_checksum(content3)
 
     assert checksum1 == checksum2 == checksum3
 
@@ -230,8 +227,8 @@ CREATE TABLE sessions (id INTEGER);
 CREATE TABLE sessions (id INTEGER);
 """
 
-    timestamp_checksum = runner._calculate_checksum(timestamp_content)
-    sequential_checksum = runner._calculate_checksum(sequential_content)
+    timestamp_checksum = runner.calculate_checksum(timestamp_content)
+    sequential_checksum = runner.calculate_checksum(sequential_content)
 
     assert timestamp_checksum == sequential_checksum
 
@@ -240,7 +237,7 @@ def test_checksum_empty_file(temp_migrations_dir: Path) -> None:
     """Test checksum computation for empty file."""
     runner = SyncMigrationRunner(temp_migrations_dir)
 
-    checksum = runner._calculate_checksum("")
+    checksum = runner.calculate_checksum("")
 
     assert isinstance(checksum, str)
     assert len(checksum) == 32
@@ -254,9 +251,9 @@ def test_checksum_only_headers(temp_migrations_dir: Path) -> None:
 -- name: migrate-20251011120000-down
 """
 
-    checksum = runner._calculate_checksum(content)
+    checksum = runner.calculate_checksum(content)
 
-    empty_checksum = runner._calculate_checksum("\n")
+    empty_checksum = runner.calculate_checksum("\n")
 
     assert checksum == empty_checksum
 
@@ -274,8 +271,8 @@ CREATE TABLE users (id INTEGER);
 CREATE TABLE users (id INTEGER);
 """
 
-    checksum1 = runner._calculate_checksum(content1)
-    checksum2 = runner._calculate_checksum(content2)
+    checksum1 = runner.calculate_checksum(content1)
+    checksum2 = runner.calculate_checksum(content2)
 
     assert checksum1 != checksum2
 
@@ -292,8 +289,8 @@ CREATE TABLE users (id INTEGER);
 create table users (id integer);
 """
 
-    checksum1 = runner._calculate_checksum(content1)
-    checksum2 = runner._calculate_checksum(content2)
+    checksum1 = runner.calculate_checksum(content1)
+    checksum2 = runner.calculate_checksum(content2)
 
     assert checksum1 != checksum2
 
@@ -317,8 +314,8 @@ CREATE TABLE users (
 );
 """
 
-    original_checksum = runner._calculate_checksum(original)
-    modified_checksum = runner._calculate_checksum(modified)
+    original_checksum = runner.calculate_checksum(original)
+    modified_checksum = runner.calculate_checksum(modified)
 
     assert original_checksum != modified_checksum
 
@@ -339,7 +336,7 @@ SELECT 'migrate-20251011120000-up' as text;
 CREATE TABLE users (id INTEGER);
 """
 
-    checksum = runner._calculate_checksum(content_with_similar_text)
-    expected_checksum = runner._calculate_checksum(content_header_only_removed)
+    checksum = runner.calculate_checksum(content_with_similar_text)
+    expected_checksum = runner.calculate_checksum(content_header_only_removed)
 
     assert checksum == expected_checksum
