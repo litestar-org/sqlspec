@@ -53,29 +53,31 @@ def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = Fals
 
     # Handle dict (most common Mapping type) - fast path
     if param_type is dict:
-        if not parameters:
+        dict_params: dict[str, Any] = parameters  # type: ignore[assignment]
+        if not dict_params:
             return ("dict",)
         # Use dict insertion order (Python 3.7+ guaranteed) instead of sorted()
         # This is O(n) vs O(n log n) and produces consistent fingerprints for
         # parameters constructed in the same order (typical usage pattern)
-        keys = tuple(parameters.keys())
-        type_sig = tuple(type(v) for v in parameters.values())
+        keys = tuple(dict_params.keys())
+        type_sig = tuple(type(v) for v in dict_params.values())
         return ("dict", keys, type_sig)
 
     # Handle list and tuple (most common Sequence types) - fast path
     if param_type is list or param_type is tuple:
-        if not parameters:
+        seq_params: Sequence[Any] = parameters  # type: ignore[assignment]
+        if not seq_params:
             return ("seq",)
 
         # Optimization: Fast path for single-item sequence (extremely common)
-        if len(parameters) == 1:
-            return ("seq", (type(parameters[0]),))
+        if len(seq_params) == 1:
+            return ("seq", (type(seq_params[0]),))
 
         if is_many:
-            return _fingerprint_execute_many(parameters)
+            return _fingerprint_execute_many(seq_params)
 
         # Single execution with sequence parameters
-        type_sig = tuple(type(v) for v in parameters)
+        type_sig = tuple(type(v) for v in seq_params)
         return ("seq", type_sig)
 
     # Fallback to ABC checks for custom types (Mapping, Sequence subclasses)
@@ -497,14 +499,15 @@ class ParameterProcessor:
             for row in parameters:  # type: ignore[union-attr]
                 row_type = type(row)
                 if row_type is dict:
+                    row_dict: dict[str, Any] = row  # type: ignore[assignment]
                     if strict:
-                        missing = [name for name in named_order if name not in row]
+                        missing = [name for name in named_order if name not in row_dict]
                         if missing:
                             from sqlspec.exceptions import SQLSpecError
 
                             msg = f"Missing required parameters: {missing}"
                             raise SQLSpecError(msg)
-                    result.append(tuple(row.get(name) for name in named_order))
+                    result.append(tuple(row_dict.get(name) for name in named_order))
                 elif isinstance(row, Mapping):
                     # Fallback for custom Mapping types
                     if strict:
@@ -696,6 +699,7 @@ class ParameterProcessor:
             is_many: Whether this is execute_many.
             wrap_types: Whether to wrap parameters with type metadata.
             parsed_expression: Pre-parsed SQLGlot expression to preserve through pipeline.
+            param_fingerprint: Pre-computed parameter fingerprint for cache key.
 
         Returns:
             ParameterProcessingResult with execution SQL and parameters.
