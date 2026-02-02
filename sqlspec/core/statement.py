@@ -103,6 +103,8 @@ PROCESSED_STATE_SLOTS: Final = (
     "execution_parameters",
     "parsed_expression",
     "operation_type",
+    "input_named_parameters",
+    "applied_wrap_types",
     "parameter_fingerprint",
     "parameter_casts",
     "parameter_profile",
@@ -129,6 +131,8 @@ class ProcessedState:
         execution_parameters: Any,
         parsed_expression: "exp.Expression | None" = None,
         operation_type: "OperationType" = "COMMAND",
+        input_named_parameters: "tuple[str, ...] | None" = None,
+        applied_wrap_types: bool = False,
         parameter_fingerprint: str | None = None,
         parameter_casts: "dict[int, str] | None" = None,
         validation_errors: "list[str] | None" = None,
@@ -140,6 +144,8 @@ class ProcessedState:
         self.execution_parameters = execution_parameters
         self.parsed_expression = parsed_expression
         self.operation_type = operation_type
+        self.input_named_parameters = input_named_parameters or ()
+        self.applied_wrap_types = applied_wrap_types
         self.parameter_fingerprint = parameter_fingerprint
         self.parameter_casts = parameter_casts or {}
         self.validation_errors = validation_errors or []
@@ -542,14 +548,19 @@ class SQL:
         """
         if self._processed_state is not Empty:
             if self._compiled_from_cache:
-                can_reuse = (
-                    not self._statement_config.parameter_config.needs_static_script_compilation
-                    and self._can_reuse_cached_state(self._processed_state)
-                )
-                if can_reuse:
-                    return self._rebind_cached_parameters(self._processed_state)
-                self._processed_state = Empty
-                self._compiled_from_cache = False
+                state = self._processed_state
+                if state.execution_parameters is None:
+                    self._processed_state = Empty
+                    self._compiled_from_cache = False
+                else:
+                    can_reuse = (
+                        not self._statement_config.parameter_config.needs_static_script_compilation
+                        and self._can_reuse_cached_state(state)
+                    )
+                    if can_reuse:
+                        return self._rebind_cached_parameters(state)
+                    self._processed_state = Empty
+                    self._compiled_from_cache = False
             else:
                 return self._processed_state.compiled_sql, self._processed_state.execution_parameters
         if self._processed_state is Empty:
@@ -568,6 +579,8 @@ class SQL:
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
                     operation_type=compiled_result.operation_type,
+                    input_named_parameters=compiled_result.input_named_parameters,
+                    applied_wrap_types=compiled_result.applied_wrap_types,
                     parameter_fingerprint=param_fingerprint,
                     parameter_casts=compiled_result.parameter_casts,
                     parameter_profile=compiled_result.parameter_profile,
@@ -594,14 +607,29 @@ class SQL:
             params,
             state.parameter_profile,
             self._statement_config.parameter_config,
-            input_named_parameters=state.parameter_profile.named_parameters,
+            input_named_parameters=state.input_named_parameters,
             is_many=self._is_many,
-            apply_wrap_types=self._statement_config.enable_parameter_type_wrapping,
+            apply_wrap_types=state.applied_wrap_types,
         )
         compiled_sql = state.compiled_sql
         output_transformer = self._statement_config.output_transformer
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        self._processed_state = ProcessedState(
+            compiled_sql=compiled_sql,
+            execution_parameters=rebound_params,
+            parsed_expression=state.parsed_expression,
+            operation_type=state.operation_type,
+            input_named_parameters=state.input_named_parameters,
+            applied_wrap_types=state.applied_wrap_types,
+            parameter_fingerprint=state.parameter_fingerprint,
+            parameter_casts=state.parameter_casts,
+            parameter_profile=state.parameter_profile,
+            operation_profile=state.operation_profile,
+            validation_errors=state.validation_errors.copy(),
+            is_many=state.is_many,
+        )
+        self._compiled_from_cache = False
         return compiled_sql, rebound_params
 
     def _can_reuse_cached_state(self, state: "ProcessedState") -> bool:
@@ -694,6 +722,8 @@ class SQL:
             compiled_sql=self._raw_sql,
             execution_parameters=self._named_parameters or self._positional_parameters,
             operation_type="COMMAND",
+            input_named_parameters=(),
+            applied_wrap_types=False,
             parameter_fingerprint=structural_fingerprint(params, is_many=self._is_many),
             parameter_casts={},
             parameter_profile=ParameterProfile.empty(),

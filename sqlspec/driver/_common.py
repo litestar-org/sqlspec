@@ -1384,6 +1384,21 @@ class CommonDriverAttributesMixin:
         # FAST PATH: Statement already compiled - reuse its processed state
         # This is the key optimization: avoid double compilation
         if statement.is_processed:
+            if getattr(statement, "_compiled_from_cache", False):
+                compiled_sql, execution_parameters = statement.compile()
+                prepared_parameters = self.prepare_driver_parameters(
+                    execution_parameters,
+                    statement_config,
+                    is_many=statement.is_many,
+                    prepared_statement=statement,
+                )
+                cached_statement = CachedStatement(
+                    compiled_sql=compiled_sql,
+                    parameters=prepared_parameters,
+                    expression=statement.expression,
+                )
+                return cached_statement, prepared_parameters
+
             processed = statement.get_processed_state()
             prepared_parameters = self.prepare_driver_parameters(
                 processed.execution_parameters,

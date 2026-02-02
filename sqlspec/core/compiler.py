@@ -382,6 +382,8 @@ class SQLProcessor:
         if cache_key == self._last_cache_key and self._last_result is not None:
             self._cache_hits += 1
             cached_result = self._last_result
+            if self._config.parameter_config.needs_static_script_compilation:
+                return cached_result
 
             processed_params = self._parameter_processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
                 parameters,
@@ -420,6 +422,8 @@ class SQLProcessor:
             # Update micro-cache
             self._last_cache_key = cache_key
             self._last_result = cached_result
+            if self._config.parameter_config.needs_static_script_compilation:
+                return cached_result
 
             # Structural fingerprinting means same SQL structure = same cache entry,
             # but we must still process the caller's actual parameter values.
