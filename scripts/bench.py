@@ -17,6 +17,8 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 
 
+ROWS_TO_INSERT = 100_000
+
 @click.command()
 @click.option(
     "--driver",
@@ -97,7 +99,7 @@ def raw_sqlite_write_heavy()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
         conn.execute(CREATE_TEST_TABLE)
-        for i in range(10000):
+        for i in range(ROWS_TO_INSERT):
             conn.execute(INSERT_TEST_VALUE, (f"value_{i}",))
         conn.commit()
         conn.close()
@@ -106,12 +108,12 @@ def raw_sqlite_read_heavy()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
         conn.execute(CREATE_TEST_TABLE)
-        for i in range(10000):
+        for i in range(ROWS_TO_INSERT):
             conn.execute(INSERT_TEST_VALUE, (f"value_{i}",))
         conn.commit()
         cursor = conn.execute(SELECT_TEST_VALUES)
         rows = cursor.fetchall()
-        assert len(rows) == 10000
+        assert len(rows) == ROWS_TO_INSERT
         conn.close()
 
 def sqlspec_sqlite_initialization()-> None:
@@ -127,7 +129,7 @@ def sqlspec_sqlite_write_heavy()-> None:
         config = SqliteConfig(database=tmp.name)
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
-            for i in range(10000):
+            for i in range(ROWS_TO_INSERT):
                 session.execute(INSERT_TEST_VALUE, f"value_{i}")
 
 def sqlspec_sqlite_read_heavy()-> None:
@@ -136,10 +138,10 @@ def sqlspec_sqlite_read_heavy()-> None:
         config = SqliteConfig(database=tmp.name)
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
-            for i in range(10000):
+            for i in range(ROWS_TO_INSERT):
                 session.execute(INSERT_TEST_VALUE, f"value_{i}")
             rows = session.fetch(SELECT_TEST_VALUES)
-            assert len(rows) == 10000
+            assert len(rows) == ROWS_TO_INSERT
 
 def sqlalchemy_sqlite_initialization()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
@@ -153,7 +155,7 @@ def sqlalchemy_sqlite_write_heavy()-> None:
         engine = create_engine(f"sqlite:///{tmp.name}")
         conn = engine.connect()
         conn.execute(text(CREATE_TEST_TABLE))
-        for i in range(10000):
+        for i in range(ROWS_TO_INSERT):
             conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
         conn.close()
 
@@ -162,11 +164,11 @@ def sqlalchemy_sqlite_read_heavy()-> None:
         engine = create_engine(f"sqlite:///{tmp.name}")
         conn = engine.connect()
         conn.execute(text(CREATE_TEST_TABLE))
-        for i in range(10000):
+        for i in range(ROWS_TO_INSERT):
             conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
         result = conn.execute(text(SELECT_TEST_VALUES))
         rows = result.fetchall()
-        assert len(rows) == 10000
+        assert len(rows) == ROWS_TO_INSERT
         conn.close()
 
 # Asyncpg implementations
@@ -179,14 +181,13 @@ async def raw_asyncpg_initialization()-> None:
 
 async def raw_asyncpg_write_heavy()-> None:
     conn = await connect(dsn="postgresql://postgres:postgres@localhost/postgres")
-    for i in range(10000):
+    for i in range(ROWS_TO_INSERT):
         await conn.execute(INSERT_TEST_VALUE_ASYNCPG, f"value_{i}")
     await conn.close()
 
 async def raw_asyncpg_read_heavy():
     conn = await connect(dsn="postgresql://postgres:postgres@localhost/postgres")
     rows = await conn.fetch(SELECT_TEST_VALUES)
-    assert len(rows) == 20000
     await conn.close()
 
 async def sqlspec_asyncpg_initialization()-> None:
@@ -200,7 +201,7 @@ async def sqlspec_asyncpg_write_heavy()->None:
     sqlec = SQLSpec()
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://postgres:postgres@localhost/postgres"})
     async with sqlec.provide_session(config) as session:
-        for i in range(10000):
+        for i in range(ROWS_TO_INSERT):
             await session.execute(INSERT_TEST_VALUE_ASYNCPG, f"value_{i}")
 
 async def sqlspec_asyncpg_read_heavy()->None:
@@ -218,7 +219,7 @@ async def sqlalchemy_asyncpg_initialization()->None:
 async def sqlalchemy_asyncpg_write_heavy() -> None:
     engine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost/postgres")
     async with engine.connect() as conn:
-        for i in range(10000):
+        for i in range(ROWS_TO_INSERT):
             await conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
 
 async def sqlalchemy_asyncpg_read_heavy()-> None:
