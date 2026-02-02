@@ -1090,7 +1090,7 @@ class CommonDriverAttributesMixin:
         """
         if statement_config is None:
             statement_config = self.statement_config
-        
+
         # FAST PATH: String statement with simple parameters
         if isinstance(statement, str):
             cached_sql = self._statement_cache.get(statement)

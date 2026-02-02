@@ -1,10 +1,17 @@
+import cProfile
+import pstats
 import sqlite3
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.observability import LoggingConfig, ObservabilityConfig, TelemetryConfig
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 ROWS = 10000
 RUNS = 10
@@ -22,9 +29,6 @@ def bench_raw_sqlite(db_path: Path) -> None:
         cur.execute("insert into notes (body) values (?)", (f"note {i}",))
     conn.commit()
     conn.close()
-
-
-from sqlspec.observability import LoggingConfig, ObservabilityConfig, TelemetryConfig
 
 
 # -------------------------
@@ -48,8 +52,8 @@ def bench_sqlspec(db_path: Path) -> None:
 # -------------------------
 # Timing helper
 # -------------------------
-def run_benchmark(fn, label):
-    times = []
+def run_benchmark(fn: "Callable[[Path], None]", label: str) -> float:
+    times: list[float] = []
     # warm-up run (not measured)
     with tempfile.TemporaryDirectory() as d:
         fn(Path(d) / "warmup.db")
@@ -64,18 +68,13 @@ def run_benchmark(fn, label):
 
     return sum(times) / len(times)
 
-
-import cProfile
-import pstats
-from pathlib import Path
-
 __all__ = (
     "bench_raw_sqlite",
+    "bench_sqlite_sqlglot",
+    "bench_sqlite_sqlglot_copy",
+    "bench_sqlite_sqlglot_nocache",
     "bench_sqlspec",
     "bench_sqlspec_dict",
-    "bench_sqlite_sqlglot",
-    "bench_sqlite_sqlglot_nocache",
-    "bench_sqlite_sqlglot_copy",
     "run_benchmark",
 )
 
@@ -184,12 +183,6 @@ def bench_sqlspec_dict(db_path: Path) -> None:
         session.execute("create table if not exists notes (id integer primary key, body text)")
         for i in range(ROWS):
             session.execute("insert into notes (body) values (:body)", {"body": f"note {i}"})
-
-
-ROWS = 10000
-RUNS = 5  # Reduced for profiling
-
-# ... (rest of the functions remain same)
 
 # -------------------------
 # Main

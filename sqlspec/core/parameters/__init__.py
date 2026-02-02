@@ -60,6 +60,8 @@ __all__ = (
     "ParameterStyleConfig",
     "ParameterValidator",
     "TypedParameter",
+    "_structural_fingerprint",
+    "_value_fingerprint",
     "build_literal_inlining_transform",
     "build_null_pruning_transform",
     "build_statement_config_from_profile",

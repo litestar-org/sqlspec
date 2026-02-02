@@ -476,6 +476,7 @@ class SQLProcessor:
             parameters: Raw parameters.
             is_many: Whether this is for execute_many.
             dialect_str: Dialect name.
+            param_fingerprint: Pre-computed parameter fingerprint for cache key.
 
         Returns:
             Tuple of processed SQL, processed parameters, parameter profile, SQLGlot SQL,
@@ -796,6 +797,7 @@ class SQLProcessor:
             parameters: Parameter values
             is_many: Whether this is for execute_many operation
             expression_override: Pre-parsed SQLGlot expression to reuse
+            param_fingerprint: Pre-computed parameter fingerprint for cache key.
 
         Returns:
             CompiledSQL result

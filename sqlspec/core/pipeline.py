@@ -1,5 +1,6 @@
 """Shared statement pipeline registry and instrumentation."""
 
+import contextlib
 import hashlib
 import os
 from collections import OrderedDict
@@ -297,10 +298,8 @@ class StatementPipelineRegistry:
         full_fingerprint = f"pipeline::{fingerprint}"
 
         # Cache the fingerprint for future calls - configs are immutable in practice
-        try:
+        with contextlib.suppress(AttributeError, TypeError):
             config._fingerprint_cache = full_fingerprint
-        except (AttributeError, TypeError):
-            pass  # Mypyc-compiled classes may reject attribute assignment
 
         return full_fingerprint
 

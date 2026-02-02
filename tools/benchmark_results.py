@@ -5,14 +5,16 @@ COLS = 5
 COL_NAMES = [f"col_{i}" for i in range(COLS)]
 DATA = [tuple(range(COLS)) for _ in range(ROWS)]
 
-def bench_fetchall_sim():
+
+def bench_fetchall_sim() -> list[tuple[int, ...]]:
     # Simulate fetchall() returning list of tuples
     start = time.perf_counter()
     res = list(DATA)
     time.perf_counter() - start
     return res
 
-def bench_dict_construction():
+
+def bench_dict_construction() -> list[dict[str, int]]:
     rows = list(DATA)
     names = COL_NAMES
     start = time.perf_counter()
@@ -20,6 +22,7 @@ def bench_dict_construction():
     data = [dict(zip(names, row, strict=False)) for row in rows]
     time.perf_counter() - start
     return data
+
 
 if __name__ == "__main__":
     bench_fetchall_sim()

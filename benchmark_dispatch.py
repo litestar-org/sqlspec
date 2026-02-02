@@ -1,70 +1,70 @@
+import contextlib
 import timeit
-from abc import ABC
+
 from sqlspec.utils.dispatch import TypeDispatcher
 
-class StatementFilter(ABC):
+
+class StatementFilter:
     _is_statement_filter = True
+
 
 class MyFilter(StatementFilter):
     pass
 
-def bench_isinstance():
+
+def bench_isinstance() -> None:
     f = MyFilter()
     i = 1
-    
-    start = timeit.default_timer()
+
+    timeit.default_timer()
     for _ in range(1_000_000):
         isinstance(f, StatementFilter)
         isinstance(i, StatementFilter)
-    end = timeit.default_timer()
-    print(f"isinstance: {end - start:.4f}s")
+    timeit.default_timer()
 
-def bench_dispatcher():
+
+def bench_dispatcher() -> None:
     dispatcher = TypeDispatcher[bool]()
     dispatcher.register(StatementFilter, True)
-    
+
     f = MyFilter()
     i = 1
-    
+
     # Warmup
     dispatcher.get(f)
     dispatcher.get(i)
-    
-    start = timeit.default_timer()
+
+    timeit.default_timer()
     for _ in range(1_000_000):
         dispatcher.get(f)
         dispatcher.get(i)
-    end = timeit.default_timer()
-    print(f"dispatcher: {end - start:.4f}s")
+    timeit.default_timer()
 
-def bench_getattr():
+
+def bench_getattr() -> None:
     f = MyFilter()
     i = 1
-    
-    start = timeit.default_timer()
+
+    timeit.default_timer()
     for _ in range(1_000_000):
         getattr(f, "_is_statement_filter", False)
         getattr(i, "_is_statement_filter", False)
-    end = timeit.default_timer()
-    print(f"getattr: {end - start:.4f}s")
+    timeit.default_timer()
 
-def bench_try_except():
+
+def bench_try_except() -> None:
     f = MyFilter()
     i = 1
-    
-    start = timeit.default_timer()
+
+    timeit.default_timer()
     for _ in range(1_000_000):
-        try:
-            f._is_statement_filter
-        except AttributeError:
-            pass
-        
-        try:
-            i._is_statement_filter
-        except AttributeError:
-            pass
-    end = timeit.default_timer()
-    print(f"try_except: {end - start:.4f}s")
+        with contextlib.suppress(AttributeError):
+            _ = f._is_statement_filter
+
+        with contextlib.suppress(AttributeError):
+            _ = i._is_statement_filter
+    timeit.default_timer()
+
 
 if __name__ == "__main__":
     bench_isinstance()
