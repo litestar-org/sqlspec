@@ -69,7 +69,102 @@ import cProfile
 import pstats
 from pathlib import Path
 
-__all__ = ("bench_raw_sqlite", "bench_sqlspec", "bench_sqlspec_dict", "run_benchmark")
+__all__ = (
+    "bench_raw_sqlite",
+    "bench_sqlspec",
+    "bench_sqlspec_dict",
+    "bench_sqlite_sqlglot",
+    "bench_sqlite_sqlglot_nocache",
+    "bench_sqlite_sqlglot_copy",
+    "run_benchmark",
+)
+
+
+# -------------------------
+# Pure sqlite3 + sqlglot benchmark (parse once, cached SQL)
+# -------------------------
+def bench_sqlite_sqlglot(db_path: Path) -> None:
+    """Benchmark raw sqlite3 with only sqlglot parsing overhead.
+
+    This simulates optimal SQLSpec behavior: parse once, cache SQL, reuse.
+    Shows the minimum overhead from using sqlglot for SQL parsing.
+    """
+    import sqlglot
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("create table if not exists notes (id integer primary key, body text)")
+    conn.commit()
+
+    # Parse the SQL once with sqlglot and cache the generated SQL
+    sql = "insert into notes (body) values (?)"
+    parsed = sqlglot.parse_one(sql, dialect="sqlite")
+    cached_sql = parsed.sql(dialect="sqlite")  # Cache this!
+
+    for i in range(ROWS):
+        # Use cached SQL string (like SQLSpec does on cache hit)
+        cur.execute(cached_sql, (f"note {i}",))
+
+    conn.commit()
+    conn.close()
+
+
+# -------------------------
+# Pure sqlite3 + sqlglot with .sql() per call (no caching)
+# -------------------------
+def bench_sqlite_sqlglot_nocache(db_path: Path) -> None:
+    """Benchmark raw sqlite3 with sqlglot .sql() called each time.
+
+    This shows the cost if we regenerated SQL from AST every time,
+    which would be terrible and SQLSpec avoids via caching.
+    """
+    import sqlglot
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("create table if not exists notes (id integer primary key, body text)")
+    conn.commit()
+
+    sql = "insert into notes (body) values (?)"
+    parsed = sqlglot.parse_one(sql, dialect="sqlite")
+
+    for i in range(ROWS):
+        # Regenerate SQL each time (NO CACHING - worst case)
+        generated_sql = parsed.sql(dialect="sqlite")
+        cur.execute(generated_sql, (f"note {i}",))
+
+    conn.commit()
+    conn.close()
+
+
+# -------------------------
+# Pure sqlite3 + sqlglot with expression.copy() benchmark
+# -------------------------
+def bench_sqlite_sqlglot_copy(db_path: Path) -> None:
+    """Benchmark raw sqlite3 with sqlglot expression.copy() per call.
+
+    This shows the overhead when we copy the expression each time,
+    which happens in some SQLSpec code paths for safety.
+    """
+    import sqlglot
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("create table if not exists notes (id integer primary key, body text)")
+    conn.commit()
+
+    sql = "insert into notes (body) values (?)"
+    parsed = sqlglot.parse_one(sql, dialect="sqlite")
+    cached_sql = parsed.sql(dialect="sqlite")  # Cache the SQL
+
+    for i in range(ROWS):
+        # Copy expression each time (like SQLSpec's defensive copying)
+        # but still use cached SQL for execution
+        _ = parsed.copy()  # Overhead we're measuring
+        cur.execute(cached_sql, (f"note {i}",))
+
+    conn.commit()
+    conn.close()
 
 
 # -------------------------
