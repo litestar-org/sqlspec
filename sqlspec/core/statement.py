@@ -15,6 +15,7 @@ from sqlspec.core import pipeline
 from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
+from sqlspec.core.hashing import hash_filters
 from sqlspec.core.parameters import (
     ParameterConverter,
     ParameterProcessor,
@@ -105,6 +106,7 @@ PROCESSED_STATE_SLOTS: Final = (
     "operation_type",
     "input_named_parameters",
     "applied_wrap_types",
+    "filter_hash",
     "parameter_fingerprint",
     "parameter_casts",
     "parameter_profile",
@@ -133,6 +135,7 @@ class ProcessedState:
         operation_type: "OperationType" = "COMMAND",
         input_named_parameters: "tuple[str, ...] | None" = None,
         applied_wrap_types: bool = False,
+        filter_hash: int = 0,
         parameter_fingerprint: str | None = None,
         parameter_casts: "dict[int, str] | None" = None,
         validation_errors: "list[str] | None" = None,
@@ -146,6 +149,7 @@ class ProcessedState:
         self.operation_type = operation_type
         self.input_named_parameters = input_named_parameters or ()
         self.applied_wrap_types = applied_wrap_types
+        self.filter_hash = filter_hash
         self.parameter_fingerprint = parameter_fingerprint
         self.parameter_casts = parameter_casts or {}
         self.validation_errors = validation_errors or []
@@ -581,6 +585,7 @@ class SQL:
                     operation_type=compiled_result.operation_type,
                     input_named_parameters=compiled_result.input_named_parameters,
                     applied_wrap_types=compiled_result.applied_wrap_types,
+                    filter_hash=hash_filters(self._filters),
                     parameter_fingerprint=param_fingerprint,
                     parameter_casts=compiled_result.parameter_casts,
                     parameter_profile=compiled_result.parameter_profile,
@@ -622,6 +627,7 @@ class SQL:
             operation_type=state.operation_type,
             input_named_parameters=state.input_named_parameters,
             applied_wrap_types=state.applied_wrap_types,
+            filter_hash=state.filter_hash,
             parameter_fingerprint=state.parameter_fingerprint,
             parameter_casts=state.parameter_casts,
             parameter_profile=state.parameter_profile,
@@ -635,6 +641,8 @@ class SQL:
     def _can_reuse_cached_state(self, state: "ProcessedState") -> bool:
         cached_fingerprint = state.parameter_fingerprint
         if cached_fingerprint is None:
+            return False
+        if state.filter_hash != hash_filters(self._filters):
             return False
         params = self._named_parameters or self._positional_parameters
         return structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint
@@ -724,6 +732,7 @@ class SQL:
             operation_type="COMMAND",
             input_named_parameters=(),
             applied_wrap_types=False,
+            filter_hash=hash_filters(self._filters),
             parameter_fingerprint=structural_fingerprint(params, is_many=self._is_many),
             parameter_casts={},
             parameter_profile=ParameterProfile.empty(),

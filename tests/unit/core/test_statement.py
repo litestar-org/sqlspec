@@ -36,6 +36,8 @@ from sqlspec.core import (
     get_pipeline_metrics,
     reset_pipeline_registry,
 )
+from sqlspec.core.filters import LimitOffsetFilter
+from sqlspec.core.hashing import hash_filters
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.typing import Empty
 from tests.conftest import requires_interpreted
@@ -681,6 +683,38 @@ def test_sql_copy_recompiles_on_structure_change() -> None:
 
     assert sql == "SELECT * FROM users WHERE id = ?"
     assert params == ["x"]
+    mock_compile.assert_called_once()
+
+
+def test_sql_copy_recompiles_on_filter_change() -> None:
+    """Cached state should be discarded when filters change."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    original._filters.append(LimitOffsetFilter(10, 0))
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+        parameter_profile=ParameterProfile.empty(),
+        parameter_fingerprint=structural_fingerprint([1], is_many=False),
+        filter_hash=hash_filters(original._filters),
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=[2])
+    copy_stmt._filters = []
+
+    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+        mock_compile.return_value = CompiledSQL(
+            compiled_sql="SELECT * FROM users WHERE id = ?",
+            execution_parameters=[2],
+            operation_type="SELECT",
+            expression=exp.select("*").from_("users"),
+        )
+        sql, params = copy_stmt.compile()
+
+    assert sql == "SELECT * FROM users WHERE id = ?"
+    assert params == [2]
     mock_compile.assert_called_once()
 
 
