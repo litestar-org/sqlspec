@@ -185,4 +185,6 @@ class TestPerformanceOverhead:
             # Target <60x overhead (improved from ~92x before optimizations)
             # Single-statement execution has inherent abstraction overhead
             # This is a regression guard - if overhead increases significantly, investigate
-            assert overhead < 60, f"Overhead {overhead:.1f}x exceeds 60x target (raw={raw_time:.4f}s, spec={spec_time:.4f}s)"
+            assert overhead < 60, (
+                f"Overhead {overhead:.1f}x exceeds 60x target (raw={raw_time:.4f}s, spec={spec_time:.4f}s)"
+            )

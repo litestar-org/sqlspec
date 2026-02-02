@@ -6,7 +6,6 @@ Components:
 - Parameter processing via ParameterProcessor
 """
 
-import hashlib
 import logging
 from collections import OrderedDict
 from collections.abc import Mapping
@@ -21,7 +20,7 @@ import sqlspec.exceptions
 from sqlspec.core.parameters import (
     ParameterProcessor,
     ParameterProfile,
-    structural_fingerprint,
+    _structural_fingerprint,
     validate_parameter_alignment,
     value_fingerprint,
 )
@@ -184,9 +183,11 @@ class CompiledSQL:
 
     __slots__ = (
         "_hash",
+        "applied_wrap_types",
         "compiled_sql",
         "execution_parameters",
         "expression",
+        "input_named_parameters",
         "operation_profile",
         "operation_type",
         "parameter_casts",
@@ -208,6 +209,8 @@ class CompiledSQL:
         parameter_casts: "dict[int, str] | None" = None,
         parameter_profile: "ParameterProfile | None" = None,
         operation_profile: "OperationProfile | None" = None,
+        input_named_parameters: "tuple[str, ...]" = (),
+        applied_wrap_types: bool = False,
     ) -> None:
         """Initialize compiled result.
 
@@ -221,6 +224,8 @@ class CompiledSQL:
             parameter_casts: Mapping of parameter positions to cast types
             parameter_profile: Profile describing detected placeholders
             operation_profile: Profile describing semantic characteristics
+            input_named_parameters: Original input named parameter order
+            applied_wrap_types: Whether type wrapping was applied
         """
         self.compiled_sql = compiled_sql
         self.execution_parameters = execution_parameters
@@ -231,6 +236,8 @@ class CompiledSQL:
         self.parameter_casts = parameter_casts or {}
         self.parameter_profile = parameter_profile
         self.operation_profile = operation_profile or OperationProfile.empty()
+        self.input_named_parameters = input_named_parameters
+        self.applied_wrap_types = applied_wrap_types
         self._hash: int | None = None
 
     def __hash__(self) -> int:
@@ -275,6 +282,11 @@ class SQLProcessor:
         "_cache_hits",
         "_cache_misses",
         "_config",
+        "_dialect_str",
+        "_exec_style",
+        "_input_style",
+        "_last_cache_key",
+        "_last_result",
         "_max_cache_size",
         "_parameter_processor",
         "_parse_cache",
@@ -303,7 +315,7 @@ class SQLProcessor:
             cache_enabled: Toggle compiled SQL caching (parse/parameter caches remain size-driven)
         """
         self._config = config
-        self._cache: OrderedDict[str, CompiledSQL] = OrderedDict()
+        self._cache: OrderedDict[Any, CompiledSQL] = OrderedDict()
         self._max_cache_size = max(max_cache_size, 0)
         compiled_cache_active = cache_enabled and config.enable_caching and self._max_cache_size > 0
         self._cache_enabled = compiled_cache_active
@@ -325,10 +337,21 @@ class SQLProcessor:
         self._cache_hits = 0
         self._cache_misses = 0
         self._parse_cache: OrderedDict[
-            str, tuple[exp.Expression | None, OperationType, dict[int, str], tuple[bool, bool]]
+            Any, tuple[exp.Expression | None, OperationType, dict[int, str], tuple[bool, bool]]
         ] = OrderedDict()
         self._parse_cache_hits = 0
         self._parse_cache_misses = 0
+        self._last_cache_key = None
+        self._last_result = None
+
+        # Pre-calculate static cache key components
+        self._dialect_str = str(config.dialect) if config.dialect else None
+        self._input_style = config.parameter_config.default_parameter_style.value
+        self._exec_style = (
+            config.parameter_config.default_execution_parameter_style.value
+            if config.parameter_config.default_execution_parameter_style
+            else self._input_style
+        )
 
     def compile(
         self, sql: str, parameters: Any = None, is_many: bool = False, expression: "exp.Expression | None" = None
@@ -345,22 +368,32 @@ class SQLProcessor:
             CompiledSQL with execution information
         """
         if not self._config.enable_caching or not self._cache_enabled:
-            return self._compile_uncached(sql, parameters, is_many, expression)
+            return self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
 
-        cache_key = self._make_cache_key(sql, parameters, is_many)
+        param_fingerprint = self._get_param_fingerprint(parameters, is_many)
+        cache_key = self._make_cache_key(sql, param_fingerprint, is_many)
 
-        if cache_key in self._cache:
-            cached_result = self._cache[cache_key]
-            del self._cache[cache_key]
-            self._cache[cache_key] = cached_result
+        # MICRO-CACHE: Fast path for repeating statements
+        if cache_key == self._last_cache_key and self._last_result is not None:
             self._cache_hits += 1
-            # Structural fingerprinting means same SQL structure = same cache entry,
-            # but we must still process the caller's actual parameter values
-            dialect_str = str(self._config.dialect) if self._config.dialect else None
-            _, processed_params, _, _ = self._prepare_parameters(sql, parameters, is_many, dialect_str)
-            # Return cached compilation metadata with NEW parameters
+            cached_result = self._last_result
+
+            processed_params = self._parameter_processor._transform_cached_parameters(
+                parameters,
+                cached_result.parameter_profile,
+                self._config.parameter_config,
+                input_named_parameters=cached_result.input_named_parameters,
+                is_many=is_many,
+                apply_wrap_types=cached_result.applied_wrap_types,
+            )
+
+            final_sql = cached_result.compiled_sql
+            output_transformer = self._config.output_transformer
+            if output_transformer:
+                final_sql, processed_params = output_transformer(final_sql, processed_params)
+
             return CompiledSQL(
-                compiled_sql=cached_result.compiled_sql,
+                compiled_sql=final_sql,
                 execution_parameters=processed_params,
                 operation_type=cached_result.operation_type,
                 expression=cached_result.expression,
@@ -369,20 +402,68 @@ class SQLProcessor:
                 parameter_casts=cached_result.parameter_casts,
                 parameter_profile=cached_result.parameter_profile,
                 operation_profile=cached_result.operation_profile,
+                input_named_parameters=cached_result.input_named_parameters,
+                applied_wrap_types=cached_result.applied_wrap_types,
+            )
+
+        if cache_key in self._cache:
+            cached_result = self._cache[cache_key]
+            del self._cache[cache_key]
+            self._cache[cache_key] = cached_result
+            self._cache_hits += 1
+
+            # Update micro-cache
+            self._last_cache_key = cache_key
+            self._last_result = cached_result
+
+            # Structural fingerprinting means same SQL structure = same cache entry,
+            # but we must still process the caller's actual parameter values.
+            # FAST PATH: Call _transform_cached_parameters directly to bypass redundant
+            # ParameterProcessor cache lookup and key generation.
+            processed_params = self._parameter_processor._transform_cached_parameters(
+                parameters,
+                cached_result.parameter_profile,
+                self._config.parameter_config,
+                input_named_parameters=cached_result.input_named_parameters,
+                is_many=is_many,
+                apply_wrap_types=cached_result.applied_wrap_types,
+            )
+
+            # Apply output transformer if present (cached SQL already transformed)
+            final_sql = cached_result.compiled_sql
+            output_transformer = self._config.output_transformer
+            if output_transformer:
+                final_sql, processed_params = output_transformer(final_sql, processed_params)
+
+            # Return cached compilation metadata with NEW parameters
+            return CompiledSQL(
+                compiled_sql=final_sql,
+                execution_parameters=processed_params,
+                operation_type=cached_result.operation_type,
+                expression=cached_result.expression,
+                parameter_style=cached_result.parameter_style,
+                supports_many=cached_result.supports_many,
+                parameter_casts=cached_result.parameter_casts,
+                parameter_profile=cached_result.parameter_profile,
+                operation_profile=cached_result.operation_profile,
+                input_named_parameters=cached_result.input_named_parameters,
+                applied_wrap_types=cached_result.applied_wrap_types,
             )
 
         self._cache_misses += 1
-        result = self._compile_uncached(sql, parameters, is_many, expression)
+        result = self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=param_fingerprint)
 
         if len(self._cache) >= self._max_cache_size:
             self._cache.popitem(last=False)
 
         self._cache[cache_key] = result
+        self._last_cache_key = cache_key
+        self._last_result = result
         return result
 
     def _prepare_parameters(
-        self, sql: str, parameters: Any, is_many: bool, dialect_str: "str | None"
-    ) -> "tuple[str, Any, ParameterProfile, str]":
+        self, sql: str, parameters: Any, is_many: bool, dialect_str: "str | None", *, param_fingerprint: Any | None
+    ) -> "tuple[str, Any, ParameterProfile, str, tuple[str, ...], bool]":
         """Process SQL parameters for compilation.
 
         Args:
@@ -392,7 +473,8 @@ class SQLProcessor:
             dialect_str: Dialect name.
 
         Returns:
-            Tuple of processed SQL, processed parameters, parameter profile, and SQLGlot SQL.
+            Tuple of processed SQL, processed parameters, parameter profile, SQLGlot SQL,
+            input named parameters, and applied wrap types flag.
         """
         process_result = self._parameter_processor.process(
             sql=sql,
@@ -401,12 +483,15 @@ class SQLProcessor:
             dialect=dialect_str,
             is_many=is_many,
             wrap_types=self._config.enable_parameter_type_wrapping,
+            param_fingerprint=param_fingerprint,
         )
         return (
             process_result.sql,
             process_result.parameters,
             process_result.parameter_profile,
             process_result.sqlglot_sql,
+            process_result.input_named_parameters,
+            process_result.applied_wrap_types,
         )
 
     def _normalize_expression_override(
@@ -456,7 +541,7 @@ class SQLProcessor:
 
     def _store_parse_cache(
         self,
-        parse_cache_key: str,
+        parse_cache_key: Any,
         expression: "exp.Expression | None",
         operation_type: "OperationType",
         parameter_casts: "dict[int, str]",
@@ -499,7 +584,7 @@ class SQLProcessor:
 
     def _resolve_expression(
         self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expression | None"
-    ) -> "tuple[exp.Expression | None, OperationType, dict[int, str], OperationProfile, str | None, ParseCacheEntry | None]":
+    ) -> "tuple[exp.Expression | None, OperationType, dict[int, str], OperationProfile, Any | None, ParseCacheEntry | None]":
         """Resolve an SQLGlot expression with caching.
 
         Args:
@@ -539,7 +624,7 @@ class SQLProcessor:
         operation_type: "OperationType",
         parameter_casts: "dict[int, str]",
         operation_profile: "OperationProfile",
-        parse_cache_key: "str | None",
+        parse_cache_key: "Any | None",
         parse_cache_entry: "ParseCacheEntry | None",
         expression_override: "exp.Expression | None",
     ) -> "tuple[exp.Expression | None, Any, bool, OperationType, dict[int, str], OperationProfile]":
@@ -599,7 +684,7 @@ class SQLProcessor:
         is_many: bool,
         dialect_str: "str | None",
         ast_was_transformed: bool,
-    ) -> "tuple[str, Any, ParameterProfile]":
+    ) -> "tuple[str, Any, ParameterProfile, tuple[str, ...], bool]":
         """Finalize SQL and parameter conversion for execution.
 
         Args:
@@ -613,10 +698,11 @@ class SQLProcessor:
             ast_was_transformed: Whether AST transformations ran.
 
         Returns:
-            Final SQL, execution parameters, and parameter profile.
+            Final SQL, execution parameters, parameter profile, input named parameters,
+            and applied wrap types flag.
         """
         if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
-            return processed_sql, processed_params, parameter_profile
+            return processed_sql, processed_params, parameter_profile, (), False
         if ast_was_transformed and expression is not None:
             # Pass the transformed expression through the pipeline to avoid re-parsing
             transformed_result = self._parameter_processor.process_for_execution(
@@ -634,10 +720,16 @@ class SQLProcessor:
             output_transformer = self._config.output_transformer
             if output_transformer:
                 final_sql, final_params = output_transformer(final_sql, final_params)
-            return final_sql, final_params, parameter_profile
+            return (
+                final_sql,
+                final_params,
+                parameter_profile,
+                transformed_result.input_named_parameters,
+                transformed_result.applied_wrap_types,
+            )
 
         final_sql, final_params = self._apply_final_transformations(expression, processed_sql, parameters, dialect_str)
-        return final_sql, final_params, parameter_profile
+        return final_sql, final_params, parameter_profile, (), False
 
     def _should_validate_parameters(self, final_params: Any, raw_parameters: Any, is_many: bool) -> bool:
         """Determine if parameter alignment should be validated.
@@ -676,7 +768,13 @@ class SQLProcessor:
             raise
 
     def _compile_uncached(
-        self, sql: str, parameters: Any, is_many: bool = False, expression_override: "exp.Expression | None" = None
+        self,
+        sql: str,
+        parameters: Any,
+        is_many: bool = False,
+        expression_override: "exp.Expression | None" = None,
+        *,
+        param_fingerprint: Any | None,
     ) -> CompiledSQL:
         """Compile SQL without caching.
 
@@ -694,9 +792,14 @@ class SQLProcessor:
 
         try:
             dialect_str = str(self._config.dialect) if self._config.dialect else None
-            processed_sql, processed_params, parameter_profile, sqlglot_sql = self._prepare_parameters(
-                sql, parameters, is_many, dialect_str
-            )
+            (
+                processed_sql,
+                processed_params,
+                parameter_profile,
+                sqlglot_sql,
+                input_named_parameters,
+                applied_wrap_types,
+            ) = self._prepare_parameters(sql, parameters, is_many, dialect_str, param_fingerprint=param_fingerprint)
             expression_override = self._normalize_expression_override(expression_override, sqlglot_sql, sql)
 
             final_parameters = processed_params
@@ -730,7 +833,7 @@ class SQLProcessor:
                     expression_override,
                 )
 
-            final_sql, final_params, parameter_profile = self._finalize_compilation(
+            final_sql, final_params, parameter_profile, input_named_params, applied_wrap = self._finalize_compilation(
                 processed_sql,
                 processed_params,
                 expression,
@@ -740,6 +843,11 @@ class SQLProcessor:
                 dialect_str,
                 ast_was_transformed,
             )
+
+            # If not transformed, we still need input_named_parameters from _prepare_parameters
+            if not ast_was_transformed:
+                input_named_params = input_named_parameters
+                applied_wrap = applied_wrap_types
 
             if self._should_validate_parameters(final_params, parameters, is_many):
                 self._validate_parameters(parameter_profile, final_params, is_many)
@@ -754,6 +862,8 @@ class SQLProcessor:
                 parameter_casts=parameter_casts,
                 parameter_profile=parameter_profile,
                 operation_profile=operation_profile,
+                input_named_parameters=input_named_params,
+                applied_wrap_types=applied_wrap,
             )
 
         except sqlspec.exceptions.SQLSpecError:
@@ -769,41 +879,24 @@ class SQLProcessor:
                 operation_profile=operation_profile,
             )
 
-    def _make_cache_key(self, sql: str, parameters: Any, is_many: bool = False) -> str:
+    def _get_param_fingerprint(self, parameters: Any, is_many: bool) -> Any:
+        if self._config.parameter_config.needs_static_script_compilation:
+            return value_fingerprint(parameters)
+        return _structural_fingerprint(parameters, is_many)
+
+    def _make_cache_key(self, sql: str, param_fingerprint: Any, is_many: bool = False) -> tuple[Any, ...]:
         """Generate cache key.
 
         Args:
             sql: SQL string
-            parameters: Parameter values
+            param_fingerprint: Precomputed parameter fingerprint
             is_many: Whether this is for execute_many operation
 
         Returns:
-            Cache key string
+            Cache key tuple
         """
-        # For static script compilation, parameter VALUES are embedded in the SQL string,
-        # so different values produce different compiled SQL. Must use value_fingerprint
-        # to avoid returning cached SQL with stale embedded values.
-        if self._config.parameter_config.needs_static_script_compilation:
-            param_fingerprint = value_fingerprint(parameters)
-        else:
-            # Use structural fingerprint (keys + types, not values) for better cache hit rates
-            param_fingerprint = structural_fingerprint(parameters, is_many)
-        dialect_str = str(self._config.dialect) if self._config.dialect else None
-        # Include both input and execution parameter styles to avoid cache collisions
-        # (e.g., MySQL asyncmy uses ? for input but %s for execution)
-        input_style = self._config.parameter_config.default_parameter_style.value
-        exec_style = (
-            self._config.parameter_config.default_execution_parameter_style.value
-            if self._config.parameter_config.default_execution_parameter_style
-            else input_style
-        )
-
-        # Exclude enable_parsing and enable_transformations from hash_data as they are
-        # per-config static flags, not per-statement - they belong in pipeline key only
-        hash_data = (sql, param_fingerprint, input_style, exec_style, dialect_str, is_many)
-
-        hash_str = hashlib.blake2b(repr(hash_data).encode("utf-8"), digest_size=8).hexdigest()
-        return f"sql_{hash_str}"
+        # Use pre-calculated static components for speed
+        return (sql, param_fingerprint, self._input_style, self._exec_style, self._dialect_str, is_many)
 
     def _detect_operation_type(self, expression: "exp.Expression") -> "OperationType":
         """Detect operation type from AST.
@@ -947,11 +1040,10 @@ class SQLProcessor:
         self._parse_cache_misses = 0
         self._parameter_processor.clear_cache()
 
-    def _make_parse_cache_key(self, sql: str, dialect: "str | None") -> str:
+    def _make_parse_cache_key(self, sql: str, dialect: "str | None") -> Any:
         dialect_marker = dialect or "default"
-        # Use blake2b instead of sha256 for faster hashing (~50% faster)
-        hash_str = hashlib.blake2b(f"{dialect_marker}:{sql}".encode(), digest_size=8).hexdigest()
-        return f"parse_{hash_str}"
+        # Use tuple as cache key instead of hashing. Python handles tuple keys efficiently.
+        return (dialect_marker, sql)
 
     @property
     def cache_stats(self) -> "dict[str, int]":

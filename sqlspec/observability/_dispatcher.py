@@ -41,6 +41,7 @@ class LifecycleDispatcher:
     __slots__ = (
         "_counters",
         "_hooks",
+        "_is_enabled",
         "has_connection_create",
         "has_connection_destroy",
         "has_error",
@@ -70,12 +71,13 @@ class LifecycleDispatcher:
             setattr(self, guard_attr, bool(normalized[event_name]))
         self._hooks: dict[LifecycleEvent, tuple[LifecycleHook, ...]] = normalized
         self._counters: dict[LifecycleEvent, int] = dict.fromkeys(EVENT_ATTRS, 0)
+        self._is_enabled = any(self._hooks.values())
 
     @property
     def is_enabled(self) -> bool:
         """Return True when at least one hook is registered."""
 
-        return any(self._hooks[name] for name in EVENT_ATTRS)
+        return self._is_enabled
 
     def emit_pool_create(self, context: "LifecycleContext") -> None:
         """Fire pool creation hooks."""

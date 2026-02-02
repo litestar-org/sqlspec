@@ -1,5 +1,8 @@
 from typing import Any, Generic, TypeVar
 
+__all__ = ("TypeDispatcher",)
+
+
 T = TypeVar("T")
 
 

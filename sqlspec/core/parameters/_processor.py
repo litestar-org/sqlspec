@@ -1,6 +1,5 @@
 """Parameter processing pipeline orchestrator."""
 
-import hashlib
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -22,7 +21,13 @@ from sqlspec.core.parameters._types import (
 )
 from sqlspec.core.parameters._validator import ParameterValidator
 
-__all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
+__all__ = (
+    "ParameterProcessor",
+    "_structural_fingerprint",
+    "_value_fingerprint",
+    "structural_fingerprint",
+    "value_fingerprint",
+)
 
 # Threshold for sampling execute_many parameters instead of full iteration
 _EXECUTE_MANY_SAMPLE_THRESHOLD = 10
@@ -30,36 +35,30 @@ _EXECUTE_MANY_SAMPLE_THRESHOLD = 10
 _EXECUTE_MANY_SAMPLE_SIZE = 3
 
 
-def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> str:
+def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
     """Return a structural fingerprint for caching parameter payloads.
 
-    This fingerprint is based on parameter STRUCTURE (keys, types, count) only,
-    NOT on actual values. This dramatically improves cache hit rates since
-    queries with identical structure but different values will share cache entries.
-
-    For large execute_many operations (>10 records), only the first 3 records
-    are sampled for structure detection, combined with the total count.
-
-    Args:
-        parameters: Original parameter payload supplied by the caller.
-        is_many: Whether this is for execute_many operation.
-
-    Returns:
-        Deterministic fingerprint string derived from parameter structure.
+    Returns a hashable tuple representing the structure (keys, types, count).
+    Avoids string formatting for performance.
     """
     if parameters is None:
-        return "none"
+        return None
 
     if isinstance(parameters, Mapping):
         if not parameters:
-            return "dict:empty"
+            return ("dict",)
         sorted_keys = tuple(sorted(parameters.keys()))
-        type_sig = tuple(type(v).__name__ for k, v in sorted(parameters.items()))
-        return f"dict:{hash((sorted_keys, type_sig))}"
+        # Use type objects directly instead of __name__ to avoid attribute access overhead
+        type_sig = tuple(type(v) for k, v in sorted(parameters.items()))
+        return ("dict", sorted_keys, type_sig)
 
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
         if not parameters:
-            return "seq:empty"
+            return ("seq",)
+
+        # Optimization: Fast path for single-item sequence (extremely common)
+        if len(parameters) == 1:
+            return ("seq", (type(parameters[0]),))
 
         if is_many:
             # For large execute_many, sample first few records + count
@@ -73,27 +72,27 @@ def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = Fals
 
             if isinstance(first, Mapping):
                 sorted_keys = tuple(sorted(first.keys()))
-                type_sig = tuple(type(v).__name__ for k, v in sorted(first.items()))
-                return f"many_dict:{hash((sorted_keys, type_sig, param_count))}"
+                type_sig = tuple(type(v) for k, v in sorted(first.items()))
+                return ("many_dict", sorted_keys, type_sig, param_count)
 
             if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
                 # Sample types from first few records for consistency check
-                type_sigs: list[tuple[str, ...]] = []
+                type_sigs: list[tuple[type, ...]] = []
                 for i in range(sample_size):
                     param_item: Any = parameters[i]
-                    type_sigs.append(tuple(type(v).__name__ for v in param_item))
-                return f"many_seq:{hash((tuple(type_sigs), param_count))}"
+                    type_sigs.append(tuple(type(v) for v in param_item))
+                return ("many_seq", tuple(type_sigs), param_count)
 
             # Scalar values in sequence for execute_many
-            type_sig = tuple(type(parameters[i]).__name__ for i in range(sample_size))
-            return f"many_scalar:{hash((type_sig, param_count))}"
+            type_sig = tuple(type(parameters[i]) for i in range(sample_size))
+            return ("many_scalar", type_sig, param_count)
 
         # Single execution with sequence parameters
-        type_sig = tuple(type(v).__name__ for v in parameters)
-        return f"seq:{hash(type_sig)}"
+        type_sig = tuple(type(v) for v in parameters)
+        return ("seq", type_sig)
 
     # Scalar parameter
-    return f"scalar:{type(parameters).__name__}"
+    return ("scalar", type(parameters))
 
 
 def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> str:
@@ -110,7 +109,7 @@ def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False
     Returns:
         Deterministic fingerprint string derived from parameter structure.
     """
-    return _structural_fingerprint(parameters, is_many)
+    return str(_structural_fingerprint(parameters, is_many))
 
 
 def value_fingerprint(parameters: "ParameterPayload") -> str:
@@ -125,26 +124,24 @@ def value_fingerprint(parameters: "ParameterPayload") -> str:
     Returns:
         Deterministic fingerprint string including parameter values.
     """
-    return _value_fingerprint(parameters)
+    return str(_value_fingerprint(parameters))
 
 
-def _value_fingerprint(parameters: "ParameterPayload") -> str:
+def _value_fingerprint(parameters: "ParameterPayload") -> Any:
     """Return a value-based fingerprint for parameter payloads.
-
-    Unlike structural_fingerprint, this includes actual parameter VALUES in the hash.
-    Used for static script compilation where SQL has values embedded directly.
 
     Args:
         parameters: Original parameter payload supplied by the caller.
 
     Returns:
-        Deterministic fingerprint string including parameter values.
+        Hashable representation including parameter values.
     """
     if parameters is None:
-        return "none"
+        return None
 
     # Use repr for value-based hashing - includes both structure and values
-    return f"values:{hash(repr(parameters))}"
+    # Return as tuple to match structural_fingerprint return type (hashable)
+    return ("values", repr(parameters))
 
 
 def _coerce_nested_value(value: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
@@ -212,7 +209,7 @@ class ParameterProcessor:
         cache_max_size: int | None = None,
         validator_cache_max_size: int | None = None,
     ) -> None:
-        self._cache: OrderedDict[str, ParameterProcessingResult] = OrderedDict()
+        self._cache: OrderedDict[Any, ParameterProcessingResult] = OrderedDict()
         if cache_max_size is None:
             cache_max_size = self.DEFAULT_CACHE_SIZE
         self._cache_max_size = max(cache_max_size, 0)
@@ -271,7 +268,7 @@ class ParameterProcessor:
         parameters: "ParameterPayload",
         config: "ParameterStyleConfig",
         is_many: bool,
-        cache_key: str,
+        cache_key: Any | None,
         input_named_parameters: "tuple[str, ...]",
     ) -> "ParameterProcessingResult":
         coerced_params = parameters
@@ -325,8 +322,10 @@ class ParameterProcessor:
             return result
         return None
 
-    def _store_cached_result(self, cache_key: str, result: "ParameterProcessingResult") -> "ParameterProcessingResult":
-        if self._cache_max_size <= 0:
+    def _store_cached_result(
+        self, cache_key: Any | None, result: "ParameterProcessingResult"
+    ) -> "ParameterProcessingResult":
+        if self._cache_max_size <= 0 or cache_key is None:
             return result
         self._cache[cache_key] = result
         self._cache.move_to_end(cache_key)
@@ -501,14 +500,17 @@ class ParameterProcessor:
         dialect: str | None,
         wrap_types: bool,
         normalize_for_parsing: bool,
-    ) -> str:
-        # For static script compilation, we must include actual values in the fingerprint
-        # because the SQL will have values embedded directly (e.g., VALUES (1, 'foo'))
-        if config.needs_static_script_compilation:
-            param_fingerprint = _value_fingerprint(parameters)
-        else:
-            # Use structural fingerprint (keys + types, not values) for better cache hit rates
-            param_fingerprint = _structural_fingerprint(parameters, is_many)
+        *,
+        param_fingerprint: Any | None = None,
+    ) -> tuple[Any, ...]:
+        if param_fingerprint is None:
+            # For static script compilation, we must include actual values in the fingerprint
+            # because the SQL will have values embedded directly (e.g., VALUES (1, 'foo'))
+            if config.needs_static_script_compilation:
+                param_fingerprint = _value_fingerprint(parameters)
+            else:
+                # Use structural fingerprint (keys + types, not values) for better cache hit rates
+                param_fingerprint = _structural_fingerprint(parameters, is_many)
         dialect_marker = dialect or "default"
         # Include both input and execution parameter styles to avoid cache collisions
         # (e.g., MySQL asyncmy uses ? for input but %s for execution)
@@ -516,8 +518,11 @@ class ParameterProcessor:
         exec_style = (
             config.default_execution_parameter_style.value if config.default_execution_parameter_style else input_style
         )
-        # Use blake2b hash of tuple components for compact, deterministic cache keys
-        hash_data = (
+
+        # Optimize: Use tuple as cache key instead of hashing the string representation.
+        # This avoids expensive repr() and blake2b hashing of the SQL string on every call.
+        # Python's dict/OrderedDict handles tuple keys efficiently using hash().
+        return (
             sql,
             param_fingerprint,
             input_style,
@@ -527,7 +532,6 @@ class ParameterProcessor:
             wrap_types,
             normalize_for_parsing,
         )
-        return hashlib.blake2b(repr(hash_data).encode(), digest_size=16).hexdigest()
 
     def process(
         self,
@@ -537,9 +541,17 @@ class ParameterProcessor:
         dialect: str | None = None,
         is_many: bool = False,
         wrap_types: bool = True,
+        param_fingerprint: Any | None = None,
     ) -> "ParameterProcessingResult":
         return self._process_internal(
-            sql, parameters, config, dialect=dialect, is_many=is_many, wrap_types=wrap_types, normalize_for_parsing=True
+            sql,
+            parameters,
+            config,
+            dialect=dialect,
+            is_many=is_many,
+            wrap_types=wrap_types,
+            normalize_for_parsing=True,
+            param_fingerprint=param_fingerprint,
         )
 
     def process_for_execution(
@@ -551,6 +563,7 @@ class ParameterProcessor:
         is_many: bool = False,
         wrap_types: bool = True,
         parsed_expression: Any = None,
+        param_fingerprint: Any | None = None,
     ) -> "ParameterProcessingResult":
         """Process parameters for execution without parse normalization.
 
@@ -575,6 +588,7 @@ class ParameterProcessor:
             wrap_types=wrap_types,
             normalize_for_parsing=False,
             parsed_expression=parsed_expression,
+            param_fingerprint=param_fingerprint,
         )
 
     def _process_internal(
@@ -588,11 +602,20 @@ class ParameterProcessor:
         wrap_types: bool,
         normalize_for_parsing: bool,
         parsed_expression: Any = None,
+        param_fingerprint: Any | None = None,
     ) -> "ParameterProcessingResult":
-        cache_key = self._make_processor_cache_key(
-            sql, parameters, config, is_many, dialect, wrap_types, normalize_for_parsing
-        )
+        cache_key = None
         if self._cache_max_size > 0:
+            cache_key = self._make_processor_cache_key(
+                sql,
+                parameters,
+                config,
+                is_many,
+                dialect,
+                wrap_types,
+                normalize_for_parsing,
+                param_fingerprint=param_fingerprint,
+            )
             cached_result = self._cache.get(cache_key)
             if cached_result is not None:
                 self._cache.move_to_end(cache_key)

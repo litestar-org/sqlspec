@@ -1,5 +1,6 @@
 from sqlspec.core.statement import SQL
 
+
 def test_auto_detect_many_optimization() -> None:
     # Homogeneous list of tuples - should detect
     params = [(1,), (2,), (3,)]

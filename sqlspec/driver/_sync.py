@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core import SQL, ProcessedState, StackResult, create_arrow_result
+from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
@@ -128,6 +128,35 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         # via the fast path in _get_compiled_statement(). This ensures compile()
         # is called exactly once per statement execution.
         compiled_sql, execution_parameters = statement.compile()
+
+        # FAST PATH: Skip all instrumentation if runtime is idle
+        if runtime.is_idle:
+            exc_handler = self.handle_database_exceptions()
+            try:
+                with exc_handler, self.with_cursor(connection) as cursor:
+                    # Logic mirrors the instrumentation path below but without telemetry
+                    if statement.is_script:
+                        execution_result = self.dispatch_execute_script(cursor, statement)
+                        return self.build_statement_result(statement, execution_result)
+                    if statement.is_many:
+                        execution_result = self.dispatch_execute_many(cursor, statement)
+                        return self.build_statement_result(statement, execution_result)
+
+                    # check special handling first
+                    special_result = self.dispatch_special_handling(cursor, statement)
+                    if special_result is not None:
+                        return special_result
+
+                    execution_result = self.dispatch_execute(cursor, statement)
+                    return self.build_statement_result(statement, execution_result)
+            except Exception as exc:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from exc
+                raise
+            finally:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+
         operation = statement.operation_type
         query_context = {
             "sql": compiled_sql,

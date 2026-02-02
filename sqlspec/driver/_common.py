@@ -792,11 +792,14 @@ EXEC_SPECIAL_DATA: Final[int] = 2
 DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
 
 
+_DEFAULT_METADATA: Final = {"status_message": "OK"}
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("_observability", "connection", "driver_features", "statement_config")
+    __slots__ = ("_observability", "_statement_cache", "connection", "driver_features", "statement_config")
     connection: "Any"
     statement_config: "StatementConfig"
     driver_features: "dict[str, Any]"
@@ -821,6 +824,7 @@ class CommonDriverAttributesMixin:
         self.statement_config = statement_config
         self.driver_features = driver_features or {}
         self._observability = observability
+        self._statement_cache: dict[str, SQL] = {}
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Attach or replace the observability runtime."""
@@ -975,19 +979,20 @@ class CommonDriverAttributesMixin:
             ExecutionResult configured for the specified operation type
 
         """
+        # Positional arguments are slightly faster for NamedTuple
         return ExecutionResult(
-            cursor_result=cursor_result,
-            rowcount_override=rowcount_override,
-            special_data=special_data,
-            selected_data=selected_data,
-            column_names=column_names,
-            data_row_count=data_row_count,
-            statement_count=statement_count,
-            successful_statements=successful_statements,
-            is_script_result=is_script_result,
-            is_select_result=is_select_result,
-            is_many_result=is_many_result,
-            last_inserted_id=last_inserted_id,
+            cursor_result,
+            rowcount_override,
+            special_data,
+            selected_data,
+            column_names,
+            data_row_count,
+            statement_count,
+            successful_statements,
+            is_script_result,
+            is_select_result,
+            is_many_result,
+            last_inserted_id,
         )
 
     def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
@@ -1009,7 +1014,7 @@ class CommonDriverAttributesMixin:
                 operation_type="SCRIPT",
                 total_statements=execution_result.statement_count or 0,
                 successful_statements=execution_result.successful_statements or 0,
-                metadata=execution_result.special_data or {"status_message": "OK"},
+                metadata=execution_result.special_data or _DEFAULT_METADATA,
             )
 
         if execution_result.is_select_result:
@@ -1028,7 +1033,7 @@ class CommonDriverAttributesMixin:
             rows_affected=execution_result.rowcount_override or 0,
             operation_type=statement.operation_type,
             last_inserted_id=execution_result.last_inserted_id,
-            metadata=execution_result.special_data or {"status_message": "OK"},
+            metadata=execution_result.special_data or _DEFAULT_METADATA,
         )
 
     def _should_force_select(self, statement: "SQL", cursor: object) -> bool:
@@ -1085,6 +1090,18 @@ class CommonDriverAttributesMixin:
         """
         if statement_config is None:
             statement_config = self.statement_config
+        
+        # FAST PATH: String statement with simple parameters
+        if isinstance(statement, str):
+            cached_sql = self._statement_cache.get(statement)
+            if cached_sql is not None and not kwargs:
+                # Check if parameters contain filters
+                has_filters = any(is_statement_filter(p) for p in parameters)
+                if not has_filters:
+                    # Reuse cached SQL object and just update its parameters
+                    # This avoids SQL.__init__ overhead
+                    return cached_sql.copy(parameters=parameters)
+
         kwargs = kwargs or {}
         filters, data_parameters = self._split_parameters(parameters)
 
@@ -1094,6 +1111,9 @@ class CommonDriverAttributesMixin:
             sql_statement = self._prepare_from_sql(statement, data_parameters, statement_config, kwargs)
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
+            # Cache the newly created SQL object for future use
+            if not filters and not kwargs:
+                self._statement_cache[statement] = sql_statement
 
         return self._apply_filters(sql_statement, filters)
 

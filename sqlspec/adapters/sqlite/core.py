@@ -22,7 +22,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
-from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
+from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -332,7 +332,10 @@ def build_statement_config(
     deserializer = json_deserializer or from_json
     profile = driver_profile
     return build_statement_config_from_profile(
-        profile, statement_overrides={"dialect": "sqlite"}, json_serializer=serializer, json_deserializer=deserializer
+        profile,
+        statement_overrides={"dialect": "sqlite", "enable_parameter_type_wrapping": False},
+        json_serializer=serializer,
+        json_deserializer=deserializer,
     )
 
 

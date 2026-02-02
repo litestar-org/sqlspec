@@ -58,6 +58,16 @@ class ObservabilityRuntime:
         self._metrics: dict[str, float] = {}
 
     @property
+    def is_idle(self) -> bool:
+        """Return True when no observability features are active.
+
+        A runtime is idle if it has no lifecycle hooks, no statement observers,
+        and telemetry spans are disabled. Drivers can use this to skip
+        expensive context construction.
+        """
+        return not self.lifecycle.is_enabled and not self._statement_observers and not self.span_manager.is_enabled
+
+    @property
     def has_statement_observers(self) -> bool:
         """Return True when any observers are registered."""
 
@@ -266,6 +276,9 @@ class ObservabilityRuntime:
 
     def start_query_span(self, sql: str, operation: str, driver: str) -> Any:
         """Start a query span with runtime metadata."""
+
+        if not self.span_manager.is_enabled:
+            return None
 
         sql_hash = compute_sql_hash(sql)
         connection_info = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}

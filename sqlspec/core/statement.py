@@ -92,6 +92,7 @@ SQL_CONFIG_SLOTS: Final = (
     "parameter_converter",
     "parameter_validator",
     "_fingerprint_cache",
+    "_hash_cache",
     "_is_frozen",
 )
 
@@ -308,6 +309,38 @@ class SQL:
         return [p for p in parameters if is_statement_filter(p)]
 
     def _normalize_parameters(self, parameters: "tuple[Any, ...]") -> None:
+        if not parameters:
+            return
+
+        # Optimization: Fast path for single parameter (most common case)
+        if len(parameters) == 1:
+            param = parameters[0]
+            # Fast check for simple types before filter check
+            if isinstance(param, (str, int, float, bool)) or param is None:
+                self._positional_parameters.append(param)
+                return
+
+            if is_statement_filter(param):
+                return
+
+            if isinstance(param, dict):
+                self._named_parameters.update(param)
+            elif isinstance(param, (list, tuple)):
+                if self._is_many:
+                    self._positional_parameters = list(param)
+                else:
+                    self._positional_parameters.extend(param)
+            else:
+                self._positional_parameters.append(param)
+            return
+
+        # Multiple parameters: check for filters
+        # O(N) check only if we have more than 1 param
+        has_filter = any(is_statement_filter(p) for p in parameters)
+        if not has_filter:
+            self._positional_parameters.extend(parameters)
+            return
+
         actual_params = [p for p in parameters if not is_statement_filter(p)]
         if not actual_params:
             return
@@ -558,6 +591,12 @@ class SQL:
         Returns:
             New SQL instance with modifications applied
         """
+        # FAST PATH: Only parameters are changing
+        if statement is None and not kwargs and parameters is not None and not isinstance(parameters, (str, bytes)):
+            new_sql = self._create_empty_copy()
+            new_sql._process_parameters(*(parameters if isinstance(parameters, tuple) else (parameters,)))
+            return new_sql
+
         statement_expression = self._raw_expression if statement is None else statement
         new_sql = SQL(
             statement_expression or self._raw_sql,
@@ -572,7 +611,32 @@ class SQL:
         new_sql._filters = self._filters.copy()
         return new_sql
 
+    def _create_empty_copy(self) -> "SQL":
+        """Create a shell copy with shared immutable state but empty mutable state."""
+        # Use __new__ to bypass __init__
+        new_sql = SQL.__new__(SQL)
+        new_sql._raw_sql = self._raw_sql
+        new_sql._raw_expression = self._raw_expression
+        new_sql._statement_config = self._statement_config
+        new_sql._dialect = self._dialect
+        new_sql._is_many = self._is_many
+        new_sql._is_script = self._is_script
+        new_sql._original_parameters = ()
+
+        # Reset mutable state
+        new_sql._processed_state = Empty
+        new_sql._hash = None
+        new_sql._filters = self._filters.copy()
+        new_sql._named_parameters = {}
+        new_sql._positional_parameters = []
+        new_sql._sql_param_counters = self._sql_param_counters.copy()
+
+        return new_sql
+
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
+        import traceback
+
+        traceback.print_exc()
         logger.debug("Processing failed, using fallback: %s", error)
         return ProcessedState(
             compiled_sql=self._raw_sql,
@@ -1419,7 +1483,8 @@ class StatementConfig:
             self.statement_transformers = tuple(statement_transformers)
         else:
             self.statement_transformers = ()
-        self._fingerprint_cache: "str | None" = None
+        self._fingerprint_cache: str | None = None
+        self._hash_cache: int | None = None
         self._is_frozen = False
 
     def freeze(self) -> None:
@@ -1463,21 +1528,23 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_column_pruning,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            str(self.dialect),
-            self.parameter_config.hash(),
-            self.execution_mode,
-            self.output_transformer,
-            self.statement_transformers,
-        ))
+        if self._hash_cache is None:
+            self._hash_cache = hash((
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_column_pruning,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                str(self.dialect),
+                self.parameter_config.hash(),
+                self.execution_mode,
+                self.output_transformer,
+                self.statement_transformers,
+            ))
+        return self._hash_cache
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""
