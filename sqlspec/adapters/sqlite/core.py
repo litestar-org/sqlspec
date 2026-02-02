@@ -121,9 +121,11 @@ def resolve_rowcount(cursor: Any) -> int:
     Returns:
         Positive rowcount value or 0 when unknown.
     """
-    if not has_rowcount(cursor):
+    try:
+        rowcount = cursor.rowcount
+    except AttributeError:
         return 0
-    rowcount = cursor.rowcount
+
     if isinstance(rowcount, int) and rowcount > 0:
         return rowcount
     return 0
