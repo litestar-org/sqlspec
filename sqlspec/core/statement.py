@@ -275,7 +275,12 @@ class SQL:
         """
         if len(parameters) == 1 and isinstance(parameters[0], list):
             param_list = parameters[0]
-            if param_list and all(isinstance(item, (tuple, list)) for item in param_list):
+            if not param_list:
+                return False
+            # Optimization: Check only the first element for batch structure
+            # O(1) check instead of O(N) scan
+            first_item = param_list[0]
+            if isinstance(first_item, (tuple, list, dict)):
                 return len(param_list) > 1
         return False
 
