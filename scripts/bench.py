@@ -1,22 +1,22 @@
-#!/usr/bin/env python
 import asyncio
-from asyncpg import connect
 import inspect
 import os
+import sqlite3
+import tempfile
+import time
 from typing import Any
+
+import click
+from asyncpg import connect
 from rich.console import Console
 from rich.table import Table
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine
-from  sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
+
+from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.adapters.sqlite import SqliteConfig
 
-
-import sqlite3
-import tempfile
-import time
-import click
 
 @click.command()
 @click.option(
@@ -41,9 +41,6 @@ def main(driver: tuple[str, ...]) -> None:
         for err in errors:
             click.secho(f"Error: {err}", fg="red")
     click.echo(f"Benchmarks complete for drivers: {', '.join(driver)}")
-
-
-
 
 
 def run_benchmark(driver: str, errors: list[str]) -> list[dict[str, Any]]:
@@ -88,13 +85,13 @@ CREATE_TEST_TABLE = "CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT);"
 INSERT_TEST_VALUE = "INSERT INTO test (value) VALUES (?);"
 INSERT_TEST_VALUE_SQLA = "INSERT INTO test (value) VALUES (:value);"
 
-def raw_sqlite_initialization():
+def raw_sqlite_initialization()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
         conn.execute(CREATE_TEST_TABLE)
         conn.close()
 
-def raw_sqlite_write_heavy():
+def raw_sqlite_write_heavy()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
         conn.execute(CREATE_TEST_TABLE)
@@ -103,7 +100,7 @@ def raw_sqlite_write_heavy():
         conn.commit()
         conn.close()
 
-def raw_sqlite_read_heavy():
+def raw_sqlite_read_heavy()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
         conn.execute(CREATE_TEST_TABLE)
@@ -115,14 +112,14 @@ def raw_sqlite_read_heavy():
         assert len(rows) == 10000
         conn.close()
 
-def sqlspec_sqlite_initialization():
+def sqlspec_sqlite_initialization()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
         config = SqliteConfig(database=tmp.name)
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
 
-def sqlspec_sqlite_write_heavy():
+def sqlspec_sqlite_write_heavy()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
         config = SqliteConfig(database=tmp.name)
@@ -131,7 +128,7 @@ def sqlspec_sqlite_write_heavy():
             for i in range(10000):
                 session.execute(INSERT_TEST_VALUE, f"value_{i}")
 
-def sqlspec_sqlite_read_heavy():
+def sqlspec_sqlite_read_heavy()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
         config = SqliteConfig(database=tmp.name)
@@ -142,14 +139,14 @@ def sqlspec_sqlite_read_heavy():
             rows = session.fetch("SELECT * FROM test;")
             assert len(rows) == 10000
 
-def sqlalchemy_sqlite_initialization():
+def sqlalchemy_sqlite_initialization()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         engine = create_engine(f"sqlite:///{tmp.name}")
         conn = engine.connect()
         conn.execute(text(CREATE_TEST_TABLE))
         conn.close()
 
-def sqlalchemy_sqlite_write_heavy():
+def sqlalchemy_sqlite_write_heavy()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         engine = create_engine(f"sqlite:///{tmp.name}")
         conn = engine.connect()
@@ -158,7 +155,7 @@ def sqlalchemy_sqlite_write_heavy():
             conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
         conn.close()
 
-def sqlalchemy_sqlite_read_heavy():
+def sqlalchemy_sqlite_read_heavy()-> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         engine = create_engine(f"sqlite:///{tmp.name}")
         conn = engine.connect()
@@ -171,14 +168,14 @@ def sqlalchemy_sqlite_read_heavy():
         conn.close()
 
 # Asyncpg implementations
-async def raw_asyncpg_initialization():
+async def raw_asyncpg_initialization()-> None:
     dsn = os.environ.get("ASYNC_PG_DSN", "postgresql://postgres:postgres@localhost/postgres")
     conn = await connect(dsn=dsn)
     await conn.execute(CREATE_TEST_TABLE)
     # truncate table to ensure clean state
     await conn.close()
 
-async def raw_asyncpg_write_heavy():
+async def raw_asyncpg_write_heavy()-> None:
     dsn = os.environ.get("ASYNC_PG_DSN", "postgresql://postgres:postgres@localhost/postgres")
     conn = await connect(dsn=dsn)
     for i in range(10000):
@@ -192,42 +189,42 @@ async def raw_asyncpg_read_heavy():
     assert len(rows) == 20000
     await conn.close()
 
-async def sqlspec_asyncpg_initialization():
+async def sqlspec_asyncpg_initialization()-> None:
     sqlec = SQLSpec()
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://postgres:postgres@localhost/postgres"})
     async with sqlec.provide_session(config) as session:
         await session.execute(CREATE_TEST_TABLE)
-async def sqlspec_asyncpg_write_heavy():
+
+async def sqlspec_asyncpg_write_heavy()->None:
     sqlec = SQLSpec()
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://postgres:postgres@localhost/postgres"})
     async with sqlec.provide_session(config) as session:
         for i in range(10000):
             await session.execute(INSERT_TEST_VALUE, f"value_{i}")
 
-async def sqlspec_asyncpg_read_heavy():
+async def sqlspec_asyncpg_read_heavy()->None:
     sqlec = SQLSpec()
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://postgres:postgres@localhost/postgres"})
     async with sqlec.provide_session(config) as session:
         rows = await session.fetch("SELECT * FROM test;")
-        print(len(rows))
         assert len(rows) == 0
 
-async def sqlalchemy_asyncpg_initialization():
+async def sqlalchemy_asyncpg_initialization()->None:
     engine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost/postgres")
     async with engine.connect() as conn:
         await conn.execute(text(CREATE_TEST_TABLE))
-async def sqlalchemy_asyncpg_write_heavy():
+
+async def sqlalchemy_asyncpg_write_heavy() -> None:
     engine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost/postgres")
     async with engine.connect() as conn:
         for i in range(10000):
             await conn.execute(text(INSERT_TEST_VALUE), {"value": f"value_{i}"})
 
-async def sqlalchemy_asyncpg_read_heavy():
+async def sqlalchemy_asyncpg_read_heavy()-> None:
     engine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost/postgres")
     async with engine.begin() as conn:
         result = await conn.execute(text("SELECT * FROM test;"))
         rows = result.fetchall()
-        print(len(rows))
         assert len(rows) == 0
 
 SCENARIO_REGISTRY = {
@@ -253,7 +250,7 @@ SCENARIO_REGISTRY = {
     # ("sqlalchemy", "asyncpg", "read_heavy"): sqlalchemy_asyncpg_read_heavy,
 }
 
-def print_benchmark_table(results):
+def print_benchmark_table(results: list[dict[str, Any]]) -> None:
     console = Console()
     table = Table(title="Benchmark Results")
     table.add_column("Driver", style="cyan", no_wrap=True)
@@ -277,10 +274,7 @@ def print_benchmark_table(results):
             percent_slower = "—"
         else:
             raw_time = raw_times.get((driver, scenario))
-            if raw_time and raw_time > 0:
-                percent_slower = f"{100 * (t - raw_time) / raw_time:.1f}%"
-            else:
-                percent_slower = "n/a"
+            percent_slower = f"{100 * (t - raw_time) / raw_time:.1f}%" if raw_time and raw_time > 0 else "n/a"
         table.add_row(
             driver,
             lib,
