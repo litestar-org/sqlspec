@@ -1526,13 +1526,19 @@ class StatementConfig:
         )
 
 
+_DEFAULT_CONFIG: "StatementConfig | None" = None
+
+
 def get_default_config() -> StatementConfig:
     """Get default statement configuration.
 
     Returns:
-        StatementConfig with default settings
+        Cached StatementConfig singleton with default settings.
     """
-    return StatementConfig()
+    global _DEFAULT_CONFIG
+    if _DEFAULT_CONFIG is None:
+        _DEFAULT_CONFIG = StatementConfig()
+    return _DEFAULT_CONFIG
 
 
 def get_default_parameter_config() -> ParameterStyleConfig:
