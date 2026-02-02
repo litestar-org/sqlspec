@@ -614,6 +614,37 @@ def test_sql_copy_creates_new_instance() -> None:
     assert copy_stmt._raw_sql == original._raw_sql
 
 
+def test_sql_compiled_from_cache_flag_default_false() -> None:
+    """New SQL instances should not be marked as compiled from cache."""
+    stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
+
+    assert stmt._compiled_from_cache is False
+
+
+def test_sql_copy_sets_compiled_from_cache_flag_on_processed_state() -> None:
+    """Parameter-only copies should mark cache flag when state is present."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    original._processed_state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+    )
+
+    copy_stmt = original.copy(parameters=[2])
+
+    assert copy_stmt._compiled_from_cache is True
+
+
+def test_sql_copy_does_not_set_compiled_from_cache_without_state() -> None:
+    """Parameter-only copies should not set cache flag without state."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+
+    copy_stmt = original.copy(parameters=[2])
+
+    assert copy_stmt._compiled_from_cache is False
+
+
 def test_sql_as_script_creates_new_instance() -> None:
     """Test SQL.as_script() creates new immutable instance."""
     original = SQL("SELECT * FROM users")

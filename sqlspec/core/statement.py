@@ -156,6 +156,7 @@ class SQL:
     """
 
     __slots__ = (
+        "_compiled_from_cache",
         "_dialect",
         "_filters",
         "_hash",
@@ -194,6 +195,7 @@ class SQL:
         config = statement_config or self._create_auto_config(statement, parameters, kwargs)
         self._statement_config = config
         self._dialect = self._normalize_dialect(config.dialect)
+        self._compiled_from_cache = False
         self._processed_state: EmptyEnum | ProcessedState = Empty
         self._hash: int | None = None
         self._filters: list[StatementFilter] = []
@@ -624,6 +626,7 @@ class SQL:
         new_sql._original_parameters = ()
 
         # Reset mutable state
+        new_sql._compiled_from_cache = self._processed_state is not Empty
         new_sql._processed_state = Empty
         new_sql._hash = None
         new_sql._filters = self._filters.copy()
