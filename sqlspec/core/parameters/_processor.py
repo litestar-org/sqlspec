@@ -40,19 +40,30 @@ def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = Fals
 
     Returns a hashable tuple representing the structure (keys, types, count).
     Avoids string formatting for performance.
+
+    Note: Uses Python 3.7+ dict insertion order instead of sorted() for determinism.
+    This means fingerprints depend on the order keys were inserted, which is typically
+    consistent within a single codebase.
     """
     if parameters is None:
         return None
 
-    if isinstance(parameters, Mapping):
+    # Fast type dispatch: check concrete types first (2-4x faster than ABC isinstance)
+    param_type = type(parameters)
+
+    # Handle dict (most common Mapping type) - fast path
+    if param_type is dict:
         if not parameters:
             return ("dict",)
-        sorted_keys = tuple(sorted(parameters.keys()))
-        # Use type objects directly instead of __name__ to avoid attribute access overhead
-        type_sig = tuple(type(v) for k, v in sorted(parameters.items()))
-        return ("dict", sorted_keys, type_sig)
+        # Use dict insertion order (Python 3.7+ guaranteed) instead of sorted()
+        # This is O(n) vs O(n log n) and produces consistent fingerprints for
+        # parameters constructed in the same order (typical usage pattern)
+        keys = tuple(parameters.keys())
+        type_sig = tuple(type(v) for v in parameters.values())
+        return ("dict", keys, type_sig)
 
-    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+    # Handle list and tuple (most common Sequence types) - fast path
+    if param_type is list or param_type is tuple:
         if not parameters:
             return ("seq",)
 
@@ -61,38 +72,80 @@ def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = Fals
             return ("seq", (type(parameters[0]),))
 
         if is_many:
-            # For large execute_many, sample first few records + count
-            param_count = len(parameters)
-            sample_size = (
-                min(_EXECUTE_MANY_SAMPLE_SIZE, param_count)
-                if param_count > _EXECUTE_MANY_SAMPLE_THRESHOLD
-                else param_count
-            )
-            first = parameters[0] if parameters else None
-
-            if isinstance(first, Mapping):
-                sorted_keys = tuple(sorted(first.keys()))
-                type_sig = tuple(type(v) for k, v in sorted(first.items()))
-                return ("many_dict", sorted_keys, type_sig, param_count)
-
-            if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
-                # Sample types from first few records for consistency check
-                type_sigs: list[tuple[type, ...]] = []
-                for i in range(sample_size):
-                    param_item: Any = parameters[i]
-                    type_sigs.append(tuple(type(v) for v in param_item))
-                return ("many_seq", tuple(type_sigs), param_count)
-
-            # Scalar values in sequence for execute_many
-            type_sig = tuple(type(parameters[i]) for i in range(sample_size))
-            return ("many_scalar", type_sig, param_count)
+            return _fingerprint_execute_many(parameters)
 
         # Single execution with sequence parameters
         type_sig = tuple(type(v) for v in parameters)
         return ("seq", type_sig)
 
+    # Fallback to ABC checks for custom types (Mapping, Sequence subclasses)
+    if isinstance(parameters, Mapping):
+        if not parameters:
+            return ("dict",)
+        keys = tuple(parameters.keys())
+        type_sig = tuple(type(v) for v in parameters.values())
+        return ("dict", keys, type_sig)
+
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+        if not parameters:
+            return ("seq",)
+
+        if len(parameters) == 1:
+            return ("seq", (type(parameters[0]),))
+
+        if is_many:
+            return _fingerprint_execute_many(parameters)
+
+        type_sig = tuple(type(v) for v in parameters)
+        return ("seq", type_sig)
+
     # Scalar parameter
-    return ("scalar", type(parameters))
+    return ("scalar", param_type)
+
+
+def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
+    """Generate fingerprint for execute_many parameters.
+
+    Extracted to reduce code duplication and allow inlining of the common single-execution path.
+    """
+    param_count = len(parameters)
+    sample_size = (
+        min(_EXECUTE_MANY_SAMPLE_SIZE, param_count)
+        if param_count > _EXECUTE_MANY_SAMPLE_THRESHOLD
+        else param_count
+    )
+    first = parameters[0]
+    first_type = type(first)
+
+    # Fast type dispatch for first element
+    if first_type is dict:
+        keys = tuple(first.keys())
+        type_sig = tuple(type(v) for v in first.values())
+        return ("many_dict", keys, type_sig, param_count)
+
+    if first_type is list or first_type is tuple:
+        type_sigs: list[tuple[type, ...]] = []
+        for i in range(sample_size):
+            param_item: Any = parameters[i]
+            type_sigs.append(tuple(type(v) for v in param_item))
+        return ("many_seq", tuple(type_sigs), param_count)
+
+    # Fallback to ABC checks
+    if isinstance(first, Mapping):
+        keys = tuple(first.keys())
+        type_sig = tuple(type(v) for v in first.values())
+        return ("many_dict", keys, type_sig, param_count)
+
+    if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
+        type_sigs = []
+        for i in range(sample_size):
+            param_item = parameters[i]
+            type_sigs.append(tuple(type(v) for v in param_item))
+        return ("many_seq", tuple(type_sigs), param_count)
+
+    # Scalar values in sequence for execute_many
+    type_sig = tuple(type(parameters[i]) for i in range(sample_size))
+    return ("many_scalar", type_sig, param_count)
 
 
 def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> str:
@@ -145,10 +198,12 @@ def _value_fingerprint(parameters: "ParameterPayload") -> Any:
 
 
 def _coerce_nested_value(value: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
-    if isinstance(value, (list, tuple)) and not isinstance(value, (str, bytes)):
-        return [_coerce_parameter_value(item, type_coercion_map) for item in value]
-    if isinstance(value, dict):
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in value.items()}
+    # Fast type dispatch for common types
+    value_type = type(value)
+    if value_type is list or value_type is tuple:
+        return [_coerce_parameter_value(item, type_coercion_map) for item in value]  # type: ignore[union-attr]
+    if value_type is dict:
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in value.items()}  # type: ignore[union-attr]
     return value
 
 
@@ -156,17 +211,19 @@ def _coerce_parameter_value(value: object, type_coercion_map: "dict[type, Callab
     if value is None:
         return value
 
-    if isinstance(value, TypedParameter):
-        wrapped_value: object = value.value
+    value_type = type(value)
+    # Fast path: check TypedParameter by type identity (2-4x faster than isinstance)
+    if value_type is TypedParameter:
+        typed_param: TypedParameter = value  # type: ignore[assignment]
+        wrapped_value: object = typed_param.value
         if wrapped_value is None:
             return wrapped_value
-        original_type = value.original_type
+        original_type = typed_param.original_type
         if original_type in type_coercion_map:
             coerced = type_coercion_map[original_type](wrapped_value)
             return _coerce_nested_value(coerced, type_coercion_map)
         return wrapped_value
 
-    value_type = type(value)
     if value_type in type_coercion_map:
         coerced = type_coercion_map[value_type](value)
         return _coerce_nested_value(coerced, type_coercion_map)
@@ -174,6 +231,13 @@ def _coerce_parameter_value(value: object, type_coercion_map: "dict[type, Callab
 
 
 def _coerce_parameter_set(param_set: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
+    # Fast type dispatch for common types
+    param_type = type(param_set)
+    if param_type is list or param_type is tuple:
+        return [_coerce_parameter_value(item, type_coercion_map) for item in param_set]  # type: ignore[union-attr]
+    if param_type is dict:
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in param_set.items()}  # type: ignore[union-attr]
+    # Fallback to ABC checks for custom types
     if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
         return [_coerce_parameter_value(item, type_coercion_map) for item in param_set]
     if isinstance(param_set, Mapping):
@@ -184,6 +248,15 @@ def _coerce_parameter_set(param_set: object, type_coercion_map: "dict[type, Call
 def _coerce_parameters_payload(
     parameters: "ParameterPayload", type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool
 ) -> object:
+    # Fast type dispatch for common types
+    param_type = type(parameters)
+    if param_type is list or param_type is tuple:
+        if is_many:
+            return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in parameters]  # type: ignore[union-attr]
+        return [_coerce_parameter_value(item, type_coercion_map) for item in parameters]  # type: ignore[union-attr]
+    if param_type is dict:
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in parameters.items()}  # type: ignore[union-attr]
+    # Fallback to ABC checks for custom types
     if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
         return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in parameters]
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
@@ -298,6 +371,13 @@ class ParameterProcessor:
         return config.default_execution_parameter_style or config.default_parameter_style
 
     def _wrap_parameter_types(self, parameters: "ParameterPayload") -> "ConvertedParameters":
+        # Fast type dispatch for common types
+        param_type = type(parameters)
+        if param_type is list or param_type is tuple:
+            return [wrap_with_type(p) for p in parameters]  # type: ignore[union-attr]
+        if param_type is dict:
+            return {k: wrap_with_type(v) for k, v in parameters.items()}  # type: ignore[union-attr]
+        # Fallback to ABC checks for custom types
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             return [wrap_with_type(p) for p in parameters]
         if isinstance(parameters, Mapping):
@@ -311,15 +391,16 @@ class ParameterProcessor:
         is_many: bool = False,
     ) -> "ConvertedParameters":
         result = _coerce_parameters_payload(parameters, type_coercion_map, is_many)
-        # Type narrow the result - _coerce_parameters_payload returns object but we know it produces concrete types
+        # Fast type narrowing - _coerce_parameters_payload returns object but produces concrete types
         if result is None:
             return None
-        if isinstance(result, dict):
-            return result
-        if isinstance(result, list):
-            return result
-        if isinstance(result, tuple):
-            return result
+        result_type = type(result)
+        if result_type is dict:
+            return result  # type: ignore[return-value]
+        if result_type is list:
+            return result  # type: ignore[return-value]
+        if result_type is tuple:
+            return result  # type: ignore[return-value]
         return None
 
     def _store_cached_result(
@@ -408,11 +489,24 @@ class ParameterProcessor:
         if not named_order:
             return parameters
 
-        if is_many and isinstance(parameters, (list, tuple)):
+        param_type = type(parameters)
+
+        if is_many and (param_type is list or param_type is tuple):
             # Process each row in execute_many
             result: list[Any] = []
-            for row in parameters:
-                if isinstance(row, Mapping):
+            for row in parameters:  # type: ignore[union-attr]
+                row_type = type(row)
+                if row_type is dict:
+                    if strict:
+                        missing = [name for name in named_order if name not in row]
+                        if missing:
+                            from sqlspec.exceptions import SQLSpecError
+
+                            msg = f"Missing required parameters: {missing}"
+                            raise SQLSpecError(msg)
+                    result.append(tuple(row.get(name) for name in named_order))
+                elif isinstance(row, Mapping):
+                    # Fallback for custom Mapping types
                     if strict:
                         missing = [name for name in named_order if name not in row]
                         if missing:
@@ -425,6 +519,17 @@ class ParameterProcessor:
                     result.append(row)
             return result
 
+        if param_type is dict:
+            if strict:
+                missing = [name for name in named_order if name not in parameters]  # type: ignore[operator]
+                if missing:
+                    from sqlspec.exceptions import SQLSpecError
+
+                    msg = f"Missing required parameters: {missing}"
+                    raise SQLSpecError(msg)
+            return tuple(parameters.get(name) for name in named_order)  # type: ignore[union-attr]
+
+        # Fallback for custom Mapping types
         if isinstance(parameters, Mapping):
             if strict:
                 missing = [name for name in named_order if name not in parameters]
@@ -460,6 +565,22 @@ class ParameterProcessor:
         if not looks_many:
             return False
 
+        # Fast type dispatch for common types
+        payload_type = type(payload)
+        if payload_type is dict:
+            return True
+
+        if payload_type is list or payload_type is tuple:
+            # Check if any item is a dict (fast path) or Mapping (fallback)
+            for item in payload:  # type: ignore[union-attr]
+                item_type = type(item)
+                if item_type is dict:
+                    return True
+                if isinstance(item, Mapping):
+                    return True
+            return False
+
+        # Fallback for custom types
         if isinstance(payload, Mapping):
             return True
 

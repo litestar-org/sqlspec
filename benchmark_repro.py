@@ -1,46 +1,49 @@
-import time
 import sqlite3
 import tempfile
+import time
 from pathlib import Path
+
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 ROWS = 10000
 RUNS = 10
 
+
 # -------------------------
 # Raw sqlite3 benchmark
 # -------------------------
-def bench_raw_sqlite(db_path: Path):
+def bench_raw_sqlite(db_path: Path) -> None:
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    cur.execute(
-        "create table if not exists notes (id integer primary key, body text)"
-    )
+    cur.execute("create table if not exists notes (id integer primary key, body text)")
     conn.commit()
     for i in range(ROWS):
-        cur.execute(
-            "insert into notes (body) values (?)", (f"note {i}",),
-        )
+        cur.execute("insert into notes (body) values (?)", (f"note {i}",))
     conn.commit()
     conn.close()
+
+
+from sqlspec.observability import LoggingConfig, ObservabilityConfig, TelemetryConfig
+
 
 # -------------------------
 # SQLSpec benchmark
 # -------------------------
-def bench_sqlspec(db_path: Path):
-    spec = SQLSpec()
-    config = spec.add_config(
-        SqliteConfig(connection_config={"database": str(db_path)})
+def bench_sqlspec(db_path: Path) -> None:
+    # Disable all observability for pure performance measurement
+    obs_config = ObservabilityConfig(
+        telemetry=TelemetryConfig(enable_spans=False),
+        logging=LoggingConfig(include_sql_hash=False, include_trace_context=False),
+        print_sql=False,
     )
+    spec = SQLSpec(observability_config=obs_config)
+    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
     with spec.provide_session(config) as session:
-        session.execute(
-            "create table if not exists notes (id integer primary key, body text)"
-        )
+        session.execute("create table if not exists notes (id integer primary key, body text)")
         for i in range(ROWS):
-            session.execute(
-                "insert into notes (body) values (?)", (f"note {i}",),
-            )
+            session.execute("insert into notes (body) values (?)", (f"note {i}",))
+
 
 # -------------------------
 # Timing helper
@@ -58,22 +61,55 @@ def run_benchmark(fn, label):
             fn(db_path)
             elapsed = time.perf_counter() - start
             times.append(elapsed)
-    
-    avg = sum(times) / len(times)
-    print(f"{label:<15} avg over {RUNS} runs: {avg:.4f}s")
-    return avg
+
+    return sum(times) / len(times)
+
+
+import cProfile
+import pstats
+from pathlib import Path
+
+__all__ = ("bench_raw_sqlite", "bench_sqlspec", "bench_sqlspec_dict", "run_benchmark")
+
+
+# -------------------------
+# SQLSpec benchmark with dict parameters
+# -------------------------
+def bench_sqlspec_dict(db_path: Path) -> None:
+    """Benchmark with dict parameters to test sorted() removal."""
+    # Disable all observability for pure performance measurement
+    obs_config = ObservabilityConfig(
+        telemetry=TelemetryConfig(enable_spans=False),
+        logging=LoggingConfig(include_sql_hash=False, include_trace_context=False),
+        print_sql=False,
+    )
+    spec = SQLSpec(observability_config=obs_config)
+    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    with spec.provide_session(config) as session:
+        session.execute("create table if not exists notes (id integer primary key, body text)")
+        for i in range(ROWS):
+            session.execute("insert into notes (body) values (:body)", {"body": f"note {i}"})
+
+
+ROWS = 10000
+RUNS = 5  # Reduced for profiling
+
+# ... (rest of the functions remain same)
 
 # -------------------------
 # Main
 # -------------------------
 if __name__ == "__main__":
-    print(f"Benchmark: create table + insert {ROWS:,} rows\n")
+    with tempfile.TemporaryDirectory() as d:
+        db_path = Path(d) / "profile.db"
+        profiler = cProfile.Profile()
+        profiler.enable()
+        bench_sqlspec(db_path)
+        profiler.disable()
+        stats = pstats.Stats(profiler).sort_stats("tottime")
+        stats.print_stats(30)
+
     raw_time = run_benchmark(bench_raw_sqlite, "raw sqlite3")
     sqlspec_time = run_benchmark(bench_sqlspec, "sqlspec")
-    
+
     slowdown = sqlspec_time / raw_time
-    print("\nSummary")
-    print("-------")
-    print(f"raw sqlite3 : {raw_time:.4f}s")
-    print(f"sqlspec     : {sqlspec_time:.4f}s")
-    print(f"slowdown    : {slowdown:.2f}x")

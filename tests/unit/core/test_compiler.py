@@ -308,30 +308,37 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
     are based on parameter STRUCTURE (types, keys) not VALUES. Same SQL with same
     parameter structure produces the same cache key regardless of actual values.
     """
+    from sqlspec.core.parameters import _structural_fingerprint
+
     processor = SQLProcessor(basic_statement_config)
 
+    # _make_cache_key expects a precomputed fingerprint, not raw params
     # Same SQL and parameter structure = same key
-    key1 = processor._make_cache_key("SELECT * FROM users", [123])
-    key2 = processor._make_cache_key("SELECT * FROM users", [123])
+    fp1 = _structural_fingerprint([123])
+    key1 = processor._make_cache_key("SELECT * FROM users", fp1)
+    key2 = processor._make_cache_key("SELECT * FROM users", fp1)
     assert key1 == key2
 
     # Different SQL = different key
-    key3 = processor._make_cache_key("SELECT * FROM posts", [123])
+    key3 = processor._make_cache_key("SELECT * FROM posts", fp1)
     assert key1 != key3
 
     # Same SQL with same parameter STRUCTURE (list of one int) = SAME key (structural fingerprinting)
-    key4 = processor._make_cache_key("SELECT * FROM users", [456])
+    fp4 = _structural_fingerprint([456])
+    key4 = processor._make_cache_key("SELECT * FROM users", fp4)
     assert key1 == key4  # Structural fingerprinting: same structure = same key
 
     # Different parameter STRUCTURE = different key
-    key5 = processor._make_cache_key("SELECT * FROM users", {"id": 123})  # dict vs list
+    fp5 = _structural_fingerprint({"id": 123})  # dict vs list
+    key5 = processor._make_cache_key("SELECT * FROM users", fp5)
     assert key1 != key5
 
-    key6 = processor._make_cache_key("SELECT * FROM users", [123, "extra"])  # different type signature
+    fp6 = _structural_fingerprint([123, "extra"])  # different type signature
+    key6 = processor._make_cache_key("SELECT * FROM users", fp6)
     assert key1 != key6
 
-    assert isinstance(key1, str)
-    assert key1.startswith("sql_")
+    # Cache keys are now tuples for better performance
+    assert isinstance(key1, tuple)
 
 
 def test_cache_eviction(basic_statement_config: "StatementConfig") -> None:
@@ -792,9 +799,11 @@ def test_memory_efficiency_with_slots() -> None:
 
     expected_slots = {
         "_hash",
+        "applied_wrap_types",
         "compiled_sql",
         "execution_parameters",
         "expression",
+        "input_named_parameters",
         "operation_type",
         "operation_profile",
         "parameter_casts",
@@ -820,6 +829,11 @@ def test_processor_memory_efficiency_with_slots() -> None:
         "_cache_hits",
         "_cache_misses",
         "_config",
+        "_dialect_str",
+        "_exec_style",
+        "_input_style",
+        "_last_cache_key",
+        "_last_result",
         "_max_cache_size",
         "_parameter_processor",
         "_parse_cache",

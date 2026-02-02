@@ -23,6 +23,7 @@ class ObservabilityRuntime:
     """Aggregates dispatchers, observers, spans, and custom metrics."""
 
     __slots__ = (
+        "_is_idle_cached",
         "_metrics",
         "_redaction",
         "_statement_observers",
@@ -56,6 +57,9 @@ class ObservabilityRuntime:
         self._statement_observers = tuple(observers)
         self._redaction = config.redaction.copy() if config.redaction else None
         self._metrics: dict[str, float] = {}
+        # Pre-compute the non-span idle state (lifecycle and observers are immutable)
+        # span_manager can be replaced for testing so we check it separately
+        self._is_idle_cached = not self.lifecycle.is_enabled and not self._statement_observers
 
     @property
     def is_idle(self) -> bool:
@@ -65,7 +69,9 @@ class ObservabilityRuntime:
         and telemetry spans are disabled. Drivers can use this to skip
         expensive context construction.
         """
-        return not self.lifecycle.is_enabled and not self._statement_observers and not self.span_manager.is_enabled
+        # Fast path: lifecycle and observers state is cached (immutable after init)
+        # span_manager is checked each time as it can be replaced for testing
+        return self._is_idle_cached and not self.span_manager.is_enabled
 
     @property
     def has_statement_observers(self) -> bool:

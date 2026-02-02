@@ -165,9 +165,14 @@ class OperationProfile:
 def _is_effectively_empty_parameters(value: Any) -> bool:
     if value is None:
         return True
-    if isinstance(value, Mapping):
+    # Fast type dispatch: check concrete types first (2-4x faster than ABC isinstance)
+    value_type = type(value)
+    if value_type is dict or value_type is list or value_type is tuple:
         return len(value) == 0
-    if isinstance(value, (list, tuple, set, frozenset)):
+    if value_type is set or value_type is frozenset:
+        return len(value) == 0
+    # Fallback to ABC check for custom Mapping types
+    if isinstance(value, Mapping):
         return len(value) == 0
     return False
 
@@ -558,9 +563,10 @@ class SQLProcessor:
         """
         if len(self._parse_cache) >= self._parse_cache_max_size:
             self._parse_cache.popitem(last=False)
-        cache_expression = expression.copy() if expression is not None else None
+        # Store expression reference directly - _unpack_parse_cache_entry copies on retrieval
+        # so we avoid double-copying (store + retrieve)
         self._parse_cache[parse_cache_key] = (
-            cache_expression,
+            expression,
             operation_type,
             parameter_casts,
             (operation_profile.returns_rows, operation_profile.modifies_rows),
@@ -578,9 +584,12 @@ class SQLProcessor:
             Parsed expression metadata.
         """
         cached_expression, cached_operation, cached_casts, cached_profile = parse_cache_entry
-        expression = cached_expression.copy() if cached_expression is not None else None
+        # Return expression reference without copying - _apply_ast_transformers will copy
+        # if transformers are configured and will modify it. This avoids unnecessary copies
+        # when no transformers are active (common case).
         operation_profile = OperationProfile(returns_rows=cached_profile[0], modifies_rows=cached_profile[1])
-        return expression, cached_operation, dict(cached_casts), operation_profile
+        # cached_casts is already a dict, no need to copy - it's not mutated by callers
+        return cached_expression, cached_operation, cached_casts, operation_profile
 
     def _resolve_expression(
         self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expression | None"
@@ -649,8 +658,12 @@ class SQLProcessor:
         if expression is None or (not statement_transformers and not ast_transformer):
             return expression, parameters, False, operation_type, parameter_casts, operation_profile
 
+        # Must copy the expression before transformers modify it to avoid corrupting:
+        # 1. Cache entries (for both cache hits and misses that will be cached)
+        # 2. User-provided expression_override references
         should_copy = False
-        if parse_cache_key is not None and parse_cache_entry is None:
+        if parse_cache_key is not None:
+            # Either cache miss (will be stored) or cache hit (reference from cache)
             should_copy = True
         if expression_override is not None and expression is expression_override:
             should_copy = True

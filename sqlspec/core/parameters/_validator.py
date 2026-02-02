@@ -10,6 +10,10 @@ from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
 
 __all__ = ("PARAMETER_REGEX", "ParameterValidator")
 
+# Pre-computed frozenset for fast parameter character detection
+# Using set intersection is faster than any(c in sql for c in ...)
+_PARAM_CHARS = frozenset("?%:@$")
+
 PARAMETER_REGEX = re.compile(
     r"""
     (?P<dquote>"(?:[^"\\]|\\.)*") |
@@ -100,7 +104,8 @@ class ParameterValidator:
             return cached_result
         self._cache_misses += 1
 
-        if not any(c in sql for c in ("?", "%", ":", "@", "$")):
+        # Fast check using frozenset intersection (faster than any() with generator)
+        if not _PARAM_CHARS.intersection(sql):
             if len(self._parameter_cache) >= self._cache_max_size:
                 self._parameter_cache.popitem(last=False)
             self._parameter_cache[cache_key] = []
@@ -150,7 +155,8 @@ class ParameterValidator:
             "sql_server_global",
         )
 
-        if not any(c in sql for c in ("?", "%", ":", "@", "$")):
+        # Fast check using frozenset intersection (faster than any() with generator)
+        if not _PARAM_CHARS.intersection(sql):
             return []
 
         for match in PARAMETER_REGEX.finditer(sql):

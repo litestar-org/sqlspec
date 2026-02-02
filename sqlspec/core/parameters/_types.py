@@ -422,7 +422,18 @@ class ParameterProfile:
     def __init__(self, parameters: "Sequence[ParameterInfo] | None" = None) -> None:
         param_tuple: tuple[ParameterInfo, ...] = tuple(parameters) if parameters else ()
         self._parameters = param_tuple
-        self.styles = tuple(sorted({param.style.value for param in param_tuple})) if param_tuple else ()
+
+        # Optimize styles computation: skip sorted() for single-style case (common)
+        if param_tuple:
+            unique_styles = {param.style.value for param in param_tuple}
+            # Skip sort for single style (common case) - O(1) vs O(n log n)
+            if len(unique_styles) == 1:
+                self.styles = (next(iter(unique_styles)),)
+            else:
+                self.styles = tuple(sorted(unique_styles))
+        else:
+            self.styles = ()
+
         placeholder_counts: dict[str, int] = {}
         reused_ordinals: list[int] = []
         named_parameters: list[str] = []
