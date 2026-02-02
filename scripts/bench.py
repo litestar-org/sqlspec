@@ -79,57 +79,71 @@ def run_benchmark(driver: str, errors: list[str]) -> list[dict[str, Any]]:
 
 
 # --- Scenario helpers and registry ---
-
-
-def do_initialization_raw_sqlite():
+def raw_sqlite_initialization():
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
         conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT);")
         conn.close()
 
-def do_initialization_sqlspec_sqlite():
+def raw_sqlite_write_heavy():
+    ...
+
+def raw_sqlite_read_heavy():
+    ...
+
+def sqlspec_sqlite_initialization():
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
         config = SqliteConfig(database=tmp.name)
         with spec.provide_session(config) as session:
             session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT);")
 
-def do_initialization_sqlalchemy_sqlite():
+def sqlspec_sqlite_write_heavy():
+    ...
+
+def sqlspec_sqlite_read_heavy():
+    ...
+
+def sqlalchemy_sqlite_initialization():
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         engine = create_engine(f"sqlite:///{tmp.name}")
         conn = engine.connect()
         conn.execute(text("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT);"))
         conn.close()
 
-async def do_initialization_asyncpg():
+def sqlalchemy_sqlite_write_heavy():
+    ...
+
+def sqlalchemy_sqlite_read_heavy():
+    ...
+
+async def raw_asyncpg_initialization():
     dsn = os.environ.get("ASYNC_PG_DSN", "postgresql://postgres:postgres@localhost/postgres")
     conn = await connect(dsn=dsn)
     await conn.execute("CREATE TABLE IF NOT EXISTS test (id serial PRIMARY KEY, value text);")
     await conn.close()
 
 
-def do_write_heavy_placeholder():
-    time.sleep(0.01)
+async def raw_asyncpg_write_heavy():
+    ...
 
-def do_read_heavy_placeholder():
-    time.sleep(0.01)
+async def raw_asyncpg_read_heavy():
+    ...
 
 SCENARIO_REGISTRY = {
-    ("raw", "sqlite", "initialization"): do_initialization_raw_sqlite,
-    ("sqlspec", "sqlite", "initialization"): do_initialization_sqlspec_sqlite,
-    ("sqlalchemy", "sqlite", "initialization"): do_initialization_sqlalchemy_sqlite,
-    ("asyncpg", "postgres", "initialization"): do_initialization_asyncpg,
-    # Add more as needed...
-    ("raw", "sqlite", "write_heavy"): do_write_heavy_placeholder,
-    ("sqlspec", "sqlite", "write_heavy"): do_write_heavy_placeholder,
-    ("sqlalchemy", "sqlite", "write_heavy"): do_write_heavy_placeholder,
-    ("asyncpg", "postgres", "write_heavy"): do_write_heavy_placeholder,
-    ("raw", "sqlite", "read_heavy"): do_read_heavy_placeholder,
-    ("sqlspec", "sqlite", "read_heavy"): do_read_heavy_placeholder,
-    ("sqlalchemy", "sqlite", "read_heavy"): do_read_heavy_placeholder,
-    ("asyncpg", "postgres", "read_heavy"): do_read_heavy_placeholder,
+    ("raw", "sqlite", "initialization"): raw_sqlite_initialization,
+    ("raw", "sqlite", "write_heavy"): raw_sqlite_write_heavy,
+    ("raw", "sqlite", "read_heavy"): raw_sqlite_read_heavy,
+    ("sqlspec", "sqlite", "initialization"): sqlspec_sqlite_initialization,
+    ("sqlspec", "sqlite", "write_heavy"): sqlspec_sqlite_write_heavy,
+    ("sqlspec", "sqlite", "read_heavy"): sqlspec_sqlite_read_heavy,
+    ("sqlalchemy", "sqlite", "initialization"): sqlalchemy_sqlite_initialization,
+    ("sqlalchemy", "sqlite", "write_heavy"): sqlalchemy_sqlite_write_heavy,
+    ("sqlalchemy", "sqlite", "read_heavy"): sqlalchemy_sqlite_read_heavy,
+    ("raw", "asyncpg", "initialization"): raw_asyncpg_initialization,
+    ("raw", "asyncpg", "write_heavy"): raw_asyncpg_write_heavy,
+    ("raw", "asyncpg", "read_heavy"): raw_asyncpg_read_heavy,
 }
-
 
 def print_benchmark_table(results):
     console = Console()
