@@ -1355,7 +1355,29 @@ class CommonDriverAttributesMixin:
     def _get_compiled_statement(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[CachedStatement, object]":
-        """Compile SQL and return cached statement metadata plus prepared parameters."""
+        """Compile SQL and return cached statement metadata plus prepared parameters.
+
+        FAST PATH: If the statement is already processed (compiled), we reuse
+        its ProcessedState directly. This eliminates redundant compilation when
+        dispatch_statement_execution() has already triggered compile().
+        """
+        # FAST PATH: Statement already compiled - reuse its processed state
+        # This is the key optimization: avoid double compilation
+        if statement.is_processed:
+            processed = statement.get_processed_state()
+            prepared_parameters = self.prepare_driver_parameters(
+                processed.execution_parameters,
+                statement_config,
+                is_many=statement.is_many,
+                prepared_statement=statement,
+            )
+            cached_statement = CachedStatement(
+                compiled_sql=processed.compiled_sql,
+                parameters=prepared_parameters,
+                expression=processed.parsed_expression,
+            )
+            return cached_statement, prepared_parameters
+
         # Materialize iterators before cache key generation to prevent exhaustion.
         # If statement.parameters is an iterator (e.g., generator), structural_fingerprint
         # will consume it during cache key generation, leaving empty parameters for execution.
@@ -1380,14 +1402,13 @@ class CommonDriverAttributesMixin:
             if cached_result is not None and isinstance(cached_result, CachedStatement):
                 # Structural fingerprinting means same SQL structure = same cache entry,
                 # but we must still use the caller's actual parameter values.
-                # Recompile with the NEW parameters to get correctly processed values.
-                prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
-                _, execution_parameters = prepared_statement.compile()
+                # Compile with the statement's parameters to get correctly processed values.
+                compiled_sql, execution_parameters = statement.compile()
                 prepared_parameters = self.prepare_driver_parameters(
                     execution_parameters,
                     statement_config,
-                    is_many=prepared_statement.is_many,
-                    prepared_statement=prepared_statement,
+                    is_many=statement.is_many,
+                    prepared_statement=statement,
                 )
                 # Return cached SQL metadata but with newly processed parameters
                 # Preserve list type for execute_many operations (some drivers require list, not tuple)
@@ -1398,19 +1419,19 @@ class CommonDriverAttributesMixin:
                 )
                 return updated_cached, prepared_parameters
 
-        prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
-        compiled_sql, execution_parameters = prepared_statement.compile()
+        # Compile the statement directly (no need for prepare_statement indirection)
+        compiled_sql, execution_parameters = statement.compile()
 
         prepared_parameters = self.prepare_driver_parameters(
             execution_parameters,
             statement_config,
-            is_many=prepared_statement.is_many,
-            prepared_statement=prepared_statement,
+            is_many=statement.is_many,
+            prepared_statement=statement,
         )
 
         cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
         cached_statement = CachedStatement(
-            compiled_sql=compiled_sql, parameters=cached_parameters, expression=prepared_statement.expression
+            compiled_sql=compiled_sql, parameters=cached_parameters, expression=statement.expression
         )
 
         if cache_key is not None and cache is not None:

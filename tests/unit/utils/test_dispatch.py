@@ -4,6 +4,8 @@ import pytest
 
 from sqlspec.utils.dispatch import TypeDispatcher
 
+# pyright: reportPrivateUsage=false
+
 
 class Base:
     pass

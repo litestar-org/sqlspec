@@ -1,6 +1,8 @@
 from sqlspec.core.compiler import SQLProcessor
 from sqlspec.core.statement import get_default_config, SQL
 
+# pyright: reportPrivateUsage=false
+
 def test_sql_processor_cache_key_stability() -> None:
     config = get_default_config()
     processor = SQLProcessor(config)

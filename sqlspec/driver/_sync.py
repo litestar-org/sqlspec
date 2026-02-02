@@ -124,8 +124,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
         runtime = self.observability
+        # Pre-compile the statement so dispatch methods can reuse the processed state
+        # via the fast path in _get_compiled_statement(). This ensures compile()
+        # is called exactly once per statement execution.
         compiled_sql, execution_parameters = statement.compile()
-        _ = cast("ProcessedState", statement.get_processed_state())
         operation = statement.operation_type
         query_context = {
             "sql": compiled_sql,

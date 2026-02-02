@@ -91,6 +91,8 @@ SQL_CONFIG_SLOTS: Final = (
     "parameter_config",
     "parameter_converter",
     "parameter_validator",
+    "_fingerprint_cache",
+    "_is_frozen",
 )
 
 PROCESSED_STATE_SLOTS: Final = (
@@ -1417,6 +1419,12 @@ class StatementConfig:
             self.statement_transformers = tuple(statement_transformers)
         else:
             self.statement_transformers = ()
+        self._fingerprint_cache: "str | None" = None
+        self._is_frozen = False
+
+    def freeze(self) -> None:
+        """Mark the configuration as immutable to enable caching."""
+        self._is_frozen = True
 
     def replace(self, **kwargs: Any) -> "StatementConfig":
         """Immutable update pattern.
@@ -1538,6 +1546,7 @@ def get_default_config() -> StatementConfig:
     global _DEFAULT_CONFIG
     if _DEFAULT_CONFIG is None:
         _DEFAULT_CONFIG = StatementConfig()
+        _DEFAULT_CONFIG.freeze()
     return _DEFAULT_CONFIG
 
 
