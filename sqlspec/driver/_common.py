@@ -1112,7 +1112,7 @@ class CommonDriverAttributesMixin:
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
             # Cache the newly created SQL object for future use
-            if not filters and not kwargs:
+            if not filters and not kwargs and isinstance(statement, str):
                 self._statement_cache[statement] = sql_statement
 
         return self._apply_filters(sql_statement, filters)

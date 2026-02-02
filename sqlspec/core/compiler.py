@@ -20,7 +20,7 @@ import sqlspec.exceptions
 from sqlspec.core.parameters import (
     ParameterProcessor,
     ParameterProfile,
-    _structural_fingerprint,
+    _structural_fingerprint,  # pyright: ignore[reportPrivateUsage]
     validate_parameter_alignment,
     value_fingerprint,
 )
@@ -239,7 +239,7 @@ class CompiledSQL:
         self.parameter_style = parameter_style
         self.supports_many = supports_many
         self.parameter_casts = parameter_casts or {}
-        self.parameter_profile = parameter_profile
+        self.parameter_profile = parameter_profile or ParameterProfile.empty()
         self.operation_profile = operation_profile or OperationProfile.empty()
         self.input_named_parameters = input_named_parameters
         self.applied_wrap_types = applied_wrap_types
@@ -346,8 +346,8 @@ class SQLProcessor:
         ] = OrderedDict()
         self._parse_cache_hits = 0
         self._parse_cache_misses = 0
-        self._last_cache_key = None
-        self._last_result = None
+        self._last_cache_key: Any | None = None
+        self._last_result: CompiledSQL | None = None
 
         # Pre-calculate static cache key components
         self._dialect_str = str(config.dialect) if config.dialect else None
@@ -383,7 +383,7 @@ class SQLProcessor:
             self._cache_hits += 1
             cached_result = self._last_result
 
-            processed_params = self._parameter_processor._transform_cached_parameters(
+            processed_params = self._parameter_processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
                 parameters,
                 cached_result.parameter_profile,
                 self._config.parameter_config,
@@ -425,7 +425,7 @@ class SQLProcessor:
             # but we must still process the caller's actual parameter values.
             # FAST PATH: Call _transform_cached_parameters directly to bypass redundant
             # ParameterProcessor cache lookup and key generation.
-            processed_params = self._parameter_processor._transform_cached_parameters(
+            processed_params = self._parameter_processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
                 parameters,
                 cached_result.parameter_profile,
                 self._config.parameter_config,

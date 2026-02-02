@@ -418,6 +418,9 @@ class ParameterProfile:
     """Aggregate metadata describing detected parameters."""
 
     __slots__ = ("_parameters", "_placeholder_counts", "named_parameters", "reused_ordinals", "styles")
+    named_parameters: tuple[str, ...]
+    reused_ordinals: tuple[int, ...]
+    styles: tuple[str, ...]
 
     def __init__(self, parameters: "Sequence[ParameterInfo] | None" = None) -> None:
         param_tuple: tuple[ParameterInfo, ...] = tuple(parameters) if parameters else ()

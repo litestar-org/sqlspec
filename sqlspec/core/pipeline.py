@@ -254,7 +254,7 @@ class StatementPipelineRegistry:
         # Optimization: Use cached fingerprint if available
         # Configs are effectively immutable after creation, so caching is safe
         cached = getattr(config, "_fingerprint_cache", None)
-        if cached is not None:
+        if isinstance(cached, str):
             return cached
 
         param_config = config.parameter_config

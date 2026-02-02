@@ -129,7 +129,7 @@ class ProcessedState:
         execution_parameters: Any,
         parsed_expression: "exp.Expression | None" = None,
         operation_type: "OperationType" = "COMMAND",
-        parameter_fingerprint: Any | None = None,
+        parameter_fingerprint: str | None = None,
         parameter_casts: "dict[int, str] | None" = None,
         validation_errors: "list[str] | None" = None,
         parameter_profile: "ParameterProfile | None" = None,
@@ -590,7 +590,7 @@ class SQL:
             cache_max_size=0,
             validator_cache_max_size=0,
         )
-        rebound_params = processor._transform_cached_parameters(
+        rebound_params = processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
             params,
             state.parameter_profile,
             self._statement_config.parameter_config,

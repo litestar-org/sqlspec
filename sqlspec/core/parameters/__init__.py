@@ -10,8 +10,8 @@ from sqlspec.core.parameters._alignment import (
 from sqlspec.core.parameters._converter import ParameterConverter
 from sqlspec.core.parameters._processor import (
     ParameterProcessor,
-    _structural_fingerprint,
-    _value_fingerprint,
+    _structural_fingerprint,  # pyright: ignore[reportPrivateUsage]
+    _value_fingerprint,  # pyright: ignore[reportPrivateUsage]
     structural_fingerprint,
     value_fingerprint,
 )

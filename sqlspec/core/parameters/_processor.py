@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -203,9 +203,11 @@ def _coerce_nested_value(value: object, type_coercion_map: "dict[type, Callable[
     # Fast type dispatch for common types
     value_type = type(value)
     if value_type is list or value_type is tuple:
-        return [_coerce_parameter_value(item, type_coercion_map) for item in value]  # type: ignore[union-attr]
+        seq_value = cast("Sequence[Any]", value)
+        return [_coerce_parameter_value(item, type_coercion_map) for item in seq_value]
     if value_type is dict:
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in value.items()}  # type: ignore[union-attr]
+        dict_value = cast("dict[Any, Any]", value)
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in dict_value.items()}
     return value
 
 
@@ -236,9 +238,11 @@ def _coerce_parameter_set(param_set: object, type_coercion_map: "dict[type, Call
     # Fast type dispatch for common types
     param_type = type(param_set)
     if param_type is list or param_type is tuple:
-        return [_coerce_parameter_value(item, type_coercion_map) for item in param_set]  # type: ignore[union-attr]
+        seq_value = cast("Sequence[Any]", param_set)
+        return [_coerce_parameter_value(item, type_coercion_map) for item in seq_value]
     if param_type is dict:
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in param_set.items()}  # type: ignore[union-attr]
+        dict_value = cast("dict[Any, Any]", param_set)
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in dict_value.items()}
     # Fallback to ABC checks for custom types
     if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
         return [_coerce_parameter_value(item, type_coercion_map) for item in param_set]
@@ -253,11 +257,13 @@ def _coerce_parameters_payload(
     # Fast type dispatch for common types
     param_type = type(parameters)
     if param_type is list or param_type is tuple:
+        seq_params = cast("Sequence[Any]", parameters)
         if is_many:
-            return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in parameters]  # type: ignore[union-attr]
-        return [_coerce_parameter_value(item, type_coercion_map) for item in parameters]  # type: ignore[union-attr]
+            return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in seq_params]
+        return [_coerce_parameter_value(item, type_coercion_map) for item in seq_params]
     if param_type is dict:
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in parameters.items()}  # type: ignore[union-attr]
+        dict_params = cast("dict[Any, Any]", parameters)
+        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in dict_params.items()}
     # Fallback to ABC checks for custom types
     if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
         return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in parameters]
@@ -575,7 +581,8 @@ class ParameterProcessor:
 
         if payload_type is list or payload_type is tuple:
             # Check if any item is a dict (fast path) or Mapping (fallback)
-            for item in payload:  # type: ignore[union-attr]
+            seq_payload = cast("Sequence[Any]", payload)
+            for item in seq_payload:
                 item_type = type(item)
                 if item_type is dict:
                     return True
