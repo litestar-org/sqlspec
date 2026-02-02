@@ -5,9 +5,9 @@ import sqlite3
 import tempfile
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple
+from typing import Any, Callable
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, SyncDatabaseConfig
 from sqlalchemy import create_engine, text
 
 # ==========================
@@ -79,7 +79,7 @@ def sqlite_connect(db, wal=False):
 def sqlite_raw_session(db, wal):
     return lambda: sqlite_connect(db, wal).close()
 
-def sqlite_populate(conn, rows):
+def sqlite_populate(conn: sqlite3.Connection, rows):
     cur = conn.cursor()
     cur.execute("drop table if exists notes")
     cur.execute("create table notes (id integer primary key, body text)")
@@ -110,35 +110,22 @@ def sqlite_raw_read(db, rows, reads, wal):
         conn.close()
     return fn
 
-def make_sqlite_driver(args):
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    return Driver(
-        name="sqlite",
-        raw_session=lambda db: sqlite_raw_session(db, args.wal),
-        raw_write=lambda db: sqlite_raw_write(db, args.rows, args.wal),
-        raw_read=lambda db: sqlite_raw_read(db, args.rows, args.reads, args.wal),
-        sqlspec_config=lambda spec, db: spec.add_config(
-            SqliteConfig(connection_config={"database": db})
-        ),
-        sqlalchemy_url=lambda db: f"sqlite:///{db}",
-    )
 
 # ==========================
 # SQLSPEC BENCHES
 # ==========================
 
-def sqlspec_session(spec, cfg):
+def sqlspec_session(spec: SQLSpec, cfg: SyncDatabaseConfig[Any, Any, Any]):
     def fn():
         with spec.provide_session(cfg):
             pass
     return fn
 
-def sqlspec_populate(spec, cfg, rows):
+def sqlspec_populate(spec: SQLSpec, cfg: SyncDatabaseConfig[Any,Any,Any], rows):
     with spec.provide_session(cfg) as s:
         s.execute("drop table if exists notes")
         s.execute("create table notes (id integer primary key, body text)")
-        s.execute(
+        s.execute_many(
             "insert into notes (body) values (?)",
             [(f"note {i}",) for i in range(rows)],
         )
@@ -237,6 +224,24 @@ def run_driver(driver: Driver, db: str, args):
         )
 
 # ==========================
+# SQLITE DRIVER FACTORY
+# ==========================
+def make_sqlite_driver(args):
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    return Driver(
+        name="sqlite",
+        raw_session=lambda db: sqlite_raw_session(db, args.wal),
+        raw_write=lambda db: sqlite_raw_write(db, args.rows, args.wal),
+        raw_read=lambda db: sqlite_raw_read(db, args.rows, args.reads, args.wal),
+        sqlspec_config=lambda spec, db: spec.add_config(
+            SqliteConfig(connection_config={"database": db})
+        ),
+        sqlalchemy_url=lambda db: f"sqlite:///{db}",
+    )
+
+
+# ==========================
 # MAIN
 # ==========================
 
@@ -249,7 +254,7 @@ def main():
         f"DB={'memory' if args.memory else 'file'}"
     )
 
-    drivers: Dict[str, Callable] = {
+    drivers: dict[str, Callable[Any, Any]] = {
         "sqlite": lambda: make_sqlite_driver(args),
     }
 
