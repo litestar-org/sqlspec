@@ -69,12 +69,14 @@ def run_benchmark(fn: "Callable[[Path], None]", label: str) -> float:
     return sum(times) / len(times)
 
 __all__ = (
+    "assert_compile_bypass",
     "bench_raw_sqlite",
     "bench_sqlite_sqlglot",
     "bench_sqlite_sqlglot_copy",
     "bench_sqlite_sqlglot_nocache",
     "bench_sqlspec",
     "bench_sqlspec_dict",
+    "profile_cache_hit_compile_calls",
     "run_benchmark",
 )
 
@@ -184,10 +186,53 @@ def bench_sqlspec_dict(db_path: Path) -> None:
         for i in range(ROWS):
             session.execute("insert into notes (body) values (:body)", {"body": f"note {i}"})
 
+
+def profile_cache_hit_compile_calls(db_path: Path) -> int:
+    """Return pipeline compilation call count for repeated inserts."""
+    obs_config = ObservabilityConfig(
+        telemetry=TelemetryConfig(enable_spans=False),
+        logging=LoggingConfig(include_sql_hash=False, include_trace_context=False),
+        print_sql=False,
+    )
+    spec = SQLSpec(observability_config=obs_config)
+    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+
+    from sqlspec.core import pipeline as pipeline_module
+
+    calls = 0
+    original = pipeline_module.compile_with_pipeline
+
+    def wrapped(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    with spec.provide_session(config) as session:
+        session.execute("create table if not exists notes (id integer primary key, body text)")
+        pipeline_module.compile_with_pipeline = wrapped
+        try:
+            for i in range(ROWS):
+                session.execute("insert into notes (body) values (?)", (f"note {i}",))
+        finally:
+            pipeline_module.compile_with_pipeline = original
+
+    return calls
+
+
+def assert_compile_bypass(db_path: Path) -> None:
+    """Assert compile is bypassed on cache hits after initial insert."""
+    calls = profile_cache_hit_compile_calls(db_path)
+    if calls != 1:
+        msg = f"Expected 1 compilation call for repeated inserts, got {calls}"
+        raise AssertionError(msg)
+
 # -------------------------
 # Main
 # -------------------------
 if __name__ == "__main__":
+    with tempfile.TemporaryDirectory() as d:
+        assert_compile_bypass(Path(d) / "compile_check.db")
+
     with tempfile.TemporaryDirectory() as d:
         db_path = Path(d) / "profile.db"
         profiler = cProfile.Profile()
