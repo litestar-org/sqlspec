@@ -88,12 +88,12 @@ def test_calculate_checksum_basic() -> None:
     runner = MockMigrationRunner()
 
     content = "CREATE TABLE users (id INTEGER PRIMARY KEY);"
-    checksum = runner._calculate_checksum(content)
+    checksum = runner.calculate_checksum(content)
 
     assert isinstance(checksum, str)
     assert len(checksum) == 32
 
-    checksum2 = runner._calculate_checksum(content)
+    checksum2 = runner.calculate_checksum(content)
     assert checksum == checksum2
 
 
@@ -104,8 +104,8 @@ def test_calculate_checksum_different_content() -> None:
     content1 = "CREATE TABLE users (id INTEGER PRIMARY KEY);"
     content2 = "CREATE TABLE products (id INTEGER PRIMARY KEY);"
 
-    checksum1 = runner._calculate_checksum(content1)
-    checksum2 = runner._calculate_checksum(content2)
+    checksum1 = runner.calculate_checksum(content1)
+    checksum2 = runner.calculate_checksum(content2)
 
     assert checksum1 != checksum2
 
@@ -115,7 +115,7 @@ def test_calculate_checksum_unicode_content() -> None:
     runner = MockMigrationRunner()
 
     content = "-- Migration with unicode: 测试 файл עברית"
-    checksum = runner._calculate_checksum(content)
+    checksum = runner.calculate_checksum(content)
 
     assert isinstance(checksum, str)
     assert len(checksum) == 32

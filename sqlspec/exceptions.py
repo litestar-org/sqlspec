@@ -37,6 +37,7 @@ __all__ = (
     "SQLSpecError",
     "SerializationConflictError",
     "SerializationError",
+    "SquashValidationError",
     "StackExecutionError",
     "StorageCapabilityError",
     "StorageOperationFailedError",
@@ -357,6 +358,17 @@ class OutOfOrderMigrationError(MigrationError):
 
     Out-of-order migrations occur when a pending migration has a timestamp
     earlier than already-applied migrations, typically from late-merging branches.
+    """
+
+
+class SquashValidationError(MigrationError):
+    """Raised when migration squash validation fails.
+
+    Squash validation errors occur when:
+    - Version range is invalid (start > end)
+    - Gap detected in version sequence
+    - Mixed migration types that cannot be squashed
+    - Target file already exists
     """
 
 

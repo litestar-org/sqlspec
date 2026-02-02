@@ -84,6 +84,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             .column("execution_time_ms", "INTEGER")
             .column("checksum", "VARCHAR(64)")
             .column("applied_by", "VARCHAR(255)")
+            .column("replaces", "TEXT")
         )
 
     def _get_current_version_sql(self) -> Select:
@@ -187,6 +188,70 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             .set("version_num", new_version)
             .set("version_type", new_version_type)
             .where(sql.version_num == old_version)
+        )
+
+    def _get_delete_versions_sql(self, versions: "list[str]") -> Delete:
+        """Get SQL builder for deleting multiple version records.
+
+        Used by squash operations to remove replaced migration records.
+
+        Args:
+            versions: List of version strings to delete.
+
+        Returns:
+            SQL builder object for delete.
+        """
+        return sql.delete().from_(self.version_table).where(sql.version_num.in_(versions))
+
+    def _get_record_squashed_migration_sql(
+        self,
+        version: str,
+        version_type: str,
+        execution_sequence: int,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+        replaces: str,
+    ) -> Insert:
+        """Get SQL builder for recording a squashed migration.
+
+        Args:
+            version: Version number of the squashed migration.
+            version_type: Version format type ('sequential' or 'timestamp').
+            execution_sequence: Auto-incrementing application order.
+            description: Description of the migration.
+            execution_time_ms: Execution time in milliseconds.
+            checksum: MD5 checksum of the migration content.
+            applied_by: User who applied the migration.
+            replaces: Comma-separated list of replaced versions.
+
+        Returns:
+            SQL builder object for insert.
+        """
+        return (
+            sql
+            .insert(self.version_table)
+            .columns(
+                "version_num",
+                "version_type",
+                "execution_sequence",
+                "description",
+                "execution_time_ms",
+                "checksum",
+                "applied_by",
+                "replaces",
+            )
+            .values(
+                version,
+                version_type,
+                execution_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                applied_by,
+                replaces,
+            )
         )
 
     def _get_check_column_exists_sql(self) -> Select:
@@ -324,7 +389,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         parts = stem.split("_", 1)
         return parts[0].zfill(4) if parts and parts[0].isdigit() else None
 
-    def _calculate_checksum(self, content: str) -> str:
+    def calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
 
         Args:
@@ -403,7 +468,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
         loader.validate_migration_file(file_path)
         content = file_path.read_text(encoding="utf-8")
-        checksum = self._calculate_checksum(content)
+        checksum = self.calculate_checksum(content)
         description = self._extract_description(content, file_path)
         if not description:
             description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""

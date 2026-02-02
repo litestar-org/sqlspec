@@ -1,5 +1,18 @@
 """SQLSpec: Type-safe SQL query mapper for Python."""
 
+# ruff: noqa: E402
+# Suppress noisy Google library deprecation warnings about Python version support.
+# These are informational and clutter CLI output unnecessarily.
+import warnings as _warnings
+
+_warnings.filterwarnings(
+    "ignore",
+    message="You are using a Python version.*which Google will stop supporting",
+    category=FutureWarning,
+    module=r"google\.api_core\._python_version_support",
+)
+del _warnings
+
 from sqlspec import adapters, base, builder, core, driver, exceptions, extensions, loader, migrations, typing, utils
 from sqlspec.__metadata__ import __version__
 from sqlspec.base import SQLSpec

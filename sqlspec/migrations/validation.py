@@ -10,16 +10,24 @@ from typing import TYPE_CHECKING
 
 from rich.console import Console
 
-from sqlspec.exceptions import OutOfOrderMigrationError
+from sqlspec.exceptions import OutOfOrderMigrationError, SquashValidationError
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
     from sqlspec.migrations.version import MigrationVersion
 
-__all__ = ("MigrationGap", "detect_out_of_order_migrations", "format_out_of_order_warning")
+__all__ = (
+    "MigrationGap",
+    "detect_out_of_order_migrations",
+    "format_out_of_order_warning",
+    "validate_extension_consistency",
+    "validate_squash_idempotency",
+    "validate_squash_range",
+)
 
 console = Console()
 logger = get_logger("sqlspec.migrations.validation")
@@ -223,3 +231,129 @@ def validate_migration_order(
         return
     console.print("[yellow]Out-of-order migrations detected[/]")
     console.print(f"[yellow]{warning_message}[/]")
+
+
+def validate_squash_range(
+    migrations: "list[tuple[str, Path]]", start_version: str, end_version: str, *, allow_gaps: bool = False
+) -> "list[tuple[str, Path]]":
+    """Validate and filter migrations within a squash range.
+
+    Filters migrations to those within [start, end] range (inclusive),
+    validates the range exists, and optionally checks for gaps.
+
+    Args:
+        migrations: List of (version, path) tuples for all available migrations.
+        start_version: First version in the range to squash (inclusive).
+        end_version: Last version in the range to squash (inclusive).
+        allow_gaps: If True, skip gap detection. If False (default), raise error on gaps.
+
+    Returns:
+        Sorted list of (version, path) tuples within the range.
+
+    Raises:
+        SquashValidationError: If validation fails (invalid range, missing versions, gaps).
+
+    """
+    if int(start_version) > int(end_version):
+        msg = f"Invalid range: start version {start_version} is greater than end version {end_version}"
+        raise SquashValidationError(msg)
+
+    version_map: dict[str, Path] = dict(migrations)
+
+    if start_version not in version_map:
+        msg = f"Start version {start_version} not found in migrations"
+        raise SquashValidationError(msg)
+    if end_version not in version_map:
+        msg = f"End version {end_version} not found in migrations"
+        raise SquashValidationError(msg)
+
+    start_int = int(start_version)
+    end_int = int(end_version)
+    result: list[tuple[str, Path]] = []
+
+    for version, path in migrations:
+        try:
+            version_int = int(version)
+        except ValueError:
+            continue
+        if start_int <= version_int <= end_int:
+            result.append((version, path))
+
+    result.sort(key=lambda x: int(x[0]))
+
+    if not result:
+        msg = f"No migrations found in range {start_version} to {end_version}"
+        raise SquashValidationError(msg)
+
+    if not allow_gaps and len(result) > 1:
+        sorted_versions = [int(v) for v, _ in result]
+        for i in range(1, len(sorted_versions)):
+            if sorted_versions[i] - sorted_versions[i - 1] != 1:
+                msg = f"Gap detected in version sequence between {sorted_versions[i - 1]:04d} and {sorted_versions[i]:04d}"
+                raise SquashValidationError(msg)
+
+    return result
+
+
+def validate_extension_consistency(migrations: "list[tuple[str, Path]]") -> None:
+    """Validate all migrations belong to same namespace (core or single extension).
+
+    Ensures migrations can be safely squashed together by verifying they all
+    belong to either core migrations or the same extension namespace.
+
+    Args:
+        migrations: List of (version, path) tuples to validate.
+
+    Raises:
+        SquashValidationError: If migrations mix core and extension, or different extensions.
+
+    """
+    if not migrations:
+        return
+
+    extensions: set[str | None] = set()
+
+    for version, _ in migrations:
+        parsed = parse_version(version)
+        extensions.add(parsed.extension)
+
+    if len(extensions) > 1:
+        has_core = None in extensions
+        ext_names = [e for e in extensions if e is not None]
+
+        if has_core:
+            msg = f"Cannot squash migrations mixing core and extension ({', '.join(ext_names)})"
+            raise SquashValidationError(msg)
+
+        msg = f"Cannot squash migrations from different extensions: {', '.join(sorted(ext_names))}"
+        raise SquashValidationError(msg)
+
+
+def validate_squash_idempotency(source_files: "list[Path]", target_file: "Path") -> str:
+    """Check if a squash operation has already been performed.
+
+    Determines the current state of a squash operation based on file existence.
+
+    Args:
+        source_files: List of original migration file paths that would be squashed.
+        target_file: Path where the squashed migration would be written.
+
+    Returns:
+        Status string: "ready" (can squash), "already_squashed" (already done),
+        or "partial" (inconsistent state - target exists but some sources remain).
+
+    """
+    target_exists = target_file.exists()
+    sources_exist = [f.exists() for f in source_files]
+    any_source_exists = any(sources_exist)
+
+    if not target_exists and any_source_exists:
+        return "ready"
+
+    if target_exists and not any_source_exists:
+        return "already_squashed"
+
+    if target_exists and any_source_exists:
+        return "partial"
+
+    return "ready"

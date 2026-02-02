@@ -18,6 +18,7 @@ from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
+from sqlspec.migrations.squash import MigrationSquasher
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
 from sqlspec.migrations.version import generate_conversion_map, generate_timestamp_version, parse_version
@@ -984,6 +985,94 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         )
         console.print(f"[green]Created migration:[/] {file_path}")
 
+    def squash(
+        self,
+        start_version: str,
+        end_version: str,
+        description: str,
+        *,
+        dry_run: bool = False,
+        update_database: bool = True,
+        yes: bool = False,
+        allow_gaps: bool = False,
+        output_format: str = "sql",
+    ) -> None:
+        """Squash a range of migrations into a single file.
+
+        Combines multiple sequential migrations into a single "release" migration.
+        UP statements are merged in version order, DOWN statements in reverse order.
+
+        Args:
+            start_version: First version in the range to squash (inclusive).
+            end_version: Last version in the range to squash (inclusive).
+            description: Description for the squashed migration file.
+            dry_run: Preview changes without applying.
+            update_database: Update migration records in database.
+            yes: Skip confirmation prompt.
+            allow_gaps: Allow gaps in version sequence.
+            output_format: Output format ("sql" or "py").
+
+        Raises:
+            SquashValidationError: If validation fails (invalid range, gaps, etc.).
+        """
+        squasher = MigrationSquasher(self.migrations_path, self.runner, self._template_settings)
+
+        plans = squasher.plan_squash(
+            start_version, end_version, description, allow_gaps=allow_gaps, output_format=output_format
+        )
+
+        # Display plan for each squash group
+        table = Table(title="Squash Plan")
+        table.add_column("Version", style="cyan")
+        table.add_column("File")
+        table.add_column("Target", style="green")
+
+        total_migrations = 0
+        for plan in plans:
+            for version, file_path in plan.source_migrations:
+                table.add_row(version, file_path.name, plan.target_path.name)
+                total_migrations += 1
+
+        console.print(table)
+        target_files = ", ".join(p.target_path.name for p in plans)
+        console.print(
+            f"\n[yellow]{total_migrations} migrations will be squashed into {len(plans)} file(s): {target_files}[/]"
+        )
+
+        if dry_run:
+            console.print("[yellow][Preview Mode - No changes made][/]")
+            return
+
+        if not yes:
+            response = input("\nProceed with squash? [y/N]: ")
+            if response.lower() != "y":
+                console.print("[yellow]Squash cancelled[/]")
+                return
+
+        squasher.apply_squash(plans)
+        for plan in plans:
+            console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
+
+        if update_database:
+            with self.config.provide_session() as driver:
+                self.tracker.ensure_tracking_table(driver)
+
+                for plan in plans:
+                    if self.tracker.is_squash_already_applied(driver, plan.target_version, plan.source_versions):
+                        up_sql, down_sql = squasher.extract_sql(plan.source_migrations)
+                        if plan.target_path.suffix == ".py":
+                            content = squasher.generate_python_squash(plan, up_sql, down_sql)
+                        else:
+                            content = squasher.generate_squashed_content(plan, up_sql, down_sql)
+                        checksum = self.runner.calculate_checksum(content)
+
+                        self.tracker.replace_with_squash(
+                            driver, plan.target_version, plan.source_versions, description, checksum
+                        )
+                console.print("[green]✓ Updated migration tracking table[/]")
+
+        console.print("[green]✓ Squash complete![/]")
+
     def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
         """Convert timestamp migrations to sequential format.
 
@@ -1807,6 +1896,103 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             description=message,
         )
         console.print(f"[green]Created migration:[/] {file_path}")
+
+    async def squash(
+        self,
+        start_version: str,
+        end_version: str,
+        description: str,
+        *,
+        dry_run: bool = False,
+        update_database: bool = True,
+        yes: bool = False,
+        allow_gaps: bool = False,
+        output_format: str = "sql",
+    ) -> None:
+        """Squash a range of migrations into a single file.
+
+        Combines multiple sequential migrations into a single "release" migration.
+        UP statements are merged in version order, DOWN statements in reverse order.
+
+        Args:
+            start_version: First version in the range to squash (inclusive).
+            end_version: Last version in the range to squash (inclusive).
+            description: Description for the squashed migration file.
+            dry_run: Preview changes without applying.
+            update_database: Update migration records in database.
+            yes: Skip confirmation prompt.
+            allow_gaps: Allow gaps in version sequence.
+            output_format: Output format ("sql" or "py").
+
+        Raises:
+            SquashValidationError: If validation fails (invalid range, gaps, etc.).
+        """
+        sync_runner = SyncMigrationRunner(
+            self.migrations_path,
+            self._discover_extension_migrations(),
+            None,
+            self.extension_configs,
+            runtime=self._runtime,
+            description_hints=self._template_settings.description_hints,
+        )
+
+        squasher = MigrationSquasher(self.migrations_path, sync_runner, self._template_settings)
+
+        plans = squasher.plan_squash(
+            start_version, end_version, description, allow_gaps=allow_gaps, output_format=output_format
+        )
+
+        # Display plan for each squash group
+        table = Table(title="Squash Plan")
+        table.add_column("Version", style="cyan")
+        table.add_column("File")
+        table.add_column("Target", style="green")
+
+        total_migrations = 0
+        for plan in plans:
+            for version, file_path in plan.source_migrations:
+                table.add_row(version, file_path.name, plan.target_path.name)
+                total_migrations += 1
+
+        console.print(table)
+        target_files = ", ".join(p.target_path.name for p in plans)
+        console.print(
+            f"\n[yellow]{total_migrations} migrations will be squashed into {len(plans)} file(s): {target_files}[/]"
+        )
+
+        if dry_run:
+            console.print("[yellow][Preview Mode - No changes made][/]")
+            return
+
+        if not yes:
+            response = input("\nProceed with squash? [y/N]: ")
+            if response.lower() != "y":
+                console.print("[yellow]Squash cancelled[/]")
+                return
+
+        squasher.apply_squash(plans)
+        for plan in plans:
+            console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
+
+        if update_database:
+            async with self.config.provide_session() as driver:
+                await self.tracker.ensure_tracking_table(driver)
+
+                for plan in plans:
+                    if await self.tracker.is_squash_already_applied(driver, plan.target_version, plan.source_versions):
+                        up_sql, down_sql = squasher.extract_sql(plan.source_migrations)
+                        if plan.target_path.suffix == ".py":
+                            content = squasher.generate_python_squash(plan, up_sql, down_sql)
+                        else:
+                            content = squasher.generate_squashed_content(plan, up_sql, down_sql)
+                        checksum = sync_runner.calculate_checksum(content)
+
+                        await self.tracker.replace_with_squash(
+                            driver, plan.target_version, plan.source_versions, description, checksum
+                        )
+                console.print("[green]✓ Updated migration tracking table[/]")
+
+        console.print("[green]✓ Squash complete![/]")
 
     async def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
         """Convert timestamp migrations to sequential format.

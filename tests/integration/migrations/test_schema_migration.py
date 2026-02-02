@@ -44,6 +44,7 @@ def test_tracker_creates_full_schema_on_fresh_install(sqlite_session: SqliteDriv
         "execution_time_ms",
         "checksum",
         "applied_by",
+        "replaces",
     }
 
     assert columns == expected_columns
