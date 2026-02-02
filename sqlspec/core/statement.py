@@ -22,6 +22,7 @@ from sqlspec.core.parameters import (
     ParameterStyle,
     ParameterStyleConfig,
     ParameterValidator,
+    structural_fingerprint,
 )
 from sqlspec.core.query_modifiers import (
     apply_column_pruning,
@@ -102,6 +103,7 @@ PROCESSED_STATE_SLOTS: Final = (
     "execution_parameters",
     "parsed_expression",
     "operation_type",
+    "parameter_fingerprint",
     "parameter_casts",
     "parameter_profile",
     "operation_profile",
@@ -127,6 +129,7 @@ class ProcessedState:
         execution_parameters: Any,
         parsed_expression: "exp.Expression | None" = None,
         operation_type: "OperationType" = "COMMAND",
+        parameter_fingerprint: Any | None = None,
         parameter_casts: "dict[int, str] | None" = None,
         validation_errors: "list[str] | None" = None,
         parameter_profile: "ParameterProfile | None" = None,
@@ -137,6 +140,7 @@ class ProcessedState:
         self.execution_parameters = execution_parameters
         self.parsed_expression = parsed_expression
         self.operation_type = operation_type
+        self.parameter_fingerprint = parameter_fingerprint
         self.parameter_casts = parameter_casts or {}
         self.validation_errors = validation_errors or []
         self.parameter_profile = parameter_profile or ParameterProfile.empty()
@@ -537,15 +541,24 @@ class SQL:
             Tuple of compiled SQL string and execution parameters
         """
         if self._processed_state is not Empty:
-            if self._compiled_from_cache and not self._statement_config.parameter_config.needs_static_script_compilation:
-                return self._rebind_cached_parameters(self._processed_state)
-            return self._processed_state.compiled_sql, self._processed_state.execution_parameters
+            if self._compiled_from_cache:
+                can_reuse = (
+                    not self._statement_config.parameter_config.needs_static_script_compilation
+                    and self._can_reuse_cached_state(self._processed_state)
+                )
+                if can_reuse:
+                    return self._rebind_cached_parameters(self._processed_state)
+                self._processed_state = Empty
+                self._compiled_from_cache = False
+            else:
+                return self._processed_state.compiled_sql, self._processed_state.execution_parameters
         if self._processed_state is Empty:
             try:
                 config = self._statement_config
                 raw_sql = self._raw_sql
                 params = self._named_parameters or self._positional_parameters
                 is_many = self._is_many
+                param_fingerprint = structural_fingerprint(params, is_many=is_many)
                 compiled_result = pipeline.compile_with_pipeline(
                     config, raw_sql, params, is_many=is_many, expression=self._raw_expression
                 )
@@ -555,6 +568,7 @@ class SQL:
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
                     operation_type=compiled_result.operation_type,
+                    parameter_fingerprint=param_fingerprint,
                     parameter_casts=compiled_result.parameter_casts,
                     parameter_profile=compiled_result.parameter_profile,
                     operation_profile=compiled_result.operation_profile,
@@ -589,6 +603,13 @@ class SQL:
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
         return compiled_sql, rebound_params
+
+    def _can_reuse_cached_state(self, state: "ProcessedState") -> bool:
+        cached_fingerprint = state.parameter_fingerprint
+        if cached_fingerprint is None:
+            return False
+        params = self._named_parameters or self._positional_parameters
+        return structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint
 
     def as_script(self) -> "SQL":
         """Create copy marked for script execution.
@@ -668,10 +689,12 @@ class SQL:
 
         traceback.print_exc()
         logger.debug("Processing failed, using fallback: %s", error)
+        params = self._named_parameters or self._positional_parameters
         return ProcessedState(
             compiled_sql=self._raw_sql,
             execution_parameters=self._named_parameters or self._positional_parameters,
             operation_type="COMMAND",
+            parameter_fingerprint=structural_fingerprint(params, is_many=self._is_many),
             parameter_casts={},
             parameter_profile=ParameterProfile.empty(),
             operation_profile=OperationProfile.empty(),
