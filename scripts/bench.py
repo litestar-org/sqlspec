@@ -130,9 +130,6 @@ SCENARIO_REGISTRY = {
     ("asyncpg", "postgres", "read_heavy"): do_read_heavy_placeholder,
 }
 
-def fallback_scenario():
-    time.sleep(0.01)
-
 
 def print_benchmark_table(results):
     console = Console()
