@@ -17,6 +17,7 @@ from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.parameters import (
     ParameterConverter,
+    ParameterProcessor,
     ParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
@@ -535,6 +536,10 @@ class SQL:
         Returns:
             Tuple of compiled SQL string and execution parameters
         """
+        if self._processed_state is not Empty:
+            if self._compiled_from_cache and not self._statement_config.parameter_config.needs_static_script_compilation:
+                return self._rebind_cached_parameters(self._processed_state)
+            return self._processed_state.compiled_sql, self._processed_state.execution_parameters
         if self._processed_state is Empty:
             try:
                 config = self._statement_config
@@ -562,6 +567,28 @@ class SQL:
                 self._processed_state = self._handle_compile_failure(e)
 
         return self._processed_state.compiled_sql, self._processed_state.execution_parameters
+
+    def _rebind_cached_parameters(self, state: "ProcessedState") -> "tuple[str, Any]":
+        params = self._named_parameters or self._positional_parameters
+        processor = ParameterProcessor(
+            converter=self._statement_config.parameter_converter,
+            validator=self._statement_config.parameter_validator,
+            cache_max_size=0,
+            validator_cache_max_size=0,
+        )
+        rebound_params = processor._transform_cached_parameters(
+            params,
+            state.parameter_profile,
+            self._statement_config.parameter_config,
+            input_named_parameters=state.parameter_profile.named_parameters,
+            is_many=self._is_many,
+            apply_wrap_types=self._statement_config.enable_parameter_type_wrapping,
+        )
+        compiled_sql = state.compiled_sql
+        output_transformer = self._statement_config.output_transformer
+        if output_transformer:
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        return compiled_sql, rebound_params
 
     def as_script(self) -> "SQL":
         """Create copy marked for script execution.
@@ -627,7 +654,7 @@ class SQL:
 
         # Reset mutable state
         new_sql._compiled_from_cache = self._processed_state is not Empty
-        new_sql._processed_state = Empty
+        new_sql._processed_state = self._processed_state if self._processed_state is not Empty else Empty
         new_sql._hash = None
         new_sql._filters = self._filters.copy()
         new_sql._named_parameters = {}

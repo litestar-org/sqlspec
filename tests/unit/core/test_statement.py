@@ -26,6 +26,7 @@ from sqlspec.core import (
     SQL,
     CompiledSQL,
     OperationType,
+    ParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
     ProcessedState,
@@ -612,6 +613,44 @@ def test_sql_copy_creates_new_instance() -> None:
     assert copy_stmt._positional_parameters != original._positional_parameters
 
     assert copy_stmt._raw_sql == original._raw_sql
+
+
+def test_sql_copy_preserves_processed_state() -> None:
+    """Parameter-only copies should preserve processed state when present."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=[2])
+
+    assert copy_stmt._processed_state is state
+
+
+def test_sql_copy_rebinds_parameters_on_compile() -> None:
+    """Cached state should rebind execution parameters for copied SQL."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+        parameter_profile=ParameterProfile.empty(),
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=[2])
+
+    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+        sql, params = copy_stmt.compile()
+
+    assert sql == "SELECT * FROM users WHERE id = ?"
+    assert params == [2]
+    mock_compile.assert_not_called()
 
 
 def test_sql_compiled_from_cache_flag_default_false() -> None:
