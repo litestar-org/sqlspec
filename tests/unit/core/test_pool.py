@@ -92,3 +92,21 @@ def test_thread_local_pools_reuse_within_thread() -> None:
 
 def test_thread_local_pools_are_distinct_by_type() -> None:
     assert get_sql_pool() is not get_processed_state_pool()
+
+
+def test_object_pool_reuse_stability_over_iterations() -> None:
+    """Pool should cap retained objects and avoid unbounded growth."""
+    pool = ObjectPool(factory=lambda: _Sentinel(0), resetter=lambda obj: setattr(obj, "value", 0), max_size=8)
+
+    for _ in range(100_000):
+        a = pool.acquire()
+        b = pool.acquire()
+        c = pool.acquire()
+        a.value = 1
+        b.value = 1
+        c.value = 1
+        pool.release(a)
+        pool.release(b)
+        pool.release(c)
+
+    assert len(pool._pool) <= 8
