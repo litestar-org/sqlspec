@@ -631,6 +631,7 @@ def get_sqlspec_rs() -> "Any | None":
     except ModuleNotFoundError:
         return None
 
+
 __all__ = (
     "ALLOYDB_CONNECTOR_INSTALLED",
     "ATTRS_INSTALLED",
@@ -693,7 +694,6 @@ __all__ = (
     "Tracer",
     "TypeAdapter",
     "TypeAdapterStub",
-    "get_sqlspec_rs",
     "UnsetType",
     "UnsetTypeStub",
     "attrs_asdict",
@@ -710,6 +710,7 @@ __all__ = (
     "cattrs_unstructure",
     "convert",
     "convert_stub",
+    "get_sqlspec_rs",
     "module_available",
     "trace",
 )

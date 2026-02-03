@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
     from sqlspec.core.statement import SQL, ProcessedState
 
-__all__ = ("ObjectPool", "get_processed_state_pool", "get_sql_pool", )
+__all__ = ("ObjectPool", "get_processed_state_pool", "get_sql_pool")
 
 
 T = TypeVar("T")

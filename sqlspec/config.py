@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, Ty
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec._typing import SQLSPEC_RS_INSTALLED, get_sqlspec_rs
+from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader

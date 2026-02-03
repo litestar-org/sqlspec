@@ -7,18 +7,7 @@ import re
 from collections import OrderedDict
 from contextlib import suppress
 from time import perf_counter
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Final,
-    Literal,
-    NamedTuple,
-    NoReturn,
-    Protocol,
-    cast,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
@@ -38,28 +27,13 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core._pool import get_sql_pool
-from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import (
-    ParameterProcessor,
-    ParameterProfile,
-    structural_fingerprint,
-    value_fingerprint,
-)
+from sqlspec.core.parameters import ParameterProcessor, ParameterProfile, structural_fingerprint, value_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
-from sqlspec.exceptions import (
-    ImproperConfigurationError,
-    NotFoundError,
-    SQLFileNotFoundError,
-    StorageCapabilityError,
-)
-from sqlspec.observability import (
-    ObservabilityRuntime,
-    get_trace_context,
-    resolve_db_system,
-)
+from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
+from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.typing import VersionCacheResult, VersionInfo
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -78,15 +52,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
+    from sqlspec.core.compiler import OperationProfile, OperationType
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
     from sqlspec.core.statement import ProcessedState
     from sqlspec.data_dictionary._types import DialectConfig
-    from sqlspec.storage import (
-        AsyncStoragePipeline,
-        StorageCapabilities,
-        SyncStoragePipeline,
-    )
+    from sqlspec.storage import AsyncStoragePipeline, StorageCapabilities, SyncStoragePipeline
     from sqlspec.typing import ForeignKeyMetadata, SchemaT, StatementParameters
 
 
@@ -126,26 +97,21 @@ def _parameter_sort_key(item: "tuple[str, object]") -> float:
 
 
 def _select_dominant_style(
-    style_counts: "dict[ParameterStyle, int]",
-    precedence: "dict[ParameterStyle, int]",
+    style_counts: "dict[ParameterStyle, int]", precedence: "dict[ParameterStyle, int]"
 ) -> "ParameterStyle":
     best_style: ParameterStyle | None = None
     best_count = -1
     best_precedence = 100
     for style, count in style_counts.items():
         current_precedence = precedence.get(style, 99)
-        if count > best_count or (
-            count == best_count and current_precedence < best_precedence
-        ):
+        if count > best_count or (count == best_count and current_precedence < best_precedence):
             best_style = style
             best_count = count
             best_precedence = current_precedence
     return cast("ParameterStyle", best_style)
 
 
-def _extract_pagination_placeholders_from_expression(
-    expression: "exp.Expression",
-) -> "set[str]":
+def _extract_pagination_placeholders_from_expression(expression: "exp.Expression") -> "set[str]":
     """Extract named placeholder names from LIMIT and OFFSET clauses of an expression.
 
     Args:
@@ -200,10 +166,7 @@ def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
         if placeholders:
             return placeholders
         # Check if it has any named placeholders at all - if not, fall through
-        has_named = any(
-            isinstance(n, exp.Placeholder) and n.this is not None
-            for n in stmt_expr.walk()
-        )
+        has_named = any(isinstance(n, exp.Placeholder) and n.this is not None for n in stmt_expr.walk())
         if has_named:
             # Expression has named placeholders but none in LIMIT/OFFSET
             return set()
@@ -310,11 +273,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
             continue
         if has_array_interface(current_obj):
             try:
-                dtype_str = (
-                    current_obj.dtype.str
-                    if has_dtype_str(current_obj.dtype)
-                    else str(type(current_obj))
-                )
+                dtype_str = current_obj.dtype.str if has_dtype_str(current_obj.dtype) else str(type(current_obj))
                 shape = tuple(int(s) for s in current_obj.shape)
                 parent[idx] = ("ndarray", dtype_str, shape)
             except (AttributeError, TypeError):
@@ -331,10 +290,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
 
             stack.append((_CONVERT_TO_TUPLE, parent, idx))
 
-            stack.extend(
-                (current_obj[i], new_list, i)
-                for i in range(len(current_obj) - 1, -1, -1)
-            )
+            stack.extend((current_obj[i], new_list, i) for i in range(len(current_obj) - 1, -1, -1))
             continue
 
         if isinstance(current_obj, dict):
@@ -352,10 +308,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
             stack.append((_CONVERT_TO_TUPLE, parent, idx))
 
             for i in range(len(items_list) - 1, -1, -1):
-                stack.extend((
-                    (_CONVERT_TO_TUPLE, items_list, i),
-                    (items_list[i][1], items_list[i], 1),
-                ))
+                stack.extend(((_CONVERT_TO_TUPLE, items_list, i), (items_list[i][1], items_list[i], 1)))
 
             continue
 
@@ -370,10 +323,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
 
             stack.append((_CONVERT_TO_FROZENSET, parent, idx))
 
-            stack.extend(
-                (sorted_list[i], new_list, i)
-                for i in range(len(sorted_list) - 1, -1, -1)
-            )
+            stack.extend((sorted_list[i], new_list, i) for i in range(len(sorted_list) - 1, -1, -1))
             continue
 
         parent[idx] = current_obj
@@ -457,9 +407,7 @@ class StackExecutionObserver:
             "sqlspec.stack.native_pipeline": self.native_pipeline,
             "sqlspec.stack.forced_disable": self.driver.stack_native_disabled,
         }
-        self.span = self.runtime.start_span(
-            "sqlspec.stack.execute", attributes=attributes
-        )
+        self.span = self.runtime.start_span("sqlspec.stack.execute", attributes=attributes)
         log_with_context(
             logger,
             logging.DEBUG,
@@ -476,16 +424,12 @@ class StackExecutionObserver:
         )
         return self
 
-    def __exit__(
-        self, exc_type: Any, exc: Exception | None, exc_tb: Any
-    ) -> Literal[False]:
+    def __exit__(self, exc_type: Any, exc: Exception | None, exc_tb: Any) -> Literal[False]:
         duration = perf_counter() - self.started
         self.metrics.record_duration(duration)
         if exc is not None:
             self.metrics.record_error(exc)
-        self.runtime.span_manager.end_span(
-            self.span, error=exc if exc is not None else None
-        )
+        self.runtime.span_manager.end_span(self.span, error=exc if exc is not None else None)
         self.metrics.emit(self.runtime)
         level = logging.ERROR if exc is not None else logging.DEBUG
         trace_id, span_id = get_trace_context()
@@ -580,9 +524,7 @@ class DataDictionaryDialectMixin:
     def list_available_features(self) -> "list[str]":
         """List available feature flags for this dialect."""
         config = self.get_dialect_config()
-        features = set(config.feature_flags.keys()) | set(
-            config.feature_versions.keys()
-        )
+        features = set(config.feature_flags.keys()) | set(config.feature_versions.keys())
         return sorted(features)
 
 
@@ -642,9 +584,7 @@ class DataDictionaryMixin:
         """
         return self.get_cached_version(id(driver))
 
-    def cache_version_for_driver(
-        self, driver: Any, version: "VersionInfo | None"
-    ) -> None:
+    def cache_version_for_driver(self, driver: Any, version: "VersionInfo | None") -> None:
         """Cache version info for a driver instance.
 
         Args:
@@ -672,19 +612,13 @@ class DataDictionaryMixin:
                 groups = match.groups()
 
                 major = int(groups[0])
-                minor = (
-                    int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR else 0
-                )
-                patch = (
-                    int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH else 0
-                )
+                minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR else 0
+                patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH else 0
                 return VersionInfo(major, minor, patch)
 
         return None
 
-    def parse_version_with_pattern(
-        self, pattern: "re.Pattern[str]", version_str: str
-    ) -> "VersionInfo | None":
+    def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
         """Parse version string using a specific regex pattern.
 
         Args:
@@ -704,16 +638,8 @@ class DataDictionaryMixin:
             return None
 
         major = int(groups[0])
-        minor = (
-            int(groups[1])
-            if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR and groups[1]
-            else 0
-        )
-        patch = (
-            int(groups[2])
-            if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2]
-            else 0
-        )
+        minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR and groups[1] else 0
+        patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2] else 0
         return VersionInfo(major, minor, patch)
 
     def _resolve_log_adapter(self) -> str:
@@ -725,24 +651,15 @@ class DataDictionaryMixin:
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
         """Log detected database version with db.system context."""
         logger.debug(
-            "Detected database version",
-            extra={"db.system": resolve_db_system(adapter), "db.version": str(version)},
+            "Detected database version", extra={"db.system": resolve_db_system(adapter), "db.version": str(version)}
         )
 
     def _log_version_unavailable(self, adapter: str, reason: str) -> None:
         """Log that database version could not be determined."""
-        logger.debug(
-            "Database version unavailable",
-            extra={"db.system": resolve_db_system(adapter), "reason": reason},
-        )
+        logger.debug("Database version unavailable", extra={"db.system": resolve_db_system(adapter), "reason": reason})
 
     def _log_schema_introspect(
-        self,
-        driver: Any,
-        *,
-        schema_name: "str | None",
-        table_name: "str | None",
-        operation: str,
+        self, driver: Any, *, schema_name: "str | None", table_name: "str | None", operation: str
     ) -> None:
         """Log schema-level introspection activity."""
         log_with_context(
@@ -755,9 +672,7 @@ class DataDictionaryMixin:
             operation=operation,
         )
 
-    def _log_table_describe(
-        self, driver: Any, *, schema_name: "str | None", table_name: str, operation: str
-    ) -> None:
+    def _log_table_describe(self, driver: Any, *, schema_name: "str | None", table_name: str, operation: str) -> None:
         """Log table-level introspection activity."""
         log_with_context(
             logger,
@@ -769,9 +684,7 @@ class DataDictionaryMixin:
             operation=operation,
         )
 
-    def detect_version_with_queries(
-        self, driver: "HasExecuteProtocol", queries: "list[str]"
-    ) -> "VersionInfo | None":
+    def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version.
 
         Args:
@@ -796,9 +709,7 @@ class DataDictionaryMixin:
 
                     parsed_version = self.parse_version_string(version_str)
                     if parsed_version:
-                        self._log_version_detected(
-                            self._resolve_log_adapter(), parsed_version
-                        )
+                        self._log_version_detected(self._resolve_log_adapter(), parsed_version)
                         return parsed_version
 
         self._log_version_unavailable(self._resolve_log_adapter(), "queries_exhausted")
@@ -829,9 +740,7 @@ class DataDictionaryMixin:
         """
         return ["supports_transactions", "supports_prepared_statements"]
 
-    def sort_tables_topologically(
-        self, tables: "list[str]", foreign_keys: "list[ForeignKeyMetadata]"
-    ) -> "list[str]":
+    def sort_tables_topologically(self, tables: "list[str]", foreign_keys: "list[ForeignKeyMetadata]") -> "list[str]":
         """Sort tables topologically based on foreign key dependencies using Python.
 
         Args:
@@ -887,11 +796,7 @@ class ExecutionResult(NamedTuple):
 EXEC_CURSOR_RESULT: Final[int] = 0
 EXEC_ROWCOUNT_OVERRIDE: Final[int] = 1
 EXEC_SPECIAL_DATA: Final[int] = 2
-DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (
-    None,
-    None,
-    None,
-)
+DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
 
 
 _DEFAULT_METADATA: Final = {"status_message": "OK"}
@@ -973,11 +878,7 @@ class CommonDriverAttributesMixin:
         self._query_cache = _QueryCache(_FAST_PATH_QUERY_CACHE_SIZE)
         self._fast_path_enabled = False
         self._fast_path_binder: (
-            Callable[
-                [Any, ParameterProfile, Any, tuple[str, ...], bool, bool],
-                ConvertedParameters,
-            ]
-            | None
+            Callable[[Any, ParameterProfile, Any, tuple[str, ...], bool, bool], ConvertedParameters] | None
         ) = None
         binder = self.driver_features.get("fast_path_binder")
         if binder is not None and callable(binder):
@@ -990,10 +891,7 @@ class CommonDriverAttributesMixin:
         self._update_fast_path_flag()
 
     def _update_fast_path_flag(self) -> None:
-        self._fast_path_enabled = bool(
-            not self.statement_config.statement_transformers
-            and self.observability.is_idle,
-        )
+        self._fast_path_enabled = bool(not self.statement_config.statement_transformers and self.observability.is_idle)
 
     @property
     def observability(self) -> "ObservabilityRuntime":
@@ -1051,9 +949,7 @@ class CommonDriverAttributesMixin:
         human_label = CAPABILITY_HINTS.get(capability_flag, capability_flag)
         remediation = "Check adapter supports this capability or stage artifacts via storage pipeline."
         msg = f"{human_label} is not available for this adapter"
-        raise StorageCapabilityError(
-            msg, capability=capability_flag, remediation=remediation
-        )
+        raise StorageCapabilityError(msg, capability=capability_flag, remediation=remediation)
 
     def _raise_storage_not_implemented(self, capability: str) -> None:
         """Raise NotImplementedError for storage operations.
@@ -1066,20 +962,14 @@ class CommonDriverAttributesMixin:
 
         """
         msg = f"{capability} is not implemented for this driver"
-        remediation = (
-            "Override storage methods on the adapter to enable this capability."
-        )
-        raise StorageCapabilityError(
-            msg, capability=capability, remediation=remediation
-        )
+        remediation = "Override storage methods on the adapter to enable this capability."
+        raise StorageCapabilityError(msg, capability=capability, remediation=remediation)
 
     def _release_pooled_statement(self, statement: "SQL") -> None:
         if getattr(statement, "_pooled", False):
             get_sql_pool().release(statement)
 
-    def _fast_rebind(
-        self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery"
-    ) -> "ConvertedParameters":
+    def _fast_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
         binder = self._fast_path_binder
         if binder is not None:
             return binder(
@@ -1091,11 +981,7 @@ class CommonDriverAttributesMixin:
                 cached.applied_wrap_types,
             )
         config = self.statement_config.parameter_config
-        if (
-            not cached.input_named_parameters
-            and not cached.applied_wrap_types
-            and not config.type_coercion_map
-        ):
+        if not cached.input_named_parameters and not cached.applied_wrap_types and not config.type_coercion_map:
             return params
         processor = ParameterProcessor(
             converter=self.statement_config.parameter_converter,
@@ -1151,9 +1037,7 @@ class CommonDriverAttributesMixin:
         )
         return statement
 
-    def _try_fast_execute(
-        self, statement: str, params: "tuple[Any, ...] | list[Any]"
-    ) -> "SQLResult | None":
+    def _try_fast_execute(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
         if not self._fast_path_enabled:
             return None
         if self.statement_config.parameter_config.needs_static_script_compilation:
@@ -1163,25 +1047,16 @@ class CommonDriverAttributesMixin:
             return None
         if cached.param_count != len(params):
             return None
-        if (
-            isinstance(params, list)
-            and params
-            and isinstance(params[0], (tuple, list, dict))
-            and len(params) > 1
-        ):
+        if isinstance(params, list) and params and isinstance(params[0], (tuple, list, dict)) and len(params) > 1:
             return None
 
         rebound_params = self._fast_rebind(params, cached)
         compiled_sql = cached.compiled_sql
         output_transformer = self.statement_config.output_transformer
         if output_transformer:
-            compiled_sql, rebound_params = output_transformer(
-                compiled_sql, rebound_params
-            )
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
 
-        fast_statement = self._build_fast_statement(
-            statement, params, cached, rebound_params
-        )
+        fast_statement = self._build_fast_statement(statement, params, cached, rebound_params)
         return self._execute_raw(fast_statement, compiled_sql, rebound_params)
 
     def _execute_raw(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
@@ -1221,24 +1096,16 @@ class CommonDriverAttributesMixin:
 
     @overload
     @staticmethod
-    def to_schema(
-        data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]"
-    ) -> "list[SchemaT]": ...
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
     @overload
     @staticmethod
-    def to_schema(
-        data: "list[dict[str, Any]]", *, schema_type: None = None
-    ) -> "list[dict[str, Any]]": ...
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
     @overload
     @staticmethod
-    def to_schema(
-        data: "dict[str, Any]", *, schema_type: "type[SchemaT]"
-    ) -> "SchemaT": ...
+    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
     @overload
     @staticmethod
-    def to_schema(
-        data: "dict[str, Any]", *, schema_type: None = None
-    ) -> "dict[str, Any]": ...
+    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
     @overload
     @staticmethod
     def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
@@ -1320,9 +1187,7 @@ class CommonDriverAttributesMixin:
             last_inserted_id,
         )
 
-    def build_statement_result(
-        self, statement: "SQL", execution_result: ExecutionResult
-    ) -> "SQLResult":
+    def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
         """Build and return the SQLResult from ExecutionResult data.
 
         Args:
@@ -1433,17 +1298,11 @@ class CommonDriverAttributesMixin:
         filters, data_parameters = self._split_parameters(parameters)
 
         if isinstance(statement, QueryBuilder):
-            sql_statement = self._prepare_from_builder(
-                statement, data_parameters, statement_config, kwargs
-            )
+            sql_statement = self._prepare_from_builder(statement, data_parameters, statement_config, kwargs)
         elif isinstance(statement, SQL):
-            sql_statement = self._prepare_from_sql(
-                statement, data_parameters, statement_config, kwargs
-            )
+            sql_statement = self._prepare_from_sql(statement, data_parameters, statement_config, kwargs)
         else:
-            sql_statement = self._prepare_from_string(
-                statement, data_parameters, statement_config, kwargs
-            )
+            sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
             # Cache the newly created SQL object for future use
             if not filters and not kwargs and isinstance(statement, str):
                 self._statement_cache[statement] = sql_statement
@@ -1451,8 +1310,7 @@ class CommonDriverAttributesMixin:
         return self._apply_filters(sql_statement, filters)
 
     def _split_parameters(
-        self,
-        parameters: "tuple[StatementParameters | StatementFilter, ...]",
+        self, parameters: "tuple[StatementParameters | StatementFilter, ...]"
     ) -> "tuple[list[StatementFilter], list[StatementParameters]]":
         filters: list[StatementFilter] = []
         data_parameters: list[StatementParameters] = []
@@ -1478,12 +1336,7 @@ class CommonDriverAttributesMixin:
                 else sql_statement.positional_parameters
             )
             statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
-            return SQL(
-                statement_seed,
-                *merged_parameters,
-                statement_config=statement_config,
-                **kwargs,
-            )
+            return SQL(statement_seed, *merged_parameters, statement_config=statement_config, **kwargs)
         return sql_statement
 
     def _prepare_from_sql(
@@ -1500,12 +1353,7 @@ class CommonDriverAttributesMixin:
                 else sql_statement.positional_parameters
             )
             statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
-            return SQL(
-                statement_seed,
-                *merged_parameters,
-                statement_config=statement_config,
-                **kwargs,
-            )
+            return SQL(statement_seed, *merged_parameters, statement_config=statement_config, **kwargs)
 
         needs_rebuild = False
         if statement_config.dialect and (
@@ -1521,29 +1369,12 @@ class CommonDriverAttributesMixin:
             needs_rebuild = True
 
         if needs_rebuild:
-            statement_seed = (
-                sql_statement.raw_expression
-                or sql_statement.raw_sql
-                or sql_statement.sql
-            )
+            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql or sql_statement.sql
             if sql_statement.is_many and sql_statement.parameters:
-                return SQL(
-                    statement_seed,
-                    sql_statement.parameters,
-                    statement_config=statement_config,
-                    is_many=True,
-                )
+                return SQL(statement_seed, sql_statement.parameters, statement_config=statement_config, is_many=True)
             if sql_statement.named_parameters:
-                return SQL(
-                    statement_seed,
-                    statement_config=statement_config,
-                    **sql_statement.named_parameters,
-                )
-            return SQL(
-                statement_seed,
-                *sql_statement.positional_parameters,
-                statement_config=statement_config,
-            )
+                return SQL(statement_seed, statement_config=statement_config, **sql_statement.named_parameters)
+            return SQL(statement_seed, *sql_statement.positional_parameters, statement_config=statement_config)
         return sql_statement
 
     def _prepare_from_string(
@@ -1553,25 +1384,15 @@ class CommonDriverAttributesMixin:
         statement_config: "StatementConfig",
         kwargs: "dict[str, Any]",
     ) -> "SQL":
-        return SQL(
-            statement,
-            *tuple(data_parameters),
-            statement_config=statement_config,
-            **kwargs,
-        )
+        return SQL(statement, *tuple(data_parameters), statement_config=statement_config, **kwargs)
 
-    def _apply_filters(
-        self, sql_statement: "SQL", filters: "list[StatementFilter]"
-    ) -> "SQL":
+    def _apply_filters(self, sql_statement: "SQL", filters: "list[StatementFilter]") -> "SQL":
         for filter_obj in filters:
             sql_statement = filter_obj.append_to_statement(sql_statement)
         return sql_statement
 
     def split_script_statements(
-        self,
-        script: str,
-        statement_config: "StatementConfig",
-        strip_trailing_semicolon: bool = False,
+        self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
     ) -> "list[str]":
         """Split a SQL script into individual statements.
 
@@ -1590,9 +1411,7 @@ class CommonDriverAttributesMixin:
         return [
             sql_script.strip()
             for sql_script in split_sql_script(
-                script,
-                dialect=str(statement_config.dialect),
-                strip_trailing_terminator=strip_trailing_semicolon,
+                script, dialect=str(statement_config.dialect), strip_trailing_terminator=strip_trailing_semicolon
             )
             if sql_script.strip()
         ]
@@ -1619,10 +1438,7 @@ class CommonDriverAttributesMixin:
             Parameters with TypedParameter objects unwrapped to primitive values
 
         """
-        if (
-            parameters is None
-            and statement_config.parameter_config.needs_static_script_compilation
-        ):
+        if parameters is None and statement_config.parameter_config.needs_static_script_compilation:
             return None
 
         if not parameters:
@@ -1630,18 +1446,11 @@ class CommonDriverAttributesMixin:
 
         if is_many:
             if isinstance(parameters, list):
-                return [
-                    self._format_parameter_set_for_many(param_set, statement_config)
-                    for param_set in parameters
-                ]
+                return [self._format_parameter_set_for_many(param_set, statement_config) for param_set in parameters]
             return [self._format_parameter_set_for_many(parameters, statement_config)]
         return self._format_parameter_set(parameters, statement_config)
 
-    def _apply_coercion(
-        self,
-        value: object,
-        type_coercion_map: "dict[type, Callable[[Any], Any]] | None",
-    ) -> object:
+    def _apply_coercion(self, value: object, type_coercion_map: "dict[type, Callable[[Any], Any]] | None") -> object:
         """Apply type coercion to a single value.
 
         Args:
@@ -1660,9 +1469,7 @@ class CommonDriverAttributesMixin:
         return unwrapped_value
 
     def _format_parameter_set_for_many(
-        self,
-        parameters: "StatementParameters",
-        statement_config: "StatementConfig",
+        self, parameters: "StatementParameters", statement_config: "StatementConfig"
     ) -> "ConvertedParameters":
         """Prepare a single parameter set for execute_many operations.
 
@@ -1687,19 +1494,13 @@ class CommonDriverAttributesMixin:
             return [coerce_value(parameters, type_coercion_map)]
 
         if isinstance(parameters, dict):
-            return {
-                k: coerce_value(v, type_coercion_map) for k, v in parameters.items()
-            }
+            return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
 
         coerced_params = [coerce_value(p, type_coercion_map) for p in parameters]
-        return (
-            tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
-        )
+        return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
 
     def _format_parameter_set(
-        self,
-        parameters: "StatementParameters",
-        statement_config: "StatementConfig",
+        self, parameters: "StatementParameters", statement_config: "StatementConfig"
     ) -> "ConvertedParameters":
         """Prepare a single parameter set for database driver consumption.
 
@@ -1721,44 +1522,28 @@ class CommonDriverAttributesMixin:
             return [coerce_value(parameters, type_coercion_map)]
 
         if isinstance(parameters, dict):
-            if (
-                statement_config.parameter_config.supported_execution_parameter_styles
-                and (
-                    ParameterStyle.NAMED_PYFORMAT
-                    in statement_config.parameter_config.supported_execution_parameter_styles
-                    or ParameterStyle.NAMED_COLON
-                    in statement_config.parameter_config.supported_execution_parameter_styles
-                )
+            if statement_config.parameter_config.supported_execution_parameter_styles and (
+                ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
+                or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
             ):
-                return {
-                    k: coerce_value(v, type_coercion_map) for k, v in parameters.items()
-                }
+                return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
             if statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
             }:
                 sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
-                return [
-                    coerce_value(value, type_coercion_map) for _, value in sorted_items
-                ]
+                return [coerce_value(value, type_coercion_map) for _, value in sorted_items]
 
-            return {
-                k: coerce_value(v, type_coercion_map) for k, v in parameters.items()
-            }
+            return {k: coerce_value(v, type_coercion_map) for k, v in parameters.items()}
 
         coerced_params = [coerce_value(p, type_coercion_map) for p in parameters]
-        if statement_config.parameter_config.preserve_parameter_format and isinstance(
-            parameters, tuple
-        ):
+        if statement_config.parameter_config.preserve_parameter_format and isinstance(parameters, tuple):
             return tuple(coerced_params)
         return coerced_params
 
     def _get_compiled_sql(
-        self,
-        statement: "SQL",
-        statement_config: "StatementConfig",
-        flatten_single_parameters: bool = False,
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[str, object]":
         """Get compiled SQL with parameter style conversion and caching.
 
@@ -1775,17 +1560,12 @@ class CommonDriverAttributesMixin:
 
         """
         compiled_statement, prepared_parameters = self._get_compiled_statement(
-            statement,
-            statement_config,
-            flatten_single_parameters=flatten_single_parameters,
+            statement, statement_config, flatten_single_parameters=flatten_single_parameters
         )
         return compiled_statement.compiled_sql, prepared_parameters
 
     def _get_compiled_statement(
-        self,
-        statement: "SQL",
-        statement_config: "StatementConfig",
-        flatten_single_parameters: bool = False,
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[CachedStatement, object]":
         """Compile SQL and return cached statement metadata plus prepared parameters.
 
@@ -1799,15 +1579,10 @@ class CommonDriverAttributesMixin:
             if getattr(statement, "_compiled_from_cache", False):
                 compiled_sql, execution_parameters = statement.compile()
                 prepared_parameters = self.prepare_driver_parameters(
-                    execution_parameters,
-                    statement_config,
-                    is_many=statement.is_many,
-                    prepared_statement=statement,
+                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
                 )
                 cached_statement = CachedStatement(
-                    compiled_sql=compiled_sql,
-                    parameters=prepared_parameters,
-                    expression=statement.expression,
+                    compiled_sql=compiled_sql, parameters=prepared_parameters, expression=statement.expression
                 )
                 self._maybe_cache_fast_path(statement)
                 return cached_statement, prepared_parameters
@@ -1845,9 +1620,7 @@ class CommonDriverAttributesMixin:
         cache_key = None
         cache = None
         if cache_config.compiled_cache_enabled and statement_config.enable_caching:
-            cache_key = self._generate_compilation_cache_key(
-                statement, statement_config, flatten_single_parameters
-            )
+            cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
             cached_result = cache.get_statement(cache_key, dialect_key)
             if cached_result is not None and isinstance(cached_result, CachedStatement):
@@ -1856,10 +1629,7 @@ class CommonDriverAttributesMixin:
                 # Compile with the statement's parameters to get correctly processed values.
                 compiled_sql, execution_parameters = statement.compile()
                 prepared_parameters = self.prepare_driver_parameters(
-                    execution_parameters,
-                    statement_config,
-                    is_many=statement.is_many,
-                    prepared_statement=statement,
+                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
                 )
                 # Return cached SQL metadata but with newly processed parameters
                 # Preserve list type for execute_many operations (some drivers require list, not tuple)
@@ -1875,21 +1645,12 @@ class CommonDriverAttributesMixin:
         compiled_sql, execution_parameters = statement.compile()
 
         prepared_parameters = self.prepare_driver_parameters(
-            execution_parameters,
-            statement_config,
-            is_many=statement.is_many,
-            prepared_statement=statement,
+            execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
         )
 
-        cached_parameters = (
-            tuple(prepared_parameters)
-            if isinstance(prepared_parameters, list)
-            else prepared_parameters
-        )
+        cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
         cached_statement = CachedStatement(
-            compiled_sql=compiled_sql,
-            parameters=cached_parameters,
-            expression=statement.expression,
+            compiled_sql=compiled_sql, parameters=cached_parameters, expression=statement.expression
         )
 
         if cache_key is not None and cache is not None:
@@ -1899,10 +1660,7 @@ class CommonDriverAttributesMixin:
         return cached_statement, prepared_parameters
 
     def _generate_compilation_cache_key(
-        self,
-        statement: "SQL",
-        config: "StatementConfig",
-        flatten_single_parameters: bool,
+        self, statement: "SQL", config: "StatementConfig", flatten_single_parameters: bool
     ) -> str:
         """Generate cache key that includes all compilation context.
 
@@ -1910,10 +1668,7 @@ class CommonDriverAttributesMixin:
         preventing cache contamination between different compilation contexts.
         """
         statement_transformers = (
-            tuple(
-                _callable_cache_key(transformer)
-                for transformer in config.statement_transformers
-            )
+            tuple(_callable_cache_key(transformer) for transformer in config.statement_transformers)
             if config.statement_transformers
             else ()
         )
@@ -1935,11 +1690,11 @@ class CommonDriverAttributesMixin:
         if params is None or (isinstance(params, (list, tuple, dict)) and not params):
             return f"compiled:{hash(statement.sql)}:{context_hash}"
 
-        if isinstance(params, tuple) and all(
-            isinstance(p, (int, str, bytes, bool, type(None))) for p in params
-        ):
+        if isinstance(params, tuple) and all(isinstance(p, (int, str, bytes, bool, type(None))) for p in params):
             try:
-                return f"compiled:{hash((statement.sql, params, statement.is_many, statement.is_script))}:{context_hash}"
+                return (
+                    f"compiled:{hash((statement.sql, params, statement.is_many, statement.is_script))}:{context_hash}"
+                )
             except TypeError:
                 pass
 
@@ -1950,17 +1705,10 @@ class CommonDriverAttributesMixin:
             params_fingerprint = value_fingerprint(params)
         else:
             params_fingerprint = structural_fingerprint(params)
-        base_hash = hash((
-            statement.sql,
-            params_fingerprint,
-            statement.is_many,
-            statement.is_script,
-        ))
+        base_hash = hash((statement.sql, params_fingerprint, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 
-    def _get_dominant_parameter_style(
-        self, parameters: "list[Any]"
-    ) -> "ParameterStyle | None":
+    def _get_dominant_parameter_style(self, parameters: "list[Any]") -> "ParameterStyle | None":
         """Determine the dominant parameter style from parameter info list.
 
         Args:
@@ -2087,23 +1835,15 @@ class CommonDriverAttributesMixin:
                     count_expr.set("joins", [join.copy() for join in joins])
 
                 if expr.args.get("where"):
-                    count_expr = count_expr.where(
-                        cast("exp.Expression", expr.args.get("where")).copy(),
-                        copy=False,
-                    )
+                    count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")).copy(), copy=False)
                 if expr.args.get("having"):
-                    count_expr = count_expr.having(
-                        cast("exp.Expression", expr.args.get("having")).copy(),
-                        copy=False,
-                    )
+                    count_expr = count_expr.having(cast("exp.Expression", expr.args.get("having")).copy(), copy=False)
 
             if cte is not None:
                 count_expr.set("with_", cte.copy())
             # Filter out pagination parameters (limit/offset) captured before compile()
             filtered_named_params = {
-                k: v
-                for k, v in original_sql.named_parameters.items()
-                if k not in pagination_params
+                k: v for k, v in original_sql.named_parameters.items() if k not in pagination_params
             }
             return SQL(
                 count_expr,
@@ -2117,11 +1857,7 @@ class CommonDriverAttributesMixin:
         if cte is not None:
             count_expr.set("with_", cte.copy())
         # Filter out pagination parameters (limit/offset) captured before compile()
-        filtered_named_params = {
-            k: v
-            for k, v in original_sql.named_parameters.items()
-            if k not in pagination_params
-        }
+        filtered_named_params = {k: v for k, v in original_sql.named_parameters.items() if k not in pagination_params}
         return SQL(
             count_expr,
             *original_sql.positional_parameters,
@@ -2129,9 +1865,7 @@ class CommonDriverAttributesMixin:
             **filtered_named_params,
         )
 
-    def _add_count_over_column(
-        self, original_sql: "SQL", alias: str = "_total_count"
-    ) -> "SQL":
+    def _add_count_over_column(self, original_sql: "SQL", alias: str = "_total_count") -> "SQL":
         """Add a COUNT(*) OVER() column to the SELECT statement for inline total counts.
 
         This method modifies the SELECT to include a window function that returns

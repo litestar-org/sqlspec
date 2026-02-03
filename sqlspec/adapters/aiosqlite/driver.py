@@ -122,11 +122,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     async def _execute_raw_async(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
         exc_handler = self.handle_database_exceptions()
         cursor_manager = self.with_cursor(self.connection)
-        cursor: "aiosqlite.Cursor | None" = None
+        cursor: aiosqlite.Cursor | None = None
         exc: Exception | None = None
         exc_handler_entered = False
         cursor_entered = False
-        result: "SQLResult | None" = None
+        result: SQLResult | None = None
 
         try:
             await exc_handler.__aenter__()
@@ -139,7 +139,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 fetched_data = await cursor.fetchall()
                 data, column_names, row_count = collect_rows(cast("list[Any]", fetched_data), cursor.description)
                 execution_result = self.create_execution_result(
-                    cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
+                    cursor,
+                    selected_data=data,
+                    column_names=column_names,
+                    data_row_count=row_count,
+                    is_select_result=True,
                 )
             else:
                 affected_rows = resolve_rowcount(cursor)

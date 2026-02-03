@@ -334,7 +334,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc: Exception | None = None
         exc_handler_entered = False
         cursor_entered = False
-        result: "SQLResult | None" = None
+        result: SQLResult | None = None
 
         try:
             await exc_handler.__aenter__()

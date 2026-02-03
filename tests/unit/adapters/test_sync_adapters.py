@@ -9,8 +9,8 @@ import pytest
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
-from sqlspec.typing import Empty
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+from sqlspec.typing import Empty
 from tests.unit.adapters.conftest import MockSyncConnection, MockSyncDriver
 
 pytestmark = pytest.mark.xdist_group("adapter_unit")

@@ -9,6 +9,8 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from anyio import Path as AsyncPath
+
 from sqlspec.storage import storage_registry
 from sqlspec.utils.serializers import from_json as decode_json
 from sqlspec.utils.serializers import schema_dump
@@ -235,7 +237,7 @@ async def write_fixture_async(
     """
     if storage_backend == "local":
         uri = "file://"
-        storage_kwargs["base_path"] = str(Path(fixtures_path).resolve())
+        storage_kwargs["base_path"] = str(await AsyncPath(fixtures_path).resolve())
     else:
         uri = storage_backend
 

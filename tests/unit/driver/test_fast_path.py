@@ -22,11 +22,17 @@ class _FakeDriver(CommonDriverAttributesMixin):
 def test_query_cache_lru_eviction() -> None:
     cache = _QueryCache(max_size=2)
 
-    cache.set("a", CachedQuery("SQL_A", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1))
-    cache.set("b", CachedQuery("SQL_B", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1))
+    cache.set(
+        "a", CachedQuery("SQL_A", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
+    )
+    cache.set(
+        "b", CachedQuery("SQL_B", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
+    )
     assert cache.get("a") is not None
 
-    cache.set("c", CachedQuery("SQL_C", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1))
+    cache.set(
+        "c", CachedQuery("SQL_C", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
+    )
 
     assert cache.get("b") is None
     assert cache.get("a") is not None
@@ -36,10 +42,18 @@ def test_query_cache_lru_eviction() -> None:
 def test_query_cache_update_moves_to_end() -> None:
     cache = _QueryCache(max_size=2)
 
-    cache.set("a", CachedQuery("SQL_A", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1))
-    cache.set("b", CachedQuery("SQL_B", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1))
-    cache.set("a", CachedQuery("SQL_A2", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 2))
-    cache.set("c", CachedQuery("SQL_C", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1))
+    cache.set(
+        "a", CachedQuery("SQL_A", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
+    )
+    cache.set(
+        "b", CachedQuery("SQL_B", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
+    )
+    cache.set(
+        "a", CachedQuery("SQL_A2", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 2)
+    )
+    cache.set(
+        "c", CachedQuery("SQL_C", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
+    )
 
     assert cache.get("b") is None
     entry = cache.get("a")
@@ -186,9 +200,7 @@ async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, mon
 
 
 @pytest.mark.asyncio
-async def test_async_execute_skips_fast_path_with_statement_config_override(
-    mock_async_driver, monkeypatch
-) -> None:
+async def test_async_execute_skips_fast_path_with_statement_config_override(mock_async_driver, monkeypatch) -> None:
     called = False
 
     async def _fake_try(statement: str, params: tuple[Any, ...] | list[Any]) -> object:

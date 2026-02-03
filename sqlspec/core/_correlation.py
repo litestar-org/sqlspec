@@ -162,7 +162,7 @@ class CorrelationExtractor:
             the sanitized value is empty.
         """
         sanitized = value.strip()[: self._max_length]
-        return sanitized if sanitized else CorrelationContext.generate()
+        return sanitized or CorrelationContext.generate()
 
     def __repr__(self) -> str:
         return f"CorrelationExtractor(headers={self._headers!r}, max_length={self._max_length!r})"
