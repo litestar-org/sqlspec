@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
+    from sqlspec.core.statement import ProcessedState
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
