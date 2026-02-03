@@ -305,26 +305,19 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     async def qc_lookup(
         self, statement: str, params: "tuple[Any, ...] | list[Any]"
     ) -> "SQLResult | None":
-        if not self._qc_enabled:
-            return None
-        if self.statement_config.parameter_config.needs_static_script_compilation:
-            return None
-        cached = self._qc.get(statement)
-        if cached is None:
-            return None
-        if cached.param_count != len(params):
-            return None
-        if isinstance(params, list) and params and isinstance(params[0], (tuple, list, dict)) and len(params) > 1:
-            return None
+        """Attempt fast-path execution for cached query (async).
 
-        rebound_params = self.qc_rebind(params, cached)
-        compiled_sql = cached.compiled_sql
-        output_transformer = self.statement_config.output_transformer
-        if output_transformer:
-            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        Args:
+            statement: Raw SQL string.
+            params: Query parameters.
 
-        fast_statement = self.qc_build(statement, params, cached, rebound_params)
-        return await self.qc_execute(fast_statement, compiled_sql, rebound_params)
+        Returns:
+            SQLResult if cache hit and execution succeeds, None otherwise.
+        """
+        prep = self.qc_prepare(statement, params)
+        if prep is None:
+            return None
+        return await self.qc_execute(*prep)
 
     async def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
         _ = (sql, params)

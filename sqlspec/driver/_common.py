@@ -1002,13 +1002,24 @@ class CommonDriverAttributesMixin:
         )
         return statement
 
-    def qc_lookup(
+    def qc_prepare(
         self, statement: str, params: "tuple[Any, ...] | list[Any]"
-    ) -> "SQLResult | None":
+    ) -> "tuple[SQL, str, Any] | None":
+        """Prepare fast-path execution if cache hit.
+
+        Args:
+            statement: Raw SQL string.
+            params: Query parameters (tuple or list).
+
+        Returns:
+            Tuple of (SQL object, compiled SQL, bound params) if cache hit,
+            None if cache miss or ineligible.
+        """
         if not self._qc_enabled:
             return None
         if self.statement_config.parameter_config.needs_static_script_compilation:
             return None
+
         cached = self._qc.get(statement)
         if cached is None:
             return None
@@ -1019,12 +1030,30 @@ class CommonDriverAttributesMixin:
 
         rebound_params = self.qc_rebind(params, cached)
         compiled_sql = cached.compiled_sql
+
         output_transformer = self.statement_config.output_transformer
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
 
         fast_statement = self.qc_build(statement, params, cached, rebound_params)
-        return cast("SQLResult", self.qc_execute(fast_statement, compiled_sql, rebound_params))
+        return fast_statement, compiled_sql, rebound_params
+
+    def qc_lookup(
+        self, statement: str, params: "tuple[Any, ...] | list[Any]"
+    ) -> "SQLResult | None":
+        """Attempt fast-path execution for cached query.
+
+        Args:
+            statement: Raw SQL string.
+            params: Query parameters.
+
+        Returns:
+            SQLResult if cache hit and execution succeeds, None otherwise.
+        """
+        prep = self.qc_prepare(statement, params)
+        if prep is None:
+            return None
+        return cast("SQLResult", self.qc_execute(*prep))
 
     def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
