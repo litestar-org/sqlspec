@@ -6,9 +6,17 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
+from sqlspec.core import (
+    SQL,
+    ParameterStyle,
+    ParameterStyleConfig,
+    SQLResult,
+    StatementConfig,
+    get_default_config,
+)
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.typing import Empty
 from tests.unit.adapters.conftest import MockSyncConnection, MockSyncDriver
 
 pytestmark = pytest.mark.xdist_group("adapter_unit")
@@ -203,6 +211,26 @@ def test_sync_driver_dispatch_statement_execution_many(mock_sync_driver: MockSyn
     assert isinstance(result, SQLResult)
     assert result.operation_type == "INSERT"
     assert result.rows_affected == 2
+
+
+def test_sync_driver_releases_pooled_statement(mock_sync_driver: MockSyncDriver) -> None:
+    """Pooled statements should be reset after dispatch execution."""
+    seed = "SELECT * FROM users WHERE id = ?"
+    mock_sync_driver.prepare_statement(
+        seed, (1,), statement_config=mock_sync_driver.statement_config, kwargs={}
+    )
+    pooled = mock_sync_driver.prepare_statement(
+        seed, (2,), statement_config=mock_sync_driver.statement_config, kwargs={}
+    )
+
+    assert pooled._pooled is True
+
+    mock_sync_driver.dispatch_statement_execution(pooled, mock_sync_driver.connection)
+
+    assert pooled._raw_sql == ""
+    assert pooled._processed_state is Empty
+    assert pooled._filters == []
+    assert pooled._statement_config is get_default_config()
 
 
 def test_sync_driver_transaction_management(mock_sync_driver: MockSyncDriver) -> None:

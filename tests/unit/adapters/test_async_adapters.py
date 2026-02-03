@@ -6,9 +6,17 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
+from sqlspec.core import (
+    SQL,
+    ParameterStyle,
+    ParameterStyleConfig,
+    SQLResult,
+    StatementConfig,
+    get_default_config,
+)
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.typing import Empty
 from tests.unit.adapters.conftest import MockAsyncConnection, MockAsyncCursor, MockAsyncDriver
 
 pytestmark = pytest.mark.xdist_group("adapter_unit")
@@ -199,6 +207,26 @@ async def test_async_driver_dispatch_statement_execution_many(mock_async_driver:
     assert isinstance(result, SQLResult)
     assert result.operation_type == "INSERT"
     assert result.rows_affected == 2
+
+
+async def test_async_driver_releases_pooled_statement(mock_async_driver: MockAsyncDriver) -> None:
+    """Pooled statements should be reset after dispatch execution."""
+    seed = "SELECT * FROM users WHERE id = ?"
+    mock_async_driver.prepare_statement(
+        seed, (1,), statement_config=mock_async_driver.statement_config, kwargs={}
+    )
+    pooled = mock_async_driver.prepare_statement(
+        seed, (2,), statement_config=mock_async_driver.statement_config, kwargs={}
+    )
+
+    assert pooled._pooled is True
+
+    await mock_async_driver.dispatch_statement_execution(pooled, mock_async_driver.connection)
+
+    assert pooled._raw_sql == ""
+    assert pooled._processed_state is Empty
+    assert pooled._filters == []
+    assert pooled._statement_config is get_default_config()
 
 
 async def test_async_driver_transaction_management(mock_async_driver: MockAsyncDriver) -> None:

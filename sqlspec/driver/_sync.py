@@ -123,104 +123,107 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             The result of the SQL execution
 
         """
-        runtime = self.observability
-        # Pre-compile the statement so dispatch methods can reuse the processed state
-        # via the fast path in _get_compiled_statement(). This ensures compile()
-        # is called exactly once per statement execution.
-        compiled_sql, execution_parameters = statement.compile()
+        try:
+            runtime = self.observability
+            # Pre-compile the statement so dispatch methods can reuse the processed state
+            # via the fast path in _get_compiled_statement(). This ensures compile()
+            # is called exactly once per statement execution.
+            compiled_sql, execution_parameters = statement.compile()
 
-        # FAST PATH: Skip all instrumentation if runtime is idle
-        if runtime.is_idle:
+            # FAST PATH: Skip all instrumentation if runtime is idle
+            if runtime.is_idle:
+                exc_handler = self.handle_database_exceptions()
+                try:
+                    with exc_handler, self.with_cursor(connection) as cursor:
+                        # Logic mirrors the instrumentation path below but without telemetry
+                        if statement.is_script:
+                            execution_result = self.dispatch_execute_script(cursor, statement)
+                            return self.build_statement_result(statement, execution_result)
+                        if statement.is_many:
+                            execution_result = self.dispatch_execute_many(cursor, statement)
+                            return self.build_statement_result(statement, execution_result)
+
+                        # check special handling first
+                        special_result = self.dispatch_special_handling(cursor, statement)
+                        if special_result is not None:
+                            return special_result
+
+                        execution_result = self.dispatch_execute(cursor, statement)
+                        return self.build_statement_result(statement, execution_result)
+                except Exception as exc:
+                    if exc_handler.pending_exception is not None:
+                        raise exc_handler.pending_exception from exc
+                    raise
+                finally:
+                    if exc_handler.pending_exception is not None:
+                        raise exc_handler.pending_exception from None
+
+            operation = statement.operation_type
+            query_context = {
+                "sql": compiled_sql,
+                "parameters": execution_parameters,
+                "driver": type(self).__name__,
+                "operation": operation,
+                "is_many": statement.is_many,
+                "is_script": statement.is_script,
+            }
+            runtime.emit_query_start(**query_context)
+            span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
+            started = perf_counter()
+
+            result: SQLResult | None = None
             exc_handler = self.handle_database_exceptions()
             try:
                 with exc_handler, self.with_cursor(connection) as cursor:
-                    # Logic mirrors the instrumentation path below but without telemetry
-                    if statement.is_script:
-                        execution_result = self.dispatch_execute_script(cursor, statement)
-                        return self.build_statement_result(statement, execution_result)
-                    if statement.is_many:
-                        execution_result = self.dispatch_execute_many(cursor, statement)
-                        return self.build_statement_result(statement, execution_result)
-
-                    # check special handling first
                     special_result = self.dispatch_special_handling(cursor, statement)
                     if special_result is not None:
-                        return special_result
-
-                    execution_result = self.dispatch_execute(cursor, statement)
-                    return self.build_statement_result(statement, execution_result)
-            except Exception as exc:
+                        result = special_result
+                    elif statement.is_script:
+                        execution_result = self.dispatch_execute_script(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    elif statement.is_many:
+                        execution_result = self.dispatch_execute_many(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    else:
+                        execution_result = self.dispatch_execute(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+            except Exception as exc:  # pragma: no cover - instrumentation path
                 if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from exc
+                    mapped_exc = exc_handler.pending_exception
+                    runtime.span_manager.end_span(span, error=mapped_exc)
+                    runtime.emit_error(mapped_exc, **query_context)
+                    raise mapped_exc from exc
+                runtime.span_manager.end_span(span, error=exc)
+                runtime.emit_error(exc, **query_context)
                 raise
-            finally:
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
 
-        operation = statement.operation_type
-        query_context = {
-            "sql": compiled_sql,
-            "parameters": execution_parameters,
-            "driver": type(self).__name__,
-            "operation": operation,
-            "is_many": statement.is_many,
-            "is_script": statement.is_script,
-        }
-        runtime.emit_query_start(**query_context)
-        span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
-        started = perf_counter()
-
-        result: SQLResult | None = None
-        exc_handler = self.handle_database_exceptions()
-        try:
-            with exc_handler, self.with_cursor(connection) as cursor:
-                special_result = self.dispatch_special_handling(cursor, statement)
-                if special_result is not None:
-                    result = special_result
-                elif statement.is_script:
-                    execution_result = self.dispatch_execute_script(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-                elif statement.is_many:
-                    execution_result = self.dispatch_execute_many(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-                else:
-                    execution_result = self.dispatch_execute(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-        except Exception as exc:  # pragma: no cover - instrumentation path
             if exc_handler.pending_exception is not None:
                 mapped_exc = exc_handler.pending_exception
                 runtime.span_manager.end_span(span, error=mapped_exc)
                 runtime.emit_error(mapped_exc, **query_context)
-                raise mapped_exc from exc
-            runtime.span_manager.end_span(span, error=exc)
-            runtime.emit_error(exc, **query_context)
-            raise
+                raise mapped_exc from None
 
-        if exc_handler.pending_exception is not None:
-            mapped_exc = exc_handler.pending_exception
-            runtime.span_manager.end_span(span, error=mapped_exc)
-            runtime.emit_error(mapped_exc, **query_context)
-            raise mapped_exc from None
+            assert result is not None  # Guaranteed: no exception means result was assigned
 
-        assert result is not None  # Guaranteed: no exception means result was assigned
-
-        runtime.span_manager.end_span(span)
-        duration = perf_counter() - started
-        runtime.emit_query_complete(**{**query_context, "rows_affected": result.rows_affected})
-        runtime.emit_statement_event(
-            sql=compiled_sql,
-            parameters=execution_parameters,
-            driver=type(self).__name__,
-            operation=operation,
-            execution_mode=self.statement_config.execution_mode,
-            is_many=statement.is_many,
-            is_script=statement.is_script,
-            rows_affected=result.rows_affected,
-            duration_s=duration,
-            storage_backend=(result.metadata or {}).get("storage_backend"),
-            started_at=started,
-        )
-        return result
+            runtime.span_manager.end_span(span)
+            duration = perf_counter() - started
+            runtime.emit_query_complete(**{**query_context, "rows_affected": result.rows_affected})
+            runtime.emit_statement_event(
+                sql=compiled_sql,
+                parameters=execution_parameters,
+                driver=type(self).__name__,
+                operation=operation,
+                execution_mode=self.statement_config.execution_mode,
+                is_many=statement.is_many,
+                is_script=statement.is_script,
+                rows_affected=result.rows_affected,
+                duration_s=duration,
+                storage_backend=(result.metadata or {}).get("storage_backend"),
+                started_at=started,
+            )
+            return result
+        finally:
+            self._release_pooled_statement(statement)
 
     @abstractmethod
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:

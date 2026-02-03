@@ -25,6 +25,7 @@ from sqlspec.core import (
     get_cache_config,
     split_sql_script,
 )
+from sqlspec.core._pool import get_sql_pool
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import structural_fingerprint, value_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
@@ -901,6 +902,10 @@ class CommonDriverAttributesMixin:
         msg = f"{capability} is not implemented for this driver"
         remediation = "Override storage methods on the adapter to enable this capability."
         raise StorageCapabilityError(msg, capability=capability, remediation=remediation)
+
+    def _release_pooled_statement(self, statement: "SQL") -> None:
+        if getattr(statement, "_pooled", False):
+            get_sql_pool().release(statement)
 
     @overload
     @staticmethod
