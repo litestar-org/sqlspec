@@ -231,6 +231,13 @@ def test_sql_reset_clears_state() -> None:
     assert stmt._dialect is None
 
 
+def test_sql_pooled_flag_defaults_false() -> None:
+    """SQL should default to non-pooled state."""
+    stmt = SQL("SELECT 1")
+
+    assert stmt._pooled is False
+
+
 def test_sql_initialization_with_string() -> None:
     """Test SQL initialization with string input."""
     sql_str = "SELECT * FROM users"

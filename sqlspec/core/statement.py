@@ -181,6 +181,7 @@ class SQL:
         "_named_parameters",
         "_original_parameters",
         "_positional_parameters",
+        "_pooled",
         "_processed_state",
         "_raw_expression",
         "_raw_sql",
@@ -212,6 +213,7 @@ class SQL:
         self._statement_config = config
         self._dialect = self._normalize_dialect(config.dialect)
         self._compiled_from_cache = False
+        self._pooled = False
         self._processed_state: EmptyEnum | ProcessedState = Empty
         self._hash: int | None = None
         self._filters: list[StatementFilter] = []
