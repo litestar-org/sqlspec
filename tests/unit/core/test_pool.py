@@ -1,9 +1,12 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for ObjectPool behavior."""
 
+import threading
+from queue import Queue
+
 import pytest
 
-from sqlspec.core._pool import ObjectPool
+from sqlspec.core._pool import ObjectPool, get_processed_state_pool, get_sql_pool
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -65,3 +68,27 @@ def test_object_pool_release_resets_and_respects_max_size() -> None:
     reused = pool.acquire()
     assert reused is first
     assert reused.value == 0
+
+
+def test_thread_local_pools_are_unique_per_thread() -> None:
+    main_pool = get_sql_pool()
+    queue: "Queue[object]" = Queue()
+
+    def worker() -> None:
+        queue.put(get_sql_pool())
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    worker_pool = queue.get()
+    assert worker_pool is not main_pool
+
+
+def test_thread_local_pools_reuse_within_thread() -> None:
+    assert get_sql_pool() is get_sql_pool()
+    assert get_processed_state_pool() is get_processed_state_pool()
+
+
+def test_thread_local_pools_are_distinct_by_type() -> None:
+    assert get_sql_pool() is not get_processed_state_pool()
