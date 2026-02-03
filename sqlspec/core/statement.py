@@ -16,6 +16,7 @@ from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.hashing import hash_filters
+from sqlspec.core._pool import get_sql_pool
 from sqlspec.core.parameters import (
     ParameterConverter,
     ParameterProcessor,
@@ -721,8 +722,7 @@ class SQL:
 
     def _create_empty_copy(self) -> "SQL":
         """Create a shell copy with shared immutable state but empty mutable state."""
-        # Use __new__ to bypass __init__
-        new_sql = SQL.__new__(SQL)
+        new_sql = get_sql_pool().acquire()
         new_sql._raw_sql = self._raw_sql
         new_sql._raw_expression = self._raw_expression
         new_sql._statement_config = self._statement_config
@@ -730,6 +730,7 @@ class SQL:
         new_sql._is_many = self._is_many
         new_sql._is_script = self._is_script
         new_sql._original_parameters = ()
+        new_sql._pooled = True
 
         # Reset mutable state
         new_sql._compiled_from_cache = self._processed_state is not Empty

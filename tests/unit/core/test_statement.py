@@ -238,6 +238,15 @@ def test_sql_pooled_flag_defaults_false() -> None:
     assert stmt._pooled is False
 
 
+def test_sql_copy_uses_pool_for_parameter_only_change() -> None:
+    """Parameter-only copy should use pooled SQL object."""
+    stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
+
+    copied = stmt.copy(parameters=(2,))
+
+    assert copied._pooled is True
+
+
 def test_sql_initialization_with_string() -> None:
     """Test SQL initialization with string input."""
     sql_str = "SELECT * FROM users"

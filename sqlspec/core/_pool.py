@@ -60,7 +60,9 @@ def _create_processed_state() -> "ProcessedState":
 def get_sql_pool() -> "ObjectPool[SQL]":
     pool = getattr(_thread_local, "sql_pool", None)
     if pool is None:
-        pool = ObjectPool(factory=_create_sql, resetter=_reset_noop)
+        from sqlspec.core.statement import SQL
+
+        pool = ObjectPool(factory=_create_sql, resetter=SQL.reset)
         _thread_local.sql_pool = pool
     return pool
 
