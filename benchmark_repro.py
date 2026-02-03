@@ -3,6 +3,7 @@ import pstats
 import sqlite3
 import tempfile
 import time
+import tracemalloc
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -67,6 +68,17 @@ def run_benchmark(fn: "Callable[[Path], None]", label: str) -> float:
             times.append(elapsed)
 
     return sum(times) / len(times)
+
+
+def run_benchmark_allocations(fn: "Callable[[Path], None]") -> "tuple[int, int]":
+    """Return (current, peak) allocated bytes for a benchmark run."""
+    with tempfile.TemporaryDirectory() as d:
+        db_path = Path(d) / "alloc.db"
+        tracemalloc.start()
+        fn(db_path)
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+    return current, peak
 
 __all__ = (
     "assert_compile_bypass",
