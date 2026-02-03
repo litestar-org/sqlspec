@@ -193,6 +193,44 @@ def test_processed_state_garbage_collected() -> None:
     assert state_ref() is None
 
 
+def test_sql_reset_clears_state() -> None:
+    """SQL.reset() should clear mutable state and drop references."""
+    config = StatementConfig(dialect="sqlite")
+    expression = exp.select("*").from_("users")
+    stmt = SQL(expression, LimitOffsetFilter(1, 0), statement_config=config, is_many=True, is_script=True, user_id=1)
+
+    stmt._compiled_from_cache = True
+    stmt._hash = 123
+    stmt._sql_param_counters["user_id"] = 1
+    stmt._processed_state = ProcessedState("SELECT 1", [1], operation_type="SELECT")
+
+    filters_ref = stmt._filters
+    named_ref = stmt._named_parameters
+    positional_ref = stmt._positional_parameters
+    counters_ref = stmt._sql_param_counters
+
+    stmt.reset()
+
+    assert stmt._compiled_from_cache is False
+    assert stmt._processed_state is Empty
+    assert stmt._hash is None
+    assert stmt._filters is filters_ref
+    assert stmt._filters == []
+    assert stmt._named_parameters is named_ref
+    assert stmt._named_parameters == {}
+    assert stmt._positional_parameters is positional_ref
+    assert stmt._positional_parameters == []
+    assert stmt._sql_param_counters is counters_ref
+    assert stmt._sql_param_counters == {}
+    assert stmt._original_parameters == ()
+    assert stmt._raw_sql == ""
+    assert stmt._raw_expression is None
+    assert stmt._is_many is False
+    assert stmt._is_script is False
+    assert stmt._statement_config is get_default_config()
+    assert stmt._dialect is None
+
+
 def test_sql_initialization_with_string() -> None:
     """Test SQL initialization with string input."""
     sql_str = "SELECT * FROM users"

@@ -253,6 +253,23 @@ class SQL:
         """
         return get_default_config()
 
+    def reset(self) -> None:
+        """Reset SQL object for reuse in pooling scenarios."""
+        self._compiled_from_cache = False
+        self._processed_state = Empty
+        self._hash = None
+        self._filters.clear()
+        self._named_parameters.clear()
+        self._positional_parameters.clear()
+        self._sql_param_counters.clear()
+        self._original_parameters = ()
+        self._is_many = False
+        self._is_script = False
+        self._raw_expression = None
+        self._raw_sql = ""
+        self._statement_config = get_default_config()
+        self._dialect = self._normalize_dialect(self._statement_config.dialect)
+
     def _normalize_dialect(self, dialect: "DialectType") -> "str | None":
         """Convert dialect to string representation.
 
