@@ -2,25 +2,26 @@
 """Unit tests for fast-path query cache behavior."""
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.core.compiler import OperationProfile
 from sqlspec.core.parameters import ParameterInfo, ParameterProfile
-from sqlspec.driver._common import CachedQuery, CommonDriverAttributesMixin, _QueryCache
+from sqlspec.driver._common import CachedQuery, CommonDriverAttributesMixin
+from sqlspec.driver._query_cache import QueryCache
 
 
 class _FakeDriver(CommonDriverAttributesMixin):
     __slots__ = ()
 
-    def _execute_raw(self, statement: Any, sql: str, params: Any) -> Any:
+    def _execute_compiled(self, statement: Any, sql: str, params: Any) -> Any:
         return (statement, sql, params)
 
 
 def test_query_cache_lru_eviction() -> None:
-    cache = _QueryCache(max_size=2)
+    cache = QueryCache(max_size=2)
 
     cache.set(
         "a", CachedQuery("SQL_A", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
@@ -40,7 +41,7 @@ def test_query_cache_lru_eviction() -> None:
 
 
 def test_query_cache_update_moves_to_end() -> None:
-    cache = _QueryCache(max_size=2)
+    cache = QueryCache(max_size=2)
 
     cache.set(
         "a", CachedQuery("SQL_A", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
@@ -62,7 +63,7 @@ def test_query_cache_update_moves_to_end() -> None:
     assert entry.param_count == 2
 
 
-def test_try_fast_execute_cache_hit_rebinds() -> None:
+def test_try_cached_compiled_cache_hit_rebinds() -> None:
     config = StatementConfig(
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
@@ -83,16 +84,16 @@ def test_try_fast_execute_cache_hit_rebinds() -> None:
     )
     driver._query_cache.set("SELECT * FROM t WHERE id = ?", cached)
 
-    result = driver._try_fast_execute("SELECT * FROM t WHERE id = ?", (1,))
+    result = driver._try_cached_compiled("SELECT * FROM t WHERE id = ?", (1,))
 
     assert result is not None
-    statement, sql, params = result
+    statement, sql, params = cast("tuple[Any, str, Any]", result)
     assert sql == "SELECT * FROM t WHERE id = ?"
     assert params == (1,)
     assert statement.operation_type == "SELECT"
 
 
-def test_fast_path_binder_override() -> None:
+def test_cached_compiled_binder_override() -> None:
     config = StatementConfig(
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
@@ -125,10 +126,10 @@ def test_fast_path_binder_override() -> None:
     )
     driver._query_cache.set("SELECT * FROM t WHERE id = ?", cached)
 
-    result = driver._try_fast_execute("SELECT * FROM t WHERE id = ?", (1,))
+    result = driver._try_cached_compiled("SELECT * FROM t WHERE id = ?", (1,))
 
     assert result is not None
-    _, _, params = result
+    _, _, params = cast("tuple[Any, str, Any]", result)
     assert params == ("bound",)
 
 
@@ -140,7 +141,7 @@ def test_execute_uses_fast_path_when_eligible(mock_sync_driver, monkeypatch) -> 
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(mock_sync_driver, "_try_fast_execute", _fake_try)
+    monkeypatch.setattr(mock_sync_driver, "_try_cached_compiled", _fake_try)
     mock_sync_driver._fast_path_enabled = True
 
     result = mock_sync_driver.execute("SELECT ?", (1,))
@@ -157,7 +158,7 @@ def test_execute_skips_fast_path_with_statement_config_override(mock_sync_driver
         called = True
         return object()
 
-    monkeypatch.setattr(mock_sync_driver, "_try_fast_execute", _fake_try)
+    monkeypatch.setattr(mock_sync_driver, "_try_cached_compiled", _fake_try)
     mock_sync_driver._fast_path_enabled = True
 
     statement_config = mock_sync_driver.statement_config.replace()
@@ -190,7 +191,7 @@ async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, mon
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(mock_async_driver, "_try_fast_execute_async", _fake_try)
+    monkeypatch.setattr(mock_async_driver, "_try_cached_compiled", _fake_try)
     mock_async_driver._fast_path_enabled = True
 
     result = await mock_async_driver.execute("SELECT ?", (1,))
@@ -208,7 +209,7 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(mock
         called = True
         return object()
 
-    monkeypatch.setattr(mock_async_driver, "_try_fast_execute_async", _fake_try)
+    monkeypatch.setattr(mock_async_driver, "_try_cached_compiled", _fake_try)
     mock_async_driver._fast_path_enabled = True
 
     statement_config = mock_async_driver.statement_config.replace()
@@ -234,7 +235,7 @@ async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async
 
 
 def test_query_cache_thread_safety() -> None:
-    cache = _QueryCache(max_size=32)
+    cache = QueryCache(max_size=32)
     cached = CachedQuery("SQL", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 0)
     for idx in range(16):
         cache.set(str(idx), cached)

@@ -4,7 +4,6 @@ import graphlib
 import hashlib
 import logging
 import re
-from collections import OrderedDict
 from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
@@ -31,6 +30,7 @@ from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import ParameterProcessor, ParameterProfile, structural_fingerprint, value_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.driver._query_cache import QC_MAX_SIZE, CachedQuery, QueryCache
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
@@ -49,10 +49,9 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
-    from sqlspec.core.compiler import OperationProfile, OperationType
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
     from sqlspec.core.statement import ProcessedState
@@ -800,40 +799,6 @@ DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]
 
 
 _DEFAULT_METADATA: Final = {"status_message": "OK"}
-_FAST_PATH_QUERY_CACHE_SIZE: Final = 1024
-
-
-class CachedQuery(NamedTuple):
-    compiled_sql: str
-    parameter_profile: "ParameterProfile"
-    input_named_parameters: "tuple[str, ...]"
-    applied_wrap_types: bool
-    parameter_casts: "dict[int, str]"
-    operation_type: "OperationType"
-    operation_profile: "OperationProfile"
-    param_count: int
-
-
-class _QueryCache:
-    __slots__ = ("_cache", "_max_size")
-
-    def __init__(self, max_size: int) -> None:
-        self._cache: OrderedDict[str, CachedQuery] = OrderedDict()
-        self._max_size = max_size
-
-    def get(self, sql: str) -> CachedQuery | None:
-        entry = self._cache.get(sql)
-        if entry is None:
-            return None
-        self._cache.move_to_end(sql)
-        return entry
-
-    def set(self, sql: str, entry: CachedQuery) -> None:
-        if sql in self._cache:
-            self._cache.move_to_end(sql)
-        elif len(self._cache) >= self._max_size:
-            self._cache.popitem(last=False)
-        self._cache[sql] = entry
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -875,7 +840,7 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._statement_cache: dict[str, SQL] = {}
-        self._query_cache = _QueryCache(_FAST_PATH_QUERY_CACHE_SIZE)
+        self._query_cache = QueryCache(QC_MAX_SIZE)
         self._fast_path_enabled = False
         self._fast_path_binder: (
             Callable[[Any, ParameterProfile, Any, tuple[str, ...], bool, bool], ConvertedParameters] | None
@@ -1037,7 +1002,9 @@ class CommonDriverAttributesMixin:
         )
         return statement
 
-    def _try_fast_execute(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
+    def _try_cached_compiled(
+        self, statement: str, params: "tuple[Any, ...] | list[Any]"
+    ) -> "SQLResult | None":
         if not self._fast_path_enabled:
             return None
         if self.statement_config.parameter_config.needs_static_script_compilation:
@@ -1057,9 +1024,9 @@ class CommonDriverAttributesMixin:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
 
         fast_statement = self._build_fast_statement(statement, params, cached, rebound_params)
-        return self._execute_raw(fast_statement, compiled_sql, rebound_params)
+        return cast("SQLResult", self._execute_compiled(fast_statement, compiled_sql, rebound_params))
 
-    def _execute_raw(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+    def _execute_compiled(self, statement: "SQL", sql: str, params: Any) -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
 
     def _maybe_cache_fast_path(self, statement: "SQL") -> None:
