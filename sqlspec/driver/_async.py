@@ -302,6 +302,87 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
+    async def _try_fast_execute_async(
+        self, statement: str, params: "tuple[Any, ...] | list[Any]"
+    ) -> "SQLResult | None":
+        if not self._fast_path_enabled:
+            return None
+        if self.statement_config.parameter_config.needs_static_script_compilation:
+            return None
+        cached = self._query_cache.get(statement)
+        if cached is None:
+            return None
+        if cached.param_count != len(params):
+            return None
+        if isinstance(params, list) and params and isinstance(params[0], (tuple, list, dict)) and len(params) > 1:
+            return None
+
+        rebound_params = self._fast_rebind(params, cached)
+        compiled_sql = cached.compiled_sql
+        output_transformer = self.statement_config.output_transformer
+        if output_transformer:
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+
+        fast_statement = self._build_fast_statement(statement, params, cached, rebound_params)
+        return await self._execute_raw_async(fast_statement, compiled_sql, rebound_params)
+
+    async def _execute_raw_async(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+        _ = (sql, params)
+        exc_handler = self.handle_database_exceptions()
+        cursor_manager = self.with_cursor(self.connection)
+        cursor: Any | None = None
+        exc: Exception | None = None
+        exc_handler_entered = False
+        cursor_entered = False
+        result: "SQLResult | None" = None
+
+        try:
+            await exc_handler.__aenter__()
+            exc_handler_entered = True
+            cursor = await cursor_manager.__aenter__()
+            cursor_entered = True
+            special_result = await self.dispatch_special_handling(cursor, statement)
+            if special_result is not None:
+                result = special_result
+            elif statement.is_script:
+                execution_result = await self.dispatch_execute_script(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
+            elif statement.is_many:
+                execution_result = await self.dispatch_execute_many(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
+            else:
+                execution_result = await self.dispatch_execute(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
+        except Exception as err:
+            exc = err
+        finally:
+            if cursor_entered:
+                if exc is None:
+                    await cursor_manager.__aexit__(None, None, None)
+                else:
+                    await cursor_manager.__aexit__(type(exc), exc, exc.__traceback__)
+            if exc_handler_entered:
+                if exc is None:
+                    await exc_handler.__aexit__(None, None, None)
+                else:
+                    await exc_handler.__aexit__(type(exc), exc, exc.__traceback__)
+
+        try:
+            if exc is not None:
+                mapped_exc = exc_handler.pending_exception or exc
+                if exc_handler.pending_exception is not None:
+                    raise mapped_exc from exc
+                raise exc
+
+            if exc_handler.pending_exception is not None:
+                mapped_exc = exc_handler.pending_exception
+                raise mapped_exc from None
+
+            assert result is not None
+            return result
+        finally:
+            self._release_pooled_statement(statement)
+
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT - Required Abstract Methods
     # ─────────────────────────────────────────────────────────────────────────────
@@ -350,6 +431,17 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
+        if (
+            self._fast_path_enabled
+            and (statement_config is None or statement_config is self.statement_config)
+            and isinstance(statement, str)
+            and len(parameters) == 1
+            and isinstance(parameters[0], (tuple, list))
+            and not kwargs
+        ):
+            fast_result = await self._try_fast_execute_async(statement, parameters[0])
+            if fast_result is not None:
+                return fast_result
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )

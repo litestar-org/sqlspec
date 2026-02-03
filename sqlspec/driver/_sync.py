@@ -302,6 +302,27 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
+    def _execute_raw(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+        _ = (sql, params)
+        exc_handler = self.handle_database_exceptions()
+        try:
+            try:
+                with exc_handler, self.with_cursor(self.connection) as cursor:
+                    special_result = self.dispatch_special_handling(cursor, statement)
+                    if special_result is not None:
+                        return special_result
+                    execution_result = self.dispatch_execute(cursor, statement)
+                    return self.build_statement_result(statement, execution_result)
+            except Exception as exc:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from exc
+                raise
+            finally:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+        finally:
+            self._release_pooled_statement(statement)
+
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT - Required Abstract Methods
     # ─────────────────────────────────────────────────────────────────────────────
@@ -350,6 +371,17 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
+        if (
+            self._fast_path_enabled
+            and (statement_config is None or statement_config is self.statement_config)
+            and isinstance(statement, str)
+            and len(parameters) == 1
+            and isinstance(parameters[0], (tuple, list))
+            and not kwargs
+        ):
+            fast_result = self._try_fast_execute(statement, parameters[0])
+            if fast_result is not None:
+                return fast_result
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
