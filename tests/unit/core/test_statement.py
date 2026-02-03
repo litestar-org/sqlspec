@@ -15,7 +15,9 @@ Key Test Coverage:
 8. Edge cases - Complex queries, comments, string literals
 """
 
+import gc
 import os
+import weakref
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -168,6 +170,27 @@ def test_processed_state_hash_equality() -> None:
     assert hash(state1) == hash(state2)
 
     assert hash(state1) != hash(state3)
+
+
+def test_processed_state_garbage_collected() -> None:
+    """ProcessedState should be collected once the owning SQL is gone."""
+    stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+        parameter_profile=ParameterProfile.empty(),
+        parameter_fingerprint=structural_fingerprint([1], is_many=False),
+    )
+    stmt._processed_state = state
+    state_ref = weakref.ref(state)
+
+    del state
+    del stmt
+    gc.collect()
+
+    assert state_ref() is None
 
 
 def test_sql_initialization_with_string() -> None:

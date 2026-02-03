@@ -113,6 +113,7 @@ PROCESSED_STATE_SLOTS: Final = (
     "operation_profile",
     "validation_errors",
     "is_many",
+    "__weakref__",
 )
 
 
