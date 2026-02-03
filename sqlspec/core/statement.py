@@ -16,7 +16,7 @@ from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.hashing import hash_filters
-from sqlspec.core._pool import get_sql_pool
+from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.parameters import (
     ParameterConverter,
     ParameterProcessor,
@@ -274,6 +274,8 @@ class SQL:
 
     def reset(self) -> None:
         """Reset SQL object for reuse in pooling scenarios."""
+        if self._pooled and not self._compiled_from_cache and self._processed_state is not Empty:
+            get_processed_state_pool().release(self._processed_state)
         self._compiled_from_cache = False
         self._processed_state = Empty
         self._hash = None
@@ -615,7 +617,7 @@ class SQL:
                     config, raw_sql, params, is_many=is_many, expression=self._raw_expression
                 )
 
-                self._processed_state = ProcessedState(
+                self._processed_state = self._build_processed_state(
                     compiled_sql=compiled_result.compiled_sql,
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
@@ -657,7 +659,7 @@ class SQL:
         output_transformer = self._statement_config.output_transformer
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
-        self._processed_state = ProcessedState(
+        self._processed_state = self._build_processed_state(
             compiled_sql=compiled_sql,
             execution_parameters=rebound_params,
             parsed_expression=state.parsed_expression,
@@ -759,15 +761,52 @@ class SQL:
 
         return new_sql
 
+    def _build_processed_state(
+        self,
+        *,
+        compiled_sql: str,
+        execution_parameters: Any,
+        parsed_expression: "exp.Expression | None",
+        operation_type: "OperationType",
+        input_named_parameters: "tuple[str, ...] | None",
+        applied_wrap_types: bool,
+        filter_hash: int,
+        parameter_fingerprint: str | None,
+        parameter_casts: "dict[int, str] | None",
+        parameter_profile: "ParameterProfile | None",
+        operation_profile: "OperationProfile | None",
+        validation_errors: "list[str] | None",
+        is_many: bool,
+    ) -> "ProcessedState":
+        state = get_processed_state_pool().acquire()
+        ProcessedState.__init__(
+            state,
+            compiled_sql=compiled_sql,
+            execution_parameters=execution_parameters,
+            parsed_expression=parsed_expression,
+            operation_type=operation_type,
+            input_named_parameters=input_named_parameters,
+            applied_wrap_types=applied_wrap_types,
+            filter_hash=filter_hash,
+            parameter_fingerprint=parameter_fingerprint,
+            parameter_casts=parameter_casts,
+            validation_errors=validation_errors,
+            parameter_profile=parameter_profile,
+            operation_profile=operation_profile,
+            is_many=is_many,
+        )
+        return state
+
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
         import traceback
 
         traceback.print_exc()
         logger.debug("Processing failed, using fallback: %s", error)
         params = self._named_parameters or self._positional_parameters
-        return ProcessedState(
+        return self._build_processed_state(
             compiled_sql=self._raw_sql,
             execution_parameters=self._named_parameters or self._positional_parameters,
+            parsed_expression=None,
             operation_type="COMMAND",
             input_named_parameters=(),
             applied_wrap_types=False,
@@ -776,6 +815,7 @@ class SQL:
             parameter_casts={},
             parameter_profile=ParameterProfile.empty(),
             operation_profile=OperationProfile.empty(),
+            validation_errors=[str(error)],
             is_many=self._is_many,
         )
 

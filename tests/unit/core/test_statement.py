@@ -232,6 +232,27 @@ def test_processed_state_reset_clears_state() -> None:
     assert state.parameter_profile.is_empty()
     assert state.operation_profile.returns_rows is False
     assert state.operation_profile.modifies_rows is False
+
+
+def test_processed_state_pool_resets_on_release() -> None:
+    """ProcessedState pool should reset state before reuse."""
+    from sqlspec.core._pool import get_processed_state_pool
+
+    pool = get_processed_state_pool()
+    state = pool.acquire()
+    state.compiled_sql = "SELECT 1"
+    state.execution_parameters = [1]
+    state.operation_type = "SELECT"
+    state.parameter_casts["k"] = "v"
+
+    pool.release(state)
+
+    reused = pool.acquire()
+
+    assert reused.compiled_sql == ""
+    assert reused.execution_parameters == []
+    assert reused.operation_type == "COMMAND"
+    assert reused.parameter_casts == {}
     assert state.is_many is False
 
 
