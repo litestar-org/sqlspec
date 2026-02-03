@@ -1043,6 +1043,38 @@ class CommonDriverAttributesMixin:
     def _execute_raw(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
         raise NotImplementedError
 
+    def _maybe_cache_fast_path(self, statement: "SQL") -> None:
+        if not self._fast_path_enabled:
+            return
+        if statement.statement_config is not self.statement_config:
+            return
+        if statement.is_script or statement.is_many:
+            return
+        if statement.raw_expression is not None:
+            return
+        if not statement.raw_sql:
+            return
+        if statement.statement_config.parameter_config.needs_static_script_compilation:
+            return
+        if len(statement.get_filters_view()) > 0:
+            return
+        if not statement.is_processed:
+            return
+
+        processed = cast("ProcessedState", statement.get_processed_state())
+        param_profile = processed.parameter_profile
+        cached = CachedQuery(
+            compiled_sql=processed.compiled_sql,
+            parameter_profile=param_profile,
+            input_named_parameters=processed.input_named_parameters,
+            applied_wrap_types=processed.applied_wrap_types,
+            parameter_casts=dict(processed.parameter_casts),
+            operation_type=processed.operation_type,
+            operation_profile=processed.operation_profile,
+            param_count=param_profile.total_count,
+        )
+        self._query_cache.set(statement.raw_sql, cached)
+
     @overload
     @staticmethod
     def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
@@ -1533,6 +1565,7 @@ class CommonDriverAttributesMixin:
                 cached_statement = CachedStatement(
                     compiled_sql=compiled_sql, parameters=prepared_parameters, expression=statement.expression
                 )
+                self._maybe_cache_fast_path(statement)
                 return cached_statement, prepared_parameters
 
             processed = statement.get_processed_state()
@@ -1547,6 +1580,7 @@ class CommonDriverAttributesMixin:
                 parameters=prepared_parameters,
                 expression=processed.parsed_expression,
             )
+            self._maybe_cache_fast_path(statement)
             return cached_statement, prepared_parameters
 
         # Materialize iterators before cache key generation to prevent exhaustion.
@@ -1585,6 +1619,7 @@ class CommonDriverAttributesMixin:
                     parameters=prepared_parameters,
                     expression=cached_result.expression,
                 )
+                self._maybe_cache_fast_path(statement)
                 return updated_cached, prepared_parameters
 
         # Compile the statement directly (no need for prepare_statement indirection)
@@ -1602,6 +1637,7 @@ class CommonDriverAttributesMixin:
         if cache_key is not None and cache is not None:
             cache.put_statement(cache_key, cached_statement, dialect_key)
 
+        self._maybe_cache_fast_path(statement)
         return cached_statement, prepared_parameters
 
     def _generate_compilation_cache_key(

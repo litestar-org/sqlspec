@@ -112,6 +112,20 @@ def test_execute_skips_fast_path_with_statement_config_override(mock_sync_driver
     assert result.operation_type == "SELECT"
 
 
+def test_execute_populates_fast_path_cache_on_normal_path(mock_sync_driver) -> None:
+    mock_sync_driver._fast_path_enabled = True
+
+    assert mock_sync_driver._query_cache.get("SELECT ?") is None
+
+    result = mock_sync_driver.execute("SELECT ?", (1,))
+
+    cached = mock_sync_driver._query_cache.get("SELECT ?")
+    assert cached is not None
+    assert cached.param_count == 1
+    assert cached.operation_type == "SELECT"
+    assert result.operation_type == "SELECT"
+
+
 @pytest.mark.asyncio
 async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, monkeypatch) -> None:
     sentinel = object()
@@ -148,4 +162,19 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(
     result = await mock_async_driver.execute("SELECT ?", (1,), statement_config=statement_config)
 
     assert called is False
+    assert result.operation_type == "SELECT"
+
+
+@pytest.mark.asyncio
+async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async_driver) -> None:
+    mock_async_driver._fast_path_enabled = True
+
+    assert mock_async_driver._query_cache.get("SELECT ?") is None
+
+    result = await mock_async_driver.execute("SELECT ?", (1,))
+
+    cached = mock_async_driver._query_cache.get("SELECT ?")
+    assert cached is not None
+    assert cached.param_count == 1
+    assert cached.operation_type == "SELECT"
     assert result.operation_type == "SELECT"
