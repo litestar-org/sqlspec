@@ -800,7 +800,14 @@ _DEFAULT_METADATA: Final = {"status_message": "OK"}
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("_observability", "_statement_cache", "connection", "driver_features", "statement_config")
+    __slots__ = (
+        "_fast_path_enabled",
+        "_observability",
+        "_statement_cache",
+        "connection",
+        "driver_features",
+        "statement_config",
+    )
     connection: "Any"
     statement_config: "StatementConfig"
     driver_features: "dict[str, Any]"
@@ -826,10 +833,18 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._statement_cache: dict[str, SQL] = {}
+        self._fast_path_enabled = False
+        self._update_fast_path_flag()
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Attach or replace the observability runtime."""
         self._observability = runtime
+        self._update_fast_path_flag()
+
+    def _update_fast_path_flag(self) -> None:
+        self._fast_path_enabled = bool(
+            not self.statement_config.statement_transformers and self.observability.is_idle
+        )
 
     @property
     def observability(self) -> "ObservabilityRuntime":

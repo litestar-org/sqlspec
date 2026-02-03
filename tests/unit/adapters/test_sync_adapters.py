@@ -10,6 +10,7 @@ from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, S
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.typing import Empty
+from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from tests.unit.adapters.conftest import MockSyncConnection, MockSyncDriver
 
 pytestmark = pytest.mark.xdist_group("adapter_unit")
@@ -38,6 +39,37 @@ def test_sync_driver_with_custom_config(mock_sync_connection: MockSyncConnection
     driver = MockSyncDriver(mock_sync_connection, custom_config)
     assert driver.statement_config.dialect == "postgresql"
     assert driver.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
+
+
+def test_sync_driver_fast_path_flag_default(mock_sync_connection: MockSyncConnection) -> None:
+    driver = MockSyncDriver(mock_sync_connection)
+
+    assert driver._fast_path_enabled is True
+
+
+def test_sync_driver_fast_path_flag_disabled_by_transformer(mock_sync_connection: MockSyncConnection) -> None:
+    def transformer(expression: Any, context: Any) -> "tuple[Any, Any]":
+        return expression, context
+
+    custom_config = StatementConfig(
+        dialect="sqlite",
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+        ),
+        statement_transformers=(transformer,),
+    )
+    driver = MockSyncDriver(mock_sync_connection, custom_config)
+
+    assert driver._fast_path_enabled is False
+
+
+def test_sync_driver_fast_path_flag_disabled_by_observability(mock_sync_connection: MockSyncConnection) -> None:
+    driver = MockSyncDriver(mock_sync_connection)
+    runtime = ObservabilityRuntime(ObservabilityConfig(print_sql=True))
+
+    driver.attach_observability(runtime)
+
+    assert driver._fast_path_enabled is False
 
 
 def test_sync_driver_with_cursor(mock_sync_driver: MockSyncDriver) -> None:
