@@ -1911,4 +1911,3 @@ class CommonDriverAttributesMixin:
             statement_config=original_sql.statement_config,
             **original_sql.named_parameters,
         )
-    "_QueryCache",
