@@ -642,6 +642,8 @@ class SQL:
         cached_fingerprint = state.parameter_fingerprint
         if cached_fingerprint is None:
             return False
+        if state.is_many != self._is_many:
+            return False
         if state.filter_hash != hash_filters(self._filters):
             return False
         params = self._named_parameters or self._positional_parameters

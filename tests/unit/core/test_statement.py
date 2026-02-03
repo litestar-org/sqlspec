@@ -718,6 +718,37 @@ def test_sql_copy_recompiles_on_filter_change() -> None:
     mock_compile.assert_called_once()
 
 
+def test_sql_copy_recompiles_on_is_many_change() -> None:
+    """Cached state should be discarded when is_many changes."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+        parameter_profile=ParameterProfile.empty(),
+        parameter_fingerprint=structural_fingerprint([1], is_many=False),
+        is_many=False,
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=[2])
+    copy_stmt._is_many = True
+
+    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+        mock_compile.return_value = CompiledSQL(
+            compiled_sql="SELECT * FROM users WHERE id = ?",
+            execution_parameters=[2],
+            operation_type="SELECT",
+            expression=exp.select("*").from_("users"),
+        )
+        sql, params = copy_stmt.compile()
+
+    assert sql == "SELECT * FROM users WHERE id = ?"
+    assert params == [2]
+    mock_compile.assert_called_once()
+
+
 def test_sql_compiled_from_cache_flag_default_false() -> None:
     """New SQL instances should not be marked as compiled from cache."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
