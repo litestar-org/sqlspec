@@ -221,12 +221,12 @@ _DEFAULT_PY_TEMPLATE = PythonTemplateDefinition(
     body=(
         "def up(context: object | None = None) -> str | Iterable[str]:\n"
         '    """Apply the migration (upgrade)."""\n'
-        '    return "\n'
+        '    return """\n'
         "    CREATE TABLE example (\n"
         "        id INTEGER PRIMARY KEY,\n"
         "        name TEXT NOT NULL\n"
         "    );\n"
-        '    "\n\n'
+        '    """\n\n'
         "def down(context: object | None = None) -> str | Iterable[str]:\n"
         '    """Reverse the migration."""\n'
         '    return "DROP TABLE example;"'
