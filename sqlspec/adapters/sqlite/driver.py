@@ -25,7 +25,7 @@ from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite._typing import SqliteConnection
-    from sqlspec.core import SQL, StatementConfig
+    from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
@@ -133,6 +133,39 @@ class SqliteDriver(SyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def _execute_raw(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+        exc_handler = self.handle_database_exceptions()
+        try:
+            try:
+                with exc_handler, self.with_cursor(self.connection) as cursor:
+                    cursor.execute(sql, normalize_execute_parameters(params))
+
+                    if statement.returns_rows():
+                        fetched_data = cursor.fetchall()
+                        data, column_names, row_count = collect_rows(fetched_data, cursor.description)
+
+                        execution_result = self.create_execution_result(
+                            cursor,
+                            selected_data=data,
+                            column_names=column_names,
+                            data_row_count=row_count,
+                            is_select_result=True,
+                        )
+                        return self.build_statement_result(statement, execution_result)
+
+                    affected_rows = resolve_rowcount(cursor)
+                    execution_result = self.create_execution_result(cursor, rowcount_override=affected_rows)
+                    return self.build_statement_result(statement, execution_result)
+            except Exception as exc:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from exc
+                raise
+            finally:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+        finally:
+            self._release_pooled_statement(statement)
 
     def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
