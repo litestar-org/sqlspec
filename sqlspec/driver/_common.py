@@ -27,6 +27,8 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core._pool import get_sql_pool
+from sqlspec.core.compiler import OperationProfile, OperationType
+from sqlspec.core.parameters import ParameterProcessor, ParameterProfile
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import structural_fingerprint, value_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
@@ -60,6 +62,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "CachedQuery",
     "DEFAULT_EXECUTION_RESULT",
     "EXEC_CURSOR_RESULT",
     "EXEC_ROWCOUNT_OVERRIDE",
@@ -799,8 +802,13 @@ _FAST_PATH_QUERY_CACHE_SIZE: Final = 1024
 
 
 class CachedQuery(NamedTuple):
-    driver_sql: str
-    coercions: "tuple[Callable[[Any], Any] | None, ...]"
+    compiled_sql: str
+    parameter_profile: "ParameterProfile"
+    input_named_parameters: "tuple[str, ...]"
+    applied_wrap_types: bool
+    parameter_casts: "dict[int, str]"
+    operation_type: "OperationType"
+    operation_profile: "OperationProfile"
     param_count: int
 
 
@@ -954,6 +962,86 @@ class CommonDriverAttributesMixin:
     def _release_pooled_statement(self, statement: "SQL") -> None:
         if getattr(statement, "_pooled", False):
             get_sql_pool().release(statement)
+
+    def _fast_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
+        processor = ParameterProcessor(
+            converter=self.statement_config.parameter_converter,
+            validator=self.statement_config.parameter_validator,
+            cache_max_size=0,
+            validator_cache_max_size=0,
+        )
+        return processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
+            params,
+            cached.parameter_profile,
+            self.statement_config.parameter_config,
+            input_named_parameters=cached.input_named_parameters,
+            is_many=False,
+            apply_wrap_types=cached.applied_wrap_types,
+        )
+
+    def _build_fast_statement(
+        self,
+        sql: str,
+        params: "tuple[Any, ...] | list[Any]",
+        cached: "CachedQuery",
+        execution_parameters: "ConvertedParameters",
+    ) -> "SQL":
+        statement = get_sql_pool().acquire()
+        statement._raw_sql = sql
+        statement._raw_expression = None
+        statement._statement_config = self.statement_config
+        statement._dialect = statement._normalize_dialect(self.statement_config.dialect)
+        statement._is_many = False
+        statement._is_script = False
+        statement._original_parameters = ()
+        statement._pooled = True
+        statement._compiled_from_cache = False
+        statement._hash = None
+        statement._filters = []
+        statement._named_parameters = {}
+        statement._positional_parameters = list(params)
+        statement._sql_param_counters = {}
+        statement._processed_state = statement._build_processed_state(
+            compiled_sql=cached.compiled_sql,
+            execution_parameters=execution_parameters,
+            parsed_expression=None,
+            operation_type=cached.operation_type,
+            input_named_parameters=cached.input_named_parameters,
+            applied_wrap_types=cached.applied_wrap_types,
+            filter_hash=0,
+            parameter_fingerprint=None,
+            parameter_casts=cached.parameter_casts,
+            parameter_profile=cached.parameter_profile,
+            operation_profile=cached.operation_profile,
+            validation_errors=[],
+            is_many=False,
+        )
+        return statement
+
+    def _try_fast_execute(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
+        if not self._fast_path_enabled:
+            return None
+        if self.statement_config.parameter_config.needs_static_script_compilation:
+            return None
+        cached = self._query_cache.get(statement)
+        if cached is None:
+            return None
+        if cached.param_count != len(params):
+            return None
+        if isinstance(params, list) and params and isinstance(params[0], (tuple, list, dict)) and len(params) > 1:
+            return None
+
+        rebound_params = self._fast_rebind(params, cached)
+        compiled_sql = cached.compiled_sql
+        output_transformer = self.statement_config.output_transformer
+        if output_transformer:
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+
+        fast_statement = self._build_fast_statement(statement, params, cached, rebound_params)
+        return self._execute_raw(fast_statement, compiled_sql, rebound_params)
+
+    def _execute_raw(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+        raise NotImplementedError
 
     @overload
     @staticmethod
@@ -1766,3 +1854,4 @@ class CommonDriverAttributesMixin:
             statement_config=original_sql.statement_config,
             **original_sql.named_parameters,
         )
+    "_QueryCache",
