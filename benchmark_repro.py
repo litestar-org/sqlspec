@@ -50,6 +50,21 @@ def bench_sqlspec(db_path: Path) -> None:
             session.execute("insert into notes (body) values (?)", (f"note {i}",))
 
 
+def bench_sqlspec_fast_path(db_path: Path) -> None:
+    obs_config = ObservabilityConfig(
+        telemetry=TelemetryConfig(enable_spans=False),
+        logging=LoggingConfig(include_sql_hash=False, include_trace_context=False),
+        print_sql=False,
+    )
+    spec = SQLSpec(observability_config=obs_config)
+    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    with spec.provide_session(config) as session:
+        session.execute("create table if not exists notes (id integer primary key, body text)")
+        session.execute("insert into notes (body) values (?)", ("warmup",))
+        for i in range(ROWS):
+            session.execute("insert into notes (body) values (?)", (f"note {i}",))
+
+
 # -------------------------
 # Timing helper
 # -------------------------
@@ -88,8 +103,10 @@ __all__ = (
     "bench_sqlite_sqlglot_copy",
     "bench_sqlite_sqlglot_nocache",
     "bench_sqlspec",
+    "bench_sqlspec_fast_path",
     "bench_sqlspec_dict",
     "profile_cache_hit_compile_calls",
+    "profile_fast_path_hit_rate",
     "run_benchmark",
 )
 
@@ -232,6 +249,44 @@ def profile_cache_hit_compile_calls(db_path: Path) -> int:
     return calls
 
 
+def profile_fast_path_hit_rate(db_path: Path) -> float:
+    obs_config = ObservabilityConfig(
+        telemetry=TelemetryConfig(enable_spans=False),
+        logging=LoggingConfig(include_sql_hash=False, include_trace_context=False),
+        print_sql=False,
+    )
+    spec = SQLSpec(observability_config=obs_config)
+    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+
+    from sqlspec.driver import SyncDriverAdapterBase
+
+    hits = 0
+    calls = 0
+    original = SyncDriverAdapterBase._try_fast_execute
+
+    def wrapped(self: SyncDriverAdapterBase, statement: str, params: tuple[object, ...] | list[object]) -> object:
+        nonlocal hits, calls
+        calls += 1
+        result = original(self, statement, params)
+        if result is not None:
+            hits += 1
+        return result
+
+    with spec.provide_session(config) as session:
+        session.execute("create table if not exists notes (id integer primary key, body text)")
+        SyncDriverAdapterBase._try_fast_execute = wrapped
+        try:
+            session.execute("insert into notes (body) values (?)", ("warmup",))
+            for i in range(ROWS):
+                session.execute("insert into notes (body) values (?)", (f"note {i}",))
+        finally:
+            SyncDriverAdapterBase._try_fast_execute = original
+
+    if not calls:
+        return 0.0
+    return hits / calls
+
+
 def assert_compile_bypass(db_path: Path) -> None:
     """Assert compile is bypassed on cache hits after initial insert."""
     calls = profile_cache_hit_compile_calls(db_path)
@@ -258,5 +313,15 @@ if __name__ == "__main__":
 
     raw_time = run_benchmark(bench_raw_sqlite, "raw sqlite3")
     sqlspec_time = run_benchmark(bench_sqlspec, "sqlspec")
+    fast_path_time = run_benchmark(bench_sqlspec_fast_path, "sqlspec fast path")
 
     slowdown = sqlspec_time / raw_time
+    fast_path_slowdown = fast_path_time / raw_time
+
+    with tempfile.TemporaryDirectory() as d:
+        hit_rate = profile_fast_path_hit_rate(Path(d) / "fast_path_hits.db")
+
+    print(f"raw sqlite3: {raw_time:.4f}s")
+    print(f"sqlspec: {sqlspec_time:.4f}s ({slowdown:.2f}x)")
+    print(f"sqlspec fast path: {fast_path_time:.4f}s ({fast_path_slowdown:.2f}x)")
+    print(f"fast path hit rate: {hit_rate:.2%}")

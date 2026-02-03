@@ -1,6 +1,7 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for fast-path query cache behavior."""
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -178,3 +179,20 @@ async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async
     assert cached.param_count == 1
     assert cached.operation_type == "SELECT"
     assert result.operation_type == "SELECT"
+
+
+def test_query_cache_thread_safety() -> None:
+    cache = _QueryCache(max_size=32)
+    cached = CachedQuery("SQL", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 0)
+    for idx in range(16):
+        cache.set(str(idx), cached)
+
+    def worker(seed: int) -> None:
+        for i in range(200):
+            key = str((seed + i) % 16)
+            cache.get(key)
+            if i % 5 == 0:
+                cache.set(key, cached)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(worker, range(4)))
