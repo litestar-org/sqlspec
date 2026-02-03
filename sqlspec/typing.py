@@ -24,6 +24,7 @@ from sqlspec._typing import (
     PROMETHEUS_INSTALLED,
     PYARROW_INSTALLED,
     PYDANTIC_INSTALLED,
+    SQLSPEC_RS_INSTALLED,
     UNSET,
     UUID_UTILS_INSTALLED,
     ArrowRecordBatch,
@@ -64,6 +65,7 @@ from sqlspec._typing import (
     cattrs_structure,
     cattrs_unstructure,
     convert,
+    get_sqlspec_rs,
     module_available,
     trace,
 )
