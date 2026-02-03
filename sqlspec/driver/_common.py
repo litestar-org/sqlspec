@@ -1007,6 +1007,9 @@ class CommonDriverAttributesMixin:
     ) -> "tuple[SQL, str, Any] | None":
         """Prepare fast-path execution if cache hit.
 
+        Only essential checks in the hot lookup path. All detailed eligibility
+        validation happens at store time in qc_store().
+
         Args:
             statement: Raw SQL string.
             params: Query parameters (tuple or list).
@@ -1017,15 +1020,8 @@ class CommonDriverAttributesMixin:
         """
         if not self._qc_enabled:
             return None
-        if self.statement_config.parameter_config.needs_static_script_compilation:
-            return None
-
         cached = self._qc.get(statement)
-        if cached is None:
-            return None
-        if cached.param_count != len(params):
-            return None
-        if isinstance(params, list) and params and isinstance(params[0], (tuple, list, dict)) and len(params) > 1:
+        if cached is None or cached.param_count != len(params):
             return None
 
         rebound_params = self.qc_rebind(params, cached)
@@ -1059,6 +1055,20 @@ class CommonDriverAttributesMixin:
         raise NotImplementedError
 
     def qc_store(self, statement: "SQL") -> None:
+        """Store statement in cache if eligible.
+
+        All eligibility validation happens here (executed once per unique query).
+        This keeps the hot lookup path (qc_prepare) minimal - just a flag check
+        and cache lookup.
+
+        Ineligible queries:
+        - QC disabled or config mismatch
+        - Scripts or execute-many (multiple statements/param sets)
+        - Raw expressions (dynamic SQL)
+        - Static script compilation (parameters embedded in SQL)
+        - Filtered statements (dynamic WHERE clauses)
+        - Unprocessed statements (no compiled metadata)
+        """
         if not self._qc_enabled:
             return
         if statement.statement_config is not self.statement_config:
