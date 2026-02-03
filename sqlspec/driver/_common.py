@@ -840,6 +840,7 @@ class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
     __slots__ = (
+        "_fast_path_binder",
         "_fast_path_enabled",
         "_observability",
         "_query_cache",
@@ -875,6 +876,12 @@ class CommonDriverAttributesMixin:
         self._statement_cache: dict[str, SQL] = {}
         self._query_cache = _QueryCache(_FAST_PATH_QUERY_CACHE_SIZE)
         self._fast_path_enabled = False
+        self._fast_path_binder: (
+            "Callable[[Any, ParameterProfile, Any, tuple[str, ...], bool, bool], ConvertedParameters] | None"
+        ) = None
+        binder = self.driver_features.get("fast_path_binder")
+        if binder is not None and callable(binder):
+            self._fast_path_binder = binder
         self._update_fast_path_flag()
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
@@ -964,6 +971,19 @@ class CommonDriverAttributesMixin:
             get_sql_pool().release(statement)
 
     def _fast_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
+        binder = self._fast_path_binder
+        if binder is not None:
+            return binder(
+                params,
+                cached.parameter_profile,
+                self.statement_config.parameter_config,
+                cached.input_named_parameters,
+                False,
+                cached.applied_wrap_types,
+            )
+        config = self.statement_config.parameter_config
+        if not cached.input_named_parameters and not cached.applied_wrap_types and not config.type_coercion_map:
+            return params
         processor = ParameterProcessor(
             converter=self.statement_config.parameter_converter,
             validator=self.statement_config.parameter_validator,
@@ -973,7 +993,7 @@ class CommonDriverAttributesMixin:
         return processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
             params,
             cached.parameter_profile,
-            self.statement_config.parameter_config,
+            config,
             input_named_parameters=cached.input_named_parameters,
             is_many=False,
             apply_wrap_types=cached.applied_wrap_types,

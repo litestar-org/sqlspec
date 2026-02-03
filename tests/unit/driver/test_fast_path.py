@@ -78,6 +78,46 @@ def test_try_fast_execute_cache_hit_rebinds() -> None:
     assert statement.operation_type == "SELECT"
 
 
+def test_fast_path_binder_override() -> None:
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+        )
+    )
+
+    def binder(
+        params: Any,
+        profile: ParameterProfile,
+        config: Any,
+        input_named_parameters: tuple[str, ...],
+        is_many: bool,
+        apply_wrap_types: bool,
+    ) -> Any:
+        _ = (params, profile, config, input_named_parameters, is_many, apply_wrap_types)
+        return ("bound",)
+
+    driver = _FakeDriver(object(), config, driver_features={"fast_path_binder": binder})
+    driver._fast_path_enabled = True
+
+    cached = CachedQuery(
+        compiled_sql="SELECT * FROM t WHERE id = ?",
+        parameter_profile=ParameterProfile.empty(),
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
+        param_count=1,
+    )
+    driver._query_cache.set("SELECT * FROM t WHERE id = ?", cached)
+
+    result = driver._try_fast_execute("SELECT * FROM t WHERE id = ?", (1,))
+
+    assert result is not None
+    _, _, params = result
+    assert params == ("bound",)
+
+
 def test_execute_uses_fast_path_when_eligible(mock_sync_driver, monkeypatch) -> None:
     sentinel = object()
     called: dict[str, object] = {}
