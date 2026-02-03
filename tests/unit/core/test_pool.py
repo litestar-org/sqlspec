@@ -110,3 +110,17 @@ def test_object_pool_reuse_stability_over_iterations() -> None:
         pool.release(c)
 
     assert len(pool._pool) <= 8
+
+
+def test_object_pool_thread_isolation() -> None:
+    """Thread-local pools should not share objects across threads."""
+    queue: "Queue[ObjectPool[_Sentinel]]" = Queue()
+
+    def worker() -> None:
+        queue.put(get_sql_pool())
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    assert queue.get() is not get_sql_pool()
