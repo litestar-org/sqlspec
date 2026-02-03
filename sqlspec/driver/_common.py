@@ -4,6 +4,7 @@ import graphlib
 import hashlib
 import logging
 import re
+from collections import OrderedDict
 from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
@@ -794,6 +795,36 @@ DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]
 
 
 _DEFAULT_METADATA: Final = {"status_message": "OK"}
+_FAST_PATH_QUERY_CACHE_SIZE: Final = 1024
+
+
+class CachedQuery(NamedTuple):
+    driver_sql: str
+    coercions: "tuple[Callable[[Any], Any] | None, ...]"
+    param_count: int
+
+
+class _QueryCache:
+    __slots__ = ("_cache", "_max_size")
+
+    def __init__(self, max_size: int) -> None:
+        self._cache: "OrderedDict[str, CachedQuery]" = OrderedDict()
+        self._max_size = max_size
+
+    def get(self, sql: str) -> CachedQuery | None:
+        entry = self._cache.get(sql)
+        if entry is None:
+            return None
+        self._cache.move_to_end(sql)
+        return entry
+
+    def set(self, sql: str, entry: CachedQuery) -> None:
+        if sql in self._cache:
+            self._cache.move_to_end(sql)
+        else:
+            if len(self._cache) >= self._max_size:
+                self._cache.popitem(last=False)
+        self._cache[sql] = entry
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -803,6 +834,7 @@ class CommonDriverAttributesMixin:
     __slots__ = (
         "_fast_path_enabled",
         "_observability",
+        "_query_cache",
         "_statement_cache",
         "connection",
         "driver_features",
@@ -833,6 +865,7 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._statement_cache: dict[str, SQL] = {}
+        self._query_cache = _QueryCache(_FAST_PATH_QUERY_CACHE_SIZE)
         self._fast_path_enabled = False
         self._update_fast_path_flag()
 
