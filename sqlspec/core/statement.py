@@ -162,6 +162,22 @@ class ProcessedState:
     def __hash__(self) -> int:
         return hash((self.compiled_sql, str(self.execution_parameters), self.operation_type))
 
+    def reset(self) -> None:
+        """Reset processing state for reuse."""
+        self.compiled_sql = ""
+        self.execution_parameters = []
+        self.parsed_expression = None
+        self.operation_type = "COMMAND"
+        self.input_named_parameters = ()
+        self.applied_wrap_types = False
+        self.filter_hash = 0
+        self.parameter_fingerprint = None
+        self.parameter_casts.clear()
+        self.validation_errors.clear()
+        self.parameter_profile = ParameterProfile.empty()
+        self.operation_profile = OperationProfile.empty()
+        self.is_many = False
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class SQL:

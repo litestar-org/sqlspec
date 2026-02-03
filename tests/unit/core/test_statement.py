@@ -27,6 +27,7 @@ from sqlglot import expressions as exp
 from sqlspec.core import (
     SQL,
     CompiledSQL,
+    OperationProfile,
     OperationType,
     ParameterProfile,
     ParameterStyle,
@@ -191,6 +192,47 @@ def test_processed_state_garbage_collected() -> None:
     gc.collect()
 
     assert state_ref() is None
+
+
+def test_processed_state_reset_clears_state() -> None:
+    """ProcessedState.reset() should clear mutable data for reuse."""
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        parsed_expression=exp.select("*").from_("users"),
+        operation_type="SELECT",
+        input_named_parameters=("id",),
+        applied_wrap_types=True,
+        filter_hash=123,
+        parameter_fingerprint="fingerprint",
+        parameter_casts={0: "int"},
+        validation_errors=["err"],
+        parameter_profile=ParameterProfile.empty(),
+        operation_profile=OperationProfile.empty(),
+        is_many=True,
+    )
+
+    casts_ref = state.parameter_casts
+    errors_ref = state.validation_errors
+
+    state.reset()
+
+    assert state.compiled_sql == ""
+    assert state.execution_parameters == []
+    assert state.parsed_expression is None
+    assert state.operation_type == "COMMAND"
+    assert state.input_named_parameters == ()
+    assert state.applied_wrap_types is False
+    assert state.filter_hash == 0
+    assert state.parameter_fingerprint is None
+    assert state.parameter_casts is casts_ref
+    assert state.parameter_casts == {}
+    assert state.validation_errors is errors_ref
+    assert state.validation_errors == []
+    assert state.parameter_profile.is_empty()
+    assert state.operation_profile.returns_rows is False
+    assert state.operation_profile.modifies_rows is False
+    assert state.is_many is False
 
 
 def test_sql_reset_clears_state() -> None:
