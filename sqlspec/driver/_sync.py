@@ -224,6 +224,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             return result
         finally:
             self._release_pooled_statement(statement)
+        msg = "Execution failed to return a result."
+        raise RuntimeError(msg)
 
     @abstractmethod
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -302,7 +304,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
-    def _execute_raw(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+    def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
         _ = (sql, params)
         exc_handler = self.handle_database_exceptions()
         try:
@@ -372,14 +374,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
         if (
-            self._fast_path_enabled
+            self._qc_enabled
             and (statement_config is None or statement_config is self.statement_config)
             and isinstance(statement, str)
             and len(parameters) == 1
             and isinstance(parameters[0], (tuple, list))
             and not kwargs
         ):
-            fast_result = self._try_fast_execute(statement, parameters[0])
+            fast_result = self.qc_lookup(statement, parameters[0])
             if fast_result is not None:
                 return fast_result
         sql_statement = self.prepare_statement(

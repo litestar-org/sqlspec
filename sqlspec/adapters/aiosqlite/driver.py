@@ -119,7 +119,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    async def _execute_raw_async(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+    async def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
         exc_handler = self.handle_database_exceptions()
         cursor_manager = self.with_cursor(self.connection)
         cursor: aiosqlite.Cursor | None = None

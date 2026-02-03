@@ -881,7 +881,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         if updated is not self.observability_config:
             self.observability_config = updated
 
-    def _configure_fast_path_binder(self) -> None:
+    def _configure_qc_binder(self) -> None:
         """Attach sqlspec_rs fast-path binder when available."""
 
         if "fast_path_binder" in self.driver_features:
@@ -1222,7 +1222,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
-        self._configure_fast_path_binder()
+        self._configure_qc_binder()
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
         self._promote_driver_feature_hooks()
@@ -1394,7 +1394,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
-        self._configure_fast_path_binder()
+        self._configure_qc_binder()
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1565,7 +1565,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
-        self._configure_fast_path_binder()
+        self._configure_qc_binder()
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
         self._promote_driver_feature_hooks()
@@ -1771,7 +1771,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
-        self._configure_fast_path_binder()
+        self._configure_qc_binder()
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
         self._promote_driver_feature_hooks()

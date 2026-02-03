@@ -134,7 +134,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def _execute_raw(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+    def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
         exc_handler = self.handle_database_exceptions()
         try:
             try:
@@ -166,6 +166,8 @@ class SqliteDriver(SyncDriverAdapterBase):
                     raise exc_handler.pending_exception from None
         finally:
             self._release_pooled_statement(statement)
+        msg = "Execution failed to return a result."
+        raise RuntimeError(msg)
 
     def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.

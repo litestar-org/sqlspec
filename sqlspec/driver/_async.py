@@ -302,14 +302,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
-    async def _try_fast_execute_async(
+    async def qc_lookup(
         self, statement: str, params: "tuple[Any, ...] | list[Any]"
     ) -> "SQLResult | None":
-        if not self._fast_path_enabled:
+        if not self._qc_enabled:
             return None
         if self.statement_config.parameter_config.needs_static_script_compilation:
             return None
-        cached = self._query_cache.get(statement)
+        cached = self._qc.get(statement)
         if cached is None:
             return None
         if cached.param_count != len(params):
@@ -317,16 +317,16 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         if isinstance(params, list) and params and isinstance(params[0], (tuple, list, dict)) and len(params) > 1:
             return None
 
-        rebound_params = self._fast_rebind(params, cached)
+        rebound_params = self.qc_rebind(params, cached)
         compiled_sql = cached.compiled_sql
         output_transformer = self.statement_config.output_transformer
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
 
-        fast_statement = self._build_fast_statement(statement, params, cached, rebound_params)
-        return await self._execute_raw_async(fast_statement, compiled_sql, rebound_params)
+        fast_statement = self.qc_build(statement, params, cached, rebound_params)
+        return await self.qc_execute(fast_statement, compiled_sql, rebound_params)
 
-    async def _execute_raw_async(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
+    async def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
         _ = (sql, params)
         exc_handler = self.handle_database_exceptions()
         cursor_manager = self.with_cursor(self.connection)
@@ -432,14 +432,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
         if (
-            self._fast_path_enabled
+            self._qc_enabled
             and (statement_config is None or statement_config is self.statement_config)
             and isinstance(statement, str)
             and len(parameters) == 1
             and isinstance(parameters[0], (tuple, list))
             and not kwargs
         ):
-            fast_result = await self._try_fast_execute_async(statement, parameters[0])
+            fast_result = await self.qc_lookup(statement, parameters[0])
             if fast_result is not None:
                 return fast_result
         sql_statement = self.prepare_statement(

@@ -806,10 +806,10 @@ class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
     __slots__ = (
-        "_fast_path_binder",
-        "_fast_path_enabled",
         "_observability",
-        "_query_cache",
+        "_qc",
+        "_qc_binder",
+        "_qc_enabled",
         "_statement_cache",
         "connection",
         "driver_features",
@@ -840,23 +840,23 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._statement_cache: dict[str, SQL] = {}
-        self._query_cache = QueryCache(QC_MAX_SIZE)
-        self._fast_path_enabled = False
-        self._fast_path_binder: (
+        self._qc = QueryCache(QC_MAX_SIZE)
+        self._qc_enabled = False
+        self._qc_binder: (
             Callable[[Any, ParameterProfile, Any, tuple[str, ...], bool, bool], ConvertedParameters] | None
         ) = None
         binder = self.driver_features.get("fast_path_binder")
         if binder is not None and callable(binder):
-            self._fast_path_binder = binder
-        self._update_fast_path_flag()
+            self._qc_binder = binder
+        self._update_qc_flag()
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Attach or replace the observability runtime."""
         self._observability = runtime
-        self._update_fast_path_flag()
+        self._update_qc_flag()
 
-    def _update_fast_path_flag(self) -> None:
-        self._fast_path_enabled = bool(not self.statement_config.statement_transformers and self.observability.is_idle)
+    def _update_qc_flag(self) -> None:
+        self._qc_enabled = bool(not self.statement_config.statement_transformers and self.observability.is_idle)
 
     @property
     def observability(self) -> "ObservabilityRuntime":
@@ -934,8 +934,8 @@ class CommonDriverAttributesMixin:
         if getattr(statement, "_pooled", False):
             get_sql_pool().release(statement)
 
-    def _fast_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
-        binder = self._fast_path_binder
+    def qc_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
+        binder = self._qc_binder
         if binder is not None:
             return binder(
                 params,
@@ -963,7 +963,7 @@ class CommonDriverAttributesMixin:
             apply_wrap_types=cached.applied_wrap_types,
         )
 
-    def _build_fast_statement(
+    def qc_build(
         self,
         sql: str,
         params: "tuple[Any, ...] | list[Any]",
@@ -1002,14 +1002,14 @@ class CommonDriverAttributesMixin:
         )
         return statement
 
-    def _try_cached_compiled(
+    def qc_lookup(
         self, statement: str, params: "tuple[Any, ...] | list[Any]"
     ) -> "SQLResult | None":
-        if not self._fast_path_enabled:
+        if not self._qc_enabled:
             return None
         if self.statement_config.parameter_config.needs_static_script_compilation:
             return None
-        cached = self._query_cache.get(statement)
+        cached = self._qc.get(statement)
         if cached is None:
             return None
         if cached.param_count != len(params):
@@ -1017,20 +1017,20 @@ class CommonDriverAttributesMixin:
         if isinstance(params, list) and params and isinstance(params[0], (tuple, list, dict)) and len(params) > 1:
             return None
 
-        rebound_params = self._fast_rebind(params, cached)
+        rebound_params = self.qc_rebind(params, cached)
         compiled_sql = cached.compiled_sql
         output_transformer = self.statement_config.output_transformer
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
 
-        fast_statement = self._build_fast_statement(statement, params, cached, rebound_params)
-        return cast("SQLResult", self._execute_compiled(fast_statement, compiled_sql, rebound_params))
+        fast_statement = self.qc_build(statement, params, cached, rebound_params)
+        return cast("SQLResult", self.qc_execute(fast_statement, compiled_sql, rebound_params))
 
-    def _execute_compiled(self, statement: "SQL", sql: str, params: Any) -> "SQLResult | Awaitable[SQLResult]":
+    def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
 
-    def _maybe_cache_fast_path(self, statement: "SQL") -> None:
-        if not self._fast_path_enabled:
+    def qc_store(self, statement: "SQL") -> None:
+        if not self._qc_enabled:
             return
         if statement.statement_config is not self.statement_config:
             return
@@ -1059,7 +1059,7 @@ class CommonDriverAttributesMixin:
             operation_profile=processed.operation_profile,
             param_count=param_profile.total_count,
         )
-        self._query_cache.set(statement.raw_sql, cached)
+        self._qc.set(statement.raw_sql, cached)
 
     @overload
     @staticmethod
@@ -1551,7 +1551,7 @@ class CommonDriverAttributesMixin:
                 cached_statement = CachedStatement(
                     compiled_sql=compiled_sql, parameters=prepared_parameters, expression=statement.expression
                 )
-                self._maybe_cache_fast_path(statement)
+                self.qc_store(statement)
                 return cached_statement, prepared_parameters
 
             processed = statement.get_processed_state()
@@ -1566,7 +1566,7 @@ class CommonDriverAttributesMixin:
                 parameters=prepared_parameters,
                 expression=processed.parsed_expression,
             )
-            self._maybe_cache_fast_path(statement)
+            self.qc_store(statement)
             return cached_statement, prepared_parameters
 
         # Materialize iterators before cache key generation to prevent exhaustion.
@@ -1605,7 +1605,7 @@ class CommonDriverAttributesMixin:
                     parameters=prepared_parameters,
                     expression=cached_result.expression,
                 )
-                self._maybe_cache_fast_path(statement)
+                self.qc_store(statement)
                 return updated_cached, prepared_parameters
 
         # Compile the statement directly (no need for prepare_statement indirection)
@@ -1623,7 +1623,7 @@ class CommonDriverAttributesMixin:
         if cache_key is not None and cache is not None:
             cache.put_statement(cache_key, cached_statement, dialect_key)
 
-        self._maybe_cache_fast_path(statement)
+        self.qc_store(statement)
         return cached_statement, prepared_parameters
 
     def _generate_compilation_cache_key(
