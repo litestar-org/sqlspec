@@ -6,14 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from sqlspec.core import (
-    SQL,
-    ParameterStyle,
-    ParameterStyleConfig,
-    SQLResult,
-    StatementConfig,
-    get_default_config,
-)
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.typing import Empty
@@ -212,9 +205,7 @@ async def test_async_driver_dispatch_statement_execution_many(mock_async_driver:
 async def test_async_driver_releases_pooled_statement(mock_async_driver: MockAsyncDriver) -> None:
     """Pooled statements should be reset after dispatch execution."""
     seed = "SELECT * FROM users WHERE id = ?"
-    mock_async_driver.prepare_statement(
-        seed, (1,), statement_config=mock_async_driver.statement_config, kwargs={}
-    )
+    mock_async_driver.prepare_statement(seed, (1,), statement_config=mock_async_driver.statement_config, kwargs={})
     pooled = mock_async_driver.prepare_statement(
         seed, (2,), statement_config=mock_async_driver.statement_config, kwargs={}
     )

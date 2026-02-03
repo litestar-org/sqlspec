@@ -243,7 +243,7 @@ def test_processed_state_pool_resets_on_release() -> None:
     state.compiled_sql = "SELECT 1"
     state.execution_parameters = [1]
     state.operation_type = "SELECT"
-    state.parameter_casts["k"] = "v"
+    state.parameter_casts[0] = "v"
 
     pool.release(state)
 
@@ -275,7 +275,7 @@ def test_sql_reset_clears_state() -> None:
     stmt.reset()
 
     assert stmt._compiled_from_cache is False
-    assert stmt._processed_state is Empty
+    assert stmt.is_processed is False
     assert stmt._hash is None
     assert stmt._filters is filters_ref
     assert stmt._filters == []

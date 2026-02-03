@@ -1392,15 +1392,10 @@ class CommonDriverAttributesMixin:
             if getattr(statement, "_compiled_from_cache", False):
                 compiled_sql, execution_parameters = statement.compile()
                 prepared_parameters = self.prepare_driver_parameters(
-                    execution_parameters,
-                    statement_config,
-                    is_many=statement.is_many,
-                    prepared_statement=statement,
+                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
                 )
                 cached_statement = CachedStatement(
-                    compiled_sql=compiled_sql,
-                    parameters=prepared_parameters,
-                    expression=statement.expression,
+                    compiled_sql=compiled_sql, parameters=prepared_parameters, expression=statement.expression
                 )
                 return cached_statement, prepared_parameters
 
@@ -1445,10 +1440,7 @@ class CommonDriverAttributesMixin:
                 # Compile with the statement's parameters to get correctly processed values.
                 compiled_sql, execution_parameters = statement.compile()
                 prepared_parameters = self.prepare_driver_parameters(
-                    execution_parameters,
-                    statement_config,
-                    is_many=statement.is_many,
-                    prepared_statement=statement,
+                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
                 )
                 # Return cached SQL metadata but with newly processed parameters
                 # Preserve list type for execute_many operations (some drivers require list, not tuple)
@@ -1463,10 +1455,7 @@ class CommonDriverAttributesMixin:
         compiled_sql, execution_parameters = statement.compile()
 
         prepared_parameters = self.prepare_driver_parameters(
-            execution_parameters,
-            statement_config,
-            is_many=statement.is_many,
-            prepared_statement=statement,
+            execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
         )
 
         cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters

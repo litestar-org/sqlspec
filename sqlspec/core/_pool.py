@@ -7,7 +7,11 @@ from mypy_extensions import mypyc_attr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from sqlspec.core.statement import ProcessedState, SQL
+
+    from sqlspec.core.statement import SQL, ProcessedState
+
+__all__ = ("ObjectPool", "get_processed_state_pool", "get_sql_pool", )
+
 
 T = TypeVar("T")
 _thread_local = threading.local()
@@ -19,12 +23,7 @@ class ObjectPool(Generic[T]):
 
     __slots__ = ("_factory", "_max_size", "_pool", "_resetter")
 
-    def __init__(
-        self,
-        factory: "Callable[[], T]",
-        resetter: "Callable[[T], None]",
-        max_size: int = 100,
-    ) -> None:
+    def __init__(self, factory: "Callable[[], T]", resetter: "Callable[[T], None]", max_size: int = 100) -> None:
         self._pool: list[T] = []
         self._max_size = max_size
         self._factory = factory

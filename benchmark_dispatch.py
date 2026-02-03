@@ -3,6 +3,8 @@ import timeit
 
 from sqlspec.utils.dispatch import TypeDispatcher
 
+__all__ = ("MyFilter", "StatementFilter", "bench_dispatcher", "bench_getattr", "bench_isinstance", "bench_try_except", )
+
 
 class StatementFilter:
     _is_statement_filter = True

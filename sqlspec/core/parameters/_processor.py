@@ -112,9 +112,7 @@ def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
     """
     param_count = len(parameters)
     sample_size = (
-        min(_EXECUTE_MANY_SAMPLE_SIZE, param_count)
-        if param_count > _EXECUTE_MANY_SAMPLE_THRESHOLD
-        else param_count
+        min(_EXECUTE_MANY_SAMPLE_SIZE, param_count) if param_count > _EXECUTE_MANY_SAMPLE_THRESHOLD else param_count
     )
     first = parameters[0]
     first_type = type(first)

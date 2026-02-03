@@ -80,6 +80,7 @@ def run_benchmark_allocations(fn: "Callable[[Path], None]") -> "tuple[int, int]"
         tracemalloc.stop()
     return current, peak
 
+
 __all__ = (
     "assert_compile_bypass",
     "bench_raw_sqlite",
@@ -237,6 +238,7 @@ def assert_compile_bypass(db_path: Path) -> None:
     if calls != 1:
         msg = f"Expected 1 compilation call for repeated inserts, got {calls}"
         raise AssertionError(msg)
+
 
 # -------------------------
 # Main

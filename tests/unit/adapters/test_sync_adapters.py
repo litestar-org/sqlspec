@@ -6,14 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core import (
-    SQL,
-    ParameterStyle,
-    ParameterStyleConfig,
-    SQLResult,
-    StatementConfig,
-    get_default_config,
-)
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.typing import Empty
@@ -216,9 +209,7 @@ def test_sync_driver_dispatch_statement_execution_many(mock_sync_driver: MockSyn
 def test_sync_driver_releases_pooled_statement(mock_sync_driver: MockSyncDriver) -> None:
     """Pooled statements should be reset after dispatch execution."""
     seed = "SELECT * FROM users WHERE id = ?"
-    mock_sync_driver.prepare_statement(
-        seed, (1,), statement_config=mock_sync_driver.statement_config, kwargs={}
-    )
+    mock_sync_driver.prepare_statement(seed, (1,), statement_config=mock_sync_driver.statement_config, kwargs={})
     pooled = mock_sync_driver.prepare_statement(
         seed, (2,), statement_config=mock_sync_driver.statement_config, kwargs={}
     )

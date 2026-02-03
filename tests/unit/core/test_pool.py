@@ -3,6 +3,7 @@
 
 import threading
 from queue import Queue
+from typing import cast
 
 import pytest
 
@@ -72,7 +73,7 @@ def test_object_pool_release_resets_and_respects_max_size() -> None:
 
 def test_thread_local_pools_are_unique_per_thread() -> None:
     main_pool = get_sql_pool()
-    queue: "Queue[object]" = Queue()
+    queue: Queue[object] = Queue()
 
     def worker() -> None:
         queue.put(get_sql_pool())
@@ -91,7 +92,9 @@ def test_thread_local_pools_reuse_within_thread() -> None:
 
 
 def test_thread_local_pools_are_distinct_by_type() -> None:
-    assert get_sql_pool() is not get_processed_state_pool()
+    sql_pool = get_sql_pool()
+    processed_pool = get_processed_state_pool()
+    assert cast("object", sql_pool) is not cast("object", processed_pool)
 
 
 def test_object_pool_reuse_stability_over_iterations() -> None:
@@ -114,7 +117,7 @@ def test_object_pool_reuse_stability_over_iterations() -> None:
 
 def test_object_pool_thread_isolation() -> None:
     """Thread-local pools should not share objects across threads."""
-    queue: "Queue[ObjectPool[_Sentinel]]" = Queue()
+    queue: Queue[object] = Queue()
 
     def worker() -> None:
         queue.put(get_sql_pool())
@@ -123,4 +126,5 @@ def test_object_pool_thread_isolation() -> None:
     thread.start()
     thread.join()
 
-    assert queue.get() is not get_sql_pool()
+    worker_pool = queue.get()
+    assert worker_pool is not get_sql_pool()

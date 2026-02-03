@@ -12,11 +12,11 @@ from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
 from sqlspec.core import pipeline
+from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.hashing import hash_filters
-from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.parameters import (
     ParameterConverter,
     ParameterProcessor,
@@ -197,8 +197,8 @@ class SQL:
         "_is_script",
         "_named_parameters",
         "_original_parameters",
-        "_positional_parameters",
         "_pooled",
+        "_positional_parameters",
         "_processed_state",
         "_raw_expression",
         "_raw_sql",
