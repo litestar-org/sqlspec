@@ -16,7 +16,8 @@ def disable_connectors_by_default():
     """Disable both connectors by default for clean test state."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", False):
         with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", False):
-            yield
+            with patch.object(AsyncpgConfig, "_detect_extensions", new_callable=AsyncMock):
+                yield
 
 
 @pytest.fixture
