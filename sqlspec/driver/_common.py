@@ -27,7 +27,7 @@ from sqlspec.core import (
 )
 from sqlspec.core._pool import get_sql_pool
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import ParameterProcessor, ParameterProfile, structural_fingerprint, value_fingerprint
+from sqlspec.core.parameters import ParameterProcessor, structural_fingerprint, value_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._query_cache import QC_MAX_SIZE, CachedQuery, QueryCache
@@ -808,7 +808,6 @@ class CommonDriverAttributesMixin:
     __slots__ = (
         "_observability",
         "_qc",
-        "_qc_binder",
         "_qc_enabled",
         "_statement_cache",
         "connection",
@@ -842,14 +841,6 @@ class CommonDriverAttributesMixin:
         self._statement_cache: dict[str, SQL] = {}
         self._qc = QueryCache(QC_MAX_SIZE)
         self._qc_enabled = False
-        self._qc_binder: (
-            Callable[[Any, ParameterProfile, Any, tuple[str, ...], bool, bool], ConvertedParameters] | None
-        ) = None
-        binder = self.driver_features.get("fast_path_binder")
-        if binder is not None and callable(binder):
-            self._qc_binder = cast(
-                "Callable[[Any, ParameterProfile, Any, tuple[str, ...], bool, bool], ConvertedParameters]", binder
-            )
         self._update_qc_flag()
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
@@ -937,16 +928,7 @@ class CommonDriverAttributesMixin:
             get_sql_pool().release(statement)
 
     def qc_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
-        binder = self._qc_binder
-        if binder is not None:
-            return binder(
-                params,
-                cached.parameter_profile,
-                self.statement_config.parameter_config,
-                cached.input_named_parameters,
-                False,
-                cached.applied_wrap_types,
-            )
+        """Rebind parameters for a cached query."""
         config = self.statement_config.parameter_config
         if not cached.input_named_parameters and not cached.applied_wrap_types and not config.type_coercion_map:
             return params

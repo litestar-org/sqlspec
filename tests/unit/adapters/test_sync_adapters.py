@@ -44,7 +44,7 @@ def test_sync_driver_with_custom_config(mock_sync_connection: MockSyncConnection
 def test_sync_driver_fast_path_flag_default(mock_sync_connection: MockSyncConnection) -> None:
     driver = MockSyncDriver(mock_sync_connection)
 
-    assert driver._fast_path_enabled is True
+    assert driver._qc_enabled is True
 
 
 def test_sync_driver_fast_path_flag_disabled_by_transformer(mock_sync_connection: MockSyncConnection) -> None:
@@ -60,7 +60,7 @@ def test_sync_driver_fast_path_flag_disabled_by_transformer(mock_sync_connection
     )
     driver = MockSyncDriver(mock_sync_connection, custom_config)
 
-    assert driver._fast_path_enabled is False
+    assert driver._qc_enabled is False
 
 
 def test_sync_driver_fast_path_flag_disabled_by_observability(mock_sync_connection: MockSyncConnection) -> None:
@@ -69,7 +69,7 @@ def test_sync_driver_fast_path_flag_disabled_by_observability(mock_sync_connecti
 
     driver.attach_observability(runtime)
 
-    assert driver._fast_path_enabled is False
+    assert driver._qc_enabled is False
 
 
 def test_sync_driver_with_cursor(mock_sync_driver: MockSyncDriver) -> None:

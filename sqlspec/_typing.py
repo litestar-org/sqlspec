@@ -617,21 +617,6 @@ PYDANTIC_INSTALLED = dependency_flag("pydantic")
 ALLOYDB_CONNECTOR_INSTALLED = dependency_flag("google.cloud.alloydb.connector")
 NANOID_INSTALLED = dependency_flag("fastnanoid")
 UUID_UTILS_INSTALLED = dependency_flag("uuid_utils")
-SQLSPEC_RS_INSTALLED = dependency_flag("sqlspec_rs")
-
-
-def get_sqlspec_rs() -> "Any | None":
-    """Return the sqlspec_rs module when available."""
-    if not SQLSPEC_RS_INSTALLED:
-        return None
-    try:
-        import importlib
-
-        return importlib.import_module("sqlspec_rs")
-    except ModuleNotFoundError:
-        return None
-
-
 __all__ = (
     "ALLOYDB_CONNECTOR_INSTALLED",
     "ATTRS_INSTALLED",
@@ -710,7 +695,6 @@ __all__ = (
     "cattrs_unstructure",
     "convert",
     "convert_stub",
-    "get_sqlspec_rs",
     "module_available",
     "trace",
 )
