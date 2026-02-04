@@ -847,7 +847,9 @@ class CommonDriverAttributesMixin:
         ) = None
         binder = self.driver_features.get("fast_path_binder")
         if binder is not None and callable(binder):
-            self._qc_binder = binder
+            self._qc_binder = cast(
+                "Callable[[Any, ParameterProfile, Any, tuple[str, ...], bool, bool], ConvertedParameters]", binder
+            )
         self._update_qc_flag()
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
@@ -971,21 +973,23 @@ class CommonDriverAttributesMixin:
         execution_parameters: "ConvertedParameters",
     ) -> "SQL":
         statement = get_sql_pool().acquire()
-        statement._raw_sql = sql
-        statement._raw_expression = None
-        statement._statement_config = self.statement_config
-        statement._dialect = statement._normalize_dialect(self.statement_config.dialect)
-        statement._is_many = False
-        statement._is_script = False
-        statement._original_parameters = ()
-        statement._pooled = True
-        statement._compiled_from_cache = False
-        statement._hash = None
-        statement._filters = []
-        statement._named_parameters = {}
-        statement._positional_parameters = list(params)
-        statement._sql_param_counters = {}
-        statement._processed_state = statement._build_processed_state(
+        # Fast-path: directly set internal attributes to avoid constructor overhead
+        # pyright: ignore[reportPrivateUsage]
+        statement._raw_sql = sql  # pyright: ignore[reportPrivateUsage]
+        statement._raw_expression = None  # pyright: ignore[reportPrivateUsage]
+        statement._statement_config = self.statement_config  # pyright: ignore[reportPrivateUsage]
+        statement._dialect = statement._normalize_dialect(self.statement_config.dialect)  # pyright: ignore[reportPrivateUsage]
+        statement._is_many = False  # pyright: ignore[reportPrivateUsage]
+        statement._is_script = False  # pyright: ignore[reportPrivateUsage]
+        statement._original_parameters = ()  # pyright: ignore[reportPrivateUsage]
+        statement._pooled = True  # pyright: ignore[reportPrivateUsage]
+        statement._compiled_from_cache = False  # pyright: ignore[reportPrivateUsage]
+        statement._hash = None  # pyright: ignore[reportPrivateUsage]
+        statement._filters = []  # pyright: ignore[reportPrivateUsage]
+        statement._named_parameters = {}  # pyright: ignore[reportPrivateUsage]
+        statement._positional_parameters = list(params)  # pyright: ignore[reportPrivateUsage]
+        statement._sql_param_counters = {}  # pyright: ignore[reportPrivateUsage]
+        statement._processed_state = statement._build_processed_state(  # pyright: ignore[reportPrivateUsage]
             compiled_sql=cached.compiled_sql,
             execution_parameters=execution_parameters,
             parsed_expression=None,
