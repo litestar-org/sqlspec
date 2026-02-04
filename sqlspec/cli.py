@@ -1092,4 +1092,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             except Exception as exc:
                 console.print(f"[red]✗[/] {config_name}: {exc}")
 
+
     return database_group
+
