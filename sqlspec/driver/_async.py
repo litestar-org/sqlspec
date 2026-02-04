@@ -302,7 +302,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
-    async def qc_lookup(
+    async def _qc_lookup(
         self, statement: str, params: "tuple[Any, ...] | list[Any]"
     ) -> "SQLResult | None":
         """Attempt fast-path execution for cached query (async).
@@ -314,13 +314,17 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             SQLResult if cache hit and execution succeeds, None otherwise.
         """
-        prep = self.qc_prepare(statement, params)
-        if prep is None:
+        prepared = self._qc_prepare(statement, params)
+        if prepared is None:
             return None
-        return await self.qc_execute(*prep)
+        return await self._qc_execute(prepared)
 
-    async def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
-        _ = (sql, params)
+    async def _qc_execute(self, statement: "SQL") -> "SQLResult":
+        """Execute pre-compiled query via fast path (async).
+
+        The statement is already compiled by _qc_prepare, so dispatch_execute
+        will hit the fast path in _get_compiled_statement (is_processed check).
+        """
         exc_handler = self.handle_database_exceptions()
         cursor_manager = self.with_cursor(self.connection)
         cursor: Any | None = None
@@ -337,12 +341,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             special_result = await self.dispatch_special_handling(cursor, statement)
             if special_result is not None:
                 result = special_result
-            elif statement.is_script:
-                execution_result = await self.dispatch_execute_script(cursor, statement)
-                result = self.build_statement_result(statement, execution_result)
-            elif statement.is_many:
-                execution_result = await self.dispatch_execute_many(cursor, statement)
-                result = self.build_statement_result(statement, execution_result)
             else:
                 execution_result = await self.dispatch_execute(cursor, statement)
                 result = self.build_statement_result(statement, execution_result)
@@ -432,7 +430,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             and isinstance(parameters[0], (tuple, list))
             and not kwargs
         ):
-            fast_result = await self.qc_lookup(statement, parameters[0])
+            fast_result = await self._qc_lookup(statement, parameters[0])
             if fast_result is not None:
                 return fast_result
         sql_statement = self.prepare_statement(

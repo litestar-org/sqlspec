@@ -119,67 +119,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    async def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
-        exc_handler = self.handle_database_exceptions()
-        cursor_manager = self.with_cursor(self.connection)
-        cursor: aiosqlite.Cursor | None = None
-        exc: Exception | None = None
-        exc_handler_entered = False
-        cursor_entered = False
-        result: SQLResult | None = None
-
-        try:
-            await exc_handler.__aenter__()
-            exc_handler_entered = True
-            cursor = await cursor_manager.__aenter__()
-            cursor_entered = True
-            await cursor.execute(sql, normalize_execute_parameters(params))
-
-            if statement.returns_rows():
-                fetched_data = await cursor.fetchall()
-                data, column_names, row_count = collect_rows(cast("list[Any]", fetched_data), cursor.description)
-                execution_result = self.create_execution_result(
-                    cursor,
-                    selected_data=data,
-                    column_names=column_names,
-                    data_row_count=row_count,
-                    is_select_result=True,
-                )
-            else:
-                affected_rows = resolve_rowcount(cursor)
-                execution_result = self.create_execution_result(cursor, rowcount_override=affected_rows)
-
-            result = self.build_statement_result(statement, execution_result)
-        except Exception as err:
-            exc = err
-        finally:
-            if cursor_entered:
-                if exc is None:
-                    await cursor_manager.__aexit__(None, None, None)
-                else:
-                    await cursor_manager.__aexit__(type(exc), exc, exc.__traceback__)
-            if exc_handler_entered:
-                if exc is None:
-                    await exc_handler.__aexit__(None, None, None)
-                else:
-                    await exc_handler.__aexit__(type(exc), exc, exc.__traceback__)
-
-        try:
-            if exc is not None:
-                mapped_exc = exc_handler.pending_exception or exc
-                if exc_handler.pending_exception is not None:
-                    raise mapped_exc from exc
-                raise exc
-
-            if exc_handler.pending_exception is not None:
-                mapped_exc = exc_handler.pending_exception
-                raise mapped_exc from None
-
-            assert result is not None
-            return result
-        finally:
-            self._release_pooled_statement(statement)
-
     async def dispatch_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)

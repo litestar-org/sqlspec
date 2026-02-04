@@ -304,8 +304,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
-    def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult":
-        _ = (sql, params)
+    def _qc_execute(self, statement: "SQL") -> "SQLResult":
+        """Execute pre-compiled query via fast path.
+
+        The statement is already compiled by _qc_prepare, so dispatch_execute
+        will hit the fast path in _get_compiled_statement (is_processed check).
+        """
         exc_handler = self.handle_database_exceptions()
         try:
             try:
@@ -324,6 +328,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                     raise exc_handler.pending_exception from None
         finally:
             self._release_pooled_statement(statement)
+        msg = "unreachable"
+        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
 
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT - Required Abstract Methods
@@ -381,9 +387,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             and isinstance(parameters[0], (tuple, list))
             and not kwargs
         ):
-            fast_result = self.qc_lookup(statement, parameters[0])
+            fast_result = self._qc_lookup(statement, parameters[0])
             if fast_result is not None:
-                return fast_result
+                return cast("SQLResult", fast_result)
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )

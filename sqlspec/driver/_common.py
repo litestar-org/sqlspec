@@ -963,7 +963,7 @@ class CommonDriverAttributesMixin:
             apply_wrap_types=cached.applied_wrap_types,
         )
 
-    def qc_build(
+    def _qc_build(
         self,
         sql: str,
         params: "tuple[Any, ...] | list[Any]",
@@ -1002,21 +1002,20 @@ class CommonDriverAttributesMixin:
         )
         return statement
 
-    def qc_prepare(
+    def _qc_prepare(
         self, statement: str, params: "tuple[Any, ...] | list[Any]"
-    ) -> "tuple[SQL, str, Any] | None":
+    ) -> "SQL | None":
         """Prepare fast-path execution if cache hit.
 
         Only essential checks in the hot lookup path. All detailed eligibility
-        validation happens at store time in qc_store().
+        validation happens at store time in _qc_store().
 
         Args:
             statement: Raw SQL string.
             params: Query parameters (tuple or list).
 
         Returns:
-            Tuple of (SQL object, compiled SQL, bound params) if cache hit,
-            None if cache miss or ineligible.
+            Prepared SQL object with processed state if cache hit, None otherwise.
         """
         if not self._qc_enabled:
             return None
@@ -1031,12 +1030,11 @@ class CommonDriverAttributesMixin:
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
 
-        fast_statement = self.qc_build(statement, params, cached, rebound_params)
-        return fast_statement, compiled_sql, rebound_params
+        return self._qc_build(statement, params, cached, rebound_params)
 
-    def qc_lookup(
+    def _qc_lookup(
         self, statement: str, params: "tuple[Any, ...] | list[Any]"
-    ) -> "SQLResult | None":
+    ) -> "SQLResult | Awaitable[SQLResult | None] | None":
         """Attempt fast-path execution for cached query.
 
         Args:
@@ -1044,17 +1042,18 @@ class CommonDriverAttributesMixin:
             params: Query parameters.
 
         Returns:
-            SQLResult if cache hit and execution succeeds, None otherwise.
+            SQLResult (sync) or Awaitable[SQLResult | None] (async) if cache hit,
+            None if cache miss (sync only - async always returns Awaitable).
         """
-        prep = self.qc_prepare(statement, params)
-        if prep is None:
+        prepared = self._qc_prepare(statement, params)
+        if prepared is None:
             return None
-        return cast("SQLResult", self.qc_execute(*prep))
+        return self._qc_execute(prepared)
 
-    def qc_execute(self, statement: "SQL", sql: str, params: Any) -> "SQLResult | Awaitable[SQLResult]":
+    def _qc_execute(self, statement: "SQL") -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
 
-    def qc_store(self, statement: "SQL") -> None:
+    def _qc_store(self, statement: "SQL") -> None:
         """Store statement in cache if eligible.
 
         All eligibility validation happens here (executed once per unique query).
@@ -1590,7 +1589,7 @@ class CommonDriverAttributesMixin:
                 cached_statement = CachedStatement(
                     compiled_sql=compiled_sql, parameters=prepared_parameters, expression=statement.expression
                 )
-                self.qc_store(statement)
+                self._qc_store(statement)
                 return cached_statement, prepared_parameters
 
             processed = statement.get_processed_state()
@@ -1605,7 +1604,7 @@ class CommonDriverAttributesMixin:
                 parameters=prepared_parameters,
                 expression=processed.parsed_expression,
             )
-            self.qc_store(statement)
+            self._qc_store(statement)
             return cached_statement, prepared_parameters
 
         # Materialize iterators before cache key generation to prevent exhaustion.
@@ -1644,7 +1643,7 @@ class CommonDriverAttributesMixin:
                     parameters=prepared_parameters,
                     expression=cached_result.expression,
                 )
-                self.qc_store(statement)
+                self._qc_store(statement)
                 return updated_cached, prepared_parameters
 
         # Compile the statement directly (no need for prepare_statement indirection)
@@ -1662,7 +1661,7 @@ class CommonDriverAttributesMixin:
         if cache_key is not None and cache is not None:
             cache.put_statement(cache_key, cached_statement, dialect_key)
 
-        self.qc_store(statement)
+        self._qc_store(statement)
         return cached_statement, prepared_parameters
 
     def _generate_compilation_cache_key(

@@ -16,8 +16,8 @@ from sqlspec.driver._query_cache import QueryCache
 class _FakeDriver(CommonDriverAttributesMixin):
     __slots__ = ()
 
-    def qc_execute(self, statement: Any, sql: str, params: Any) -> Any:
-        return (statement, sql, params)
+    def _qc_execute(self, statement: Any) -> Any:
+        return statement
 
 
 def test_qc_lru_eviction() -> None:
@@ -63,7 +63,7 @@ def test_qc_update_moves_to_end() -> None:
     assert entry.param_count == 2
 
 
-def testqc_lookup_cache_hit_rebinds() -> None:
+def test_qc_lookup_cache_hit_rebinds() -> None:
     config = StatementConfig(
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
@@ -84,13 +84,15 @@ def testqc_lookup_cache_hit_rebinds() -> None:
     )
     driver._qc.set("SELECT * FROM t WHERE id = ?", cached)
 
-    result = driver.qc_lookup("SELECT * FROM t WHERE id = ?", (1,))
+    result = driver._qc_lookup("SELECT * FROM t WHERE id = ?", (1,))
 
     assert result is not None
-    statement, sql, params = cast("tuple[Any, str, Any]", result)
-    assert sql == "SELECT * FROM t WHERE id = ?"
-    assert params == (1,)
+    # Result is the SQL statement with processed state
+    statement = cast("Any", result)
     assert statement.operation_type == "SELECT"
+    compiled_sql, params = statement.compile()
+    assert compiled_sql == "SELECT * FROM t WHERE id = ?"
+    assert params == (1,)
 
 
 def test_cached_compiled_binder_override() -> None:
@@ -126,10 +128,12 @@ def test_cached_compiled_binder_override() -> None:
     )
     driver._qc.set("SELECT * FROM t WHERE id = ?", cached)
 
-    result = driver.qc_lookup("SELECT * FROM t WHERE id = ?", (1,))
+    result = driver._qc_lookup("SELECT * FROM t WHERE id = ?", (1,))
 
     assert result is not None
-    _, _, params = cast("tuple[Any, str, Any]", result)
+    # Result is the SQL statement - check compiled params use custom binder
+    statement = cast("Any", result)
+    _, params = statement.compile()
     assert params == ("bound",)
 
 
@@ -141,7 +145,7 @@ def test_execute_uses_fast_path_when_eligible(mock_sync_driver, monkeypatch) -> 
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(mock_sync_driver, "qc_lookup", _fake_try)
+    monkeypatch.setattr(mock_sync_driver, "_qc_lookup", _fake_try)
     mock_sync_driver._qc_enabled = True
 
     result = mock_sync_driver.execute("SELECT ?", (1,))
@@ -158,7 +162,7 @@ def test_execute_skips_fast_path_with_statement_config_override(mock_sync_driver
         called = True
         return object()
 
-    monkeypatch.setattr(mock_sync_driver, "qc_lookup", _fake_try)
+    monkeypatch.setattr(mock_sync_driver, "_qc_lookup", _fake_try)
     mock_sync_driver._qc_enabled = True
 
     statement_config = mock_sync_driver.statement_config.replace()
@@ -191,7 +195,7 @@ async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, mon
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(mock_async_driver, "qc_lookup", _fake_try)
+    monkeypatch.setattr(mock_async_driver, "_qc_lookup", _fake_try)
     mock_async_driver._qc_enabled = True
 
     result = await mock_async_driver.execute("SELECT ?", (1,))
@@ -209,7 +213,7 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(mock
         called = True
         return object()
 
-    monkeypatch.setattr(mock_async_driver, "qc_lookup", _fake_try)
+    monkeypatch.setattr(mock_async_driver, "_qc_lookup", _fake_try)
     mock_async_driver._qc_enabled = True
 
     statement_config = mock_async_driver.statement_config.replace()
