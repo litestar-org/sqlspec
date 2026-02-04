@@ -302,9 +302,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
-    async def _qc_lookup(
-        self, statement: str, params: "tuple[Any, ...] | list[Any]"
-    ) -> "SQLResult | None":
+    async def _qc_lookup(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
         """Attempt fast-path execution for cached query (async).
 
         Args:

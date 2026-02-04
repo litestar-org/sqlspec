@@ -22,6 +22,8 @@ from sqlspec.adapters.sqlite import SqliteConfig
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+__all__ = ("main", "print_benchmark_table", "raw_asyncpg_initialization", "raw_asyncpg_read_heavy", "raw_asyncpg_write_heavy", "raw_sqlite_initialization", "raw_sqlite_iterative_inserts", "raw_sqlite_read_heavy", "raw_sqlite_repeated_queries", "raw_sqlite_write_heavy", "run_benchmark", "sqlalchemy_asyncpg_initialization", "sqlalchemy_asyncpg_read_heavy", "sqlalchemy_asyncpg_write_heavy", "sqlalchemy_sqlite_initialization", "sqlalchemy_sqlite_iterative_inserts", "sqlalchemy_sqlite_read_heavy", "sqlalchemy_sqlite_repeated_queries", "sqlalchemy_sqlite_write_heavy", "sqlspec_asyncpg_initialization", "sqlspec_asyncpg_read_heavy", "sqlspec_asyncpg_write_heavy", "sqlspec_sqlite_initialization", "sqlspec_sqlite_iterative_inserts", "sqlspec_sqlite_read_heavy", "sqlspec_sqlite_repeated_queries", "sqlspec_sqlite_write_heavy", )
+
 
 ROWS_TO_INSERT = 10_000
 

@@ -1002,9 +1002,7 @@ class CommonDriverAttributesMixin:
         )
         return statement
 
-    def _qc_prepare(
-        self, statement: str, params: "tuple[Any, ...] | list[Any]"
-    ) -> "SQL | None":
+    def _qc_prepare(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQL | None":
         """Prepare fast-path execution if cache hit.
 
         Only essential checks in the hot lookup path. All detailed eligibility
