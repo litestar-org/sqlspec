@@ -1,5 +1,7 @@
 """AsyncPG adapter for SQLSpec."""
 
+import sqlspec.adapters.asyncpg.dialect as dialect  # noqa: F401
+
 from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgConnectionConfig, AsyncpgPoolConfig
 from sqlspec.adapters.asyncpg.core import default_statement_config

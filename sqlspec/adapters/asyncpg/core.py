@@ -242,6 +242,7 @@ def apply_driver_features(
     deserializer = processed_features.setdefault("json_deserializer", from_json)
     processed_features.setdefault("enable_json_codecs", True)
     processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+    processed_features.setdefault("enable_paradedb", True)
     processed_features.setdefault("enable_cloud_sql", False)
     processed_features.setdefault("enable_alloydb", False)
 
