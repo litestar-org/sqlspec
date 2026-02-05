@@ -10,6 +10,8 @@ import inspect
 import sqlite3
 import tempfile
 import time
+from contextlib import suppress
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import click
@@ -21,6 +23,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+# Pool leak detection helper
+_leaked_pools: list[str] = []
 
 __all__ = (
     "main",
@@ -88,6 +93,11 @@ def main(driver: tuple[str, ...], rows: int) -> None:
     if errors:
         for err in errors:
             click.secho(f"Error: {err}", fg="red")
+    if _leaked_pools:
+        click.secho("Pool leaks detected:", fg="yellow")
+        for leak in _leaked_pools:
+            click.secho(f"  - {leak}", fg="yellow")
+        _leaked_pools.clear()
     click.echo(f"Benchmarks complete for drivers: {', '.join(driver)}")
 
 
@@ -351,6 +361,23 @@ def sqlalchemy_sqlite_repeated_queries() -> None:
 # These test async sqlite performance
 
 
+def _check_pool_leak(pool: Any, scenario_name: str) -> None:
+    """Check for connection leaks in a pool.
+
+    Args:
+        pool: Connection pool with size() and checked_out() methods
+        scenario_name: Name of the scenario for error reporting
+    """
+    if pool is None:
+        return
+
+    with suppress(AttributeError, TypeError):
+        total = pool.size()
+        checked_out = pool.checked_out()
+        if checked_out > 0:
+            _leaked_pools.append(f"{scenario_name}: {checked_out}/{total} connections leaked")
+
+
 def _get_aiosqlite() -> Any:
     """Import aiosqlite lazily."""
     try:
@@ -439,35 +466,56 @@ async def sqlspec_aiosqlite_initialization() -> None:
     AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
     if AiosqliteConfig is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+    # Use delete=False so we control when the file is deleted (after pool close)
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=tmp.name)
+        config = AiosqliteConfig(database=str(tmp_path))
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
+        # Properly close the pool to release all connections
+        _check_pool_leak(config.connection_instance, "aiosqlite/initialization")
+        await config.close_pool()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()  # noqa: ASYNC240
 
 
 async def sqlspec_aiosqlite_write_heavy() -> None:
     AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
     if AiosqliteConfig is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=tmp.name)
+        config = AiosqliteConfig(database=str(tmp_path))
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
             data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
             await session.execute_many(INSERT_TEST_VALUE, data)
+        _check_pool_leak(config.connection_instance, "aiosqlite/write_heavy")
+        await config.close_pool()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()  # noqa: ASYNC240
 
 
 async def sqlspec_aiosqlite_read_heavy() -> None:
     AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
     if AiosqliteConfig is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=tmp.name)
+        config = AiosqliteConfig(database=str(tmp_path))
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -475,34 +523,57 @@ async def sqlspec_aiosqlite_read_heavy() -> None:
             await session.execute_many(INSERT_TEST_VALUE, data)
             rows = await session.fetch(SELECT_TEST_VALUES)
             assert len(rows) == ROWS_TO_INSERT
+        _check_pool_leak(config.connection_instance, "aiosqlite/read_heavy")
+        await config.close_pool()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()  # noqa: ASYNC240
 
 
 async def sqlspec_aiosqlite_iterative_inserts() -> None:
     AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
     if AiosqliteConfig is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=tmp.name)
+        config = AiosqliteConfig(database=str(tmp_path))
         async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
             for i in range(ROWS_TO_INSERT):
                 await session.execute(INSERT_TEST_VALUE, (f"value_{i}",))
+        _check_pool_leak(config.connection_instance, "aiosqlite/iterative_inserts")
+        await config.close_pool()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()  # noqa: ASYNC240
 
 
 async def sqlspec_aiosqlite_repeated_queries() -> None:
     AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
     if AiosqliteConfig is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=tmp.name)
+        config = AiosqliteConfig(database=str(tmp_path))
         async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
             data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
             await session.execute_many(INSERT_TEST_VALUE, data)
             for i in range(ROWS_TO_INSERT):
                 await session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+        _check_pool_leak(config.connection_instance, "aiosqlite/repeated_queries")
+        await config.close_pool()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()  # noqa: ASYNC240
 
 
 async def sqlalchemy_aiosqlite_initialization() -> None:
