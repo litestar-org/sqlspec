@@ -59,6 +59,7 @@ __all__ = (
 
 
 ROWS_TO_INSERT = 10_000
+POOL_SIZE = 5  # Default pool size for async adapters
 
 
 @click.command()
@@ -72,19 +73,26 @@ ROWS_TO_INSERT = 10_000
 @click.option(
     "--rows", default=ROWS_TO_INSERT, show_default=True, help="Number of rows to insert/read in heavy scenarios"
 )
-def main(driver: tuple[str, ...], rows: int) -> None:
+@click.option(
+    "--pool-size",
+    default=POOL_SIZE,
+    show_default=True,
+    help="Connection pool size for async adapters (1=single connection, matches sync behavior)",
+)
+def main(driver: tuple[str, ...], rows: int, pool_size: int) -> None:
     """Run benchmarks for the specified drivers.
 
     Compares raw driver, sqlspec, and SQLAlchemy performance across
     initialization, write-heavy, and read-heavy scenarios.
     """
-    global ROWS_TO_INSERT
+    global ROWS_TO_INSERT, POOL_SIZE
     ROWS_TO_INSERT = rows
+    POOL_SIZE = pool_size
 
     results: list[dict[str, Any]] = []
     errors: list[str] = []
     for drv in driver:
-        click.echo(f"Running benchmark for driver: {drv} (rows={rows})")
+        click.echo(f"Running benchmark for driver: {drv} (rows={rows}, pool_size={pool_size})")
         results.extend(run_benchmark(drv, errors))
     if results:
         print_benchmark_table(results)
@@ -472,7 +480,7 @@ async def sqlspec_aiosqlite_initialization() -> None:
     tmp.close()
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path))
+        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -493,7 +501,7 @@ async def sqlspec_aiosqlite_write_heavy() -> None:
     tmp.close()
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path))
+        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -515,7 +523,7 @@ async def sqlspec_aiosqlite_read_heavy() -> None:
     tmp.close()
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path))
+        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -539,7 +547,7 @@ async def sqlspec_aiosqlite_iterative_inserts() -> None:
     tmp.close()
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path))
+        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -561,7 +569,7 @@ async def sqlspec_aiosqlite_repeated_queries() -> None:
     tmp.close()
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path))
+        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
