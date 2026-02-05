@@ -1006,6 +1006,12 @@ class CommonDriverAttributesMixin:
         cached = self._qc.get(statement)
         if cached is None or cached.param_count != len(params):
             return None
+        # When an AST transformer is configured (e.g. null pruning for ADBC/PostgreSQL),
+        # it may rewrite SQL based on which parameters are None. The cached compiled_sql
+        # was produced from a specific set of None positions, so we must fall back to the
+        # normal path whenever any parameter is None to let the transformer run.
+        if self.statement_config.parameter_config.ast_transformer is not None and any(p is None for p in params):
+            return None
 
         rebound_params = self.qc_rebind(params, cached)
         compiled_sql = cached.compiled_sql
@@ -1068,6 +1074,13 @@ class CommonDriverAttributesMixin:
             return
         if not statement.is_processed:
             return
+        # When an AST transformer is configured, compiled SQL may depend on which
+        # parameters are None (e.g. null pruning rewrites placeholders to NULL literals).
+        # Don't cache these results as they'd corrupt the cache for non-None calls.
+        if statement.statement_config.parameter_config.ast_transformer is not None:
+            params = statement.positional_parameters
+            if any(p is None for p in params):
+                return
 
         processed = cast("ProcessedState", statement.get_processed_state())
         param_profile = processed.parameter_profile

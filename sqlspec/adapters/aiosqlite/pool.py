@@ -532,7 +532,7 @@ class AiosqliteConnectionPool:
             # Fast claim for recently-used connections (idle < health_check_interval)
             if connection.idle_since is not None:
                 idle_time = time.time() - connection.idle_since
-                if idle_time <= self._health_check_interval and connection._healthy and not connection._closed:
+                if idle_time <= self._health_check_interval and connection.is_healthy:
                     connection.idle_since = None  # mark_as_in_use inline
                     return connection
             # Fall back to full health check for older connections
@@ -614,7 +614,7 @@ class AiosqliteConnectionPool:
                 connection_id=connection.id,
                 error=str(e),
             )
-            connection._healthy = False  # mark_unhealthy inline
+            connection.mark_unhealthy()
             await self._retire_connection(connection)
 
     def get_connection(self) -> "AiosqlitePoolConnectionContext":

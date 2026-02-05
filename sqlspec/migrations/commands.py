@@ -10,7 +10,6 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
-import anyio
 from rich.console import Console
 from rich.table import Table
 
@@ -1966,6 +1965,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             return
 
         if not yes:
+            import anyio
+
             response = await anyio.to_thread.run_sync(input, "\nProceed with squash? [y/N]: ")  # pyright: ignore[reportAttributeAccessIssue]
             if response.lower() != "y":
                 console.print("[yellow]Squash cancelled[/]")
@@ -2039,6 +2040,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             return
 
         if not yes:
+            import anyio
+
             response = await anyio.to_thread.run_sync(input, "\nProceed with conversion? [y/N]: ")  # pyright: ignore[reportAttributeAccessIssue]
             if response.lower() != "y":
                 console.print("[yellow]Conversion cancelled[/]")
