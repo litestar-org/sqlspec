@@ -493,9 +493,8 @@ def sqlspec_duckdb_repeated_queries() -> None:
 def _get_duckdb_engine() -> tuple[Any, Any]:
     """Import SQLAlchemy with duckdb_engine lazily."""
     try:
-        from sqlalchemy import create_engine, text
-
         import duckdb_engine  # noqa: F401
+        from sqlalchemy import create_engine, text
     except ImportError:
         return None, None
     else:
