@@ -78,6 +78,7 @@ dev = [
   { include-group = "test" },
   { include-group = "build" },
   { include-group = "benchmarks" },
+  "duckdb-engine>=0.17.0",
 ]
 doc = [
   "auto-pytabs[sphinx]>=0.5.0",

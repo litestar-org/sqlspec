@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sqlspec import SQLSpec
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 
 if TYPE_CHECKING:
@@ -33,6 +34,11 @@ __all__ = (
     "raw_asyncpg_initialization",
     "raw_asyncpg_read_heavy",
     "raw_asyncpg_write_heavy",
+    "raw_duckdb_initialization",
+    "raw_duckdb_iterative_inserts",
+    "raw_duckdb_read_heavy",
+    "raw_duckdb_repeated_queries",
+    "raw_duckdb_write_heavy",
     "raw_sqlite_initialization",
     "raw_sqlite_iterative_inserts",
     "raw_sqlite_read_heavy",
@@ -42,6 +48,11 @@ __all__ = (
     "sqlalchemy_asyncpg_initialization",
     "sqlalchemy_asyncpg_read_heavy",
     "sqlalchemy_asyncpg_write_heavy",
+    "sqlalchemy_duckdb_initialization",
+    "sqlalchemy_duckdb_iterative_inserts",
+    "sqlalchemy_duckdb_read_heavy",
+    "sqlalchemy_duckdb_repeated_queries",
+    "sqlalchemy_duckdb_write_heavy",
     "sqlalchemy_sqlite_initialization",
     "sqlalchemy_sqlite_iterative_inserts",
     "sqlalchemy_sqlite_read_heavy",
@@ -50,6 +61,11 @@ __all__ = (
     "sqlspec_asyncpg_initialization",
     "sqlspec_asyncpg_read_heavy",
     "sqlspec_asyncpg_write_heavy",
+    "sqlspec_duckdb_initialization",
+    "sqlspec_duckdb_iterative_inserts",
+    "sqlspec_duckdb_read_heavy",
+    "sqlspec_duckdb_repeated_queries",
+    "sqlspec_duckdb_write_heavy",
     "sqlspec_sqlite_initialization",
     "sqlspec_sqlite_iterative_inserts",
     "sqlspec_sqlite_read_heavy",
@@ -268,6 +284,328 @@ def sqlalchemy_sqlite_read_heavy() -> None:
             result = conn.execute(text(SELECT_TEST_VALUES))
             rows = result.fetchall()
             assert len(rows) == ROWS_TO_INSERT
+
+
+# DuckDB implementations
+# DuckDB is sync like sqlite, but uses its own driver
+# ------------------------------
+
+
+def _get_duckdb() -> Any:
+    """Import duckdb lazily."""
+    try:
+        import duckdb
+    except ImportError:
+        return None
+    else:
+        return duckdb
+
+
+def raw_duckdb_initialization() -> None:
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        return
+    # DuckDB needs to create the file itself - use temp name then delete
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()  # Delete so DuckDB can create fresh
+    try:
+        conn = duckdb.connect(str(tmp_path))
+        conn.execute(CREATE_TEST_TABLE)
+        conn.close()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def raw_duckdb_write_heavy() -> None:
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        conn = duckdb.connect(str(tmp_path))
+        conn.execute(CREATE_TEST_TABLE)
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        conn.executemany(INSERT_TEST_VALUE, data)
+        conn.close()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def raw_duckdb_read_heavy() -> None:
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        conn = duckdb.connect(str(tmp_path))
+        conn.execute(CREATE_TEST_TABLE)
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        conn.executemany(INSERT_TEST_VALUE, data)
+        rows = conn.execute(SELECT_TEST_VALUES).fetchall()
+        assert len(rows) == ROWS_TO_INSERT
+        conn.close()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def raw_duckdb_iterative_inserts() -> None:
+    """Individual inserts in a loop - shows per-call overhead."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        conn = duckdb.connect(str(tmp_path))
+        conn.execute(CREATE_TEST_TABLE)
+        for i in range(ROWS_TO_INSERT):
+            conn.execute(INSERT_TEST_VALUE, (f"value_{i}",))
+        conn.close()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def raw_duckdb_repeated_queries() -> None:
+    """Repeated single-row queries - tests query preparation overhead."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        conn = duckdb.connect(str(tmp_path))
+        conn.execute(CREATE_TEST_TABLE)
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        conn.executemany(INSERT_TEST_VALUE, data)
+        for i in range(ROWS_TO_INSERT):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+        conn.close()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlspec_duckdb_initialization() -> None:
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        spec = SQLSpec()
+        config = DuckDBConfig(connection_config={"database": str(tmp_path)})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlspec_duckdb_write_heavy() -> None:
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        spec = SQLSpec()
+        config = DuckDBConfig(connection_config={"database": str(tmp_path)})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            session.execute_many(INSERT_TEST_VALUE, data)
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlspec_duckdb_read_heavy() -> None:
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        spec = SQLSpec()
+        config = DuckDBConfig(connection_config={"database": str(tmp_path)})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            session.execute_many(INSERT_TEST_VALUE, data)
+            rows = session.fetch(SELECT_TEST_VALUES)
+            assert len(rows) == ROWS_TO_INSERT
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlspec_duckdb_iterative_inserts() -> None:
+    """Individual inserts in a loop - shows per-call overhead."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        spec = SQLSpec()
+        config = DuckDBConfig(connection_config={"database": str(tmp_path)})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            for i in range(ROWS_TO_INSERT):
+                session.execute(INSERT_TEST_VALUE, (f"value_{i}",))
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlspec_duckdb_repeated_queries() -> None:
+    """Repeated single-row queries - tests query cache effectiveness."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        spec = SQLSpec()
+        config = DuckDBConfig(connection_config={"database": str(tmp_path)})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            session.execute_many(INSERT_TEST_VALUE, data)
+            for i in range(ROWS_TO_INSERT):
+                session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def _get_duckdb_engine() -> tuple[Any, Any]:
+    """Import SQLAlchemy with duckdb_engine lazily."""
+    try:
+        from sqlalchemy import create_engine, text
+
+        import duckdb_engine  # noqa: F401
+    except ImportError:
+        return None, None
+    else:
+        return create_engine, text
+
+
+def sqlalchemy_duckdb_initialization() -> None:
+    create_engine, text = _get_duckdb_engine()
+    if create_engine is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        engine = create_engine(f"duckdb:///{tmp_path}")
+        with engine.connect() as conn:
+            conn.execute(text(CREATE_TEST_TABLE))
+            conn.commit()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlalchemy_duckdb_write_heavy() -> None:
+    create_engine, text = _get_duckdb_engine()
+    if create_engine is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        engine = create_engine(f"duckdb:///{tmp_path}")
+        with engine.connect() as conn:
+            conn.execute(text(CREATE_TEST_TABLE))
+            data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+            conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+            conn.commit()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlalchemy_duckdb_read_heavy() -> None:
+    create_engine, text = _get_duckdb_engine()
+    if create_engine is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        engine = create_engine(f"duckdb:///{tmp_path}")
+        with engine.connect() as conn:
+            conn.execute(text(CREATE_TEST_TABLE))
+            data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+            conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+            conn.commit()
+            result = conn.execute(text(SELECT_TEST_VALUES))
+            rows = result.fetchall()
+            assert len(rows) == ROWS_TO_INSERT
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlalchemy_duckdb_iterative_inserts() -> None:
+    """Individual inserts in a loop - shows per-call overhead."""
+    create_engine, text = _get_duckdb_engine()
+    if create_engine is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        engine = create_engine(f"duckdb:///{tmp_path}")
+        with engine.connect() as conn:
+            conn.execute(text(CREATE_TEST_TABLE))
+            for i in range(ROWS_TO_INSERT):
+                conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
+            conn.commit()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def sqlalchemy_duckdb_repeated_queries() -> None:
+    """Repeated single-row queries."""
+    create_engine, text = _get_duckdb_engine()
+    if create_engine is None:
+        return
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    try:
+        engine = create_engine(f"duckdb:///{tmp_path}")
+        with engine.connect() as conn:
+            conn.execute(text(CREATE_TEST_TABLE))
+            data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+            conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+            conn.commit()
+            for i in range(ROWS_TO_INSERT):
+                result = conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
+                result.fetchone()
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
 
 
 # Iterative insert scenarios - tests per-call overhead
@@ -810,6 +1148,22 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlalchemy", "sqlite", "read_heavy"): sqlalchemy_sqlite_read_heavy,
     ("sqlalchemy", "sqlite", "iterative_inserts"): sqlalchemy_sqlite_iterative_inserts,
     ("sqlalchemy", "sqlite", "repeated_queries"): sqlalchemy_sqlite_repeated_queries,
+    # DuckDB scenarios
+    ("raw", "duckdb", "initialization"): raw_duckdb_initialization,
+    ("raw", "duckdb", "write_heavy"): raw_duckdb_write_heavy,
+    ("raw", "duckdb", "read_heavy"): raw_duckdb_read_heavy,
+    ("raw", "duckdb", "iterative_inserts"): raw_duckdb_iterative_inserts,
+    ("raw", "duckdb", "repeated_queries"): raw_duckdb_repeated_queries,
+    ("sqlspec", "duckdb", "initialization"): sqlspec_duckdb_initialization,
+    ("sqlspec", "duckdb", "write_heavy"): sqlspec_duckdb_write_heavy,
+    ("sqlspec", "duckdb", "read_heavy"): sqlspec_duckdb_read_heavy,
+    ("sqlspec", "duckdb", "iterative_inserts"): sqlspec_duckdb_iterative_inserts,
+    ("sqlspec", "duckdb", "repeated_queries"): sqlspec_duckdb_repeated_queries,
+    ("sqlalchemy", "duckdb", "initialization"): sqlalchemy_duckdb_initialization,
+    ("sqlalchemy", "duckdb", "write_heavy"): sqlalchemy_duckdb_write_heavy,
+    ("sqlalchemy", "duckdb", "read_heavy"): sqlalchemy_duckdb_read_heavy,
+    ("sqlalchemy", "duckdb", "iterative_inserts"): sqlalchemy_duckdb_iterative_inserts,
+    ("sqlalchemy", "duckdb", "repeated_queries"): sqlalchemy_duckdb_repeated_queries,
     # Aiosqlite scenarios
     ("raw", "aiosqlite", "initialization"): raw_aiosqlite_initialization,
     ("raw", "aiosqlite", "write_heavy"): raw_aiosqlite_write_heavy,
