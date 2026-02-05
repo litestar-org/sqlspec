@@ -22,7 +22,35 @@ from sqlspec.adapters.sqlite import SqliteConfig
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-__all__ = ("main", "print_benchmark_table", "raw_asyncpg_initialization", "raw_asyncpg_read_heavy", "raw_asyncpg_write_heavy", "raw_sqlite_initialization", "raw_sqlite_iterative_inserts", "raw_sqlite_read_heavy", "raw_sqlite_repeated_queries", "raw_sqlite_write_heavy", "run_benchmark", "sqlalchemy_asyncpg_initialization", "sqlalchemy_asyncpg_read_heavy", "sqlalchemy_asyncpg_write_heavy", "sqlalchemy_sqlite_initialization", "sqlalchemy_sqlite_iterative_inserts", "sqlalchemy_sqlite_read_heavy", "sqlalchemy_sqlite_repeated_queries", "sqlalchemy_sqlite_write_heavy", "sqlspec_asyncpg_initialization", "sqlspec_asyncpg_read_heavy", "sqlspec_asyncpg_write_heavy", "sqlspec_sqlite_initialization", "sqlspec_sqlite_iterative_inserts", "sqlspec_sqlite_read_heavy", "sqlspec_sqlite_repeated_queries", "sqlspec_sqlite_write_heavy", )
+__all__ = (
+    "main",
+    "print_benchmark_table",
+    "raw_asyncpg_initialization",
+    "raw_asyncpg_read_heavy",
+    "raw_asyncpg_write_heavy",
+    "raw_sqlite_initialization",
+    "raw_sqlite_iterative_inserts",
+    "raw_sqlite_read_heavy",
+    "raw_sqlite_repeated_queries",
+    "raw_sqlite_write_heavy",
+    "run_benchmark",
+    "sqlalchemy_asyncpg_initialization",
+    "sqlalchemy_asyncpg_read_heavy",
+    "sqlalchemy_asyncpg_write_heavy",
+    "sqlalchemy_sqlite_initialization",
+    "sqlalchemy_sqlite_iterative_inserts",
+    "sqlalchemy_sqlite_read_heavy",
+    "sqlalchemy_sqlite_repeated_queries",
+    "sqlalchemy_sqlite_write_heavy",
+    "sqlspec_asyncpg_initialization",
+    "sqlspec_asyncpg_read_heavy",
+    "sqlspec_asyncpg_write_heavy",
+    "sqlspec_sqlite_initialization",
+    "sqlspec_sqlite_iterative_inserts",
+    "sqlspec_sqlite_read_heavy",
+    "sqlspec_sqlite_repeated_queries",
+    "sqlspec_sqlite_write_heavy",
+)
 
 
 ROWS_TO_INSERT = 10_000
@@ -319,6 +347,233 @@ def sqlalchemy_sqlite_repeated_queries() -> None:
                 result.fetchone()
 
 
+# Aiosqlite implementations
+# These test async sqlite performance
+
+
+def _get_aiosqlite() -> Any:
+    """Import aiosqlite lazily."""
+    try:
+        import aiosqlite
+    except ImportError:
+        return None
+    else:
+        return aiosqlite
+
+
+def _get_aiosqlite_config() -> Any:
+    """Import AiosqliteConfig lazily."""
+    try:
+        from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    except ImportError:
+        return None
+    else:
+        return AiosqliteConfig
+
+
+async def raw_aiosqlite_initialization() -> None:
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        async with aiosqlite.connect(tmp.name) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            await conn.commit()
+
+
+async def raw_aiosqlite_write_heavy() -> None:
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        async with aiosqlite.connect(tmp.name) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            await conn.executemany(INSERT_TEST_VALUE, data)
+            await conn.commit()
+
+
+async def raw_aiosqlite_read_heavy() -> None:
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        async with aiosqlite.connect(tmp.name) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            await conn.executemany(INSERT_TEST_VALUE, data)
+            await conn.commit()
+            cursor = await conn.execute(SELECT_TEST_VALUES)
+            rows = await cursor.fetchall()
+            assert len(rows) == ROWS_TO_INSERT
+
+
+async def raw_aiosqlite_iterative_inserts() -> None:
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        async with aiosqlite.connect(tmp.name) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            for i in range(ROWS_TO_INSERT):
+                await conn.execute(INSERT_TEST_VALUE, (f"value_{i}",))
+            await conn.commit()
+
+
+async def raw_aiosqlite_repeated_queries() -> None:
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        async with aiosqlite.connect(tmp.name) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            await conn.executemany(INSERT_TEST_VALUE, data)
+            await conn.commit()
+            for i in range(ROWS_TO_INSERT):
+                cursor = await conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",))
+                await cursor.fetchone()
+
+
+async def sqlspec_aiosqlite_initialization() -> None:
+    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
+    if AiosqliteConfig is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = AiosqliteConfig(database=tmp.name)
+        async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
+            await session.execute(CREATE_TEST_TABLE)
+
+
+async def sqlspec_aiosqlite_write_heavy() -> None:
+    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
+    if AiosqliteConfig is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = AiosqliteConfig(database=tmp.name)
+        async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
+            await session.execute(CREATE_TEST_TABLE)
+            data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            await session.execute_many(INSERT_TEST_VALUE, data)
+
+
+async def sqlspec_aiosqlite_read_heavy() -> None:
+    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
+    if AiosqliteConfig is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = AiosqliteConfig(database=tmp.name)
+        async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
+            await session.execute(CREATE_TEST_TABLE)
+            data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            await session.execute_many(INSERT_TEST_VALUE, data)
+            rows = await session.fetch(SELECT_TEST_VALUES)
+            assert len(rows) == ROWS_TO_INSERT
+
+
+async def sqlspec_aiosqlite_iterative_inserts() -> None:
+    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
+    if AiosqliteConfig is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = AiosqliteConfig(database=tmp.name)
+        async with spec.provide_session(config) as session:
+            await session.execute(CREATE_TEST_TABLE)
+            for i in range(ROWS_TO_INSERT):
+                await session.execute(INSERT_TEST_VALUE, (f"value_{i}",))
+
+
+async def sqlspec_aiosqlite_repeated_queries() -> None:
+    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
+    if AiosqliteConfig is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = AiosqliteConfig(database=tmp.name)
+        async with spec.provide_session(config) as session:
+            await session.execute(CREATE_TEST_TABLE)
+            data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            await session.execute_many(INSERT_TEST_VALUE, data)
+            for i in range(ROWS_TO_INSERT):
+                await session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+
+
+async def sqlalchemy_aiosqlite_initialization() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+        async with engine.connect() as conn:
+            await conn.execute(text(CREATE_TEST_TABLE))
+            await conn.commit()
+
+
+async def sqlalchemy_aiosqlite_write_heavy() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+        async with engine.connect() as conn:
+            await conn.execute(text(CREATE_TEST_TABLE))
+            data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+            await conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+            await conn.commit()
+
+
+async def sqlalchemy_aiosqlite_read_heavy() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+        async with engine.connect() as conn:
+            await conn.execute(text(CREATE_TEST_TABLE))
+            data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+            await conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+            await conn.commit()
+            result = await conn.execute(text(SELECT_TEST_VALUES))
+            rows = result.fetchall()
+            assert len(rows) == ROWS_TO_INSERT
+
+
+async def sqlalchemy_aiosqlite_iterative_inserts() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+        async with engine.connect() as conn:
+            await conn.execute(text(CREATE_TEST_TABLE))
+            for i in range(ROWS_TO_INSERT):
+                await conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
+            await conn.commit()
+
+
+async def sqlalchemy_aiosqlite_repeated_queries() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+        async with engine.connect() as conn:
+            await conn.execute(text(CREATE_TEST_TABLE))
+            data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+            await conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+            await conn.commit()
+            for i in range(ROWS_TO_INSERT):
+                result = await conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
+                result.fetchone()
+
+
 # Asyncpg implementations
 # These require asyncpg and optionally SQLAlchemy[asyncio] to be installed
 
@@ -476,6 +731,22 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlalchemy", "sqlite", "read_heavy"): sqlalchemy_sqlite_read_heavy,
     ("sqlalchemy", "sqlite", "iterative_inserts"): sqlalchemy_sqlite_iterative_inserts,
     ("sqlalchemy", "sqlite", "repeated_queries"): sqlalchemy_sqlite_repeated_queries,
+    # Aiosqlite scenarios
+    ("raw", "aiosqlite", "initialization"): raw_aiosqlite_initialization,
+    ("raw", "aiosqlite", "write_heavy"): raw_aiosqlite_write_heavy,
+    ("raw", "aiosqlite", "read_heavy"): raw_aiosqlite_read_heavy,
+    ("raw", "aiosqlite", "iterative_inserts"): raw_aiosqlite_iterative_inserts,
+    ("raw", "aiosqlite", "repeated_queries"): raw_aiosqlite_repeated_queries,
+    ("sqlspec", "aiosqlite", "initialization"): sqlspec_aiosqlite_initialization,
+    ("sqlspec", "aiosqlite", "write_heavy"): sqlspec_aiosqlite_write_heavy,
+    ("sqlspec", "aiosqlite", "read_heavy"): sqlspec_aiosqlite_read_heavy,
+    ("sqlspec", "aiosqlite", "iterative_inserts"): sqlspec_aiosqlite_iterative_inserts,
+    ("sqlspec", "aiosqlite", "repeated_queries"): sqlspec_aiosqlite_repeated_queries,
+    ("sqlalchemy", "aiosqlite", "initialization"): sqlalchemy_aiosqlite_initialization,
+    ("sqlalchemy", "aiosqlite", "write_heavy"): sqlalchemy_aiosqlite_write_heavy,
+    ("sqlalchemy", "aiosqlite", "read_heavy"): sqlalchemy_aiosqlite_read_heavy,
+    ("sqlalchemy", "aiosqlite", "iterative_inserts"): sqlalchemy_aiosqlite_iterative_inserts,
+    ("sqlalchemy", "aiosqlite", "repeated_queries"): sqlalchemy_aiosqlite_repeated_queries,
     # Asyncpg scenarios
     ("raw", "asyncpg", "initialization"): raw_asyncpg_initialization,
     ("raw", "asyncpg", "write_heavy"): raw_asyncpg_write_heavy,
