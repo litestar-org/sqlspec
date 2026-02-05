@@ -69,7 +69,16 @@ spanner = ["google-cloud-spanner"]
 uuid = ["uuid-utils"]
 
 [dependency-groups]
-benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "rich", "rich-click>=1.9.0", "duckdb"]
+benchmarks = [
+  "sqlalchemy[asyncio]",
+  "psutil",
+  "types-psutil",
+  "rich",
+  "rich-click>=1.9.0",
+  "duckdb",
+  "duckdb-engine>=0.17.0",
+  "aiosqlite",
+]
 build = ["bump-my-version", "hatch-mypyc", "pydantic-settings"]
 dev = [
   { include-group = "extras" },
@@ -78,7 +87,6 @@ dev = [
   { include-group = "test" },
   { include-group = "build" },
   { include-group = "benchmarks" },
-  "duckdb-engine>=0.17.0",
 ]
 doc = [
   "auto-pytabs[sphinx]>=0.5.0",

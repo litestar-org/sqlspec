@@ -7107,7 +7107,9 @@ uuid = [
 
 [package.dev-dependencies]
 benchmarks = [
+    { name = "aiosqlite" },
     { name = "duckdb" },
+    { name = "duckdb-engine" },
     { name = "psutil" },
     { name = "rich" },
     { name = "rich-click" },
@@ -7126,6 +7128,7 @@ dev = [
     { name = "adbc-driver-postgresql" },
     { name = "adbc-driver-sqlite" },
     { name = "aiohttp" },
+    { name = "aiosqlite" },
     { name = "anyio" },
     { name = "asyncpg-stubs" },
     { name = "auto-pytabs", extra = ["sphinx"] },
@@ -7324,7 +7327,9 @@ provides-extras = ["adbc", "adk", "aioodbc", "aiosqlite", "alloydb", "asyncmy", 
 
 [package.metadata.requires-dev]
 benchmarks = [
+    { name = "aiosqlite" },
     { name = "duckdb" },
+    { name = "duckdb-engine", specifier = ">=0.17.0" },
     { name = "psutil" },
     { name = "rich" },
     { name = "rich-click", specifier = ">=1.9.0" },
@@ -7343,6 +7348,7 @@ dev = [
     { name = "adbc-driver-postgresql" },
     { name = "adbc-driver-sqlite" },
     { name = "aiohttp" },
+    { name = "aiosqlite" },
     { name = "anyio" },
     { name = "asyncpg-stubs" },
     { name = "auto-pytabs", extras = ["sphinx"], specifier = ">=0.5.0" },
