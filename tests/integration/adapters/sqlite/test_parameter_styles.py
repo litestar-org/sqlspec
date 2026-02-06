@@ -380,7 +380,7 @@ def test_sqlite_none_with_execute_many() -> None:
         assert len(select_result.data) == 4
 
         # Check specific None handling
-        rows = select_result.data
+        rows = select_result.get_data()
         assert rows[0]["name"] == "first" and rows[0]["value"] == 10
         assert rows[1]["name"] is None and rows[1]["value"] == 20
         assert rows[2]["name"] == "third" and rows[2]["value"] is None

@@ -170,7 +170,7 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     assert page_result.data is not None
     assert len(page_result.data) == page_size
 
-    for i, row in enumerate(page_result.data):
+    for i, row in enumerate(page_result.get_data()):
         expected_id = 101 + i
         assert row["name"] == f"name_{expected_id - 1:04d}"
         assert row["value"] == (expected_id - 1) * 10

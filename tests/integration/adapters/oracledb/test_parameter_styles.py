@@ -43,7 +43,7 @@ def test_sync_oracle_parameter_styles(
     assert result.data is not None
     assert len(result.data) == len(expected_rows)
 
-    actual_rows = _lower_rows(result.data)
+    actual_rows = _lower_rows(result.get_data())
     expected_rows_lower = [_lower_dict(row) for row in expected_rows]
 
     for i, expected_row in enumerate(expected_rows_lower):
@@ -78,7 +78,7 @@ async def test_async_oracle_parameter_styles(
     assert result.data is not None
     assert len(result.data) == len(expected_rows)
 
-    actual_rows = _lower_rows(result.data)
+    actual_rows = _lower_rows(result.get_data())
     expected_rows_lower = [_lower_dict(row) for row in expected_rows]
 
     for i, expected_row in enumerate(expected_rows_lower):
@@ -207,7 +207,7 @@ def test_sync_oracle_in_clause_with_params(oracle_sync_session: OracleSyncDriver
     assert result.data is not None
     assert len(result.data) == 4
 
-    rows = _lower_rows(result.data)
+    rows = _lower_rows(result.get_data())
     categories = [row["category"] for row in rows]
     assert all(cat in ["TYPE_A", "TYPE_B"] for cat in categories)
     assert "TYPE_C" not in categories
@@ -249,7 +249,7 @@ async def test_async_oracle_null_parameter_handling(oracle_async_session: Oracle
     assert isinstance(null_result, SQLResult)
     assert null_result.data is not None
     assert len(null_result.data) == 1
-    assert _lower_rows(null_result.data)[0]["id"] == 1
+    assert _lower_rows(null_result.get_data())[0]["id"] == 1
 
     select_not_null_sql = (
         "SELECT id, name, optional_field FROM test_null_params_table_oracledb_async WHERE optional_field IS NOT NULL"
@@ -258,7 +258,7 @@ async def test_async_oracle_null_parameter_handling(oracle_async_session: Oracle
     assert isinstance(not_null_result, SQLResult)
     assert not_null_result.data is not None
     assert len(not_null_result.data) == 1
-    not_null_row = _lower_rows(not_null_result.data)[0]
+    not_null_row = _lower_rows(not_null_result.get_data())[0]
     assert not_null_row["id"] == 2
     assert not_null_row["optional_field"] == "Not Null"
 
@@ -472,7 +472,7 @@ def test_sync_oracle_none_parameters_with_execute_many(oracle_sync_session: Orac
     assert len(select_result.data) == len(batch_data)
 
     # Check each record
-    for i, row in enumerate(_lower_rows(select_result.data)):
+    for i, row in enumerate(_lower_rows(select_result.get_data())):
         expected = batch_data[i]
         assert row["id"] == expected["id"]
         assert row["name"] == expected["name"]
@@ -486,7 +486,7 @@ def test_sync_oracle_none_parameters_with_execute_many(oracle_sync_session: Orac
     assert isinstance(select_with_none, SQLResult)
     assert select_with_none.data is not None
     # Should find records with NULL names (records 2, 4)
-    null_name_ids = [row["id"] for row in _lower_rows(select_with_none.data)]
+    null_name_ids = [row["id"] for row in _lower_rows(select_with_none.get_data())]
     assert 2 in null_name_ids
     assert 4 in null_name_ids
 
@@ -565,7 +565,7 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
     assert len(select_result.data) == 3
 
     # Check record 1 (None LOBs)
-    rows = _lower_rows(select_result.data)
+    rows = _lower_rows(select_result.get_data())
 
     row1 = rows[0]
     assert row1["id"] == 1
@@ -673,7 +673,7 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     assert len(select_result.data) == 3
 
     # Check record 1 (None JSON)
-    rows = _lower_rows(select_result.data)
+    rows = _lower_rows(select_result.get_data())
 
     row1 = rows[0]
     assert row1["id"] == 1
@@ -707,7 +707,7 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     assert isinstance(query_result, SQLResult)
     assert query_result.data is not None
     # Should find record 1 (both NULL)
-    null_json_ids = [row["id"] for row in _lower_rows(query_result.data) if row["id"] == 1]
+    null_json_ids = [row["id"] for row in _lower_rows(query_result.get_data()) if row["id"] == 1]
     assert len(null_json_ids) >= 1
 
     await oracle_async_session.execute_script(

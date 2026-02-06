@@ -499,7 +499,7 @@ async def test_asyncmy_none_with_execute_many(asyncmy_parameter_session: Asyncmy
     assert verify_result.data is not None
     assert len(verify_result.data) == 5
 
-    rows = verify_result.data
+    rows = verify_result.get_data()
     assert rows[0]["name"] == "item1" and rows[0]["value"] == 100 and rows[0]["category"] == "A"
     assert rows[1]["name"] == "item2" and rows[1]["value"] is None and rows[1]["category"] == "B"
     assert rows[2]["name"] == "item3" and rows[2]["value"] == 300 and rows[2]["category"] is None

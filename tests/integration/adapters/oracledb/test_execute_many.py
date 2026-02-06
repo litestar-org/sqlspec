@@ -109,7 +109,7 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
     assert select_result.data is not None
     assert len(select_result.data) == len(initial_data)
 
-    for i, row in enumerate(select_result.data):
+    for i, row in enumerate(select_result.get_data()):
         expected_status, expected_score, expected_id = update_data[i]
         assert row["id"] == expected_id
         assert row["status"] == expected_status
@@ -167,7 +167,7 @@ def test_sync_execute_many_with_named_parameters(oracle_sync_session: OracleSync
     assert select_result.data is not None
     assert len(select_result.data) == len(batch_data)
 
-    for i, row in enumerate(select_result.data):
+    for i, row in enumerate(select_result.get_data()):
         expected = batch_data[i]
         assert row["id"] == expected["id"]
         assert row["product_name"] == expected["product_name"]
@@ -237,7 +237,7 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
     assert select_result.data is not None
     assert len(select_result.data) == len(employee_data)
 
-    for i, row in enumerate(select_result.data):
+    for i, row in enumerate(select_result.get_data()):
         assert row["id"] == i + 1
         assert row["name"] == employee_data[i][0]
         assert row["department"] == employee_data[i][1]

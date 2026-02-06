@@ -121,7 +121,7 @@ async def test_psqlpy_large_result_sets(psqlpy_session: PsqlpyDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 100
 
-    for i, row in enumerate(result.data):
+    for i, row in enumerate(result.get_data()):
         assert row["name"] == f"large_result_{i}"
 
 

@@ -242,7 +242,7 @@ def test_adbc_none_with_execute_many(adbc_postgresql_session: AdbcDriver) -> Non
     assert len(verify_result.data) == 5
 
     # Check specific None handling in the results
-    rows = verify_result.data
+    rows = verify_result.get_data()
     assert rows[1]["text_col"] is None and rows[1]["int_col"] == 20  # ID 21
     assert rows[2]["int_col"] is None and rows[2]["date_col"] is None  # ID 22
     assert rows[3]["text_col"] is None and rows[3]["int_col"] is None  # ID 23
