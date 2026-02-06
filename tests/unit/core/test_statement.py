@@ -173,6 +173,7 @@ def test_processed_state_hash_equality() -> None:
     assert hash(state1) != hash(state3)
 
 
+@requires_interpreted
 def test_processed_state_garbage_collected() -> None:
     """ProcessedState should be collected once the owning SQL is gone."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
@@ -797,6 +798,7 @@ def test_sql_copy_rebinds_parameters_on_compile() -> None:
     mock_compile.assert_not_called()
 
 
+@requires_interpreted
 def test_sql_copy_recompiles_on_structure_change() -> None:
     """Cached state should be discarded when parameter structure changes."""
     original = SQL("SELECT * FROM users WHERE id = ?", 1)
@@ -826,6 +828,7 @@ def test_sql_copy_recompiles_on_structure_change() -> None:
     mock_compile.assert_called_once()
 
 
+@requires_interpreted
 def test_sql_copy_recompiles_on_filter_change() -> None:
     """Cached state should be discarded when filters change."""
     original = SQL("SELECT * FROM users WHERE id = ?", 1)
@@ -858,6 +861,7 @@ def test_sql_copy_recompiles_on_filter_change() -> None:
     mock_compile.assert_called_once()
 
 
+@requires_interpreted
 def test_sql_copy_recompiles_on_is_many_change() -> None:
     """Cached state should be discarded when is_many changes."""
     original = SQL("SELECT * FROM users WHERE id = ?", 1)
