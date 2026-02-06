@@ -15,6 +15,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import anyio
 import click
 from rich.console import Console
 from rich.table import Table
@@ -803,30 +804,45 @@ async def raw_aiosqlite_initialization() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        async with aiosqlite.connect(tmp.name) as conn:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
             await conn.commit()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def raw_aiosqlite_write_heavy() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        async with aiosqlite.connect(tmp.name) as conn:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
             data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
             await conn.executemany(INSERT_TEST_VALUE, data)
             await conn.commit()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def raw_aiosqlite_read_heavy() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        async with aiosqlite.connect(tmp.name) as conn:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
             data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
             await conn.executemany(INSERT_TEST_VALUE, data)
@@ -834,26 +850,38 @@ async def raw_aiosqlite_read_heavy() -> None:
             cursor = await conn.execute(SELECT_TEST_VALUES)
             rows = await cursor.fetchall()
             assert len(rows) == ROWS_TO_INSERT
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def raw_aiosqlite_iterative_inserts() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        async with aiosqlite.connect(tmp.name) as conn:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
             for i in range(ROWS_TO_INSERT):
                 await conn.execute(INSERT_TEST_VALUE, (f"value_{i}",))
             await conn.commit()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def raw_aiosqlite_repeated_queries() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        async with aiosqlite.connect(tmp.name) as conn:
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
             data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
             await conn.executemany(INSERT_TEST_VALUE, data)
@@ -861,6 +889,9 @@ async def raw_aiosqlite_repeated_queries() -> None:
             for i in range(ROWS_TO_INSERT):
                 cursor = await conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",))
                 await cursor.fetchone()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlspec_aiosqlite_initialization() -> None:
@@ -882,7 +913,7 @@ async def sqlspec_aiosqlite_initialization() -> None:
         await config.close_pool()
     finally:
         with suppress(OSError):
-            tmp_path.unlink()  # noqa: ASYNC240
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlspec_aiosqlite_write_heavy() -> None:
@@ -904,7 +935,7 @@ async def sqlspec_aiosqlite_write_heavy() -> None:
         await config.close_pool()
     finally:
         with suppress(OSError):
-            tmp_path.unlink()  # noqa: ASYNC240
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlspec_aiosqlite_read_heavy() -> None:
@@ -928,7 +959,7 @@ async def sqlspec_aiosqlite_read_heavy() -> None:
         await config.close_pool()
     finally:
         with suppress(OSError):
-            tmp_path.unlink()  # noqa: ASYNC240
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlspec_aiosqlite_iterative_inserts() -> None:
@@ -950,7 +981,7 @@ async def sqlspec_aiosqlite_iterative_inserts() -> None:
         await config.close_pool()
     finally:
         with suppress(OSError):
-            tmp_path.unlink()  # noqa: ASYNC240
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlspec_aiosqlite_repeated_queries() -> None:
@@ -974,39 +1005,56 @@ async def sqlspec_aiosqlite_repeated_queries() -> None:
         await config.close_pool()
     finally:
         with suppress(OSError):
-            tmp_path.unlink()  # noqa: ASYNC240
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlalchemy_aiosqlite_initialization() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
             await conn.execute(text(CREATE_TEST_TABLE))
             await conn.commit()
+        await engine.dispose()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlalchemy_aiosqlite_write_heavy() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
             await conn.execute(text(CREATE_TEST_TABLE))
             data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
             await conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
             await conn.commit()
+        await engine.dispose()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlalchemy_aiosqlite_read_heavy() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
             await conn.execute(text(CREATE_TEST_TABLE))
             data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
@@ -1015,27 +1063,41 @@ async def sqlalchemy_aiosqlite_read_heavy() -> None:
             result = await conn.execute(text(SELECT_TEST_VALUES))
             rows = result.fetchall()
             assert len(rows) == ROWS_TO_INSERT
+        await engine.dispose()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlalchemy_aiosqlite_iterative_inserts() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
             await conn.execute(text(CREATE_TEST_TABLE))
             for i in range(ROWS_TO_INSERT):
                 await conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
             await conn.commit()
+        await engine.dispose()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 async def sqlalchemy_aiosqlite_repeated_queries() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp.name}")
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
             await conn.execute(text(CREATE_TEST_TABLE))
             data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
@@ -1044,6 +1106,10 @@ async def sqlalchemy_aiosqlite_repeated_queries() -> None:
             for i in range(ROWS_TO_INSERT):
                 result = await conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
                 result.fetchone()
+        await engine.dispose()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
 
 
 # Asyncpg implementations
@@ -1160,6 +1226,7 @@ async def sqlalchemy_asyncpg_initialization() -> None:
         await conn.execute(text(DROP_TEST_TABLE))
         await conn.execute(text(CREATE_TEST_TABLE))
         await conn.commit()
+    await engine.dispose()
 
 
 async def sqlalchemy_asyncpg_write_heavy() -> None:
@@ -1173,6 +1240,7 @@ async def sqlalchemy_asyncpg_write_heavy() -> None:
         data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
         await conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
         await conn.commit()
+    await engine.dispose()
 
 
 async def sqlalchemy_asyncpg_read_heavy() -> None:
@@ -1184,6 +1252,7 @@ async def sqlalchemy_asyncpg_read_heavy() -> None:
         result = await conn.execute(text(SELECT_TEST_VALUES))
         rows = result.fetchall()
         assert len(rows) == ROWS_TO_INSERT
+    await engine.dispose()
 
 
 SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
