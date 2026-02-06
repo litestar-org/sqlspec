@@ -214,6 +214,8 @@ class TestAsyncUpgradeUseLogger:
             patch("sqlspec.migrations.commands.console"),
             patch("sqlspec.migrations.commands.logger") as mock_logger,
             patch.object(commands.runner, "get_migration_files", return_value=[]),
+            patch.object(commands.tracker, "get_applied_migrations", return_value=[]),
+            patch.object(commands.tracker, "ensure_tracking_table", return_value=None),
         ):
             mock_session.return_value.__aenter__.return_value = mock_driver
 
@@ -235,6 +237,8 @@ class TestAsyncUpgradeUseLogger:
             patch("sqlspec.migrations.commands.console") as mock_console,
             patch("sqlspec.migrations.commands.logger"),
             patch.object(commands.runner, "get_migration_files", return_value=[]),
+            patch.object(commands.tracker, "get_applied_migrations", return_value=[]),
+            patch.object(commands.tracker, "ensure_tracking_table", return_value=None),
         ):
             mock_session.return_value.__aenter__.return_value = mock_driver
 
@@ -256,6 +260,8 @@ class TestAsyncUpgradeUseLogger:
             patch("sqlspec.migrations.commands.console"),
             patch("sqlspec.migrations.commands.logger") as mock_logger,
             patch.object(commands.runner, "get_migration_files", return_value=[]),
+            patch.object(commands.tracker, "get_applied_migrations", return_value=[]),
+            patch.object(commands.tracker, "ensure_tracking_table", return_value=None),
         ):
             mock_session.return_value.__aenter__.return_value = mock_driver
 

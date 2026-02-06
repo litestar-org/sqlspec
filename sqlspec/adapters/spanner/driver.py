@@ -166,7 +166,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 raise SQLConversionError(msg)
             data, column_names = collect_rows(rows, fields, self._type_converter)
             return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                is_select_result=True,
+                row_format="tuple",
             )
 
         if supports_write(cursor):

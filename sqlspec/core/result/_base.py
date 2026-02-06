@@ -158,7 +158,9 @@ class SQLResult(StatementResult):
     """
 
     __slots__ = (
+        "_materialized_dicts",
         "_operation_type",
+        "_row_format",
         "column_names",
         "error",
         "errors",
@@ -177,7 +179,7 @@ class SQLResult(StatementResult):
     def __init__(
         self,
         statement: "SQL",
-        data: "list[dict[str, Any]] | None" = None,
+        data: "list[Any] | None" = None,
         rows_affected: int = 0,
         last_inserted_id: int | str | None = None,
         execution_time: float | None = None,
@@ -194,12 +196,13 @@ class SQLResult(StatementResult):
         errors: "list[str] | None" = None,
         total_statements: int = 0,
         successful_statements: int = 0,
+        row_format: str = "dict",
     ) -> None:
         """Initialize SQL result.
 
         Args:
             statement: The original SQL statement that was executed.
-            data: The result data from the operation.
+            data: The result data from the operation (raw driver-native format).
             rows_affected: Number of rows affected by the operation.
             last_inserted_id: Last inserted ID from the operation.
             execution_time: Time taken to execute the statement in seconds.
@@ -216,6 +219,7 @@ class SQLResult(StatementResult):
             errors: List of error messages for script execution.
             total_statements: Total number of statements in a script.
             successful_statements: Count of successful statements in a script.
+            row_format: Format of raw rows - "tuple", "dict", or "record".
         """
         super().__init__(
             statement=statement,
@@ -229,6 +233,8 @@ class SQLResult(StatementResult):
         self._operation_type = operation_type
         self.operation_index = operation_index
         self.parameters = parameters
+        self._row_format = row_format
+        self._materialized_dicts: list[dict[str, Any]] | None = None
 
         self.column_names = column_names or []
         self.total_count = total_count
@@ -240,7 +246,9 @@ class SQLResult(StatementResult):
         self.successful_statements = successful_statements
 
         if not self.column_names and data and len(data) > 0:
-            self.column_names = list(data[0].keys())
+            first_row = data[0]
+            if isinstance(first_row, dict):
+                self.column_names = list(first_row.keys())
         if self.total_count is None:
             self.total_count = len(data) if data is not None else 0
 
@@ -254,16 +262,40 @@ class SQLResult(StatementResult):
         return self._operation_type
 
     def _get_rows(self) -> "list[dict[str, Any]]":
-        """Get validated row data as list of dicts.
+        """Get row data as list of dicts, materializing lazily from raw format.
 
         Returns:
             List of row dictionaries, empty list if no data.
         """
+        if self._materialized_dicts is not None:
+            return self._materialized_dicts
         if self.data is None:
             return []
         if not isinstance(self.data, list):
             return []
-        return self.data
+        raw = self.data
+        if not raw:
+            self._materialized_dicts = []
+            return self._materialized_dicts
+        fmt = self._row_format
+        if fmt == "dict":
+            self._materialized_dicts = raw
+        elif fmt == "tuple":
+            col_names = self.column_names
+            self._materialized_dicts = [dict(zip(col_names, row)) for row in raw]
+        else:
+            # "record" — dict-like objects (asyncpg.Record, sqlite3.Row, bigquery.Row)
+            self._materialized_dicts = [dict(record) for record in raw]
+        return self._materialized_dicts
+
+    @property
+    def raw_data(self) -> "tuple[list[Any], list[str]]":
+        """Zero-copy access to raw driver-native rows and column names.
+
+        Returns:
+            Tuple of (raw_rows, column_names).
+        """
+        return (self.data if self.data is not None else [], self.column_names)
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get metadata value by key.
@@ -622,7 +654,7 @@ class SQLResult(StatementResult):
             msg = "No data available"
             raise ValueError(msg)
 
-        return convert_dict_to_arrow(self.data, return_format="table")
+        return convert_dict_to_arrow(self._get_rows(), return_format="table")
 
     def to_pandas(self) -> "PandasDataFrame":
         """Convert result data to pandas DataFrame.
@@ -642,7 +674,7 @@ class SQLResult(StatementResult):
             msg = "No data available"
             raise ValueError(msg)
 
-        return rows_to_pandas(self.data)
+        return rows_to_pandas(self._get_rows())
 
     def to_polars(self) -> "PolarsDataFrame":
         """Convert result data to Polars DataFrame.
@@ -662,7 +694,7 @@ class SQLResult(StatementResult):
             msg = "No data available"
             raise ValueError(msg)
 
-        return rows_to_polars(self.data)
+        return rows_to_polars(self._get_rows())
 
     def write_to_storage_sync(
         self,
@@ -1028,7 +1060,7 @@ class StackResult:
 
 def create_sql_result(
     statement: "SQL",
-    data: "list[dict[str, Any]] | None" = None,
+    data: "list[Any] | None" = None,
     rows_affected: int = 0,
     last_inserted_id: int | str | None = None,
     execution_time: float | None = None,
@@ -1039,7 +1071,7 @@ def create_sql_result(
 
     Args:
         statement: The SQL statement that produced this result.
-        data: Result data from query execution.
+        data: Result data from query execution (raw driver-native format).
         rows_affected: Number of rows affected by the operation.
         last_inserted_id: Last inserted ID (for INSERT operations).
         execution_time: Execution time in seconds.

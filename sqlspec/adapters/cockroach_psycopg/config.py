@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from psycopg import crdb as psycopg_crdb
-from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
@@ -87,7 +86,7 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     on_connection_create: Callback executed when a connection is acquired from pool.
         For sync: Callable[[CockroachSyncConnection], None]
         For async: Callable[[CockroachAsyncConnection], Awaitable[None]]
-        Called after internal setup (row_factory configuration).
+        Called after internal setup.
     """
 
     enable_auto_retry: NotRequired[bool]
@@ -236,7 +235,6 @@ class CockroachPsycopgSyncConfig(
         )
 
     def _configure_connection(self, conn: "CockroachSyncConnection") -> None:
-        conn.row_factory = dict_row
         autocommit_setting = self.connection_config.get("autocommit")
         if autocommit_setting is not None:
             conn.autocommit = autocommit_setting
@@ -438,7 +436,6 @@ class CockroachPsycopgAsyncConfig(
         return cast("AsyncConnectionPool", pool)
 
     async def _configure_async_connection(self, conn: "CockroachAsyncConnection") -> None:
-        conn.row_factory = dict_row
         autocommit_setting = self.connection_config.get("autocommit")
         if autocommit_setting is not None:
             await conn.set_autocommit(autocommit_setting)

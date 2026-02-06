@@ -327,6 +327,7 @@ def build_pipeline_execution_result(statement: "SQL", cursor: Any) -> "Execution
             is_script_result=False,
             is_select_result=True,
             is_many_result=False,
+            row_format="tuple",
             last_inserted_id=None,
         )
 
@@ -373,6 +374,7 @@ async def build_async_pipeline_execution_result(statement: "SQL", cursor: Any) -
             is_script_result=False,
             is_select_result=True,
             is_many_result=False,
+            row_format="tuple",
             last_inserted_id=None,
         )
 

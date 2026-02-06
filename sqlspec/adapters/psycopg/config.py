@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
-from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
@@ -80,7 +79,7 @@ class PsycopgDriverFeatures(TypedDict):
     json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
     on_connection_create: Callback executed when a connection is created/acquired from the pool.
         Receives the raw psycopg connection for low-level driver configuration.
-        Runs after internal setup (row_factory, pgvector registration).
+        Runs after internal setup (pgvector registration).
         For sync config: Callable[[PsycopgSyncConnection], None]
         For async config: Callable[[PsycopgAsyncConnection], Awaitable[None]]
     enable_events: Enable database event channel support.
@@ -252,7 +251,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
 
     def _configure_connection(self, conn: "PsycopgSyncConnection") -> None:
-        conn.row_factory = dict_row
         autocommit_setting = self.connection_config.get("autocommit")
         if autocommit_setting is not None:
             conn.autocommit = autocommit_setting
@@ -278,7 +276,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """Create a single connection (not from pool).
 
         Returns:
-            A psycopg Connection instance configured with DictRow.
+            A psycopg Connection instance.
         """
         if self.connection_instance is None:
             self.connection_instance = self.create_pool()
@@ -496,7 +494,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         return pool
 
     async def _configure_async_connection(self, conn: "PsycopgAsyncConnection") -> None:
-        conn.row_factory = dict_row
         autocommit_setting = self.connection_config.get("autocommit")
         if autocommit_setting is not None:
             await conn.set_autocommit(autocommit_setting)
@@ -522,7 +519,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Create a single async connection (not from pool).
 
         Returns:
-            A psycopg AsyncConnection instance configured with DictRow.
+            A psycopg AsyncConnection instance.
         """
         if self.connection_instance is None:
             self.connection_instance = await self.create_pool()

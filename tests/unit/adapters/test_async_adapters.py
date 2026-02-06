@@ -83,7 +83,7 @@ async def test_async_driverdispatch_execute_select(mock_async_driver: MockAsyncD
     assert result.is_select_result is True
     assert result.is_script_result is False
     assert result.is_many_result is False
-    assert result.selected_data == [{"id": 1, "name": "test"}, {"id": 2, "name": "example"}]
+    assert result.selected_data == [(1, "test"), (2, "example")]
     assert result.column_names == ["id", "name"]
     assert result.data_row_count == 2
 
@@ -435,11 +435,11 @@ async def test_async_driver_create_execution_result(mock_async_driver: MockAsync
     cursor = mock_async_driver.with_cursor(mock_async_driver.connection)
 
     result = mock_async_driver.create_execution_result(
-        cursor, selected_data=[{"id": 1}, {"id": 2}], column_names=["id"], data_row_count=2, is_select_result=True
+        cursor, selected_data=[(1,), (2,)], column_names=["id"], data_row_count=2, is_select_result=True, row_format="tuple"
     )
 
     assert result.is_select_result is True
-    assert result.selected_data == [{"id": 1}, {"id": 2}]
+    assert result.selected_data == [(1,), (2,)]
     assert result.column_names == ["id"]
     assert result.data_row_count == 2
 
@@ -461,7 +461,7 @@ async def test_async_driver_build_statement_result(mock_async_driver: MockAsyncD
     cursor = mock_async_driver.with_cursor(mock_async_driver.connection)
 
     execution_result = mock_async_driver.create_execution_result(
-        cursor, selected_data=[{"id": 1}], column_names=["id"], data_row_count=1, is_select_result=True
+        cursor, selected_data=[(1,)], column_names=["id"], data_row_count=1, is_select_result=True, row_format="tuple"
     )
 
     sql_result = mock_async_driver.build_statement_result(statement, execution_result)

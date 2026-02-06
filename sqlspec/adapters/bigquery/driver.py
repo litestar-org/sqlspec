@@ -204,6 +204,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 column_names=column_names,
                 data_row_count=len(rows_list),
                 is_select_result=True,
+                row_format="record",
             )
 
         affected_rows = build_dml_rowcount(cursor.job, 0)

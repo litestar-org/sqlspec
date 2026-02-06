@@ -380,7 +380,12 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             )
 
             return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                is_select_result=True,
+                row_format="tuple",
             )
 
         # Non-SELECT result processing
@@ -837,7 +842,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             )
 
             return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                is_select_result=True,
+                row_format="tuple",
             )
 
         # Non-SELECT result processing

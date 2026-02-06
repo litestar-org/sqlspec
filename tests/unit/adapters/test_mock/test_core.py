@@ -116,7 +116,7 @@ def test_collect_rows_empty() -> None:
 
 
 def test_collect_rows_with_data() -> None:
-    """Test collecting rows with data."""
+    """Test collecting rows with raw tuple data (no dict conversion)."""
     description = [("id",), ("name",)]
     rows = [(1, "Alice"), (2, "Bob")]
     data, columns, count = collect_rows(rows, description)
@@ -124,19 +124,19 @@ def test_collect_rows_with_data() -> None:
     assert count == 2
     assert columns == ["id", "name"]
     assert len(data) == 2
-    assert data[0] == {"id": 1, "name": "Alice"}
-    assert data[1] == {"id": 2, "name": "Bob"}
+    assert data[0] == (1, "Alice")
+    assert data[1] == (2, "Bob")
 
 
 def test_collect_rows_with_none_values() -> None:
-    """Test collecting rows containing None values."""
+    """Test collecting rows containing None values (raw tuples)."""
     description = [("id",), ("value",)]
     rows = [(1, None), (2, "text")]
     data, _columns, count = collect_rows(rows, description)
 
     assert count == 2
-    assert data[0] == {"id": 1, "value": None}
-    assert data[1] == {"id": 2, "value": "text"}
+    assert data[0] == (1, None)
+    assert data[1] == (2, "text")
 
 
 def test_resolve_rowcount_with_valid_cursor() -> None:

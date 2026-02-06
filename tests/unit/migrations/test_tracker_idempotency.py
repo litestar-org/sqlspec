@@ -38,6 +38,7 @@ def test_sync_update_version_record_idempotent_when_already_updated() -> None:
         {"version_num": "0001", "version_type": "sequential"},
         {"version_num": "0002", "version_type": "sequential"},
     ]
+    check_result.get_data.return_value = check_result.data
 
     driver.execute.side_effect = [update_result, check_result]
 
@@ -56,6 +57,7 @@ def test_sync_update_version_record_raises_when_neither_version_exists() -> None
 
     check_result = Mock()
     check_result.data = [{"version_num": "0002", "version_type": "sequential"}]
+    check_result.get_data.return_value = check_result.data
 
     driver.execute.side_effect = [update_result, check_result]
 
@@ -73,6 +75,7 @@ def test_sync_update_version_record_empty_database() -> None:
 
     check_result = Mock()
     check_result.data = []
+    check_result.get_data.return_value = check_result.data
 
     driver.execute.side_effect = [update_result, check_result]
 
@@ -108,6 +111,7 @@ def test_sync_update_version_record_no_commit_on_idempotent_path() -> None:
 
     check_result = Mock()
     check_result.data = [{"version_num": "0001", "version_type": "sequential"}]
+    check_result.get_data.return_value = check_result.data
 
     driver.execute.side_effect = [update_result, check_result]
 
@@ -156,6 +160,7 @@ async def test_async_update_version_record_idempotent_when_already_updated() -> 
         {"version_num": "0001", "version_type": "sequential"},
         {"version_num": "0002", "version_type": "sequential"},
     ]
+    check_result.get_data.return_value = check_result.data
 
     call_count = [0]
 
@@ -185,6 +190,7 @@ async def test_async_update_version_record_raises_when_neither_version_exists() 
 
     check_result = Mock()
     check_result.data = [{"version_num": "0002", "version_type": "sequential"}]
+    check_result.get_data.return_value = check_result.data
 
     call_count = [0]
 
@@ -213,6 +219,7 @@ async def test_async_update_version_record_empty_database() -> None:
 
     check_result = Mock()
     check_result.data = []
+    check_result.get_data.return_value = check_result.data
 
     call_count = [0]
 
@@ -267,6 +274,7 @@ async def test_async_update_version_record_no_commit_on_idempotent_path() -> Non
 
     check_result = Mock()
     check_result.data = [{"version_num": "0001", "version_type": "sequential"}]
+    check_result.get_data.return_value = check_result.data
 
     call_count = [0]
 

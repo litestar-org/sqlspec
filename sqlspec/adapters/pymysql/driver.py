@@ -56,7 +56,7 @@ class PyMysqlCursor:
         self.cursor: Any | None = None
 
     def __enter__(self) -> Any:
-        self.cursor = self.connection.cursor(pymysql.cursors.DictCursor)
+        self.cursor = self.connection.cursor()
         return self.cursor
 
     def __exit__(self, *_: Any) -> None:
@@ -117,10 +117,17 @@ class PyMysqlDriver(SyncDriverAdapterBase):
             description = list(cursor.description) if cursor.description else None
             json_indexes = detect_json_columns(cursor, PYMYSQL_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names = collect_rows(fetched_rows, description, json_indexes, deserializer, logger=logger)
+            rows, column_names, row_format = collect_rows(
+                fetched_rows, description, json_indexes, deserializer, logger=logger
+            )
 
             return self.create_execution_result(
-                cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
+                cursor,
+                selected_data=rows,
+                column_names=column_names,
+                data_row_count=len(rows),
+                is_select_result=True,
+                row_format=row_format,
             )
 
         affected_rows = resolve_rowcount(cursor)

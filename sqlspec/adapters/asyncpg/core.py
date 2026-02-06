@@ -371,8 +371,11 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     return _create_postgres_error(error, error_code, SQLSpecError, "database error")
 
 
-def collect_rows(records: "list[Any] | None") -> "tuple[list[dict[str, Any]], list[str]]":
-    """Collect AsyncPG records into dictionaries and column names.
+def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":
+    """Collect AsyncPG records and column names.
+
+    Returns raw asyncpg.Record objects without copying to dicts.
+    Lazy dict materialization is handled by SQLResult when needed.
 
     Args:
         records: Records returned from asyncpg fetch.
@@ -382,6 +385,5 @@ def collect_rows(records: "list[Any] | None") -> "tuple[list[dict[str, Any]], li
     """
     if not records:
         return [], []
-    rows = [dict(record) for record in records]
     column_names = list(records[0].keys())
-    return rows, column_names
+    return records, column_names

@@ -706,8 +706,12 @@ def apply_driver_features(
 
 def collect_rows(
     fetched_data: "list[Any] | None", description: "list[Any] | None"
-) -> "tuple[list[dict[str, Any]], list[str]]":
-    """Collect ADBC rows into dictionaries with column names.
+) -> "tuple[list[Any], list[str]]":
+    """Collect ADBC rows and column names.
+
+    Returns raw data without dict conversion. The row format is detected
+    by the driver and passed to ``create_execution_result`` so that
+    ``SQLResult`` can handle lazy dict materialisation.
 
     Args:
         fetched_data: Rows returned from cursor.fetchall().
@@ -721,10 +725,7 @@ def collect_rows(
     column_names = [col[0] for col in description]
     if not fetched_data:
         return [], column_names
-    if isinstance(fetched_data[0], tuple):
-        dict_rows = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-        return dict_rows, column_names
-    return cast("list[dict[str, Any]]", fetched_data), column_names
+    return fetched_data, column_names
 
 
 def resolve_rowcount(cursor: Any) -> int:

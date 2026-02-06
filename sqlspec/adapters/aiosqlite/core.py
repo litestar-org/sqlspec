@@ -81,10 +81,10 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
 
 def collect_rows(
     fetched_data: "Iterable[Any]", description: "Sequence[Any] | None"
-) -> "tuple[list[dict[str, Any]], list[str], int]":
-    """Collect aiosqlite result rows into dictionaries.
+) -> "tuple[list[Any], list[str], int]":
+    """Collect aiosqlite result rows as raw tuples.
 
-    Optimized helper to convert raw rows and cursor description into list of dicts.
+    Returns raw driver-native rows without dict conversion for lazy materialization.
 
     Args:
         fetched_data: Raw rows from cursor.fetchall()
@@ -97,8 +97,7 @@ def collect_rows(
         return [], [], 0
 
     column_names = [col[0] for col in description]
-    # compiled list comp and zip is faster in mypyc
-    data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+    data = list(fetched_data)
     return data, column_names, len(data)
 
 

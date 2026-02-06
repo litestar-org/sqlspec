@@ -120,8 +120,12 @@ def coerce_params(
 
 def collect_rows(
     rows: "Sequence[Any]", fields: "Sequence[Any]", converter: Any
-) -> "tuple[list[dict[str, Any]], list[str]]":
-    """Collect Spanner rows into dictionaries.
+) -> "tuple[list[tuple[Any, ...]], list[str]]":
+    """Collect Spanner rows as tuples with type conversion applied.
+
+    Type conversion is still applied to each row value. The raw converted
+    tuples are returned instead of dicts so that ``SQLResult`` can handle
+    lazy dict materialization based on ``row_format``.
 
     Args:
         rows: Rows from result set.
@@ -132,12 +136,10 @@ def collect_rows(
         Tuple of (rows, column_names).
     """
     column_names = [field.name for field in fields]
-    data: list[dict[str, Any]] = []
-    for row in rows:
-        item: dict[str, Any] = {}
-        for index, column in enumerate(column_names):
-            item[column] = converter.convert_if_detected(row[index])
-        data.append(item)
+    num_columns = len(column_names)
+    data: list[tuple[Any, ...]] = [
+        tuple(converter.convert_if_detected(row[i]) for i in range(num_columns)) for row in rows
+    ]
     return data, column_names
 
 

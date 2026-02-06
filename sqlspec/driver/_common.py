@@ -781,7 +781,7 @@ class ExecutionResult(NamedTuple):
     cursor_result: Any
     rowcount_override: int | None
     special_data: Any
-    selected_data: "list[dict[str, Any]] | None"
+    selected_data: "list[Any] | None"
     column_names: "list[str] | None"
     data_row_count: int | None
     statement_count: int | None
@@ -789,6 +789,7 @@ class ExecutionResult(NamedTuple):
     is_script_result: bool
     is_select_result: bool
     is_many_result: bool
+    row_format: str = "dict"
     last_inserted_id: int | str | None = None
 
 
@@ -1143,7 +1144,7 @@ class CommonDriverAttributesMixin:
         *,
         rowcount_override: int | None = None,
         special_data: Any = None,
-        selected_data: "list[dict[str, Any]] | None" = None,
+        selected_data: "list[Any] | None" = None,
         column_names: "list[str] | None" = None,
         data_row_count: int | None = None,
         statement_count: int | None = None,
@@ -1151,6 +1152,7 @@ class CommonDriverAttributesMixin:
         is_script_result: bool = False,
         is_select_result: bool = False,
         is_many_result: bool = False,
+        row_format: str = "dict",
         last_inserted_id: int | str | None = None,
     ) -> ExecutionResult:
         """Create ExecutionResult with all necessary data for any operation type.
@@ -1159,7 +1161,7 @@ class CommonDriverAttributesMixin:
             cursor_result: The raw result returned by the database cursor/driver
             rowcount_override: Optional override for the number of affected rows
             special_data: Any special metadata or additional information
-            selected_data: For SELECT operations, the extracted row data
+            selected_data: For SELECT operations, the extracted row data (raw driver-native format)
             column_names: For SELECT operations, the column names
             data_row_count: For SELECT operations, the number of rows returned
             statement_count: For script operations, total number of statements
@@ -1167,6 +1169,7 @@ class CommonDriverAttributesMixin:
             is_script_result: Whether this result is from script execution
             is_select_result: Whether this result is from a SELECT operation
             is_many_result: Whether this result is from an execute_many operation
+            row_format: Format of raw rows - "tuple", "dict", or "record"
             last_inserted_id: The ID of the last inserted row (if applicable)
 
         Returns:
@@ -1186,6 +1189,7 @@ class CommonDriverAttributesMixin:
             is_script_result,
             is_select_result,
             is_many_result,
+            row_format,
             last_inserted_id,
         )
 
@@ -1219,6 +1223,7 @@ class CommonDriverAttributesMixin:
                 rows_affected=execution_result.data_row_count or 0,
                 operation_type="SELECT",
                 metadata=execution_result.special_data or {},
+                row_format=execution_result.row_format,
             )
 
         return SQLResult(

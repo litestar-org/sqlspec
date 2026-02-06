@@ -141,7 +141,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             data, column_names = collect_rows(records)
 
             return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                is_select_result=True,
+                row_format="record",
             )
 
         result = await cursor.execute(sql, *params) if params else await cursor.execute(sql)
@@ -338,7 +343,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if normalized.statement.returns_rows():
             rows = await invoke_prepared_statement(prepared, normalized.parameters, fetch=True)
             data, _ = collect_rows(rows)
-            sql_result = create_sql_result(normalized.statement, data=data, rows_affected=len(data), metadata=metadata)
+            sql_result = create_sql_result(normalized.statement, data=data, rows_affected=len(data), metadata=metadata, row_format="record")
             return StackResult.from_sql_result(sql_result)
 
         status = await invoke_prepared_statement(prepared, normalized.parameters, fetch=False)

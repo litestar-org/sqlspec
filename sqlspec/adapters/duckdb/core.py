@@ -50,25 +50,14 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _coerce_duckdb_rows(fetched_data: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]] | list[Any]":
-    """Convert row tuples into dictionaries keyed by column names.
-
-    Args:
-        fetched_data: Raw rows returned from DuckDB.
-        column_names: Column names from cursor metadata.
-
-    Returns:
-        List of dictionaries when rows are tuple-based, otherwise the original rows.
-    """
-    if fetched_data and isinstance(fetched_data[0], tuple):
-        return [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-    return fetched_data
-
-
 def collect_rows(
     fetched_data: "list[Any] | None", description: "list[Any] | None"
-) -> "tuple[list[dict[str, Any]] | list[Any], list[str]]":
+) -> "tuple[list[Any], list[str]]":
     """Collect DuckDB rows and column names.
+
+    Returns raw data without dict conversion. The row format is detected
+    by the driver and passed to ``create_execution_result`` so that
+    ``SQLResult`` can handle lazy dict materialisation.
 
     Args:
         fetched_data: Rows returned from cursor.fetchall().
@@ -82,7 +71,7 @@ def collect_rows(
     column_names = [col[0] for col in description]
     if not fetched_data:
         return [], column_names
-    return _coerce_duckdb_rows(fetched_data, column_names), column_names
+    return fetched_data, column_names
 
 
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":

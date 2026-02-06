@@ -50,8 +50,8 @@ def test_execute_statement_select(mock_connection: MagicMock) -> None:
     assert result.is_select_result
     assert result.selected_data is not None
     assert len(result.selected_data) == 2
-    assert result.selected_data[0] == {"id": 1, "name": "Alice"}
-    assert result.selected_data[1] == {"id": 2, "name": "Bob"}
+    assert result.selected_data[0] == (1, "Alice")
+    assert result.selected_data[1] == (2, "Bob")
 
 
 def test_execute_statement_dml_in_transaction(mock_transaction: MagicMock) -> None:

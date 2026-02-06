@@ -72,7 +72,7 @@ class MysqlConnectorSyncCursor:
         self.cursor: Any | None = None
 
     def __enter__(self) -> Any:
-        self.cursor = self.connection.cursor(dictionary=True)
+        self.cursor = self.connection.cursor()
         return self.cursor
 
     def __exit__(self, *_: Any) -> None:
@@ -133,10 +133,17 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             description = list(cursor.description) if cursor.description else None
             json_indexes = detect_json_columns(cursor, MYSQLCONNECTOR_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names = collect_rows(fetched_rows, description, json_indexes, deserializer, logger=logger)
+            rows, column_names, row_format = collect_rows(
+                fetched_rows, description, json_indexes, deserializer, logger=logger
+            )
 
             return self.create_execution_result(
-                cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
+                cursor,
+                selected_data=rows,
+                column_names=column_names,
+                data_row_count=len(rows),
+                is_select_result=True,
+                row_format=row_format,
             )
 
         affected_rows = resolve_rowcount(cursor)
@@ -287,7 +294,7 @@ class MysqlConnectorAsyncCursor:
         self.cursor: Any | None = None
 
     async def __aenter__(self) -> Any:
-        self.cursor = await self.connection.cursor(dictionary=True)
+        self.cursor = await self.connection.cursor()
         return self.cursor
 
     async def __aexit__(self, *_: Any) -> None:
@@ -348,10 +355,17 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             description = list(cursor.description) if cursor.description else None
             json_indexes = detect_json_columns(cursor, MYSQLCONNECTOR_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names = collect_rows(fetched_rows, description, json_indexes, deserializer, logger=logger)
+            rows, column_names, row_format = collect_rows(
+                fetched_rows, description, json_indexes, deserializer, logger=logger
+            )
 
             return self.create_execution_result(
-                cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
+                cursor,
+                selected_data=rows,
+                column_names=column_names,
+                data_row_count=len(rows),
+                is_select_result=True,
+                row_format=row_format,
             )
 
         affected_rows = resolve_rowcount(cursor)
