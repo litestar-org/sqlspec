@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sqlite3
+import statistics
 import tempfile
 import time
 from contextlib import suppress
@@ -27,6 +28,19 @@ if TYPE_CHECKING:
 
 # Pool leak detection helper
 _leaked_pools: list[str] = []
+
+
+def _is_compiled() -> bool:
+    """Detect if sqlspec driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
 
 __all__ = (
     "main",
@@ -95,7 +109,19 @@ POOL_SIZE = 5  # Default pool size for async adapters
     show_default=True,
     help="Connection pool size for async adapters (1=single connection, matches sync behavior)",
 )
-def main(driver: tuple[str, ...], rows: int, pool_size: int) -> None:
+@click.option(
+    "--iterations",
+    default=3,
+    show_default=True,
+    help="Number of timed iterations per scenario",
+)
+@click.option(
+    "--warmup",
+    default=1,
+    show_default=True,
+    help="Number of warmup iterations (not timed)",
+)
+def main(driver: tuple[str, ...], rows: int, pool_size: int, iterations: int, warmup: int) -> None:
     """Run benchmarks for the specified drivers.
 
     Compares raw driver, sqlspec, and SQLAlchemy performance across
@@ -107,9 +133,14 @@ def main(driver: tuple[str, ...], rows: int, pool_size: int) -> None:
 
     results: list[dict[str, Any]] = []
     errors: list[str] = []
+    if _is_compiled():
+        click.secho("mypyc compilation detected", fg="green")
     for drv in driver:
-        click.echo(f"Running benchmark for driver: {drv} (rows={rows}, pool_size={pool_size})")
-        results.extend(run_benchmark(drv, errors))
+        click.echo(
+            f"Running benchmark for driver: {drv} "
+            f"(rows={rows}, pool_size={pool_size}, iterations={iterations}, warmup={warmup})"
+        )
+        results.extend(run_benchmark(drv, errors, iterations=iterations, warmup=warmup))
     if results:
         print_benchmark_table(results)
     else:
@@ -125,12 +156,16 @@ def main(driver: tuple[str, ...], rows: int, pool_size: int) -> None:
     click.echo(f"Benchmarks complete for drivers: {', '.join(driver)}")
 
 
-def run_benchmark(driver: str, errors: list[str]) -> list[dict[str, Any]]:
+def run_benchmark(
+    driver: str, errors: list[str], *, iterations: int = 3, warmup: int = 1
+) -> list[dict[str, Any]]:
     """Run all benchmark scenarios for a driver.
 
     Args:
         driver: The database driver name (e.g., "sqlite", "asyncpg")
         errors: List to append error messages to
+        iterations: Number of timed iterations per scenario
+        warmup: Number of warmup iterations (not timed)
 
     Returns:
         List of benchmark result dictionaries
@@ -146,15 +181,35 @@ def run_benchmark(driver: str, errors: list[str]) -> list[dict[str, Any]]:
                 errors.append(f"No implementation for library={lib}, driver={driver}, scenario={scenario}")
                 continue
 
-            try:
-                start = time.perf_counter()
-                if inspect.iscoroutinefunction(func):
-                    asyncio.run(func())
-                else:
-                    func()
-                elapsed = time.perf_counter() - start
+            is_async = inspect.iscoroutinefunction(func)
 
-                results.append({"driver": driver, "library": lib, "scenario": scenario, "time": elapsed})
+            try:
+                # Warmup iterations (not timed)
+                for _ in range(warmup):
+                    if is_async:
+                        asyncio.run(func())
+                    else:
+                        func()
+
+                # Timed iterations
+                times: list[float] = []
+                for _ in range(iterations):
+                    start = time.perf_counter()
+                    if is_async:
+                        asyncio.run(func())
+                    else:
+                        func()
+                    times.append(time.perf_counter() - start)
+
+                median_time = statistics.median(times)
+                label = SQLSPEC_LABEL if lib == "sqlspec" else lib
+                results.append({
+                    "driver": driver,
+                    "library": label,
+                    "scenario": scenario,
+                    "time": median_time,
+                    "times": times,
+                })
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
@@ -173,9 +228,18 @@ SELECT_TEST_VALUES = "SELECT * FROM test;"
 INSERT_TEST_VALUE_SQLA = "INSERT INTO test (value) VALUES (:value);"
 
 
+def _optimize_raw_sqlite(conn: sqlite3.Connection) -> None:
+    """Apply same PRAGMAs that sqlspec applies for fair comparison."""
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
 def raw_sqlite_initialization() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
         conn.execute(CREATE_TEST_TABLE)
         conn.close()
 
@@ -183,6 +247,7 @@ def raw_sqlite_initialization() -> None:
 def raw_sqlite_write_heavy() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
         conn.execute(CREATE_TEST_TABLE)
         # Use executemany for fair comparison
         data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
@@ -194,6 +259,7 @@ def raw_sqlite_write_heavy() -> None:
 def raw_sqlite_read_heavy() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
         conn.execute(CREATE_TEST_TABLE)
         data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
         conn.executemany(INSERT_TEST_VALUE, data)
@@ -616,6 +682,7 @@ def raw_sqlite_iterative_inserts() -> None:
     """Individual inserts in a loop - shows per-call overhead."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
         conn.execute(CREATE_TEST_TABLE)
         for i in range(ROWS_TO_INSERT):
             conn.execute(INSERT_TEST_VALUE, (f"value_{i}",))
@@ -658,6 +725,7 @@ def raw_sqlite_repeated_queries() -> None:
     """Repeated single-row queries - tests query preparation overhead."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
         conn.execute(CREATE_TEST_TABLE)
         data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
         conn.executemany(INSERT_TEST_VALUE, data)
@@ -1201,6 +1269,9 @@ def print_benchmark_table(results: list[dict[str, Any]]) -> None:
     table.add_column("Time (s)", justify="right", style="yellow")
     table.add_column("% Slower vs Raw", justify="right", style="red")
 
+    # Check if any result has multiple iterations
+    multi_iter = any(len(row.get("times", [])) > 1 for row in results)
+
     # Build a lookup for raw times: {(driver, scenario): time}
     raw_times = {}
     for row in results:
@@ -1212,12 +1283,17 @@ def print_benchmark_table(results: list[dict[str, Any]]) -> None:
         scenario = row["scenario"]
         lib = row["library"]
         t = row["time"]
+        times = row.get("times", [t])
         if lib == "raw":
             percent_slower = "—"
         else:
             raw_time = raw_times.get((driver, scenario))
             percent_slower = f"{100 * (t - raw_time) / raw_time:.1f}%" if raw_time and raw_time > 0 else "n/a"
-        table.add_row(driver, lib, scenario, f"{t:.4f}", percent_slower)
+        if multi_iter and len(times) > 1:
+            time_str = f"{t:.4f} ({min(times):.4f}–{max(times):.4f})"
+        else:
+            time_str = f"{t:.4f}"
+        table.add_row(driver, lib, scenario, time_str, percent_slower)
     console.print(table)
 
 

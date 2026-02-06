@@ -47,7 +47,7 @@ def _reset_noop(_: object) -> None:
 def _create_sql() -> "SQL":
     from sqlspec.core.statement import SQL
 
-    return SQL.__new__(SQL)
+    return SQL("")
 
 
 def _create_processed_state() -> "ProcessedState":
