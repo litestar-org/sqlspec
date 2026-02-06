@@ -26,8 +26,8 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["value"] == 42
+    assert select_result.get_data()[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["value"] == 42
 
     update_result = sqlite_session.execute("UPDATE test_table SET value = ? WHERE name = ?", (100, "test_name"))
     assert isinstance(update_result, SQLResult)
@@ -36,7 +36,7 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
     verify_result = sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
-    assert verify_result.data[0]["value"] == 100
+    assert verify_result.get_data()[0]["value"] == 100
 
     delete_result = sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
@@ -45,7 +45,7 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
     empty_result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
-    assert empty_result.data[0]["count"] == 0
+    assert empty_result.get_data()[0]["count"] == 0
 
 
 @pytest.mark.parametrize(
@@ -72,7 +72,7 @@ def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, parameters: Any, 
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test_value"
+    assert result.get_data()[0]["name"] == "test_value"
 
 
 def test_sqlite_execute_many(sqlite_session: SqliteDriver) -> None:
@@ -90,14 +90,14 @@ def test_sqlite_execute_many(sqlite_session: SqliteDriver) -> None:
     select_result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(parameters_list)
+    assert select_result.get_data()[0]["count"] == len(parameters_list)
 
     ordered_result = sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
-    assert ordered_result.data[0]["name"] == "name1"
-    assert ordered_result.data[0]["value"] == 1
+    assert ordered_result.get_data()[0]["name"] == "name1"
+    assert ordered_result.get_data()[0]["value"] == 1
 
 
 def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
@@ -125,10 +125,10 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
-    assert select_result.data[0]["name"] == "script_test1"
-    assert select_result.data[0]["value"] == 1000
-    assert select_result.data[1]["name"] == "script_test2"
-    assert select_result.data[1]["value"] == 888
+    assert select_result.get_data()[0]["name"] == "script_test1"
+    assert select_result.get_data()[0]["value"] == 1000
+    assert select_result.get_data()[1]["name"] == "script_test2"
+    assert select_result.get_data()[1]["value"] == 888
 
 
 def test_sqlite_result_methods(sqlite_session: SqliteDriver) -> None:
@@ -200,7 +200,7 @@ def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
+    row = select_result.get_data()[0]
     assert row["text_col"] == "text_value"
     assert row["integer_col"] == 42
     assert row["real_col"] == math.pi
@@ -226,9 +226,10 @@ def test_sqlite_statement_stack_sequential(sqlite_session: SqliteDriver) -> None
     assert len(results) == 3
     assert results[0].rows_affected == 1
     assert results[1].rows_affected == 1
-    assert results[2].result is not None
-    assert results[2].result.data is not None
-    assert results[2].result.data[0]["total"] == 2
+    count_result = results[2].result
+    assert isinstance(count_result, SQLResult)
+    assert count_result.data is not None
+    assert count_result.get_data()[0]["total"] == 2
 
 
 @requires_interpreted
@@ -254,7 +255,7 @@ def test_sqlite_statement_stack_continue_on_error(sqlite_session: SqliteDriver) 
 
     verify = sqlite_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:
@@ -265,7 +266,7 @@ def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:
     result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("transaction_test",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["count"] == 1
+    assert result.get_data()[0]["count"] == 1
 
 
 def test_sqlite_complex_queries(sqlite_session: SqliteDriver) -> None:
@@ -300,10 +301,10 @@ def test_sqlite_complex_queries(sqlite_session: SqliteDriver) -> None:
     """)
     assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
-    assert agg_result.data[0]["total_count"] == 4
-    assert agg_result.data[0]["avg_value"] == 29.5
-    assert agg_result.data[0]["min_value"] == 25
-    assert agg_result.data[0]["max_value"] == 35
+    assert agg_result.get_data()[0]["total_count"] == 4
+    assert agg_result.get_data()[0]["avg_value"] == 29.5
+    assert agg_result.get_data()[0]["min_value"] == 25
+    assert agg_result.get_data()[0]["max_value"] == 35
 
     subquery_result = sqlite_session.execute("""
         SELECT name, value
@@ -314,8 +315,8 @@ def test_sqlite_complex_queries(sqlite_session: SqliteDriver) -> None:
     assert isinstance(subquery_result, SQLResult)
     assert subquery_result.data is not None
     assert len(subquery_result.data) == 2
-    assert subquery_result.data[0]["name"] == "Bob"
-    assert subquery_result.data[1]["name"] == "Charlie"
+    assert subquery_result.get_data()[0]["name"] == "Bob"
+    assert subquery_result.get_data()[1]["name"] == "Charlie"
 
 
 def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
@@ -358,7 +359,7 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["name"] == "metadata_test"
     assert row["value"] == 123
     assert row["id"] is not None
@@ -377,7 +378,7 @@ def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> Non
     select_result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 100
+    assert select_result.get_data()[0]["count"] == 100
 
     page_result = sqlite_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
@@ -385,7 +386,7 @@ def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> Non
     assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
-    assert page_result.data[0]["name"] == "bulk_user_20"
+    assert page_result.get_data()[0]["name"] == "bulk_user_20"
 
 
 def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> None:
@@ -489,7 +490,7 @@ def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> 
     assert select_result.data is not None
     assert len(select_result.data) == 3
 
-    for row in select_result.data:
+    for row in select_result.get_data():
         assert row["user_id"] in [1, 2, 3]
         assert row["asset_maintenance_id"] in [1, 2, 3]
         assert row["alert_definition_id"] == 1
@@ -513,7 +514,7 @@ def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> 
 
     count_result = sqlite_session.execute("SELECT COUNT(*) as count FROM alert_users")
     assert count_result.data is not None
-    assert count_result.data[0]["count"] == 3
+    assert count_result.get_data()[0]["count"] == 3
 
 
 def test_sqlite_for_update_generates_sql_but_may_not_work(sqlite_session: SqliteDriver) -> None:
@@ -536,7 +537,7 @@ def test_sqlite_for_update_generates_sql_but_may_not_work(sqlite_session: Sqlite
     result = sqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "sqlite_test"
+    assert result.get_data()[0]["name"] == "sqlite_test"
 
 
 def test_sqlite_for_share_generates_sql_but_may_not_work(sqlite_session: SqliteDriver) -> None:
@@ -558,7 +559,7 @@ def test_sqlite_for_share_generates_sql_but_may_not_work(sqlite_session: SqliteD
     result = sqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "sqlite_share"
+    assert result.get_data()[0]["name"] == "sqlite_share"
 
 
 def test_sqlite_for_update_skip_locked_generates_sql(sqlite_session: SqliteDriver) -> None:

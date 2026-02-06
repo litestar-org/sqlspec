@@ -132,7 +132,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             data, column_names, row_count = collect_rows(cast("list[Any]", fetched_data), cursor.description)
 
             return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=row_count,
+                is_select_result=True,
+                row_format="tuple",
             )
 
         affected_rows = resolve_rowcount(cursor)

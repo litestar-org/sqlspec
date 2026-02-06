@@ -20,10 +20,10 @@ def test_bigquery_standard_sql_functions(bigquery_session: BigQueryDriver) -> No
     """)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["abs_value"] == 42
-    assert result.data[0]["rounded"] == 3.15
-    assert result.data[0]["mod_result"] == 2
-    assert result.data[0]["power_result"] == 8
+    assert result.get_data()[0]["abs_value"] == 42
+    assert result.get_data()[0]["rounded"] == 3.15
+    assert result.get_data()[0]["mod_result"] == 2
+    assert result.get_data()[0]["power_result"] == 8
 
     string_result = bigquery_session.execute("""
         SELECT
@@ -34,10 +34,10 @@ def test_bigquery_standard_sql_functions(bigquery_session: BigQueryDriver) -> No
     """)
     assert isinstance(string_result, SQLResult)
     assert string_result.data is not None
-    assert string_result.data[0]["upper_str"] == "HELLO"
-    assert string_result.data[0]["lower_str"] == "world"
-    assert string_result.data[0]["str_length"] == 8
-    assert string_result.data[0]["concatenated"] == "Hello World"
+    assert string_result.get_data()[0]["upper_str"] == "HELLO"
+    assert string_result.get_data()[0]["lower_str"] == "world"
+    assert string_result.get_data()[0]["str_length"] == 8
+    assert string_result.get_data()[0]["concatenated"] == "Hello World"
 
 
 def test_bigquery_conditional_functions(bigquery_session: BigQueryDriver) -> None:
@@ -57,8 +57,8 @@ def test_bigquery_conditional_functions(bigquery_session: BigQueryDriver) -> Non
     """)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["case_result"] == "positive"
-    assert result.data[0]["if_result"] == "greater"
-    assert result.data[0]["ifnull_result"] == "default_value"
-    assert result.data[0]["nullif_result"] is None
-    assert result.data[0]["coalesce_result"] == "first_non_null"
+    assert result.get_data()[0]["case_result"] == "positive"
+    assert result.get_data()[0]["if_result"] == "greater"
+    assert result.get_data()[0]["ifnull_result"] == "default_value"
+    assert result.get_data()[0]["nullif_result"] is None
+    assert result.get_data()[0]["coalesce_result"] == "first_non_null"

@@ -61,8 +61,8 @@ def down():
 
         users_result = driver.execute("SELECT * FROM users")
         assert len(users_result.data) == 1
-        assert users_result.data[0]["name"] == "John Doe"
-        assert users_result.data[0]["email"] == "john@example.com"
+        assert users_result.get_data()[0]["name"] == "John Doe"
+        assert users_result.get_data()[0]["email"] == "john@example.com"
 
     commands.downgrade("base")
 
@@ -138,7 +138,7 @@ def down():
 
     with config.provide_session() as driver:
         tables_result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        table_names = [t["name"] for t in tables_result.data]
+        table_names = [t["name"] for t in tables_result.get_data()]
         assert "users" in table_names
         assert "posts" in table_names
 
@@ -147,13 +147,13 @@ def down():
 
         posts_result = driver.execute("SELECT * FROM posts")
         assert len(posts_result.data) == 1
-        assert posts_result.data[0]["title"] == "My Post"
+        assert posts_result.get_data()[0]["title"] == "My Post"
 
     commands.downgrade("0001")
 
     with config.provide_session() as driver:
         tables_result = driver.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        table_names = [t["name"] for t in tables_result.data]
+        table_names = [t["name"] for t in tables_result.get_data()]
         assert "users" in table_names
         assert "posts" not in table_names
 
@@ -162,7 +162,7 @@ def down():
     with config.provide_session() as driver:
         tables_result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
 
-        table_names = [t["name"] for t in tables_result.data if not t["name"].startswith("sqlspec_")]
+        table_names = [t["name"] for t in tables_result.get_data() if not t["name"].startswith("sqlspec_")]
         assert len(table_names) == 0
 
 
@@ -283,8 +283,8 @@ def down():
     with config.provide_session() as driver:
         customers_result = driver.execute("SELECT * FROM customers ORDER BY name")
         assert len(customers_result.data) == 2
-        assert customers_result.data[0]["name"] == "Customer 1"
-        assert customers_result.data[1]["name"] == "Customer 2"
+        assert customers_result.get_data()[0]["name"] == "Customer 1"
+        assert customers_result.get_data()[1]["name"] == "Customer 2"
 
     commands.downgrade("base")
 

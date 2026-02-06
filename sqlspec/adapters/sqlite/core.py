@@ -22,7 +22,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
-from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
+from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -89,12 +89,10 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def collect_rows(
-    fetched_data: "list[Any]", description: "Sequence[Any] | None"
-) -> "tuple[list[dict[str, Any]], list[str], int]":
-    """Collect SQLite result rows into dictionaries.
+def collect_rows(fetched_data: "list[Any]", description: "Sequence[Any] | None") -> "tuple[list[Any], list[str], int]":
+    """Collect SQLite result rows as raw tuples.
 
-    Optimized helper to convert raw rows and cursor description into list of dicts.
+    Returns raw driver-native rows without dict conversion for lazy materialization.
 
     Args:
         fetched_data: Raw rows from cursor.fetchall()
@@ -107,9 +105,7 @@ def collect_rows(
         return [], [], 0
 
     column_names = [col[0] for col in description]
-    # compiled list comp and zip is faster in mypyc
-    data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-    return data, column_names, len(data)
+    return fetched_data, column_names, len(fetched_data)
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -121,9 +117,11 @@ def resolve_rowcount(cursor: Any) -> int:
     Returns:
         Positive rowcount value or 0 when unknown.
     """
-    if not has_rowcount(cursor):
+    try:
+        rowcount = cursor.rowcount
+    except AttributeError:
         return 0
-    rowcount = cursor.rowcount
+
     if isinstance(rowcount, int) and rowcount > 0:
         return rowcount
     return 0
@@ -330,7 +328,10 @@ def build_statement_config(
     deserializer = json_deserializer or from_json
     profile = driver_profile
     return build_statement_config_from_profile(
-        profile, statement_overrides={"dialect": "sqlite"}, json_serializer=serializer, json_deserializer=deserializer
+        profile,
+        statement_overrides={"dialect": "sqlite", "enable_parameter_type_wrapping": False},
+        json_serializer=serializer,
+        json_deserializer=deserializer,
     )
 
 

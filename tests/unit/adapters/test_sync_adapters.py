@@ -6,9 +6,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+from sqlspec.typing import Empty
 from tests.unit.adapters.conftest import MockSyncConnection, MockSyncDriver
 
 pytestmark = pytest.mark.xdist_group("adapter_unit")
@@ -37,6 +39,37 @@ def test_sync_driver_with_custom_config(mock_sync_connection: MockSyncConnection
     driver = MockSyncDriver(mock_sync_connection, custom_config)
     assert driver.statement_config.dialect == "postgresql"
     assert driver.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
+
+
+def test_sync_driver_fast_path_flag_default(mock_sync_connection: MockSyncConnection) -> None:
+    driver = MockSyncDriver(mock_sync_connection)
+
+    assert driver._qc_enabled is True
+
+
+def test_sync_driver_fast_path_flag_disabled_by_transformer(mock_sync_connection: MockSyncConnection) -> None:
+    def transformer(expression: Any, context: Any) -> "tuple[Any, Any]":
+        return expression, context
+
+    custom_config = StatementConfig(
+        dialect="sqlite",
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+        ),
+        statement_transformers=(transformer,),
+    )
+    driver = MockSyncDriver(mock_sync_connection, custom_config)
+
+    assert driver._qc_enabled is False
+
+
+def test_sync_driver_fast_path_flag_disabled_by_observability(mock_sync_connection: MockSyncConnection) -> None:
+    driver = MockSyncDriver(mock_sync_connection)
+    runtime = ObservabilityRuntime(ObservabilityConfig(print_sql=True))
+
+    driver.attach_observability(runtime)
+
+    assert driver._qc_enabled is False
 
 
 def test_sync_driver_with_cursor(mock_sync_driver: MockSyncDriver) -> None:
@@ -82,7 +115,7 @@ def test_sync_driverdispatch_execute_select(mock_sync_driver: MockSyncDriver) ->
     assert result.is_select_result is True
     assert result.is_script_result is False
     assert result.is_many_result is False
-    assert result.selected_data == [{"id": 1, "name": "test"}, {"id": 2, "name": "example"}]
+    assert result.selected_data == [(1, "test"), (2, "example")]
     assert result.column_names == ["id", "name"]
     assert result.data_row_count == 2
 
@@ -203,6 +236,24 @@ def test_sync_driver_dispatch_statement_execution_many(mock_sync_driver: MockSyn
     assert isinstance(result, SQLResult)
     assert result.operation_type == "INSERT"
     assert result.rows_affected == 2
+
+
+def test_sync_driver_releases_pooled_statement(mock_sync_driver: MockSyncDriver) -> None:
+    """Pooled statements should be reset after dispatch execution."""
+    seed = "SELECT * FROM users WHERE id = ?"
+    mock_sync_driver.prepare_statement(seed, (1,), statement_config=mock_sync_driver.statement_config, kwargs={})
+    pooled = mock_sync_driver.prepare_statement(
+        seed, (2,), statement_config=mock_sync_driver.statement_config, kwargs={}
+    )
+
+    assert pooled._pooled is True
+
+    mock_sync_driver.dispatch_statement_execution(pooled, mock_sync_driver.connection)
+
+    assert pooled._raw_sql == ""
+    assert pooled._processed_state is Empty
+    assert pooled._filters == []
+    assert pooled._statement_config is get_default_config()
 
 
 def test_sync_driver_transaction_management(mock_sync_driver: MockSyncDriver) -> None:
@@ -420,11 +471,16 @@ def test_sync_driver_create_execution_result(mock_sync_driver: MockSyncDriver) -
     cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
     result = mock_sync_driver.create_execution_result(
-        cursor, selected_data=[{"id": 1}, {"id": 2}], column_names=["id"], data_row_count=2, is_select_result=True
+        cursor,
+        selected_data=[(1,), (2,)],
+        column_names=["id"],
+        data_row_count=2,
+        is_select_result=True,
+        row_format="tuple",
     )
 
     assert result.is_select_result is True
-    assert result.selected_data == [{"id": 1}, {"id": 2}]
+    assert result.selected_data == [(1,), (2,)]
     assert result.column_names == ["id"]
     assert result.data_row_count == 2
 
@@ -446,7 +502,7 @@ def test_sync_driver_build_statement_result(mock_sync_driver: MockSyncDriver) ->
     cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
     execution_result = mock_sync_driver.create_execution_result(
-        cursor, selected_data=[{"id": 1}], column_names=["id"], data_row_count=1, is_select_result=True
+        cursor, selected_data=[(1,)], column_names=["id"], data_row_count=1, is_select_result=True, row_format="tuple"
     )
 
     sql_result = mock_sync_driver.build_statement_result(statement, execution_result)

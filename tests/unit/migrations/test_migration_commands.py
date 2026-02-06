@@ -322,6 +322,8 @@ async def test_async_upgrade_empty_migration_folder(async_config: AiosqliteConfi
         patch.object(async_config, "provide_session") as mock_session,
         patch("sqlspec.migrations.commands.console") as mock_console,
         patch.object(commands.runner, "get_migration_files", return_value=[]),
+        patch.object(commands.tracker, "get_applied_migrations", return_value=[]),
+        patch.object(commands.tracker, "ensure_tracking_table", return_value=None),
     ):
         mock_session.return_value.__aenter__.return_value = mock_driver
 

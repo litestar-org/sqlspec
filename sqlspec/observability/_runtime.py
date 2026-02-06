@@ -23,6 +23,7 @@ class ObservabilityRuntime:
     """Aggregates dispatchers, observers, spans, and custom metrics."""
 
     __slots__ = (
+        "_is_idle_cached",
         "_metrics",
         "_redaction",
         "_statement_observers",
@@ -56,6 +57,21 @@ class ObservabilityRuntime:
         self._statement_observers = tuple(observers)
         self._redaction = config.redaction.copy() if config.redaction else None
         self._metrics: dict[str, float] = {}
+        # Pre-compute the non-span idle state (lifecycle and observers are immutable)
+        # span_manager can be replaced for testing so we check it separately
+        self._is_idle_cached = not self.lifecycle.is_enabled and not self._statement_observers
+
+    @property
+    def is_idle(self) -> bool:
+        """Return True when no observability features are active.
+
+        A runtime is idle if it has no lifecycle hooks, no statement observers,
+        and telemetry spans are disabled. Drivers can use this to skip
+        expensive context construction.
+        """
+        # Fast path: lifecycle and observers state is cached (immutable after init)
+        # span_manager is checked each time as it can be replaced for testing
+        return self._is_idle_cached and not self.span_manager.is_enabled
 
     @property
     def has_statement_observers(self) -> bool:
@@ -266,6 +282,9 @@ class ObservabilityRuntime:
 
     def start_query_span(self, sql: str, operation: str, driver: str) -> Any:
         """Start a query span with runtime metadata."""
+
+        if not self.span_manager.is_enabled:
+            return None
 
         sql_hash = compute_sql_hash(sql)
         connection_info = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}

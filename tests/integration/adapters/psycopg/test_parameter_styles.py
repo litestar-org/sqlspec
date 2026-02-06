@@ -73,7 +73,7 @@ def test_psycopg_pyformat_parameter_types(
     assert result.data is not None
     assert len(result.data) == expected_count
     if expected_count > 0:
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
 
 @pytest.mark.parametrize(
@@ -92,7 +92,7 @@ def test_psycopg_parameter_styles(
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test1"
+    assert result.get_data()[0]["name"] == "test1"
 
 
 def test_psycopg_multiple_parameters_pyformat(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -104,7 +104,7 @@ def test_psycopg_multiple_parameters_pyformat(psycopg_parameters_session: Psycop
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["value"] == 100
 
 
 def test_psycopg_multiple_parameters_named(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -117,7 +117,7 @@ def test_psycopg_multiple_parameters_named(psycopg_parameters_session: PsycopgSy
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["value"] == 100
 
 
 def test_psycopg_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -128,8 +128,8 @@ def test_psycopg_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) 
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test3"
-    assert result.data[0]["description"] is None
+    assert result.get_data()[0]["name"] == "test3"
+    assert result.get_data()[0]["description"] is None
 
     psycopg_parameters_session.execute(
         "INSERT INTO test_parameters_psycopg_sync (name, value, description) VALUES (%s, %s, %s)",
@@ -140,7 +140,7 @@ def test_psycopg_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) 
         "SELECT * FROM test_parameters_psycopg_sync WHERE name = %s", ("null_param_test")
     )
     assert len(null_result.data) == 1
-    assert null_result.data[0]["description"] is None
+    assert null_result.get_data()[0]["description"] is None
 
 
 def test_psycopg_parameter_escaping(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -157,7 +157,7 @@ def test_psycopg_parameter_escaping(psycopg_parameters_session: PsycopgSyncDrive
     assert len(result.data) == 0
 
     count_result = psycopg_parameters_session.execute("SELECT COUNT(*) as count FROM test_parameters_psycopg_sync")
-    assert count_result.data[0]["count"] >= 3
+    assert count_result.get_data()[0]["count"] >= 3
 
 
 def test_psycopg_parameter_with_like(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -174,7 +174,7 @@ def test_psycopg_parameter_with_like(psycopg_parameters_session: PsycopgSyncDriv
         "SELECT * FROM test_parameters_psycopg_sync WHERE name LIKE %(pattern)s", {"pattern": "test1%"}
     )
     assert len(named_result.data) == 1
-    assert named_result.data[0]["name"] == "test1"
+    assert named_result.get_data()[0]["name"] == "test1"
 
 
 def test_psycopg_parameter_with_any_array(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -192,9 +192,9 @@ def test_psycopg_parameter_with_any_array(psycopg_parameters_session: PsycopgSyn
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 3
-    assert result.data[0]["name"] == "alpha"
-    assert result.data[1]["name"] == "beta"
-    assert result.data[2]["name"] == "test1"
+    assert result.get_data()[0]["name"] == "alpha"
+    assert result.get_data()[1]["name"] == "beta"
+    assert result.get_data()[2]["name"] == "test1"
 
 
 def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -206,7 +206,7 @@ def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSy
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) >= 1
-    assert all(row["value"] > 150 for row in result.data)
+    assert all(row["value"] > 150 for row in result.get_data())
 
     named_sql = SQL("SELECT * FROM test_parameters_psycopg_sync WHERE value < %(max_value)s", {"max_value": 150})
     named_result = psycopg_parameters_session.execute(named_sql)
@@ -214,7 +214,7 @@ def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSy
     assert isinstance(named_result, SQLResult)
     assert named_result.data is not None
     assert len(named_result.data) >= 1
-    assert all(row["value"] < 150 for row in named_result.data)
+    assert all(row["value"] < 150 for row in named_result.get_data())
 
 
 def test_psycopg_parameter_data_types(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -250,10 +250,10 @@ def test_psycopg_parameter_data_types(psycopg_parameters_session: PsycopgSyncDri
     result = psycopg_parameters_session.execute("SELECT * FROM test_types_psycopg_sync WHERE int_val = %s", (42))
 
     assert len(result.data) == 1
-    assert result.data[0]["text_val"] == "hello"
-    assert result.data[0]["bool_val"] is True
-    assert result.data[0]["array_val"] == [1, 2, 3]
-    assert abs(result.data[0]["real_val"] - math.pi) < 0.001
+    assert result.get_data()[0]["text_val"] == "hello"
+    assert result.get_data()[0]["bool_val"] is True
+    assert result.get_data()[0]["array_val"] == [1, 2, 3]
+    assert abs(result.get_data()[0]["real_val"] - math.pi) < 0.001
 
 
 def test_psycopg_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -268,7 +268,7 @@ def test_psycopg_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDri
         "SELECT * FROM test_parameters_psycopg_sync WHERE name = %s", ("")
     )
     assert len(empty_result.data) == 1
-    assert empty_result.data[0]["value"] == 999
+    assert empty_result.get_data()[0]["value"] == 999
 
     long_string = "x" * 1000
     psycopg_parameters_session.execute(
@@ -280,7 +280,7 @@ def test_psycopg_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDri
         "SELECT * FROM test_parameters_psycopg_sync WHERE description = %s", (long_string)
     )
     assert len(long_result.data) == 1
-    assert len(long_result.data[0]["description"]) == 1000
+    assert len(long_result.get_data()[0]["description"]) == 1000
 
 
 def test_psycopg_parameter_with_postgresql_functions(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -300,7 +300,7 @@ def test_psycopg_parameter_with_postgresql_functions(psycopg_parameters_session:
         {"multiplier": 1.5, "min_val": 100},
     )
     assert len(math_result.data) >= 3
-    for row in math_result.data:
+    for row in math_result.get_data():
         expected = round(row["value"] * 1.5, 2)
         assert row["multiplied"] == expected
 
@@ -336,7 +336,7 @@ def test_psycopg_parameter_with_json(psycopg_parameters_session: PsycopgSyncDriv
     )
 
     assert len(result.data) == 2
-    assert all(row["type"] == "test" for row in result.data)
+    assert all(row["type"] == "test" for row in result.get_data())
 
     named_result = psycopg_parameters_session.execute(
         "SELECT name FROM test_json_params_psycopg_sync WHERE (metadata->>'value')::INTEGER > %(min_value)s",
@@ -374,7 +374,7 @@ def test_psycopg_parameter_with_arrays(psycopg_parameters_session: PsycopgSyncDr
     )
 
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "Array 1"
+    assert result.get_data()[0]["name"] == "Array 1"
 
     named_result = psycopg_parameters_session.execute(
         "SELECT name FROM test_arrays_params_psycopg_sync WHERE array_length(scores, 1) > %(min_length)s",
@@ -412,7 +412,7 @@ def test_psycopg_parameter_with_window_functions(psycopg_parameters_session: Psy
 
     assert len(result.data) >= 4
 
-    group_a_rows = [row for row in result.data if row["description"] == "Group A"]
+    group_a_rows = [row for row in result.get_data() if row["description"] == "Group A"]
     assert len(group_a_rows) == 2
     assert group_a_rows[0]["row_num"] == 1
     assert group_a_rows[1]["row_num"] == 2
@@ -424,7 +424,7 @@ def test_psycopg_parameter_with_copy_operations(psycopg_parameters_session: Psyc
     filter_result = psycopg_parameters_session.execute(
         "SELECT COUNT(*) as count FROM test_parameters_psycopg_sync WHERE value >= %s", (100)
     )
-    filter_result.data[0]["count"]
+    filter_result.get_data()[0]["count"]
 
     batch_data = [(f"Copy Item {i}", i * 50, "COPY_DATA") for i in range(10)]
     psycopg_parameters_session.execute_many(
@@ -436,7 +436,7 @@ def test_psycopg_parameter_with_copy_operations(psycopg_parameters_session: Psyc
         ("COPY_DATA", 100),
     )
 
-    assert verify_result.data[0]["count"] >= 8
+    assert verify_result.get_data()[0]["count"] >= 8
 
 
 def test_psycopg_parameter_mixed_styles_same_query(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -450,8 +450,8 @@ def test_psycopg_parameter_mixed_styles_same_query(psycopg_parameters_session: P
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test1"
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["name"] == "test1"
+    assert result.get_data()[0]["value"] == 100
 
 
 def test_psycopg_named_pyformat_parameter_conversion(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -465,8 +465,8 @@ def test_psycopg_named_pyformat_parameter_conversion(psycopg_parameters_session:
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test1"
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["name"] == "test1"
+    assert result.get_data()[0]["value"] == 100
 
 
 def test_psycopg_mixed_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -485,7 +485,7 @@ def test_psycopg_mixed_null_parameters(psycopg_parameters_session: PsycopgSyncDr
         {"min_val": 15, "pattern": "test_null_%"},
     )
 
-    assert result.data[0]["count"] == 1
+    assert result.get_data()[0]["count"] == 1
 
 
 def test_psycopg_parameter_consistency_check(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -499,7 +499,7 @@ def test_psycopg_parameter_consistency_check(psycopg_parameters_session: Psycopg
         "SELECT COUNT(*) as count FROM test_parameters_psycopg_sync WHERE value > %s", (150,)
     )
 
-    assert named_result.data[0]["count"] == positional_result.data[0]["count"]
+    assert named_result.get_data()[0]["count"] == positional_result.get_data()[0]["count"]
 
 
 def test_psycopg_none_values_in_named_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
@@ -633,7 +633,7 @@ def test_psycopg_none_with_execute_many(psycopg_parameters_session: PsycopgSyncD
     assert len(select_result.data) == 4
 
     # Check specific None handling
-    rows = select_result.data
+    rows = select_result.get_data()
     assert rows[0]["name"] == "first" and rows[0]["value"] == 10
     assert rows[1]["name"] is None and rows[1]["value"] == 20
     assert rows[2]["name"] == "third" and rows[2]["value"] is None
@@ -666,7 +666,7 @@ def test_psycopg_none_in_where_clause(psycopg_parameters_session: PsycopgSyncDri
     assert len(result.data) == 2  # Two rows with NULL category
 
     # Verify the correct rows were found
-    found_ids = {row["id"] for row in result.data}
+    found_ids = {row["id"] for row in result.get_data()}
     assert found_ids == {2, 4}
 
     # Test direct comparison with None parameter using explicit NULL casting
@@ -845,7 +845,7 @@ def test_psycopg_none_parameter_edge_cases(psycopg_parameters_session: PsycopgSy
 
     # Verify all rows were inserted
     all_results = psycopg_parameters_session.execute("SELECT COUNT(*) as count FROM test_position_none_psycopg_sync")
-    assert all_results.data[0]["count"] == 5
+    assert all_results.get_data()[0]["count"] == 5
 
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_edge_psycopg_sync")
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_single_none_psycopg_sync")
@@ -878,10 +878,10 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result1, SQLResult)
     assert result1.data is not None
     assert len(result1.data) == 1
-    assert result1.data[0]["name"] == "test_none_jsonb"
-    assert result1.data[0]["metadata"] is None
-    assert result1.data[0]["config"] is None
-    assert result1.data[0]["tags"] is None
+    assert result1.get_data()[0]["name"] == "test_none_jsonb"
+    assert result1.get_data()[0]["metadata"] is None
+    assert result1.get_data()[0]["config"] is None
+    assert result1.get_data()[0]["tags"] is None
 
     # Test 2: Insert mixed JSON data and None values using positional parameters
     json_data = {"user_id": 123, "preferences": {"theme": "dark", "notifications": True}}
@@ -896,11 +896,11 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert result2.data is not None
     assert len(result2.data) == 1
     # Psycopg automatically parses JSONB, so we get back dict objects
-    assert isinstance(result2.data[0]["metadata"], dict)
-    assert result2.data[0]["metadata"]["user_id"] == 123
-    assert result2.data[0]["config"] is None
-    assert isinstance(result2.data[0]["tags"], dict)
-    assert result2.data[0]["tags"]["total"] == 2
+    assert isinstance(result2.get_data()[0]["metadata"], dict)
+    assert result2.get_data()[0]["metadata"]["user_id"] == 123
+    assert result2.get_data()[0]["config"] is None
+    assert isinstance(result2.get_data()[0]["tags"], dict)
+    assert result2.get_data()[0]["tags"]["total"] == 2
 
     # Test 3: Query JSONB columns with None values
     result3 = psycopg_parameters_session.execute("SELECT * FROM test_jsonb_none_psycopg_sync WHERE metadata IS NULL")
@@ -908,7 +908,7 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result3, SQLResult)
     assert result3.data is not None
     assert len(result3.data) == 1
-    assert result3.data[0]["name"] == "test_none_jsonb"
+    assert result3.get_data()[0]["name"] == "test_none_jsonb"
 
     # Test 4: Query JSONB columns filtering by JSON content
     result4 = psycopg_parameters_session.execute(
@@ -918,7 +918,7 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result4, SQLResult)
     assert result4.data is not None
     assert len(result4.data) == 1
-    assert result4.data[0]["name"] == "test_mixed_jsonb"
+    assert result4.get_data()[0]["name"] == "test_mixed_jsonb"
 
     # Test 5: Insert using named parameters with JSONB and None
     params = {
@@ -938,10 +938,10 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result5, SQLResult)
     assert result5.data is not None
     assert len(result5.data) == 1
-    assert result5.data[0]["name"] == "named_jsonb_test"
-    assert result5.data[0]["metadata"]["type"] == "test"
-    assert result5.data[0]["config"] is None
-    assert result5.data[0]["tags"] == ["tag1", "tag2", "tag3"]
+    assert result5.get_data()[0]["name"] == "named_jsonb_test"
+    assert result5.get_data()[0]["metadata"]["type"] == "test"
+    assert result5.get_data()[0]["config"] is None
+    assert result5.get_data()[0]["tags"] == ["tag1", "tag2", "tag3"]
 
     # Test 6: Update JSONB columns with None values using positional parameters
     psycopg_parameters_session.execute(
@@ -956,8 +956,8 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result6, SQLResult)
     assert result6.data is not None
     assert len(result6.data) == 1
-    assert result6.data[0]["metadata"] is None
-    assert result6.data[0]["config"]["updated"] is True
+    assert result6.get_data()[0]["metadata"] is None
+    assert result6.get_data()[0]["config"]["updated"] is True
 
     # Test 7: Update JSONB columns with None values using named parameters
     psycopg_parameters_session.execute(
@@ -972,7 +972,7 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result7, SQLResult)
     assert result7.data is not None
     assert len(result7.data) == 1
-    assert result7.data[0]["tags"] is None
+    assert result7.get_data()[0]["tags"] is None
 
     # Test 8: Test JSONB operations with None parameters
     result8 = psycopg_parameters_session.execute(
@@ -982,7 +982,7 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result8, SQLResult)
     assert result8.data is not None
     assert len(result8.data) == 1
-    assert result8.data[0]["name"] == "named_jsonb_test"
+    assert result8.get_data()[0]["name"] == "named_jsonb_test"
 
     # Test 9: Test COALESCE with JSONB and None values
     result9 = psycopg_parameters_session.execute(
@@ -993,7 +993,7 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result9, SQLResult)
     assert result9.data is not None
     assert len(result9.data) == 1
-    assert result9.data[0]["metadata_or_default"]["default"] == "value"
+    assert result9.get_data()[0]["metadata_or_default"]["default"] == "value"
 
     # Test 10: execute_many with JSONB None values
     batch_data = [
@@ -1020,22 +1020,22 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert len(result11.data) == 3
 
     # Verify batch1
-    assert result11.data[0]["name"] == "batch1"
-    assert result11.data[0]["metadata"]["batch"] == 1
-    assert result11.data[0]["config"] is None
-    assert result11.data[0]["tags"] == ["batch"]
+    assert result11.get_data()[0]["name"] == "batch1"
+    assert result11.get_data()[0]["metadata"]["batch"] == 1
+    assert result11.get_data()[0]["config"] is None
+    assert result11.get_data()[0]["tags"] == ["batch"]
 
     # Verify batch2
-    assert result11.data[1]["name"] == "batch2"
-    assert result11.data[1]["metadata"] is None
-    assert result11.data[1]["config"]["config"] == "batch2"
-    assert result11.data[1]["tags"] is None
+    assert result11.get_data()[1]["name"] == "batch2"
+    assert result11.get_data()[1]["metadata"] is None
+    assert result11.get_data()[1]["config"]["config"] == "batch2"
+    assert result11.get_data()[1]["tags"] is None
 
     # Verify batch3
-    assert result11.data[2]["name"] == "batch3"
-    assert result11.data[2]["metadata"] is None
-    assert result11.data[2]["config"] is None
-    assert result11.data[2]["tags"] is None
+    assert result11.get_data()[2]["name"] == "batch3"
+    assert result11.get_data()[2]["metadata"] is None
+    assert result11.get_data()[2]["config"] is None
+    assert result11.get_data()[2]["tags"] is None
 
     # Test 11: Test JSONB array operations with None values
     psycopg_parameters_session.execute(
@@ -1050,7 +1050,7 @@ def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert isinstance(result12, SQLResult)
     assert result12.data is not None
     assert len(result12.data) == 1
-    assert result12.data[0]["tags"]["array"] == [None, "value", None]
+    assert result12.get_data()[0]["tags"]["array"] == [None, "value", None]
 
     # Test 12: Test JSONB path operations with None parameters
     result13 = psycopg_parameters_session.execute(

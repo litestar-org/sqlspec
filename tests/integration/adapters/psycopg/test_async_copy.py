@@ -67,8 +67,8 @@ async def test_psycopg_async_copy_operations_positional(psycopg_async_session: P
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 2
-    assert verify_result.data[0]["name"] == "test1"
-    assert verify_result.data[1]["value"] == 200
+    assert verify_result.get_data()[0]["name"] == "test1"
+    assert verify_result.get_data()[1]["value"] == 200
 
     await psycopg_async_session.execute_script("DROP TABLE copy_test_psycopg_async")
 
@@ -96,8 +96,8 @@ async def test_psycopg_async_copy_operations_keyword(psycopg_async_session: Psyc
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 2
-    assert verify_result.data[0]["name"] == "test3"
-    assert verify_result.data[1]["value"] == 400
+    assert verify_result.get_data()[0]["name"] == "test3"
+    assert verify_result.get_data()[1]["value"] == 400
 
     await psycopg_async_session.execute_script("DROP TABLE copy_test_psycopg_async_kw")
 
@@ -124,8 +124,8 @@ async def test_psycopg_async_copy_csv_format_positional(psycopg_async_session: P
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 3
-    assert select_result.data[0]["name"] == "test3"
-    assert select_result.data[2]["value"] == 500
+    assert select_result.get_data()[0]["name"] == "test3"
+    assert select_result.get_data()[2]["value"] == 500
 
     await psycopg_async_session.execute_script("DROP TABLE copy_csv_psycopg_async_pos")
 
@@ -152,8 +152,8 @@ async def test_psycopg_async_copy_csv_format_keyword(psycopg_async_session: Psyc
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 3
-    assert select_result.data[0]["name"] == "test6"
-    assert select_result.data[2]["value"] == 800
+    assert select_result.get_data()[0]["name"] == "test6"
+    assert select_result.get_data()[2]["value"] == 800
 
     await psycopg_async_session.execute_script("DROP TABLE copy_csv_psycopg_async_kw")
 
@@ -181,7 +181,7 @@ async def test_psycopg_async_statement_stack_pipeline(psycopg_async_session: Psy
         "SELECT COUNT(*) AS total FROM test_table_psycopg_async WHERE name LIKE %s", ("async-stack-%",)
     )
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 @requires_interpreted
@@ -213,4 +213,4 @@ async def test_psycopg_async_statement_stack_continue_on_error(psycopg_async_ses
 
     verify = await psycopg_async_session.execute("SELECT COUNT(*) AS total FROM test_table_psycopg_async")
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2

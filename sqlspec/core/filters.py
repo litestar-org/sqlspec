@@ -71,6 +71,8 @@ class StatementFilter(ABC):
 
     __slots__ = ()
 
+    _is_statement_filter: bool = True
+
     @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Append the filter to the statement.

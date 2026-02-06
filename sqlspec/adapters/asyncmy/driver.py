@@ -156,10 +156,17 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             description = list(cursor.description) if cursor.description else None
             json_indexes = detect_json_columns(cursor, ASYNCMY_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names = collect_rows(fetched_rows, description, json_indexes, deserializer, logger=logger)
+            rows, column_names, row_format = collect_rows(
+                fetched_rows, description, json_indexes, deserializer, logger=logger
+            )
 
             return self.create_execution_result(
-                cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
+                cursor,
+                selected_data=rows,
+                column_names=column_names,
+                data_row_count=len(rows),
+                is_select_result=True,
+                row_format=row_format,
             )
 
         affected_rows = resolve_rowcount(cursor)

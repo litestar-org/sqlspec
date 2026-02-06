@@ -1965,7 +1965,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             return
 
         if not yes:
-            response = input("\nProceed with squash? [y/N]: ")
+            import anyio
+
+            response = await anyio.to_thread.run_sync(input, "\nProceed with squash? [y/N]: ")  # pyright: ignore[reportAttributeAccessIssue]
             if response.lower() != "y":
                 console.print("[yellow]Squash cancelled[/]")
                 return
@@ -2038,7 +2040,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             return
 
         if not yes:
-            response = input("\nProceed with conversion? [y/N]: ")
+            import anyio
+
+            response = await anyio.to_thread.run_sync(input, "\nProceed with conversion? [y/N]: ")  # pyright: ignore[reportAttributeAccessIssue]
             if response.lower() != "y":
                 console.print("[yellow]Conversion cancelled[/]")
                 return

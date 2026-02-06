@@ -44,20 +44,20 @@ def test_sync_execute_many_insert_batch(oracle_sync_session: OracleSyncDriver) -
     count_result = oracle_sync_session.execute("SELECT COUNT(*) as total_count FROM test_batch_insert")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["total_count"] == len(batch_data)
+    assert count_result.get_data()[0]["total_count"] == len(batch_data)
 
     select_result = oracle_sync_session.execute("SELECT id, name, category, value FROM test_batch_insert ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == len(batch_data)
 
-    first_record = select_result.data[0]
+    first_record = select_result.get_data()[0]
     assert first_record["id"] == 1
     assert first_record["name"] == "Item 1"
     assert first_record["category"] == "TYPE_A"
     assert first_record["value"] == 100
 
-    last_record = select_result.data[-1]
+    last_record = select_result.get_data()[-1]
     assert last_record["id"] == 5
     assert last_record["name"] == "Item 5"
     assert last_record["category"] == "TYPE_B"
@@ -109,7 +109,7 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
     assert select_result.data is not None
     assert len(select_result.data) == len(initial_data)
 
-    for i, row in enumerate(select_result.data):
+    for i, row in enumerate(select_result.get_data()):
         expected_status, expected_score, expected_id = update_data[i]
         assert row["id"] == expected_id
         assert row["status"] == expected_status
@@ -120,7 +120,7 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
     )
     assert isinstance(active_count_result, SQLResult)
     assert active_count_result.data is not None
-    assert active_count_result.data[0]["active_count"] == 3
+    assert active_count_result.get_data()[0]["active_count"] == 3
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_batch_update_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -167,7 +167,7 @@ def test_sync_execute_many_with_named_parameters(oracle_sync_session: OracleSync
     assert select_result.data is not None
     assert len(select_result.data) == len(batch_data)
 
-    for i, row in enumerate(select_result.data):
+    for i, row in enumerate(select_result.get_data()):
         expected = batch_data[i]
         assert row["id"] == expected["id"]
         assert row["product_name"] == expected["product_name"]
@@ -237,7 +237,7 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
     assert select_result.data is not None
     assert len(select_result.data) == len(employee_data)
 
-    for i, row in enumerate(select_result.data):
+    for i, row in enumerate(select_result.get_data()):
         assert row["id"] == i + 1
         assert row["name"] == employee_data[i][0]
         assert row["department"] == employee_data[i][1]
@@ -247,7 +247,7 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
     )
     assert isinstance(sequence_result, SQLResult)
     assert sequence_result.data is not None
-    assert sequence_result.data[0]["current_value"] == len(employee_data)
+    assert sequence_result.get_data()[0]["current_value"] == len(employee_data)
 
     dept_result = await oracle_async_session.execute("""
         SELECT department, COUNT(*) as employee_count
@@ -258,7 +258,9 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
     assert isinstance(dept_result, SQLResult)
     assert dept_result.data is not None
 
-    engineering_count = next(row["employee_count"] for row in dept_result.data if row["department"] == "ENGINEERING")
+    engineering_count = next(
+        row["employee_count"] for row in dept_result.get_data() if row["department"] == "ENGINEERING"
+    )
     assert engineering_count == 2
 
     await oracle_async_session.execute_script("""
@@ -306,7 +308,7 @@ def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver)
     count_result = oracle_sync_session.execute("SELECT COUNT(*) as total_count FROM test_error_handling")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["total_count"] == len(valid_data) + 1
+    assert count_result.get_data()[0]["total_count"] == len(valid_data) + 1
 
     new_valid_data = [(6, "user6@example.com", "User 6"), (7, "user7@example.com", "User 7")]
 
@@ -318,7 +320,7 @@ def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver)
     assert isinstance(final_count_result, SQLResult)
     assert final_count_result.data is not None
     expected_total = len(valid_data) + 1 + len(new_valid_data)
-    assert final_count_result.data[0]["total_count"] == expected_total
+    assert final_count_result.get_data()[0]["total_count"] == expected_total
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_error_handling'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"

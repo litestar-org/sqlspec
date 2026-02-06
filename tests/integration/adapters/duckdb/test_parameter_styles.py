@@ -57,7 +57,7 @@ def test_duckdb_qmark_parameter_types(
     assert result.data is not None
     assert len(result.data) == expected_count
     if expected_count > 0:
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
 
 @pytest.mark.parametrize(
@@ -76,7 +76,7 @@ def test_duckdb_parameter_styles(
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test1"
+    assert result.get_data()[0]["name"] == "test1"
 
 
 def test_duckdb_multiple_parameters_qmark(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -88,7 +88,7 @@ def test_duckdb_multiple_parameters_qmark(duckdb_parameters_session: DuckDBDrive
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["value"] == 100
 
 
 def test_duckdb_multiple_parameters_numeric(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -100,7 +100,7 @@ def test_duckdb_multiple_parameters_numeric(duckdb_parameters_session: DuckDBDri
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["value"] == 100
 
 
 def test_duckdb_null_parameters(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -111,8 +111,8 @@ def test_duckdb_null_parameters(duckdb_parameters_session: DuckDBDriver) -> None
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test3"
-    assert result.data[0]["description"] is None
+    assert result.get_data()[0]["name"] == "test3"
+    assert result.get_data()[0]["description"] is None
 
     duckdb_parameters_session.execute(
         "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
@@ -121,7 +121,7 @@ def test_duckdb_null_parameters(duckdb_parameters_session: DuckDBDriver) -> None
 
     null_result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name = ?", ("null_param_test"))
     assert len(null_result.data) == 1
-    assert null_result.data[0]["description"] is None
+    assert null_result.get_data()[0]["description"] is None
 
 
 def test_duckdb_parameter_escaping(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -136,7 +136,7 @@ def test_duckdb_parameter_escaping(duckdb_parameters_session: DuckDBDriver) -> N
     assert len(result.data) == 0
 
     count_result = duckdb_parameters_session.execute("SELECT COUNT(*) as count FROM test_parameters")
-    assert count_result.data[0]["count"] >= 3
+    assert count_result.get_data()[0]["count"] >= 3
 
 
 def test_duckdb_parameter_with_like(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -149,7 +149,7 @@ def test_duckdb_parameter_with_like(duckdb_parameters_session: DuckDBDriver) -> 
 
     numeric_result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name LIKE $1", ("test1%"))
     assert len(numeric_result.data) == 1
-    assert numeric_result.data[0]["name"] == "test1"
+    assert numeric_result.get_data()[0]["name"] == "test1"
 
 
 def test_duckdb_parameter_with_in_clause(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -167,9 +167,9 @@ def test_duckdb_parameter_with_in_clause(duckdb_parameters_session: DuckDBDriver
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 3
-    assert result.data[0]["name"] == "alpha"
-    assert result.data[1]["name"] == "beta"
-    assert result.data[2]["name"] == "test1"
+    assert result.get_data()[0]["name"] == "alpha"
+    assert result.get_data()[1]["name"] == "beta"
+    assert result.get_data()[2]["name"] == "test1"
 
 
 def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -181,7 +181,7 @@ def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDrive
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) >= 1
-    assert all(row["value"] > 150 for row in result.data)
+    assert all(row["value"] > 150 for row in result.get_data())
 
     numeric_sql = SQL("SELECT * FROM test_parameters WHERE value < $1", [150])
     numeric_result = duckdb_parameters_session.execute(numeric_sql)
@@ -189,7 +189,7 @@ def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDrive
     assert isinstance(numeric_result, SQLResult)
     assert numeric_result.data is not None
     assert len(numeric_result.data) >= 1
-    assert all(row["value"] < 150 for row in numeric_result.data)
+    assert all(row["value"] < 150 for row in numeric_result.get_data())
 
 
 def test_duckdb_parameter_data_types(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -221,11 +221,11 @@ def test_duckdb_parameter_data_types(duckdb_parameters_session: DuckDBDriver) ->
     result = duckdb_parameters_session.execute("SELECT * FROM test_types WHERE int_val = ?", (42))
 
     assert len(result.data) == 1
-    assert result.data[0]["text_val"] == "hello"
-    assert result.data[0]["bool_val"] is True
-    assert result.data[0]["list_val"] == [1, 2, 3]
+    assert result.get_data()[0]["text_val"] == "hello"
+    assert result.get_data()[0]["bool_val"] is True
+    assert result.get_data()[0]["list_val"] == [1, 2, 3]
 
-    assert 3.13 < result.data[0]["real_val"] < 3.15
+    assert 3.13 < result.get_data()[0]["real_val"] < 3.15
 
 
 def test_duckdb_parameter_edge_cases(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -238,7 +238,7 @@ def test_duckdb_parameter_edge_cases(duckdb_parameters_session: DuckDBDriver) ->
 
     empty_result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name = ?", (""))
     assert len(empty_result.data) == 1
-    assert empty_result.data[0]["value"] == 999
+    assert empty_result.get_data()[0]["value"] == 999
 
     long_string = "x" * 1000
     duckdb_parameters_session.execute(
@@ -250,7 +250,7 @@ def test_duckdb_parameter_edge_cases(duckdb_parameters_session: DuckDBDriver) ->
         "SELECT * FROM test_parameters WHERE description = ?", (long_string)
     )
     assert len(long_result.data) == 1
-    assert len(long_result.data[0]["description"]) == 1000
+    assert len(long_result.get_data()[0]["description"]) == 1000
 
 
 def test_duckdb_parameter_with_analytics_functions(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -283,7 +283,7 @@ def test_duckdb_parameter_with_analytics_functions(duckdb_parameters_session: Du
 
     assert len(result.data) >= 4
 
-    non_null_diffs = [row for row in result.data if row["diff"] is not None]
+    non_null_diffs = [row for row in result.get_data() if row["diff"] is not None]
     assert len(non_null_diffs) >= 3
 
 
@@ -313,7 +313,7 @@ def test_duckdb_parameter_with_array_functions(duckdb_parameters_session: DuckDB
     )
 
     assert len(result.data) == 2
-    assert all(row["num_count"] >= 3 for row in result.data)
+    assert all(row["num_count"] >= 3 for row in result.get_data())
 
     element_result = duckdb_parameters_session.execute("SELECT name FROM test_arrays WHERE numbers[?] > ?", (1, 5))
     assert len(element_result.data) >= 1
@@ -347,7 +347,7 @@ def test_duckdb_parameter_with_json_functions(duckdb_parameters_session: DuckDBD
             ("test"),
         )
         assert len(result.data) == 2
-        assert all(row["type"] == "test" for row in result.data)
+        assert all(row["type"] == "test" for row in result.get_data())
 
     except Exception:
         result = duckdb_parameters_session.execute(
@@ -384,7 +384,7 @@ def test_duckdb_parameter_with_date_functions(duckdb_parameters_session: DuckDBD
     )
 
     assert len(result.data) == 2
-    assert all(row["month"] >= 6 for row in result.data)
+    assert all(row["month"] >= 6 for row in result.get_data())
 
     timestamp_result = duckdb_parameters_session.execute(
         "SELECT name FROM test_dates WHERE EXTRACT(hour FROM created_timestamp) >= ?", (14)
@@ -409,7 +409,7 @@ def test_duckdb_parameter_with_string_functions(duckdb_parameters_session: DuckD
         ("_suffix", "test"),
     )
     assert len(manipulation_result.data) >= 3
-    for row in manipulation_result.data:
+    for row in manipulation_result.get_data():
         assert row["extended_name"].endswith("_suffix")
 
 
@@ -422,7 +422,7 @@ def test_duckdb_parameter_with_math_functions(duckdb_parameters_session: DuckDBD
     )
 
     assert len(math_result.data) >= 3
-    for row in math_result.data:
+    for row in math_result.get_data():
         expected_multiplied = round(row["value"] * 1.5, 2)
         expected_powered = row["value"] ** 2
         assert row["multiplied"] == expected_multiplied
@@ -459,7 +459,7 @@ def test_duckdb_parameter_with_aggregate_functions(duckdb_parameters_session: Du
     )
 
     assert len(result.data) == 2
-    for row in result.data:
+    for row in result.get_data():
         assert row["count"] >= 2
         assert row["avg_value"] is not None
         assert row["max_value"] >= 10
@@ -488,7 +488,7 @@ def test_duckdb_parameter_performance(duckdb_parameters_session: DuckDBDriver) -
 
     query_time = end_time - start_time
     assert query_time < 1.0, f"Query took too long: {query_time:.2f} seconds"
-    assert result.data[0]["count"] >= 800
+    assert result.get_data()[0]["count"] >= 800
 
 
 # ===== None Parameter Tests =====
@@ -700,7 +700,7 @@ def test_duckdb_none_with_execute_many() -> None:
         assert len(select_result.data) == 4
 
         # Check specific None handling
-        rows = select_result.data
+        rows = select_result.get_data()
         assert rows[0]["name"] == "first" and rows[0]["value"] == 10
         assert rows[1]["name"] is None and rows[1]["value"] == 20
         assert rows[2]["name"] == "third" and rows[2]["value"] is None
@@ -733,7 +733,7 @@ def test_duckdb_none_in_where_clause() -> None:
         assert len(result.data) == 2  # Two rows with NULL category
 
         # Verify the correct rows were found
-        found_ids = {row["id"] for row in result.data}
+        found_ids = {row["id"] for row in result.get_data()}
         assert found_ids == {2, 4}
 
         # Test direct comparison with None parameter (should work with parameters)
@@ -847,7 +847,7 @@ def test_duckdb_none_parameter_edge_cases() -> None:
 
         # Verify all rows were inserted
         all_results = driver.execute("SELECT COUNT(*) as count FROM test_position_none")
-        assert all_results.data[0]["count"] == 5
+        assert all_results.get_data()[0]["count"] == 5
 
 
 def test_duckdb_parameter_count_mismatch_with_none() -> None:

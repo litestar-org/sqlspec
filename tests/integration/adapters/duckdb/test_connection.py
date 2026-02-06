@@ -68,7 +68,7 @@ def test_basic_connection() -> None:
         assert select_result.data is not None
         assert len(select_result.data) == 1
         assert select_result.column_names is not None
-        result = select_result.data[0][select_result.column_names[0]]
+        result = select_result.get_data()[0][select_result.column_names[0]]
         assert result in (1, "1")
 
 
@@ -84,8 +84,8 @@ def test_memory_database_connection() -> None:
 
         select_result = session.execute("SELECT id, name FROM test_memory")
         assert len(select_result.data) == 1
-        assert select_result.data[0]["id"] == 1
-        assert select_result.data[0]["name"] == "test"
+        assert select_result.get_data()[0]["id"] == 1
+        assert select_result.get_data()[0]["name"] == "test"
 
 
 def test_connection_with_performance_settings() -> None:
@@ -95,7 +95,7 @@ def test_connection_with_performance_settings() -> None:
     with config.provide_session() as session:
         result = session.execute("SELECT 42 as test_value")
         assert result.data is not None
-        assert result.data[0]["test_value"] in (42, "42")
+        assert result.get_data()[0]["test_value"] in (42, "42")
 
 
 def test_connection_with_data_processing_settings() -> None:
@@ -113,9 +113,9 @@ def test_connection_with_data_processing_settings() -> None:
         result = session.execute("SELECT id, value FROM test_ordering ORDER BY value")
         assert len(result.data) == 3
 
-        assert result.data[0]["value"] is None
-        assert result.data[1]["value"] == 5
-        assert result.data[2]["value"] == 10
+        assert result.get_data()[0]["value"] is None
+        assert result.get_data()[1]["value"] == 5
+        assert result.get_data()[2]["value"] == 10
 
 
 def test_connection_with_instrumentation() -> None:
@@ -125,7 +125,7 @@ def test_connection_with_instrumentation() -> None:
     with config.provide_session() as session:
         result = session.execute("SELECT ? as test_value", (42))
         assert result.data is not None
-        assert result.data[0]["test_value"] == 42
+        assert result.get_data()[0]["test_value"] == 42
 
 
 def test_connection_with_hook() -> None:
@@ -149,7 +149,7 @@ def test_connection_with_hook() -> None:
 
         result = session.execute("SELECT current_setting('threads')")
         assert result.data is not None
-        setting_value = result.data[0][result.column_names[0]]
+        setting_value = result.get_data()[0][result.column_names[0]]
         assert setting_value == 1 or setting_value == "1"
 
 
@@ -200,8 +200,8 @@ def test_connection_read_only_mode() -> None:
         with readonly_config.provide_session() as session:
             result = session.execute("SELECT id, value FROM test_readonly")
             assert len(result.data) == 1
-            assert result.data[0]["id"] == 1
-            assert result.data[0]["value"] == "test_data"
+            assert result.get_data()[0]["id"] == 1
+            assert result.get_data()[0]["value"] == "test_data"
 
         if hasattr(readonly_config, "connection_instance") and readonly_config.connection_instance:
             readonly_config.connection_instance.close()
@@ -219,7 +219,7 @@ def test_connection_with_logging_settings() -> None:
     with config.provide_session() as session:
         result = session.execute("SELECT 'logging_test' as message")
         assert result.data is not None
-        assert result.data[0]["message"] == "logging_test"
+        assert result.get_data()[0]["message"] == "logging_test"
 
 
 def test_duckdb_disabled_observability_has_zero_lifecycle_counts() -> None:
@@ -267,7 +267,7 @@ def test_connection_with_extension_settings() -> None:
     with config.provide_session() as session:
         result = session.execute("SELECT 'extension_test' as message")
         assert result.data is not None
-        assert result.data[0]["message"] == "extension_test"
+        assert result.get_data()[0]["message"] == "extension_test"
 
 
 def test_multiple_concurrent_connections() -> None:
@@ -285,8 +285,8 @@ def test_multiple_concurrent_connections() -> None:
         result1 = session1.execute("SELECT id FROM session1_table")
         result2 = session2.execute("SELECT id FROM session2_table")
 
-        assert result1.data[0]["id"] == 1
-        assert result2.data[0]["id"] == 2
+        assert result1.get_data()[0]["id"] == 1
+        assert result2.get_data()[0]["id"] == 2
 
         try:
             session1.execute("SELECT id FROM session2_table")
@@ -321,7 +321,7 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
         with config.provide_session() as session:
             result = session.execute("SELECT 1 as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == 1
+            assert result.get_data()[0]["test"] == 1
 
     finally:
         config._close_pool()
@@ -338,7 +338,7 @@ def test_config_memory_database_shared_conversion() -> None:
         with config.provide_session() as session:
             result = session.execute("SELECT 'memory_test' as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == "memory_test"
+            assert result.get_data()[0]["test"] == "memory_test"
 
     finally:
         config._close_pool()
@@ -355,7 +355,7 @@ def test_config_empty_database_conversion() -> None:
         with config.provide_session() as session:
             result = session.execute("SELECT 'empty_test' as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == "empty_test"
+            assert result.get_data()[0]["test"] == "empty_test"
 
     finally:
         config._close_pool()
@@ -372,7 +372,7 @@ def test_config_default_database_shared() -> None:
         with config.provide_session() as session:
             result = session.execute("SELECT 'default_test' as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == "default_test"
+            assert result.get_data()[0]["test"] == "default_test"
 
     finally:
         config._close_pool()
@@ -406,7 +406,7 @@ def test_config_consistency_with_other_adapters(tmp_path: Path) -> None:
             session.execute("INSERT INTO consistency_test VALUES (42)")
             result = session.execute("SELECT id FROM consistency_test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["id"] == 42
+            assert result.get_data()[0]["id"] == 42
 
             session.execute("DROP TABLE consistency_test")
 

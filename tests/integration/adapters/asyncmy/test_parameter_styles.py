@@ -77,8 +77,8 @@ async def test_asyncmy_qmark_to_pyformat_conversion(asyncmy_parameter_session: A
     assert result.rows_affected == 1
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test1"
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["name"] == "test1"
+    assert result.get_data()[0]["value"] == 100
 
 
 async def test_asyncmy_pyformat_no_conversion_needed(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -93,8 +93,8 @@ async def test_asyncmy_pyformat_no_conversion_needed(asyncmy_parameter_session: 
     assert result.rows_affected == 1
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test2"
-    assert result.data[0]["value"] == 200
+    assert result.get_data()[0]["name"] == "test2"
+    assert result.get_data()[0]["value"] == 200
 
 
 async def test_asyncmy_named_to_pyformat_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -110,8 +110,8 @@ async def test_asyncmy_named_to_pyformat_conversion(asyncmy_parameter_session: A
     assert result.rows_affected == 1
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test3"
-    assert result.data[0]["value"] == 300
+    assert result.get_data()[0]["name"] == "test3"
+    assert result.get_data()[0]["value"] == 300
 
 
 async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -124,7 +124,7 @@ async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_sessio
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
     assert result.data is not None
-    assert result.data[0]["name"] == "test2"
+    assert result.get_data()[0]["name"] == "test2"
 
     sql_qmark = SQL("SELECT * FROM test_parameter_conversion WHERE name = ? OR name = ?", "test1", "test3")
     result2 = await driver.execute(sql_qmark)
@@ -132,7 +132,7 @@ async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_sessio
     assert isinstance(result2, SQLResult)
     assert result2.rows_affected == 2
     assert result2.data is not None
-    names = [row["name"] for row in result2.data]
+    names = [row["name"] for row in result2.get_data()]
     assert "test1" in names
     assert "test3" in names
 
@@ -153,8 +153,8 @@ async def test_asyncmy_mixed_parameter_types_conversion(asyncmy_parameter_sessio
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
     assert result.data is not None
-    assert result.data[0]["name"] == "mixed_test"
-    assert result.data[0]["description"] == "Mixed type test"
+    assert result.get_data()[0]["name"] == "mixed_test"
+    assert result.get_data()[0]["description"] == "Mixed type test"
 
 
 async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -175,7 +175,7 @@ async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_sessi
     )
 
     assert verify_result.data is not None
-    assert verify_result.data[0]["count"] == 3
+    assert verify_result.get_data()[0]["count"] == 3
 
 
 async def test_asyncmy_parameter_conversion_edge_cases(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -184,18 +184,18 @@ async def test_asyncmy_parameter_conversion_edge_cases(asyncmy_parameter_session
 
     result = await driver.execute("SELECT COUNT(*) as total FROM test_parameter_conversion")
     assert result.data is not None
-    assert result.data[0]["total"] >= 3
+    assert result.get_data()[0]["total"] >= 3
 
     result2 = await driver.execute("SELECT * FROM test_parameter_conversion WHERE name = %s", ("test1",))
     assert result2.rows_affected == 1
     assert result2.data is not None
-    assert result2.data[0]["name"] == "test1"
+    assert result2.get_data()[0]["name"] == "test1"
 
     result3 = await driver.execute(
         "SELECT COUNT(*) as count FROM test_parameter_conversion WHERE name LIKE %s", ("test%",)
     )
     assert result3.data is not None
-    assert result3.data[0]["count"] >= 3
+    assert result3.get_data()[0]["count"] >= 3
 
 
 async def test_asyncmy_parameter_style_consistency_validation(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -216,8 +216,8 @@ async def test_asyncmy_parameter_style_consistency_validation(asyncmy_parameter_
     assert len(result_qmark.data) == len(result_pyformat.data)
 
     for i in range(len(result_qmark.data)):
-        assert result_qmark.data[i]["name"] == result_pyformat.data[i]["name"]
-        assert result_qmark.data[i]["value"] == result_pyformat.data[i]["value"]
+        assert result_qmark.get_data()[i]["name"] == result_pyformat.get_data()[i]["name"]
+        assert result_qmark.get_data()[i]["value"] == result_pyformat.get_data()[i]["value"]
 
 
 async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -247,8 +247,8 @@ async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_sess
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
     assert result.data is not None
-    assert result.data[0]["name"] == "complex2"
-    assert result.data[0]["value"] == 250
+    assert result.get_data()[0]["name"] == "complex2"
+    assert result.get_data()[0]["value"] == 250
 
 
 async def test_asyncmy_mysql_parameter_style_specifics(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -277,8 +277,8 @@ async def test_asyncmy_mysql_parameter_style_specifics(asyncmy_parameter_session
 
     verify_result = await driver.execute("SELECT name, value FROM test_parameter_conversion WHERE id = ?", (999,))
     assert verify_result.data is not None
-    assert verify_result.data[0]["name"] == "replace_test"
-    assert verify_result.data[0]["value"] == 888
+    assert verify_result.get_data()[0]["name"] == "replace_test"
+    assert verify_result.get_data()[0]["value"] == 888
 
 
 async def test_asyncmy_2phase_parameter_processing(asyncmy_parameter_session: AsyncmyDriver) -> None:
@@ -302,8 +302,8 @@ async def test_asyncmy_2phase_parameter_processing(asyncmy_parameter_session: As
         assert result.rows_affected == 1
         assert result.data is not None
         assert len(result.data) == 1
-        assert result.data[0]["name"] == expected_name
-        assert result.data[0]["value"] == expected_value
+        assert result.get_data()[0]["name"] == expected_name
+        assert result.get_data()[0]["value"] == expected_value
 
     consistent_results = []
     for sql_text, params, _, _ in test_cases:
@@ -343,7 +343,7 @@ async def test_asyncmy_none_parameters_pyformat(asyncmy_parameter_session: Async
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    row = select_result.data[0]
+    row = select_result.get_data()[0]
     assert row["name"] == "test_none"
     assert row["value"] is None
     assert row["description"] == "Test with None value"
@@ -377,7 +377,7 @@ async def test_asyncmy_none_parameters_qmark(asyncmy_parameter_session: AsyncmyD
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
     assert row["name"] == "qmark_test"
     assert row["value"] is None
     assert row["optional_field"] is None
@@ -419,7 +419,7 @@ async def test_asyncmy_none_parameters_named_pyformat(asyncmy_parameter_session:
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
     assert row["title"] == "Named test"
     assert row["status"] is None
     assert row["priority"] == 5
@@ -456,7 +456,7 @@ async def test_asyncmy_all_none_parameters(asyncmy_parameter_session: AsyncmyDri
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
     assert row["col1"] is None
     assert row["col2"] is None
     assert row["col3"] is None
@@ -499,7 +499,7 @@ async def test_asyncmy_none_with_execute_many(asyncmy_parameter_session: Asyncmy
     assert verify_result.data is not None
     assert len(verify_result.data) == 5
 
-    rows = verify_result.data
+    rows = verify_result.get_data()
     assert rows[0]["name"] == "item1" and rows[0]["value"] == 100 and rows[0]["category"] == "A"
     assert rows[1]["name"] == "item2" and rows[1]["value"] is None and rows[1]["category"] == "B"
     assert rows[2]["name"] == "item3" and rows[2]["value"] == 300 and rows[2]["category"] is None
@@ -584,7 +584,7 @@ async def test_asyncmy_none_in_where_clauses(asyncmy_parameter_session: AsyncmyD
     assert result.data is not None
     assert len(result.data) == 2  # item2 and item4
 
-    found_names = {row["name"] for row in result.data}
+    found_names = {row["name"] for row in result.get_data()}
     assert found_names == {"item2", "item4"}
 
     # Test parameterized query with None (should handle NULL comparison properly)
@@ -643,7 +643,7 @@ async def test_asyncmy_none_complex_scenarios(asyncmy_parameter_session: Asyncmy
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
     assert row["name"] == "complex_test"
     assert row["score"] is None
     assert abs(float(row["factor"]) - math.pi) < 0.01  # Decimal comparison
@@ -693,4 +693,4 @@ async def test_asyncmy_none_edge_cases(asyncmy_parameter_session: AsyncmyDriver)
     # Verify all rows were inserted
     count_result = await driver.execute("SELECT COUNT(*) as total FROM test_edge_cases")
     assert count_result.data is not None
-    assert count_result.data[0]["total"] == 7  # 2 initial + 5 test cases
+    assert count_result.get_data()[0]["total"] == 7  # 2 initial + 5 test cases

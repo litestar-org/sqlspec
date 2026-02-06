@@ -173,13 +173,15 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         if is_select_like:
             fetched_data = cursor.fetchall()
-            dict_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            row_format = "dict" if data and isinstance(data[0], dict) else "tuple"
             return self.create_execution_result(
                 cursor,
-                selected_data=dict_data,
+                selected_data=data,
                 column_names=column_names,
-                data_row_count=len(dict_data),
+                data_row_count=len(data),
                 is_select_result=True,
+                row_format=row_format,
             )
 
         row_count = resolve_rowcount(cursor)

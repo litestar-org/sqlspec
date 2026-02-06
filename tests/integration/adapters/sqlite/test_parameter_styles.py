@@ -29,8 +29,8 @@ def test_qmark_parameter_style(sqlite_session: SqliteDriver) -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "qmark_test"
-    assert select_result.data[0]["value"] == 42
+    assert select_result.get_data()[0]["name"] == "qmark_test"
+    assert select_result.get_data()[0]["value"] == 42
 
 
 def test_named_colon_parameter_style(sqlite_session: SqliteDriver) -> None:
@@ -51,8 +51,8 @@ def test_named_colon_parameter_style(sqlite_session: SqliteDriver) -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "named_test"
-    assert select_result.data[0]["value"] == 123
+    assert select_result.get_data()[0]["name"] == "named_test"
+    assert select_result.get_data()[0]["value"] == 123
 
 
 def test_mixed_parameter_scenarios(sqlite_session: SqliteDriver) -> None:
@@ -70,8 +70,8 @@ def test_mixed_parameter_scenarios(sqlite_session: SqliteDriver) -> None:
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    assert verify_result.data[0]["name"] == "sql_object_test"
-    assert verify_result.data[0]["value"] == 999
+    assert verify_result.get_data()[0]["name"] == "sql_object_test"
+    assert verify_result.get_data()[0]["value"] == 999
 
 
 def test_parameter_type_coercion(sqlite_session: SqliteDriver) -> None:
@@ -98,10 +98,10 @@ def test_parameter_type_coercion(sqlite_session: SqliteDriver) -> None:
     assert select_result.data is not None
     assert len(select_result.data) == 5
 
-    boolean_row = next(row for row in select_result.data if row["name"] == "boolean_value")
+    boolean_row = next(row for row in select_result.get_data() if row["name"] == "boolean_value")
     assert boolean_row["value"] == 1
 
-    none_row = next(row for row in select_result.data if row["name"] == "none_value")
+    none_row = next(row for row in select_result.get_data() if row["name"] == "none_value")
     assert none_row["value"] is None
 
 
@@ -130,7 +130,7 @@ def test_execute_many_parameter_styles(sqlite_session: SqliteDriver) -> None:
     count_result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["count"] == 6
+    assert count_result.get_data()[0]["count"] == 6
 
 
 def test_parameter_edge_cases(sqlite_session: SqliteDriver) -> None:
@@ -142,7 +142,7 @@ def test_parameter_edge_cases(sqlite_session: SqliteDriver) -> None:
     result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["count"] == 0
+    assert result.get_data()[0]["count"] == 0
 
     result = sqlite_session.execute(
         "INSERT INTO test_table (name, value) VALUES (:param, :param)", {"param": "duplicate_param_test"}
@@ -174,7 +174,7 @@ def test_parameter_escaping_and_sql_injection_protection(sqlite_session: SqliteD
     count_result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["count"] == 1
+    assert count_result.get_data()[0]["count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -380,7 +380,7 @@ def test_sqlite_none_with_execute_many() -> None:
         assert len(select_result.data) == 4
 
         # Check specific None handling
-        rows = select_result.data
+        rows = select_result.get_data()
         assert rows[0]["name"] == "first" and rows[0]["value"] == 10
         assert rows[1]["name"] is None and rows[1]["value"] == 20
         assert rows[2]["name"] == "third" and rows[2]["value"] is None
@@ -413,5 +413,5 @@ def test_sqlite_none_in_where_clause() -> None:
         assert len(result.data) == 2  # Two rows with NULL category
 
         # Verify the correct rows were found
-        found_ids = {row["id"] for row in result.data}
+        found_ids = {row["id"] for row in result.get_data()}
         assert found_ids == {2, 4}

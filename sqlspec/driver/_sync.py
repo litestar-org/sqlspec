@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core import SQL, ProcessedState, StackResult, create_arrow_result
+from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
@@ -123,73 +123,109 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             The result of the SQL execution
 
         """
-        runtime = self.observability
-        compiled_sql, execution_parameters = statement.compile()
-        _ = cast("ProcessedState", statement.get_processed_state())
-        operation = statement.operation_type
-        query_context = {
-            "sql": compiled_sql,
-            "parameters": execution_parameters,
-            "driver": type(self).__name__,
-            "operation": operation,
-            "is_many": statement.is_many,
-            "is_script": statement.is_script,
-        }
-        runtime.emit_query_start(**query_context)
-        span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
-        started = perf_counter()
-
-        result: SQLResult | None = None
-        exc_handler = self.handle_database_exceptions()
         try:
-            with exc_handler, self.with_cursor(connection) as cursor:
-                special_result = self.dispatch_special_handling(cursor, statement)
-                if special_result is not None:
-                    result = special_result
-                elif statement.is_script:
-                    execution_result = self.dispatch_execute_script(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-                elif statement.is_many:
-                    execution_result = self.dispatch_execute_many(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-                else:
-                    execution_result = self.dispatch_execute(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-        except Exception as exc:  # pragma: no cover - instrumentation path
+            runtime = self.observability
+            # Pre-compile the statement so dispatch methods can reuse the processed state
+            # via the fast path in _get_compiled_statement(). This ensures compile()
+            # is called exactly once per statement execution.
+            compiled_sql, execution_parameters = statement.compile()
+
+            # FAST PATH: Skip all instrumentation if runtime is idle
+            if runtime.is_idle:
+                exc_handler = self.handle_database_exceptions()
+                try:
+                    with exc_handler, self.with_cursor(connection) as cursor:
+                        # Logic mirrors the instrumentation path below but without telemetry
+                        if statement.is_script:
+                            execution_result = self.dispatch_execute_script(cursor, statement)
+                            return self.build_statement_result(statement, execution_result)
+                        if statement.is_many:
+                            execution_result = self.dispatch_execute_many(cursor, statement)
+                            return self.build_statement_result(statement, execution_result)
+
+                        # check special handling first
+                        special_result = self.dispatch_special_handling(cursor, statement)
+                        if special_result is not None:
+                            return special_result
+
+                        execution_result = self.dispatch_execute(cursor, statement)
+                        return self.build_statement_result(statement, execution_result)
+                except Exception as exc:
+                    if exc_handler.pending_exception is not None:
+                        raise exc_handler.pending_exception from exc
+                    raise
+                finally:
+                    if exc_handler.pending_exception is not None:
+                        raise exc_handler.pending_exception from None
+
+            operation = statement.operation_type
+            query_context = {
+                "sql": compiled_sql,
+                "parameters": execution_parameters,
+                "driver": type(self).__name__,
+                "operation": operation,
+                "is_many": statement.is_many,
+                "is_script": statement.is_script,
+            }
+            runtime.emit_query_start(**query_context)
+            span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
+            started = perf_counter()
+
+            result: SQLResult | None = None
+            exc_handler = self.handle_database_exceptions()
+            try:
+                with exc_handler, self.with_cursor(connection) as cursor:
+                    special_result = self.dispatch_special_handling(cursor, statement)
+                    if special_result is not None:
+                        result = special_result
+                    elif statement.is_script:
+                        execution_result = self.dispatch_execute_script(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    elif statement.is_many:
+                        execution_result = self.dispatch_execute_many(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    else:
+                        execution_result = self.dispatch_execute(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+            except Exception as exc:  # pragma: no cover - instrumentation path
+                if exc_handler.pending_exception is not None:
+                    mapped_exc = exc_handler.pending_exception
+                    runtime.span_manager.end_span(span, error=mapped_exc)
+                    runtime.emit_error(mapped_exc, **query_context)
+                    raise mapped_exc from exc
+                runtime.span_manager.end_span(span, error=exc)
+                runtime.emit_error(exc, **query_context)
+                raise
+
             if exc_handler.pending_exception is not None:
                 mapped_exc = exc_handler.pending_exception
                 runtime.span_manager.end_span(span, error=mapped_exc)
                 runtime.emit_error(mapped_exc, **query_context)
-                raise mapped_exc from exc
-            runtime.span_manager.end_span(span, error=exc)
-            runtime.emit_error(exc, **query_context)
-            raise
+                raise mapped_exc from None
 
-        if exc_handler.pending_exception is not None:
-            mapped_exc = exc_handler.pending_exception
-            runtime.span_manager.end_span(span, error=mapped_exc)
-            runtime.emit_error(mapped_exc, **query_context)
-            raise mapped_exc from None
+            assert result is not None  # Guaranteed: no exception means result was assigned
 
-        assert result is not None  # Guaranteed: no exception means result was assigned
-
-        runtime.span_manager.end_span(span)
-        duration = perf_counter() - started
-        runtime.emit_query_complete(**{**query_context, "rows_affected": result.rows_affected})
-        runtime.emit_statement_event(
-            sql=compiled_sql,
-            parameters=execution_parameters,
-            driver=type(self).__name__,
-            operation=operation,
-            execution_mode=self.statement_config.execution_mode,
-            is_many=statement.is_many,
-            is_script=statement.is_script,
-            rows_affected=result.rows_affected,
-            duration_s=duration,
-            storage_backend=(result.metadata or {}).get("storage_backend"),
-            started_at=started,
-        )
-        return result
+            runtime.span_manager.end_span(span)
+            duration = perf_counter() - started
+            runtime.emit_query_complete(**{**query_context, "rows_affected": result.rows_affected})
+            runtime.emit_statement_event(
+                sql=compiled_sql,
+                parameters=execution_parameters,
+                driver=type(self).__name__,
+                operation=operation,
+                execution_mode=self.statement_config.execution_mode,
+                is_many=statement.is_many,
+                is_script=statement.is_script,
+                rows_affected=result.rows_affected,
+                duration_s=duration,
+                storage_backend=(result.metadata or {}).get("storage_backend"),
+                started_at=started,
+            )
+            return result
+        finally:
+            self._release_pooled_statement(statement)
+        msg = "Execution failed to return a result."
+        raise RuntimeError(msg)
 
     @abstractmethod
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -268,6 +304,33 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
+    def _qc_execute(self, statement: "SQL") -> "SQLResult":
+        """Execute pre-compiled query via fast path.
+
+        The statement is already compiled by _qc_prepare, so dispatch_execute
+        will hit the fast path in _get_compiled_statement (is_processed check).
+        """
+        exc_handler = self.handle_database_exceptions()
+        try:
+            try:
+                with exc_handler, self.with_cursor(self.connection) as cursor:
+                    special_result = self.dispatch_special_handling(cursor, statement)
+                    if special_result is not None:
+                        return special_result
+                    execution_result = self.dispatch_execute(cursor, statement)
+                    return self.build_statement_result(statement, execution_result)
+            except Exception as exc:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from exc
+                raise
+            finally:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+        finally:
+            self._release_pooled_statement(statement)
+        msg = "unreachable"
+        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
+
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT - Required Abstract Methods
     # ─────────────────────────────────────────────────────────────────────────────
@@ -316,6 +379,17 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
+        if (
+            self._qc_enabled
+            and (statement_config is None or statement_config is self.statement_config)
+            and isinstance(statement, str)
+            and len(parameters) == 1
+            and isinstance(parameters[0], (tuple, list))
+            and not kwargs
+        ):
+            fast_result = self._qc_lookup(statement, parameters[0])
+            if fast_result is not None:
+                return cast("SQLResult", fast_result)
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
@@ -1109,7 +1183,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
 
         arrow_data = convert_dict_to_arrow_with_schema(
-            result.data, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
+            result.get_data(), return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
         )
 
         return create_arrow_result(

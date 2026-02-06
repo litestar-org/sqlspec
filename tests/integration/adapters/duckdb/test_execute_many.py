@@ -49,7 +49,7 @@ def test_duckdb_execute_many_basic(duckdb_batch_session: DuckDBDriver) -> None:
     assert result.rows_affected == 5
 
     count_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert count_result.data[0]["count"] == 5
+    assert count_result.get_data()[0]["count"] == 5
 
 
 def test_duckdb_execute_many_update(duckdb_batch_session: DuckDBDriver) -> None:
@@ -69,7 +69,7 @@ def test_duckdb_execute_many_update(duckdb_batch_session: DuckDBDriver) -> None:
 
     check_result = duckdb_batch_session.execute("SELECT name, value FROM test_batch ORDER BY name")
     assert len(check_result.data) == 3
-    assert all(row["value"] in (100, 200, 300) for row in check_result.data)
+    assert all(row["value"] in (100, 200, 300) for row in check_result.get_data())
 
 
 def test_duckdb_execute_many_empty(duckdb_batch_session: DuckDBDriver) -> None:
@@ -82,7 +82,7 @@ def test_duckdb_execute_many_empty(duckdb_batch_session: DuckDBDriver) -> None:
     assert result.rows_affected == 0
 
     count_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert count_result.data[0]["count"] == 0
+    assert count_result.get_data()[0]["count"] == 0
 
 
 def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDBDriver) -> None:
@@ -103,11 +103,11 @@ def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDBDriver) -> 
 
     null_result = duckdb_batch_session.execute("SELECT * FROM test_batch WHERE category IS NULL")
     assert len(null_result.data) == 1
-    assert null_result.data[0]["name"] == "Another Item"
+    assert null_result.get_data()[0]["name"] == "Another Item"
 
     float_result = duckdb_batch_session.execute("SELECT * FROM test_batch WHERE name = ?", ("Float Item",))
     assert len(float_result.data) == 1
-    assert float_result.data[0]["value"] == 78
+    assert float_result.get_data()[0]["value"] == 78
 
 
 def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDBDriver) -> None:
@@ -132,10 +132,10 @@ def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDBDriver) -> None:
     assert result.rows_affected == 3
 
     remaining_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert remaining_result.data[0]["count"] == 2
+    assert remaining_result.get_data()[0]["count"] == 2
 
     names_result = duckdb_batch_session.execute("SELECT name FROM test_batch ORDER BY name")
-    remaining_names = [row["name"] for row in names_result.data]
+    remaining_names = [row["name"] for row in names_result.get_data()]
     assert remaining_names == ["Delete 3", "Keep 1"]
 
 
@@ -152,15 +152,15 @@ def test_duckdb_execute_many_large_batch(duckdb_batch_session: DuckDBDriver) -> 
     assert result.rows_affected == 1000
 
     count_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert count_result.data[0]["count"] == 1000
+    assert count_result.get_data()[0]["count"] == 1000
 
     sample_result = duckdb_batch_session.execute(
         "SELECT * FROM test_batch WHERE name IN (?, ?, ?) ORDER BY value", ("Item 100", "Item 500", "Item 999")
     )
     assert len(sample_result.data) == 3
-    assert sample_result.data[0]["value"] == 1000
-    assert sample_result.data[1]["value"] == 5000
-    assert sample_result.data[2]["value"] == 9990
+    assert sample_result.get_data()[0]["value"] == 1000
+    assert sample_result.get_data()[1]["value"] == 5000
+    assert sample_result.get_data()[2]["value"] == 9990
 
 
 def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver) -> None:
@@ -176,7 +176,7 @@ def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver)
     assert result.rows_affected == 3
 
     check_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch WHERE category = ?", ("SOB"))
-    assert check_result.data[0]["count"] == 3
+    assert check_result.get_data()[0]["count"] == 3
 
 
 def test_duckdb_execute_many_with_analytics(duckdb_batch_session: DuckDBDriver) -> None:
@@ -203,8 +203,8 @@ def test_duckdb_execute_many_with_analytics(duckdb_batch_session: DuckDBDriver) 
 
     assert len(result.data) == 2
 
-    anal0_data = next(row for row in result.data if row["category"] == "ANAL0")
-    anal1_data = next(row for row in result.data if row["category"] == "ANAL1")
+    anal0_data = next(row for row in result.get_data() if row["category"] == "ANAL0")
+    anal1_data = next(row for row in result.get_data() if row["category"] == "ANAL1")
 
     assert anal0_data["count"] == 5
     assert anal1_data["count"] == 5
@@ -249,7 +249,7 @@ def test_duckdb_execute_many_with_arrays(duckdb_batch_session: DuckDBDriver) -> 
         )
 
         check_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-        assert check_result.data[0]["count"] == 3
+        assert check_result.get_data()[0]["count"] == 3
 
 
 def test_duckdb_execute_many_with_time_series(duckdb_batch_session: DuckDBDriver) -> None:
@@ -290,5 +290,5 @@ def test_duckdb_execute_many_with_time_series(duckdb_batch_session: DuckDBDriver
 
     assert len(analytics_result.data) == 3
 
-    for row in analytics_result.data:
+    for row in analytics_result.get_data():
         assert row["data_points"] == 8

@@ -51,7 +51,7 @@ async def test_provide_session_context_manager(psqlpy_config: "PsqlpyConfig") ->
         assert result.data is not None
         assert len(result.data) == 1
         assert result.column_names is not None
-        val = result.data[0][result.column_names[0]]
+        val = result.get_data()[0][result.column_names[0]]
         assert val == "test"
 
 
@@ -64,7 +64,7 @@ async def test_connection_error_handling(psqlpy_config: "PsqlpyConfig") -> None:
         result = await driver.execute("SELECT 'still_working' as status")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["status"] == "still_working"
+        assert result.get_data()[0]["status"] == "still_working"
 
 
 async def test_connection_with_core_round_3(psqlpy_config: "PsqlpyConfig") -> None:
@@ -75,7 +75,7 @@ async def test_connection_with_core_round_3(psqlpy_config: "PsqlpyConfig") -> No
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
-        assert result.data[0]["test_value"] == "core_test"
+        assert result.get_data()[0]["test_value"] == "core_test"
 
 
 async def test_multiple_connections_sequential(psqlpy_config: "PsqlpyConfig") -> None:
@@ -84,13 +84,13 @@ async def test_multiple_connections_sequential(psqlpy_config: "PsqlpyConfig") ->
         result1 = await driver1.execute("SELECT 'connection1' as conn_id")
         assert isinstance(result1, SQLResult)
         assert result1.data is not None
-        assert result1.data[0]["conn_id"] == "connection1"
+        assert result1.get_data()[0]["conn_id"] == "connection1"
 
     async with psqlpy_config.provide_session() as driver2:
         result2 = await driver2.execute("SELECT 'connection2' as conn_id")
         assert isinstance(result2, SQLResult)
         assert result2.data is not None
-        assert result2.data[0]["conn_id"] == "connection2"
+        assert result2.get_data()[0]["conn_id"] == "connection2"
 
 
 async def test_connection_concurrent_access(psqlpy_config: "PsqlpyConfig") -> None:
@@ -101,7 +101,7 @@ async def test_connection_concurrent_access(psqlpy_config: "PsqlpyConfig") -> No
             result = await driver.execute("SELECT $1::text as task_id", (f"task_{task_id}",))
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            return cast(str, result.data[0]["task_id"])
+            return cast(str, result.get_data()[0]["task_id"])
 
     tasks = [query_task(i) for i in range(3)]
     results = await asyncio.gather(*tasks)
@@ -131,8 +131,8 @@ async def test_insert_returning_param_styles(
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test_name"
-    assert result.data[0]["id"] is not None
+    assert result.get_data()[0]["name"] == "test_name"
+    assert result.get_data()[0]["id"] is not None
 
 
 @pytest.mark.parametrize(
@@ -159,7 +159,7 @@ async def test_select_param_styles(psqlpy_session: "PsqlpyDriver", parameters: A
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["name"] == "test_name"
 
 
 async def test_insert_update_delete(psqlpy_session: "PsqlpyDriver") -> None:
@@ -176,7 +176,7 @@ async def test_insert_update_delete(psqlpy_session: "PsqlpyDriver") -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "initial_name"
+    assert select_result.get_data()[0]["name"] == "initial_name"
 
     update_sql = "UPDATE test_table_psqlpy SET name = ? WHERE name = ?"
     update_result = await psqlpy_session.execute(update_sql, ("updated_name", "initial_name"))
@@ -187,7 +187,7 @@ async def test_insert_update_delete(psqlpy_session: "PsqlpyDriver") -> None:
     assert isinstance(updated_result, SQLResult)
     assert updated_result.data is not None
     assert len(updated_result.data) == 1
-    assert updated_result.data[0]["name"] == "updated_name"
+    assert updated_result.get_data()[0]["name"] == "updated_name"
 
     old_result = await psqlpy_session.execute(select_sql, ("initial_name",))
     assert isinstance(old_result, SQLResult)
@@ -218,8 +218,8 @@ async def test_select_methods(psqlpy_session: "PsqlpyDriver") -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
-    assert select_result.data[0]["name"] == "name1"
-    assert select_result.data[1]["name"] == "name2"
+    assert select_result.get_data()[0]["name"] == "name1"
+    assert select_result.get_data()[1]["name"] == "name2"
 
     single_result = await psqlpy_session.execute("SELECT name FROM test_table_psqlpy WHERE name = ?", ("name1",))
     assert isinstance(single_result, SQLResult)
@@ -248,7 +248,7 @@ async def test_select_methods(psqlpy_session: "PsqlpyDriver") -> None:
     assert value_result.data is not None
     assert len(value_result.data) == 1
     assert value_result.column_names is not None
-    value = value_result.data[0][value_result.column_names[0]]
+    value = value_result.get_data()[0][value_result.column_names[0]]
     assert isinstance(value, int)
 
 
@@ -318,7 +318,7 @@ async def test_psqlpy_statement_stack_sequential(psqlpy_session: "PsqlpyDriver")
         "SELECT COUNT(*) AS total FROM test_table_psqlpy WHERE name LIKE ?", ("psqlpy-stack-%",)
     )
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 @requires_interpreted
@@ -341,7 +341,7 @@ async def test_psqlpy_statement_stack_continue_on_error(psqlpy_session: "PsqlpyD
 
     verify = await psqlpy_session.execute("SELECT COUNT(*) AS total FROM test_table_psqlpy")
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 async def test_scalar_parameter_handling(psqlpy_session: "PsqlpyDriver") -> None:
@@ -355,14 +355,14 @@ async def test_scalar_parameter_handling(psqlpy_session: "PsqlpyDriver") -> None
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "single_param"
+    assert select_result.get_data()[0]["name"] == "single_param"
 
     value_result = await psqlpy_session.execute("SELECT id FROM test_table_psqlpy WHERE name = ?", "single_param")
     assert isinstance(value_result, SQLResult)
     assert value_result.data is not None
     assert len(value_result.data) == 1
     assert value_result.column_names is not None
-    value = value_result.data[0][value_result.column_names[0]]
+    value = value_result.get_data()[0][value_result.column_names[0]]
     assert isinstance(value, int)
 
     missing_result = await psqlpy_session.execute(
@@ -386,7 +386,7 @@ async def test_question_mark_in_edge_cases(psqlpy_session: "PsqlpyDriver") -> No
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "edge_case_test"
+    assert result.get_data()[0]["name"] == "edge_case_test"
 
     result = await psqlpy_session.execute(
         "SELECT * FROM test_table_psqlpy WHERE name = ? -- Does this work with a ? in a comment?", "edge_case_test"
@@ -394,7 +394,7 @@ async def test_question_mark_in_edge_cases(psqlpy_session: "PsqlpyDriver") -> No
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "edge_case_test"
+    assert result.get_data()[0]["name"] == "edge_case_test"
 
     result = await psqlpy_session.execute(
         "SELECT * FROM test_table_psqlpy WHERE name = ? /* Does this work with a ? in a block comment? */",
@@ -403,7 +403,7 @@ async def test_question_mark_in_edge_cases(psqlpy_session: "PsqlpyDriver") -> No
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "edge_case_test"
+    assert result.get_data()[0]["name"] == "edge_case_test"
 
     result = await psqlpy_session.execute(
         "SELECT * FROM test_table_psqlpy WHERE name = ? AND '?' = '?' -- Another ? here", "edge_case_test"
@@ -411,7 +411,7 @@ async def test_question_mark_in_edge_cases(psqlpy_session: "PsqlpyDriver") -> No
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "edge_case_test"
+    assert result.get_data()[0]["name"] == "edge_case_test"
 
     result = await psqlpy_session.execute(
         """
@@ -426,7 +426,7 @@ async def test_question_mark_in_edge_cases(psqlpy_session: "PsqlpyDriver") -> No
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "edge_case_test"
+    assert result.get_data()[0]["name"] == "edge_case_test"
 
 
 async def test_regex_parameter_binding_complex_case(psqlpy_session: "PsqlpyDriver") -> None:
@@ -459,7 +459,7 @@ async def test_regex_parameter_binding_complex_case(psqlpy_session: "PsqlpyDrive
     assert len(select_result.data) >= 0
 
     if select_result.data:
-        names = {row["name"] for row in select_result.data}
+        names = {row["name"] for row in select_result.get_data()}
         assert len(names) >= 1
 
     subquery_result = await psqlpy_session.execute(
@@ -474,7 +474,7 @@ async def test_regex_parameter_binding_complex_case(psqlpy_session: "PsqlpyDrive
     assert isinstance(subquery_result, SQLResult)
     assert subquery_result.data is not None
     assert len(subquery_result.data) == 1
-    assert subquery_result.data[0]["name"] == "complex1"
+    assert subquery_result.get_data()[0]["name"] == "complex1"
 
 
 async def test_execute_many_insert(psqlpy_session: "PsqlpyDriver") -> None:
@@ -489,7 +489,7 @@ async def test_execute_many_insert(psqlpy_session: "PsqlpyDriver") -> None:
     select_result = await psqlpy_session.execute("SELECT COUNT(*) as count FROM test_table_psqlpy")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(parameters_list)
+    assert select_result.get_data()[0]["count"] == len(parameters_list)
 
 
 async def test_update_operation(psqlpy_session: "PsqlpyDriver") -> None:
@@ -508,7 +508,7 @@ async def test_update_operation(psqlpy_session: "PsqlpyDriver") -> None:
     select_result = await psqlpy_session.execute("SELECT name FROM test_table_psqlpy WHERE id = ?", (1,))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["name"] == "updated_name"
+    assert select_result.get_data()[0]["name"] == "updated_name"
 
 
 async def test_delete_operation(psqlpy_session: "PsqlpyDriver") -> None:
@@ -525,7 +525,7 @@ async def test_delete_operation(psqlpy_session: "PsqlpyDriver") -> None:
     select_result = await psqlpy_session.execute("SELECT COUNT(*) as count FROM test_table_psqlpy")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 0
+    assert select_result.get_data()[0]["count"] == 0
 
 
 async def test_core_round_3_integration(psqlpy_session: "PsqlpyDriver") -> None:
@@ -537,8 +537,8 @@ async def test_core_round_3_integration(psqlpy_session: "PsqlpyDriver") -> None:
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["test_value"] == "core_test"
-    assert result.data[0]["test_number"] == 42
+    assert result.get_data()[0]["test_value"] == "core_test"
+    assert result.get_data()[0]["test_number"] == 42
 
 
 async def test_postgresql_specific_features(psqlpy_session: "PsqlpyDriver") -> None:
@@ -550,8 +550,8 @@ async def test_postgresql_specific_features(psqlpy_session: "PsqlpyDriver") -> N
     assert isinstance(insert_result, SQLResult)
     assert insert_result.data is not None
     assert len(insert_result.data) == 1
-    assert insert_result.data[0]["name"] == "returning_test"
-    assert insert_result.data[0]["id"] is not None
+    assert insert_result.get_data()[0]["name"] == "returning_test"
+    assert insert_result.get_data()[0]["id"] is not None
 
     type_result = await psqlpy_session.execute(
         "SELECT $1::json as json_col, $2::uuid as uuid_col", ({"key": "value"}, "550e8400-e29b-41d4-a716-446655440000")
@@ -568,7 +568,7 @@ async def test_postgresql_specific_features(psqlpy_session: "PsqlpyDriver") -> N
     pg_result = await psqlpy_session.execute("SELECT version() as pg_version")
     assert isinstance(pg_result, SQLResult)
     assert pg_result.data is not None
-    assert "PostgreSQL" in pg_result.data[0]["pg_version"]
+    assert "PostgreSQL" in pg_result.get_data()[0]["pg_version"]
 
 
 async def test_psqlpy_for_update_locking(psqlpy_session: "PsqlpyDriver") -> None:

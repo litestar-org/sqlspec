@@ -25,7 +25,9 @@ from sqlglot import expressions as exp
 from sqlspec.core import (
     SQL,
     CompiledSQL,
+    OperationProfile,
     OperationType,
+    ParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
     ProcessedState,
@@ -35,6 +37,9 @@ from sqlspec.core import (
     get_pipeline_metrics,
     reset_pipeline_registry,
 )
+from sqlspec.core.filters import LimitOffsetFilter
+from sqlspec.core.hashing import hash_filters
+from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.typing import Empty
 from tests.conftest import requires_interpreted
 
@@ -164,6 +169,122 @@ def test_processed_state_hash_equality() -> None:
     assert hash(state1) == hash(state2)
 
     assert hash(state1) != hash(state3)
+
+
+def test_processed_state_reset_clears_state() -> None:
+    """ProcessedState.reset() should clear mutable data for reuse."""
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        parsed_expression=exp.select("*").from_("users"),
+        operation_type="SELECT",
+        input_named_parameters=("id",),
+        applied_wrap_types=True,
+        filter_hash=123,
+        parameter_fingerprint="fingerprint",
+        parameter_casts={0: "int"},
+        validation_errors=["err"],
+        parameter_profile=ParameterProfile.empty(),
+        operation_profile=OperationProfile.empty(),
+        is_many=True,
+    )
+
+    casts_ref = state.parameter_casts
+    errors_ref = state.validation_errors
+
+    state.reset()
+
+    assert state.compiled_sql == ""
+    assert state.execution_parameters == []
+    assert state.parsed_expression is None
+    assert state.operation_type == "COMMAND"
+    assert state.input_named_parameters == ()
+    assert state.applied_wrap_types is False
+    assert state.filter_hash == 0
+    assert state.parameter_fingerprint is None
+    assert state.parameter_casts is casts_ref
+    assert state.parameter_casts == {}
+    assert state.validation_errors is errors_ref
+    assert state.validation_errors == []
+    assert state.parameter_profile.is_empty()
+    assert state.operation_profile.returns_rows is False
+    assert state.operation_profile.modifies_rows is False
+
+
+def test_processed_state_pool_resets_on_release() -> None:
+    """ProcessedState pool should reset state before reuse."""
+    from sqlspec.core._pool import get_processed_state_pool
+
+    pool = get_processed_state_pool()
+    state = pool.acquire()
+    state.compiled_sql = "SELECT 1"
+    state.execution_parameters = [1]
+    state.operation_type = "SELECT"
+    state.parameter_casts[0] = "v"
+
+    pool.release(state)
+
+    reused = pool.acquire()
+
+    assert reused.compiled_sql == ""
+    assert reused.execution_parameters == []
+    assert reused.operation_type == "COMMAND"
+    assert reused.parameter_casts == {}
+    assert state.is_many is False
+
+
+def test_sql_reset_clears_state() -> None:
+    """SQL.reset() should clear mutable state and drop references."""
+    config = StatementConfig(dialect="sqlite")
+    expression = exp.select("*").from_("users")
+    stmt = SQL(expression, LimitOffsetFilter(1, 0), statement_config=config, is_many=True, is_script=True, user_id=1)
+
+    stmt._compiled_from_cache = True
+    stmt._hash = 123
+    stmt._sql_param_counters["user_id"] = 1
+    stmt._processed_state = ProcessedState("SELECT 1", [1], operation_type="SELECT")
+
+    filters_ref = stmt._filters
+    named_ref = stmt._named_parameters
+    positional_ref = stmt._positional_parameters
+    counters_ref = stmt._sql_param_counters
+
+    stmt.reset()
+
+    assert stmt._compiled_from_cache is False
+    assert stmt.is_processed is False
+    assert stmt._hash is None
+    assert stmt._filters is filters_ref
+    assert stmt._filters == []
+    assert stmt._named_parameters is named_ref
+    assert stmt._named_parameters == {}
+    assert stmt._positional_parameters is positional_ref
+    assert stmt._positional_parameters == []
+    assert stmt._sql_param_counters is counters_ref
+    assert stmt._sql_param_counters == {}
+    assert stmt._original_parameters == ()
+    assert stmt._raw_sql == ""
+    assert stmt._raw_expression is None
+    assert stmt._is_many is False
+    assert stmt._is_script is False
+    assert stmt._statement_config is get_default_config()
+    assert stmt._dialect is None
+
+
+def test_sql_pooled_flag_defaults_false() -> None:
+    """SQL should default to non-pooled state."""
+    stmt = SQL("SELECT 1")
+
+    assert stmt._pooled is False
+
+
+def test_sql_copy_uses_pool_for_parameter_only_change() -> None:
+    """Parameter-only copy should use pooled SQL object."""
+    stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
+
+    copied = stmt.copy(parameters=(2,))
+
+    assert copied._pooled is True
 
 
 def test_sql_initialization_with_string() -> None:
@@ -612,6 +733,171 @@ def test_sql_copy_creates_new_instance() -> None:
     assert copy_stmt._positional_parameters != original._positional_parameters
 
     assert copy_stmt._raw_sql == original._raw_sql
+
+
+def test_sql_copy_preserves_processed_state() -> None:
+    """Parameter-only copies should preserve processed state when present."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=[2])
+
+    assert copy_stmt._processed_state is state
+
+
+def test_sql_copy_rebinds_parameters_on_compile() -> None:
+    """Cached state should rebind execution parameters for copied SQL."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+        parameter_profile=ParameterProfile.empty(),
+        parameter_fingerprint=structural_fingerprint([1], is_many=False),
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=[2])
+
+    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+        sql, params = copy_stmt.compile()
+
+    assert sql == "SELECT * FROM users WHERE id = ?"
+    assert params == [2]
+    mock_compile.assert_not_called()
+
+
+@requires_interpreted
+def test_sql_copy_recompiles_on_structure_change() -> None:
+    """Cached state should be discarded when parameter structure changes."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+        parameter_profile=ParameterProfile.empty(),
+        parameter_fingerprint=structural_fingerprint([1], is_many=False),
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=["x"])
+
+    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+        mock_compile.return_value = CompiledSQL(
+            compiled_sql="SELECT * FROM users WHERE id = ?",
+            execution_parameters=["x"],
+            operation_type="SELECT",
+            expression=exp.select("*").from_("users"),
+        )
+        sql, params = copy_stmt.compile()
+
+    assert sql == "SELECT * FROM users WHERE id = ?"
+    assert params == ["x"]
+    mock_compile.assert_called_once()
+
+
+@requires_interpreted
+def test_sql_copy_recompiles_on_filter_change() -> None:
+    """Cached state should be discarded when filters change."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    original._filters.append(LimitOffsetFilter(10, 0))
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+        parameter_profile=ParameterProfile.empty(),
+        parameter_fingerprint=structural_fingerprint([1], is_many=False),
+        filter_hash=hash_filters(original._filters),
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=[2])
+    copy_stmt._filters = []
+
+    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+        mock_compile.return_value = CompiledSQL(
+            compiled_sql="SELECT * FROM users WHERE id = ?",
+            execution_parameters=[2],
+            operation_type="SELECT",
+            expression=exp.select("*").from_("users"),
+        )
+        sql, params = copy_stmt.compile()
+
+    assert sql == "SELECT * FROM users WHERE id = ?"
+    assert params == [2]
+    mock_compile.assert_called_once()
+
+
+@requires_interpreted
+def test_sql_copy_recompiles_on_is_many_change() -> None:
+    """Cached state should be discarded when is_many changes."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+        parameter_profile=ParameterProfile.empty(),
+        parameter_fingerprint=structural_fingerprint([1], is_many=False),
+        is_many=False,
+    )
+    original._processed_state = state
+
+    copy_stmt = original.copy(parameters=[2])
+    copy_stmt._is_many = True
+
+    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+        mock_compile.return_value = CompiledSQL(
+            compiled_sql="SELECT * FROM users WHERE id = ?",
+            execution_parameters=[2],
+            operation_type="SELECT",
+            expression=exp.select("*").from_("users"),
+        )
+        sql, params = copy_stmt.compile()
+
+    assert sql == "SELECT * FROM users WHERE id = ?"
+    assert params == [2]
+    mock_compile.assert_called_once()
+
+
+def test_sql_compiled_from_cache_flag_default_false() -> None:
+    """New SQL instances should not be marked as compiled from cache."""
+    stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
+
+    assert stmt._compiled_from_cache is False
+
+
+def test_sql_copy_sets_compiled_from_cache_flag_on_processed_state() -> None:
+    """Parameter-only copies should mark cache flag when state is present."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+    original._processed_state = ProcessedState(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        execution_parameters=[1],
+        operation_type="SELECT",
+        parsed_expression=exp.select("*").from_("users"),
+    )
+
+    copy_stmt = original.copy(parameters=[2])
+
+    assert copy_stmt._compiled_from_cache is True
+
+
+def test_sql_copy_does_not_set_compiled_from_cache_without_state() -> None:
+    """Parameter-only copies should not set cache flag without state."""
+    original = SQL("SELECT * FROM users WHERE id = ?", 1)
+
+    copy_stmt = original.copy(parameters=[2])
+
+    assert copy_stmt._compiled_from_cache is False
 
 
 def test_sql_as_script_creates_new_instance() -> None:

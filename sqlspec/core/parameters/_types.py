@@ -199,6 +199,7 @@ class ParameterStyleConfig:
     """Configuration describing parameter behaviour for a statement."""
 
     __slots__ = (
+        "_hash_cache",
         "allow_mixed_parameter_styles",
         "ast_transformer",
         "default_execution_parameter_style",
@@ -251,30 +252,33 @@ class ParameterStyleConfig:
         self.strict_named_parameters = strict_named_parameters
         self.json_serializer = json_serializer
         self.json_deserializer = json_deserializer
+        self._hash_cache: int | None = None
 
     def __hash__(self) -> int:
-        hash_components = (
-            self.default_parameter_style.value,
-            frozenset(style.value for style in self.supported_parameter_styles),
-            (
-                frozenset(style.value for style in self.supported_execution_parameter_styles)
-                if self.supported_execution_parameter_styles is not None
-                else None
-            ),
-            self.default_execution_parameter_style.value,
-            tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
-            self.has_native_list_expansion,
-            self.preserve_original_params_for_many,
-            bool(self.output_transformer),
-            self.needs_static_script_compilation,
-            self.allow_mixed_parameter_styles,
-            self.preserve_parameter_format,
-            self.strict_named_parameters,
-            bool(self.ast_transformer),
-            self.json_serializer,
-            self.json_deserializer,
-        )
-        return hash(hash_components)
+        if self._hash_cache is None:
+            hash_components = (
+                self.default_parameter_style.value,
+                frozenset(style.value for style in self.supported_parameter_styles),
+                (
+                    frozenset(style.value for style in self.supported_execution_parameter_styles)
+                    if self.supported_execution_parameter_styles is not None
+                    else None
+                ),
+                self.default_execution_parameter_style.value,
+                tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
+                self.has_native_list_expansion,
+                self.preserve_original_params_for_many,
+                bool(self.output_transformer),
+                self.needs_static_script_compilation,
+                self.allow_mixed_parameter_styles,
+                self.preserve_parameter_format,
+                self.strict_named_parameters,
+                bool(self.ast_transformer),
+                self.json_serializer,
+                self.json_deserializer,
+            )
+            self._hash_cache = hash(hash_components)
+        return self._hash_cache
 
     def hash(self) -> int:
         """Return the hash value for caching compatibility.
@@ -414,11 +418,25 @@ class ParameterProfile:
     """Aggregate metadata describing detected parameters."""
 
     __slots__ = ("_parameters", "_placeholder_counts", "named_parameters", "reused_ordinals", "styles")
+    named_parameters: tuple[str, ...]
+    reused_ordinals: tuple[int, ...]
+    styles: tuple[str, ...]
 
     def __init__(self, parameters: "Sequence[ParameterInfo] | None" = None) -> None:
         param_tuple: tuple[ParameterInfo, ...] = tuple(parameters) if parameters else ()
         self._parameters = param_tuple
-        self.styles = tuple(sorted({param.style.value for param in param_tuple})) if param_tuple else ()
+
+        # Optimize styles computation: skip sorted() for single-style case (common)
+        if param_tuple:
+            unique_styles = {param.style.value for param in param_tuple}
+            # Skip sort for single style (common case) - O(1) vs O(n log n)
+            if len(unique_styles) == 1:
+                self.styles = (next(iter(unique_styles)),)
+            else:
+                self.styles = tuple(sorted(unique_styles))
+        else:
+            self.styles = ()
+
         placeholder_counts: dict[str, int] = {}
         reused_ordinals: list[int] = []
         named_parameters: list[str] = []

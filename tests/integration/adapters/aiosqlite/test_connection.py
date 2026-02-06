@@ -26,7 +26,7 @@ async def test_basic_connection(aiosqlite_config: AiosqliteConfig) -> None:
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
-        assert result.data[0]["test_value"] == 1
+        assert result.get_data()[0]["test_value"] == 1
 
 
 async def test_connection_reuse(aiosqlite_config: AiosqliteConfig) -> None:
@@ -42,7 +42,7 @@ async def test_connection_reuse(aiosqlite_config: AiosqliteConfig) -> None:
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
-        assert result.data[0]["data"] == "test_data"
+        assert result.get_data()[0]["data"] == "test_data"
 
         await driver2.execute("DROP TABLE IF EXISTS reuse_test")
         await driver2.commit()
@@ -57,7 +57,7 @@ async def test_connection_error_handling(aiosqlite_config: AiosqliteConfig) -> N
         result = await driver.execute("SELECT 'still_working' as status")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["status"] == "still_working"
+        assert result.get_data()[0]["status"] == "still_working"
 
 
 async def test_connection_with_transactions(aiosqlite_config: AiosqliteConfig) -> None:
@@ -77,7 +77,7 @@ async def test_connection_with_transactions(aiosqlite_config: AiosqliteConfig) -
         result = await driver.execute("SELECT COUNT(*) as count FROM transaction_test")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["count"] == 1
+        assert result.get_data()[0]["count"] == 1
 
         await driver.execute("BEGIN TRANSACTION")
         await driver.execute("INSERT INTO transaction_test (value) VALUES ('rollback_test')")
@@ -86,7 +86,7 @@ async def test_connection_with_transactions(aiosqlite_config: AiosqliteConfig) -
         result = await driver.execute("SELECT COUNT(*) as count FROM transaction_test")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["count"] == 1
+        assert result.get_data()[0]["count"] == 1
 
         await driver.execute("DROP TABLE IF EXISTS transaction_test")
         await driver.commit()
@@ -105,7 +105,7 @@ async def test_connection_context_manager_cleanup() -> None:
             result = await driver.execute("SELECT COUNT(*) as count FROM cleanup_test")
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            assert result.data[0]["count"] == 1
+            assert result.get_data()[0]["count"] == 1
 
         assert driver_ref is not None
 
@@ -126,7 +126,7 @@ async def test_provide_connection_direct() -> None:
             result = await driver.execute("SELECT sqlite_version() as version")
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            assert result.data[0]["version"] is not None
+            assert result.get_data()[0]["version"] is not None
 
     finally:
         await config.close_pool()
@@ -152,7 +152,7 @@ async def test_config_with_connection_config(tmp_path: Path) -> None:
         async with config.provide_session() as driver:
             result = await driver.execute("SELECT 1 as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == 1
+            assert result.get_data()[0]["test"] == 1
 
     finally:
         await config.close_pool()
@@ -176,7 +176,7 @@ async def test_config_with_kwargs_override(tmp_path: Path) -> None:
         async with config.provide_session() as driver:
             result = await driver.execute("SELECT 'override_test' as status")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["status"] == "override_test"
+            assert result.get_data()[0]["status"] == "override_test"
 
     finally:
         await config.close_pool()
@@ -233,7 +233,7 @@ async def test_config_memory_database_conversion() -> None:
         async with config.provide_session() as driver:
             result = await driver.execute("SELECT 'memory_test' as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == "memory_test"
+            assert result.get_data()[0]["test"] == "memory_test"
 
     finally:
         await config.close_pool()
@@ -252,7 +252,7 @@ async def test_config_default_database() -> None:
         async with config.provide_session() as driver:
             result = await driver.execute("SELECT 'default_test' as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == "default_test"
+            assert result.get_data()[0]["test"] == "default_test"
 
     finally:
         await config.close_pool()
@@ -277,7 +277,7 @@ async def test_config_parameter_preservation(tmp_path: Path) -> None:
             await driver.execute("INSERT INTO parameter_test VALUES (42)")
             result = await driver.execute("SELECT id FROM parameter_test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["id"] == 42
+            assert result.get_data()[0]["id"] == 42
 
             await driver.execute("DROP TABLE parameter_test")
             await driver.commit()

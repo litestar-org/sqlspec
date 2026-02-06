@@ -525,20 +525,11 @@ def _map_bigquery_source_format(file_format: "StorageFormat") -> str:
     raise StorageCapabilityError(msg, capability="parquet_import_enabled")
 
 
-def _rows_to_results(rows_iterator: Any) -> "list[dict[str, Any]]":
-    """Convert BigQuery rows to dictionary format.
-
-    Args:
-        rows_iterator: BigQuery rows iterator.
-
-    Returns:
-        List of dictionaries representing the rows.
-    """
-    return [dict(row) for row in rows_iterator]
-
-
-def collect_rows(job_result: Any, schema: Any | None) -> "tuple[list[dict[str, Any]], list[str]]":
+def collect_rows(job_result: Any, schema: Any | None) -> "tuple[list[Any], list[str]]":
     """Collect BigQuery rows and schema into structured lists.
+
+    Returns raw BigQuery Row objects without copying to dicts.
+    Lazy dict materialization is handled by SQLResult when needed.
 
     Args:
         job_result: BigQuery job result iterator.
@@ -547,7 +538,7 @@ def collect_rows(job_result: Any, schema: Any | None) -> "tuple[list[dict[str, A
     Returns:
         Tuple of (rows_list, column_names).
     """
-    rows_list = _rows_to_results(iter(job_result))
+    rows_list = list(iter(job_result))
     column_names = [field.name for field in schema] if schema else []
     return rows_list, column_names
 

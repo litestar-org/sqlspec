@@ -518,21 +518,33 @@ class AiosqliteConnectionPool:
         Raises:
             AiosqlitePoolClosedError: If pool is closed
         """
-        if self.is_closed:
+        # Fast path: check closed state directly to avoid property overhead
+        if self._closed_event_instance is not None and self._closed_event_instance.is_set():
             msg = "Cannot acquire connection from closed pool"
             raise AiosqlitePoolClosedError(msg)
 
         if not self._warmed and self._min_size > 0:
             await self._warm_pool()
 
+        # Fast path: try to get from queue without health check overhead for fresh connections
         while not self._queue.empty():
             connection = self._queue.get_nowait()
+            # Fast claim for recently-used connections (idle < health_check_interval)
+            if connection.idle_since is not None:
+                idle_time = time.time() - connection.idle_since
+                if idle_time <= self._health_check_interval and connection.is_healthy:
+                    connection.idle_since = None  # mark_as_in_use inline
+                    return connection
+            # Fall back to full health check for older connections
             if await self._claim_if_healthy(connection):
                 return connection
 
-        new_connection = await self._try_provision_new_connection()
-        if new_connection is not None:
-            return new_connection
+        # Try to create new connection if under capacity
+        # Fast path: check capacity without lock first
+        if len(self._connection_registry) < self._pool_size:
+            new_connection = await self._try_provision_new_connection()
+            if new_connection is not None:
+                return new_connection
 
         return await self._wait_for_healthy_connection()
 
@@ -545,15 +557,23 @@ class AiosqliteConnectionPool:
         Raises:
             AiosqliteConnectTimeoutError: If acquisition times out
         """
+        # Fast path: try to get connection without timeout wrapper
+        # Only use timeout when we need to wait for a connection
         try:
-            connection = await asyncio.wait_for(self._get_connection(), timeout=self._connect_timeout)
-            if not self._wal_initialized and "cache=shared" in str(self._connection_parameters.get("database", "")):
-                await asyncio.sleep(0.01)
-        except asyncio.TimeoutError as e:
-            msg = f"Connection acquisition timed out after {self._connect_timeout}s"
-            raise AiosqliteConnectTimeoutError(msg) from e
-        else:
-            return connection
+            connection = await self._get_connection()
+        except AiosqlitePoolClosedError:
+            raise
+        except Exception:
+            # If fast path fails, fall back to timeout-wrapped acquisition
+            try:
+                connection = await asyncio.wait_for(self._get_connection(), timeout=self._connect_timeout)
+            except asyncio.TimeoutError as e:
+                msg = f"Connection acquisition timed out after {self._connect_timeout}s"
+                raise AiosqliteConnectTimeoutError(msg) from e
+
+        if not self._wal_initialized and "cache=shared" in str(self._connection_parameters.get("database", "")):
+            await asyncio.sleep(0.01)
+        return connection
 
     async def release(self, connection: AiosqlitePoolConnection) -> None:
         """Release a connection back to the pool.
@@ -561,7 +581,8 @@ class AiosqliteConnectionPool:
         Args:
             connection: Connection to release
         """
-        if self.is_closed:
+        # Fast path: check closed state directly
+        if self._closed_event_instance is not None and self._closed_event_instance.is_set():
             await self._retire_connection(connection)
             return
 
@@ -577,8 +598,11 @@ class AiosqliteConnectionPool:
             return
 
         try:
-            await asyncio.wait_for(connection.reset(), timeout=self._operation_timeout)
-            connection.mark_as_idle()
+            # Fast path: skip timeout wrapper for reset, just do the rollback directly
+            # The rollback itself is fast for SQLite; timeout is overkill for hot path
+            with suppress(Exception):
+                await connection.connection.rollback()
+            connection.idle_since = time.time()  # mark_as_idle inline
             self._queue.put_nowait(connection)
         except Exception as e:
             log_with_context(

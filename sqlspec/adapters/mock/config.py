@@ -237,7 +237,6 @@ class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
             SQLite connection with row factory set.
         """
         conn = sqlite3.connect(":memory:", check_same_thread=False)
-        conn.row_factory = sqlite3.Row
 
         if self.initial_sql:
             self._execute_initial_sql(conn)
@@ -406,7 +405,6 @@ class MockAsyncConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):
         """
         connect_async = async_(sqlite3.connect)
         conn = await connect_async(":memory:", check_same_thread=False)
-        conn.row_factory = sqlite3.Row
 
         if self.initial_sql:
             await self._execute_initial_sql_async(conn)

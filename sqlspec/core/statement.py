@@ -12,15 +12,19 @@ from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
 from sqlspec.core import pipeline
+from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
+from sqlspec.core.hashing import hash_filters
 from sqlspec.core.parameters import (
     ParameterConverter,
+    ParameterProcessor,
     ParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
     ParameterValidator,
+    structural_fingerprint,
 )
 from sqlspec.core.query_modifiers import (
     apply_column_pruning,
@@ -91,6 +95,9 @@ SQL_CONFIG_SLOTS: Final = (
     "parameter_config",
     "parameter_converter",
     "parameter_validator",
+    "_fingerprint_cache",
+    "_hash_cache",
+    "_is_frozen",
 )
 
 PROCESSED_STATE_SLOTS: Final = (
@@ -98,6 +105,10 @@ PROCESSED_STATE_SLOTS: Final = (
     "execution_parameters",
     "parsed_expression",
     "operation_type",
+    "input_named_parameters",
+    "applied_wrap_types",
+    "filter_hash",
+    "parameter_fingerprint",
     "parameter_casts",
     "parameter_profile",
     "operation_profile",
@@ -123,6 +134,10 @@ class ProcessedState:
         execution_parameters: Any,
         parsed_expression: "exp.Expression | None" = None,
         operation_type: "OperationType" = "COMMAND",
+        input_named_parameters: "tuple[str, ...] | None" = None,
+        applied_wrap_types: bool = False,
+        filter_hash: int = 0,
+        parameter_fingerprint: str | None = None,
         parameter_casts: "dict[int, str] | None" = None,
         validation_errors: "list[str] | None" = None,
         parameter_profile: "ParameterProfile | None" = None,
@@ -133,6 +148,10 @@ class ProcessedState:
         self.execution_parameters = execution_parameters
         self.parsed_expression = parsed_expression
         self.operation_type = operation_type
+        self.input_named_parameters = input_named_parameters or ()
+        self.applied_wrap_types = applied_wrap_types
+        self.filter_hash = filter_hash
+        self.parameter_fingerprint = parameter_fingerprint
         self.parameter_casts = parameter_casts or {}
         self.validation_errors = validation_errors or []
         self.parameter_profile = parameter_profile or ParameterProfile.empty()
@@ -141,6 +160,22 @@ class ProcessedState:
 
     def __hash__(self) -> int:
         return hash((self.compiled_sql, str(self.execution_parameters), self.operation_type))
+
+    def reset(self) -> None:
+        """Reset processing state for reuse."""
+        self.compiled_sql = ""
+        self.execution_parameters = []
+        self.parsed_expression = None
+        self.operation_type = "COMMAND"
+        self.input_named_parameters = ()
+        self.applied_wrap_types = False
+        self.filter_hash = 0
+        self.parameter_fingerprint = None
+        self.parameter_casts.clear()
+        self.validation_errors.clear()
+        self.parameter_profile = ParameterProfile.empty()
+        self.operation_profile = OperationProfile.empty()
+        self.is_many = False
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -153,6 +188,7 @@ class SQL:
     """
 
     __slots__ = (
+        "_compiled_from_cache",
         "_dialect",
         "_filters",
         "_hash",
@@ -160,6 +196,7 @@ class SQL:
         "_is_script",
         "_named_parameters",
         "_original_parameters",
+        "_pooled",
         "_positional_parameters",
         "_processed_state",
         "_raw_expression",
@@ -191,6 +228,8 @@ class SQL:
         config = statement_config or self._create_auto_config(statement, parameters, kwargs)
         self._statement_config = config
         self._dialect = self._normalize_dialect(config.dialect)
+        self._compiled_from_cache = False
+        self._pooled = False
         self._processed_state: EmptyEnum | ProcessedState = Empty
         self._hash: int | None = None
         self._filters: list[StatementFilter] = []
@@ -231,6 +270,25 @@ class SQL:
             Default StatementConfig instance
         """
         return get_default_config()
+
+    def reset(self) -> None:
+        """Reset SQL object for reuse in pooling scenarios."""
+        if self._pooled and not self._compiled_from_cache and self._processed_state is not Empty:
+            get_processed_state_pool().release(self._processed_state)
+        self._compiled_from_cache = False
+        self._processed_state = Empty
+        self._hash = None
+        self._filters.clear()
+        self._named_parameters.clear()
+        self._positional_parameters.clear()
+        self._sql_param_counters.clear()
+        self._original_parameters = ()
+        self._is_many = False
+        self._is_script = False
+        self._raw_expression = None
+        self._raw_sql = ""
+        self._statement_config = get_default_config()
+        self._dialect = self._normalize_dialect(self._statement_config.dialect)
 
     def _normalize_dialect(self, dialect: "DialectType") -> "str | None":
         """Convert dialect to string representation.
@@ -275,7 +333,12 @@ class SQL:
         """
         if len(parameters) == 1 and isinstance(parameters[0], list):
             param_list = parameters[0]
-            if param_list and all(isinstance(item, (tuple, list)) for item in param_list):
+            if not param_list:
+                return False
+            # Optimization: Check only the first element for batch structure
+            # O(1) check instead of O(N) scan
+            first_item = param_list[0]
+            if isinstance(first_item, (tuple, list, dict)):
                 return len(param_list) > 1
         return False
 
@@ -301,6 +364,38 @@ class SQL:
         return [p for p in parameters if is_statement_filter(p)]
 
     def _normalize_parameters(self, parameters: "tuple[Any, ...]") -> None:
+        if not parameters:
+            return
+
+        # Optimization: Fast path for single parameter (most common case)
+        if len(parameters) == 1:
+            param = parameters[0]
+            # Fast check for simple types before filter check
+            if isinstance(param, (str, int, float, bool)) or param is None:
+                self._positional_parameters.append(param)
+                return
+
+            if is_statement_filter(param):
+                return
+
+            if isinstance(param, dict):
+                self._named_parameters.update(param)
+            elif isinstance(param, (list, tuple)):
+                if self._is_many:
+                    self._positional_parameters = list(param)
+                else:
+                    self._positional_parameters.extend(param)
+            else:
+                self._positional_parameters.append(param)
+            return
+
+        # Multiple parameters: check for filters
+        # O(N) check only if we have more than 1 param
+        has_filter = any(is_statement_filter(p) for p in parameters)
+        if not has_filter:
+            self._positional_parameters.extend(parameters)
+            return
+
         actual_params = [p for p in parameters if not is_statement_filter(p)]
         if not actual_params:
             return
@@ -493,21 +588,43 @@ class SQL:
         Returns:
             Tuple of compiled SQL string and execution parameters
         """
+        if self._processed_state is not Empty:
+            if self._compiled_from_cache:
+                state = self._processed_state
+                if state.execution_parameters is None:
+                    self._processed_state = Empty
+                    self._compiled_from_cache = False
+                else:
+                    can_reuse = (
+                        not self._statement_config.parameter_config.needs_static_script_compilation
+                        and self._can_reuse_cached_state(state)
+                    )
+                    if can_reuse:
+                        return self._rebind_cached_parameters(state)
+                    self._processed_state = Empty
+                    self._compiled_from_cache = False
+            else:
+                return self._processed_state.compiled_sql, self._processed_state.execution_parameters
         if self._processed_state is Empty:
             try:
                 config = self._statement_config
                 raw_sql = self._raw_sql
                 params = self._named_parameters or self._positional_parameters
                 is_many = self._is_many
+                param_fingerprint = structural_fingerprint(params, is_many=is_many)
                 compiled_result = pipeline.compile_with_pipeline(
                     config, raw_sql, params, is_many=is_many, expression=self._raw_expression
                 )
 
-                self._processed_state = ProcessedState(
+                self._processed_state = self._build_processed_state(
                     compiled_sql=compiled_result.compiled_sql,
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
                     operation_type=compiled_result.operation_type,
+                    input_named_parameters=compiled_result.input_named_parameters,
+                    applied_wrap_types=compiled_result.applied_wrap_types,
+                    filter_hash=hash_filters(self._filters),
+                    parameter_fingerprint=param_fingerprint,
                     parameter_casts=compiled_result.parameter_casts,
                     parameter_profile=compiled_result.parameter_profile,
                     operation_profile=compiled_result.operation_profile,
@@ -520,6 +637,55 @@ class SQL:
                 self._processed_state = self._handle_compile_failure(e)
 
         return self._processed_state.compiled_sql, self._processed_state.execution_parameters
+
+    def _rebind_cached_parameters(self, state: "ProcessedState") -> "tuple[str, Any]":
+        params = self._named_parameters or self._positional_parameters
+        processor = ParameterProcessor(
+            converter=self._statement_config.parameter_converter,
+            validator=self._statement_config.parameter_validator,
+            cache_max_size=0,
+            validator_cache_max_size=0,
+        )
+        rebound_params = processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
+            params,
+            state.parameter_profile,
+            self._statement_config.parameter_config,
+            input_named_parameters=state.input_named_parameters,
+            is_many=self._is_many,
+            apply_wrap_types=state.applied_wrap_types,
+        )
+        compiled_sql = state.compiled_sql
+        output_transformer = self._statement_config.output_transformer
+        if output_transformer:
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        self._processed_state = self._build_processed_state(
+            compiled_sql=compiled_sql,
+            execution_parameters=rebound_params,
+            parsed_expression=state.parsed_expression,
+            operation_type=state.operation_type,
+            input_named_parameters=state.input_named_parameters,
+            applied_wrap_types=state.applied_wrap_types,
+            filter_hash=state.filter_hash,
+            parameter_fingerprint=state.parameter_fingerprint,
+            parameter_casts=state.parameter_casts,
+            parameter_profile=state.parameter_profile,
+            operation_profile=state.operation_profile,
+            validation_errors=state.validation_errors.copy(),
+            is_many=state.is_many,
+        )
+        self._compiled_from_cache = False
+        return compiled_sql, rebound_params
+
+    def _can_reuse_cached_state(self, state: "ProcessedState") -> bool:
+        cached_fingerprint = state.parameter_fingerprint
+        if cached_fingerprint is None:
+            return False
+        if state.is_many != self._is_many:
+            return False
+        if state.filter_hash != hash_filters(self._filters):
+            return False
+        params = self._named_parameters or self._positional_parameters
+        return structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint
 
     def as_script(self) -> "SQL":
         """Create copy marked for script execution.
@@ -551,6 +717,12 @@ class SQL:
         Returns:
             New SQL instance with modifications applied
         """
+        # FAST PATH: Only parameters are changing
+        if statement is None and not kwargs and parameters is not None and not isinstance(parameters, (str, bytes)):
+            new_sql = self._create_empty_copy()
+            new_sql._process_parameters(*(parameters if isinstance(parameters, tuple) else (parameters,)))
+            return new_sql
+
         statement_expression = self._raw_expression if statement is None else statement
         new_sql = SQL(
             statement_expression or self._raw_sql,
@@ -565,15 +737,84 @@ class SQL:
         new_sql._filters = self._filters.copy()
         return new_sql
 
+    def _create_empty_copy(self) -> "SQL":
+        """Create a shell copy with shared immutable state but empty mutable state."""
+        new_sql = get_sql_pool().acquire()
+        new_sql._raw_sql = self._raw_sql
+        new_sql._raw_expression = self._raw_expression
+        new_sql._statement_config = self._statement_config
+        new_sql._dialect = self._dialect
+        new_sql._is_many = self._is_many
+        new_sql._is_script = self._is_script
+        new_sql._original_parameters = ()
+        new_sql._pooled = True
+
+        # Reset mutable state
+        new_sql._compiled_from_cache = self._processed_state is not Empty
+        new_sql._processed_state = self._processed_state if self._processed_state is not Empty else Empty
+        new_sql._hash = None
+        new_sql._filters = self._filters.copy()
+        new_sql._named_parameters = {}
+        new_sql._positional_parameters = []
+        new_sql._sql_param_counters = self._sql_param_counters.copy()
+
+        return new_sql
+
+    def _build_processed_state(
+        self,
+        *,
+        compiled_sql: str,
+        execution_parameters: Any,
+        parsed_expression: "exp.Expression | None",
+        operation_type: "OperationType",
+        input_named_parameters: "tuple[str, ...] | None",
+        applied_wrap_types: bool,
+        filter_hash: int,
+        parameter_fingerprint: str | None,
+        parameter_casts: "dict[int, str] | None",
+        parameter_profile: "ParameterProfile | None",
+        operation_profile: "OperationProfile | None",
+        validation_errors: "list[str] | None",
+        is_many: bool,
+    ) -> "ProcessedState":
+        state = get_processed_state_pool().acquire()
+        ProcessedState.__init__(
+            state,
+            compiled_sql=compiled_sql,
+            execution_parameters=execution_parameters,
+            parsed_expression=parsed_expression,
+            operation_type=operation_type,
+            input_named_parameters=input_named_parameters,
+            applied_wrap_types=applied_wrap_types,
+            filter_hash=filter_hash,
+            parameter_fingerprint=parameter_fingerprint,
+            parameter_casts=parameter_casts,
+            validation_errors=validation_errors,
+            parameter_profile=parameter_profile,
+            operation_profile=operation_profile,
+            is_many=is_many,
+        )
+        return state
+
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
+        import traceback
+
+        traceback.print_exc()
         logger.debug("Processing failed, using fallback: %s", error)
-        return ProcessedState(
+        params = self._named_parameters or self._positional_parameters
+        return self._build_processed_state(
             compiled_sql=self._raw_sql,
             execution_parameters=self._named_parameters or self._positional_parameters,
+            parsed_expression=None,
             operation_type="COMMAND",
+            input_named_parameters=(),
+            applied_wrap_types=False,
+            filter_hash=hash_filters(self._filters),
+            parameter_fingerprint=structural_fingerprint(params, is_many=self._is_many),
             parameter_casts={},
             parameter_profile=ParameterProfile.empty(),
             operation_profile=OperationProfile.empty(),
+            validation_errors=[str(error)],
             is_many=self._is_many,
         )
 
@@ -1412,6 +1653,13 @@ class StatementConfig:
             self.statement_transformers = tuple(statement_transformers)
         else:
             self.statement_transformers = ()
+        self._fingerprint_cache: str | None = None
+        self._hash_cache: int | None = None
+        self._is_frozen = False
+
+    def freeze(self) -> None:
+        """Mark the configuration as immutable to enable caching."""
+        self._is_frozen = True
 
     def replace(self, **kwargs: Any) -> "StatementConfig":
         """Immutable update pattern.
@@ -1450,21 +1698,23 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_column_pruning,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            str(self.dialect),
-            self.parameter_config.hash(),
-            self.execution_mode,
-            self.output_transformer,
-            self.statement_transformers,
-        ))
+        if self._hash_cache is None:
+            self._hash_cache = hash((
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_column_pruning,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                str(self.dialect),
+                self.parameter_config.hash(),
+                self.execution_mode,
+                self.output_transformer,
+                self.statement_transformers,
+            ))
+        return self._hash_cache
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""
@@ -1521,13 +1771,20 @@ class StatementConfig:
         )
 
 
+_DEFAULT_CONFIG: "StatementConfig | None" = None
+
+
 def get_default_config() -> StatementConfig:
     """Get default statement configuration.
 
     Returns:
-        StatementConfig with default settings
+        Cached StatementConfig singleton with default settings.
     """
-    return StatementConfig()
+    global _DEFAULT_CONFIG
+    if _DEFAULT_CONFIG is None:
+        _DEFAULT_CONFIG = StatementConfig()
+        _DEFAULT_CONFIG.freeze()
+    return _DEFAULT_CONFIG
 
 
 def get_default_parameter_config() -> ParameterStyleConfig:

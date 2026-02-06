@@ -12,6 +12,14 @@ from unittest.mock import Mock
 
 import pytest
 
+
+def _mock_result(**kwargs: Any) -> Mock:
+    """Create a Mock result with get_data() returning .data."""
+    m = Mock(**kwargs)
+    m.get_data.return_value = m.data
+    return m
+
+
 pytestmark = pytest.mark.xdist_group("migrations")
 
 
@@ -55,7 +63,7 @@ class TestSyncTrackerSquashMethods:
 
         def mock_execute(sql: Any) -> Mock:
             execute_calls.append(str(sql))
-            return Mock(rows_affected=1, data=[{"next_seq": 1}])
+            return _mock_result(rows_affected=1, data=[{"next_seq": 1}])
 
         driver.execute.side_effect = mock_execute
 
@@ -82,7 +90,7 @@ class TestSyncTrackerSquashMethods:
 
         def mock_execute(sql: Any) -> Mock:
             execute_calls.append(str(sql))
-            return Mock(rows_affected=1, data=[{"next_seq": 1}])
+            return _mock_result(rows_affected=1, data=[{"next_seq": 1}])
 
         driver.execute.side_effect = mock_execute
 
@@ -103,7 +111,7 @@ class TestSyncTrackerSquashMethods:
 
         tracker = SyncMigrationTracker()
         driver = Mock()
-        driver.execute.return_value = Mock(data=[{"version_num": "0001"}, {"version_num": "0002"}])
+        driver.execute.return_value = _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}])
 
         result = tracker.is_squash_already_applied(
             driver=driver, squashed_version="0001", replaced_versions=["0001", "0002", "0003"]
@@ -117,7 +125,7 @@ class TestSyncTrackerSquashMethods:
 
         tracker = SyncMigrationTracker()
         driver = Mock()
-        driver.execute.return_value = Mock(data=[])
+        driver.execute.return_value = _mock_result(data=[])
 
         result = tracker.is_squash_already_applied(
             driver=driver, squashed_version="0001", replaced_versions=["0001", "0002", "0003"]
@@ -142,7 +150,7 @@ class TestAsyncTrackerSquashMethods:
 
         async def mock_execute(sql: Any) -> Mock:
             execute_calls.append(str(sql))
-            return Mock(rows_affected=1, data=[{"next_seq": 1}])
+            return _mock_result(rows_affected=1, data=[{"next_seq": 1}])
 
         async def mock_commit() -> None:
             pass
@@ -170,7 +178,7 @@ class TestAsyncTrackerSquashMethods:
         driver = Mock()
 
         async def mock_execute(sql: Any) -> Mock:
-            return Mock(data=[{"version_num": "0001"}, {"version_num": "0002"}])
+            return _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}])
 
         driver.execute = mock_execute
 
@@ -189,7 +197,7 @@ class TestAsyncTrackerSquashMethods:
         driver = Mock()
 
         async def mock_execute(sql: Any) -> Mock:
-            return Mock(data=[])
+            return _mock_result(data=[])
 
         driver.execute = mock_execute
 

@@ -82,8 +82,8 @@ def test_adbc_numeric_parameter_style_basic(adbc_postgresql_session: AdbcDriver)
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "basic_test"
-    assert select_result.data[0]["value"] == 100
+    assert select_result.get_data()[0]["name"] == "basic_test"
+    assert select_result.get_data()[0]["value"] == 100
 
 
 @pytest.mark.xdist_group("postgres")
@@ -107,7 +107,7 @@ def test_adbc_none_parameters_single_none(adbc_postgresql_session: AdbcDriver) -
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
     assert row["id"] == 1
     assert row["text_col"] is None
     assert row["int_col"] == 42
@@ -135,7 +135,7 @@ def test_adbc_none_parameters_multiple_none(adbc_postgresql_session: AdbcDriver)
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
     assert row["id"] == 2
     assert row["text_col"] is None
     assert row["int_col"] is None
@@ -165,7 +165,7 @@ def test_adbc_all_none_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
     assert row["id"] == 3
     assert row["text_col"] is None
     assert row["int_col"] is None
@@ -204,7 +204,7 @@ def test_adbc_none_in_where_clause(adbc_postgresql_session: AdbcDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 2  # IDs 11 and 13
 
-    found_ids = {row["id"] for row in result.data}
+    found_ids = {row["id"] for row in result.get_data()}
     assert found_ids == {11, 13}
 
 
@@ -242,7 +242,7 @@ def test_adbc_none_with_execute_many(adbc_postgresql_session: AdbcDriver) -> Non
     assert len(verify_result.data) == 5
 
     # Check specific None handling in the results
-    rows = verify_result.data
+    rows = verify_result.get_data()
     assert rows[1]["text_col"] is None and rows[1]["int_col"] == 20  # ID 21
     assert rows[2]["int_col"] is None and rows[2]["date_col"] is None  # ID 22
     assert rows[3]["text_col"] is None and rows[3]["int_col"] is None  # ID 23
@@ -276,7 +276,7 @@ def test_adbc_none_parameter_reuse(adbc_postgresql_session: AdbcDriver) -> None:
     # Should return the row because both conditions evaluate to TRUE
     # (NULL IS NULL is TRUE)
     assert len(result.data) == 1
-    assert result.data[0]["id"] == 30
+    assert result.get_data()[0]["id"] == 30
 
 
 @pytest.mark.xdist_group("postgres")
@@ -312,7 +312,7 @@ def test_adbc_mixed_none_and_complex_types(adbc_postgresql_session: AdbcDriver) 
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
 
     assert row["text_col"] == "complex_test"
     assert row["int_col"] is None
@@ -362,7 +362,7 @@ def test_adbc_parameter_count_validation_with_none(adbc_postgresql_session: Adbc
     verify_result = adbc_postgresql_session.execute("SELECT * FROM test_none_handling_adbc WHERE id = $1", (52,))
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    assert verify_result.data[0]["id"] == 52
+    assert verify_result.get_data()[0]["id"] == 52
 
 
 @pytest.mark.xdist_group("postgres")
@@ -405,7 +405,7 @@ def test_adbc_none_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     count_result = adbc_postgresql_session.execute(
         "SELECT COUNT(*) as count FROM test_none_handling_adbc WHERE id >= $1", (60,)
     )
-    assert count_result.data[0]["count"] == 4
+    assert count_result.get_data()[0]["count"] == 4
 
 
 @pytest.mark.xdist_group("postgres")
@@ -428,7 +428,7 @@ def test_adbc_none_with_returning_clause(adbc_postgresql_session: AdbcDriver) ->
     assert result.data is not None
     assert len(result.data) == 1
 
-    returned_row = result.data[0]
+    returned_row = result.get_data()[0]
     assert returned_row["id"] == 70
     assert returned_row["text_col"] is None
     assert returned_row["int_col"] == 200
@@ -470,7 +470,7 @@ def test_adbc_sqlite_none_parameters() -> None:
         assert isinstance(verify_result, SQLResult)
         assert verify_result.data is not None
         assert len(verify_result.data) == 1
-        row = verify_result.data[0]
+        row = verify_result.get_data()[0]
         assert row["name"] is None
         assert row["value"] is None
         assert row["flag"] in (True, 1)  # SQLite may return 1 for boolean True
@@ -509,8 +509,8 @@ def test_adbc_parameter_style_consistency(adbc_postgresql_session: AdbcDriver) -
 
     # Verify the update worked
     verify_update = adbc_postgresql_session.execute("SELECT * FROM test_none_handling_adbc WHERE id = $1", (81,))
-    assert verify_update.data[0]["text_col"] is None
-    assert verify_update.data[0]["int_col"] is None
+    assert verify_update.get_data()[0]["text_col"] is None
+    assert verify_update.get_data()[0]["int_col"] is None
 
     # Test DELETE with None parameter in WHERE clause
     delete_result = adbc_postgresql_session.execute(
@@ -523,7 +523,7 @@ def test_adbc_parameter_style_consistency(adbc_postgresql_session: AdbcDriver) -
     verify_delete = adbc_postgresql_session.execute(
         "SELECT COUNT(*) as count FROM test_none_handling_adbc WHERE id = $1", (82,)
     )
-    assert verify_delete.data[0]["count"] == 0
+    assert verify_delete.get_data()[0]["count"] == 0
 
 
 @pytest.mark.xdist_group("postgres")
@@ -569,7 +569,7 @@ def test_adbc_parameter_count_validation_fixed(adbc_postgresql_session: AdbcDriv
     verify_result = adbc_postgresql_session.execute("SELECT * FROM bug_test_adbc WHERE id = $1", (1,))
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    row = verify_result.data[0]
+    row = verify_result.get_data()[0]
     assert row["id"] == 1
     assert row["col1"] is None  # None was properly converted to NULL
     assert row["col2"] is None  # This column wasn't specified
@@ -652,5 +652,5 @@ def test_adbc_repeated_parameter_handling(adbc_postgresql_session: AdbcDriver) -
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1  # Should find the row with NULL name
-    assert result.data[0]["id"] == 2
-    assert result.data[0]["name"] is None
+    assert result.get_data()[0]["id"] == 2
+    assert result.get_data()[0]["name"] is None

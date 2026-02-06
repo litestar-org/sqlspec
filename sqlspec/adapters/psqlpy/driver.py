@@ -170,6 +170,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 column_names=column_names,
                 data_row_count=len(dict_rows),
                 is_select_result=True,
+                row_format="dict",
             )
 
         result = await cursor.execute(sql, params)

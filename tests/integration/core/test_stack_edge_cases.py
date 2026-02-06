@@ -4,7 +4,7 @@ from collections.abc import Generator
 
 import pytest
 
-from sqlspec import StatementStack
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.exceptions import StackExecutionError
 from tests.conftest import requires_interpreted
@@ -35,7 +35,7 @@ def sqlite_stack_session() -> "Generator[SqliteDriver, None, None]":
 def _table_count(session: "SqliteDriver") -> int:
     result = session.execute("SELECT COUNT(*) AS total FROM stack_edge_table")
     assert result.data is not None
-    return int(result.data[0]["total"])
+    return int(result.get_data()[0]["total"])
 
 
 def test_execute_stack_requires_operations(sqlite_stack_session: "SqliteDriver") -> None:
@@ -71,12 +71,12 @@ def test_stack_with_only_select_operations(sqlite_stack_session: "SqliteDriver")
 
     first_result = results[0].result
     second_result = results[1].result
-    assert first_result is not None
-    assert second_result is not None
+    assert isinstance(first_result, SQLResult)
+    assert isinstance(second_result, SQLResult)
     assert first_result.data is not None
     assert second_result.data is not None
-    assert first_result.data[0]["name"] == "alpha"
-    assert second_result.data[0]["total"] == 2
+    assert first_result.get_data()[0]["name"] == "alpha"
+    assert second_result.get_data()[0]["total"] == 2
 
 
 def test_large_stack_of_mixed_operations(sqlite_stack_session: "SqliteDriver") -> None:
@@ -91,9 +91,9 @@ def test_large_stack_of_mixed_operations(sqlite_stack_session: "SqliteDriver") -
 
     assert len(results) == 51
     final_result = results[-1].result
-    assert final_result is not None
+    assert isinstance(final_result, SQLResult)
     assert final_result.data is not None
-    assert final_result.data[0]["total"] == 50
+    assert final_result.get_data()[0]["total"] == 50
 
 
 def test_fail_fast_rolls_back_new_transaction(sqlite_stack_session: "SqliteDriver") -> None:
@@ -138,9 +138,9 @@ def test_parameter_edge_cases(sqlite_stack_session: "SqliteDriver") -> None:
 
     results = sqlite_stack_session.execute_stack(stack)
     third_result = results[2].result
-    assert third_result is not None
+    assert isinstance(third_result, SQLResult)
     assert third_result.data is not None
-    assert third_result.data[0]["notes"] is None
+    assert third_result.get_data()[0]["notes"] is None
 
 
 def test_stack_with_existing_transaction(sqlite_stack_session: "SqliteDriver") -> None:
@@ -178,8 +178,8 @@ def test_stack_single_statement_selects_inside_existing_transaction(sqlite_stack
 
     results = sqlite_stack_session.execute_stack(stack)
     select_result = results[0].result
-    assert select_result is not None
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["name"] == "pre"
+    assert select_result.get_data()[0]["name"] == "pre"
 
     sqlite_stack_session.rollback()

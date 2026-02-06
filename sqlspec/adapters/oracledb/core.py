@@ -422,8 +422,12 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
 
 def collect_sync_rows(
     fetched_data: "list[Any] | None", description: "list[Any] | None", driver_features: "dict[str, Any]"
-) -> "tuple[list[dict[str, Any]], list[str]]":
-    """Collect OracleDB sync rows into dictionaries with normalized column names.
+) -> "tuple[list[tuple[Any, ...]], list[str]]":
+    """Collect OracleDB sync rows as tuples with normalized column names.
+
+    LOB coercion is still applied to each row. The raw coerced tuples are
+    returned instead of dicts so that ``SQLResult`` can handle lazy dict
+    materialization based on ``row_format``.
 
     Args:
         fetched_data: Rows returned from cursor.fetchall().
@@ -439,14 +443,18 @@ def collect_sync_rows(
     column_names = normalize_column_names(column_names, driver_features)
     if not fetched_data:
         return [], column_names
-    data = [dict(zip(column_names, _coerce_sync_row_values(row), strict=False)) for row in fetched_data]
+    data = [tuple(_coerce_sync_row_values(row)) for row in fetched_data]
     return data, column_names
 
 
 async def collect_async_rows(
     fetched_data: "list[Any] | None", description: "list[Any] | None", driver_features: "dict[str, Any]"
-) -> "tuple[list[dict[str, Any]], list[str]]":
-    """Collect OracleDB async rows into dictionaries with normalized column names.
+) -> "tuple[list[tuple[Any, ...]], list[str]]":
+    """Collect OracleDB async rows as tuples with normalized column names.
+
+    LOB coercion is still applied to each row. The raw coerced tuples are
+    returned instead of dicts so that ``SQLResult`` can handle lazy dict
+    materialization based on ``row_format``.
 
     Args:
         fetched_data: Rows returned from cursor.fetchall().
@@ -462,10 +470,10 @@ async def collect_async_rows(
     column_names = normalize_column_names(column_names, driver_features)
     if not fetched_data:
         return [], column_names
-    data: list[dict[str, Any]] = []
+    data: list[tuple[Any, ...]] = []
     for row in fetched_data:
         coerced_row = await _coerce_async_row_values(row)
-        data.append(dict(zip(column_names, coerced_row, strict=False)))
+        data.append(tuple(coerced_row))
     return data, column_names
 
 

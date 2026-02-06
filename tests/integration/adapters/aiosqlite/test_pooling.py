@@ -44,7 +44,7 @@ async def test_shared_memory_pooling() -> None:
             assert isinstance(result, SQLResult)
             assert result.data is not None
             assert len(result.data) == 1
-            assert result.data[0]["value"] == "shared_data"
+            assert result.get_data()[0]["value"] == "shared_data"
 
         async with config.provide_session() as session3:
             await session3.execute("DROP TABLE IF EXISTS shared_test")
@@ -80,7 +80,7 @@ async def test_regular_memory_auto_converted_pooling() -> None:
             assert isinstance(result, SQLResult)
             assert result.data is not None
             assert len(result.data) == 1
-            assert result.data[0]["value"] == "converted_data"
+            assert result.get_data()[0]["value"] == "converted_data"
 
         async with config.provide_session() as session3:
             await session3.execute("DROP TABLE IF EXISTS converted_test")
@@ -113,7 +113,7 @@ async def test_file_database_pooling_enabled() -> None:
             assert isinstance(result, SQLResult)
             assert result.data is not None
             assert len(result.data) == 1
-            assert result.data[0]["value"] == "test_data"
+            assert result.get_data()[0]["value"] == "test_data"
 
     finally:
         await config.close_pool()
@@ -151,7 +151,7 @@ async def test_pooling_with_core_round_3(aiosqlite_config: AiosqliteConfig) -> N
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
-        assert select_result.data[0]["data"] == "pool_test_data"
+        assert select_result.get_data()[0]["data"] == "pool_test_data"
 
         await session2.execute("DROP TABLE IF EXISTS pool_core_test")
         await session2.commit()
@@ -184,7 +184,7 @@ async def test_pool_concurrent_access(aiosqlite_config_file: AiosqliteConfig) ->
         result = await verify_session.execute("SELECT COUNT(*) as count FROM concurrent_test")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["count"] == 5
+        assert result.get_data()[0]["count"] == 5
 
         await verify_session.execute("DROP TABLE IF EXISTS concurrent_test")
         await verify_session.commit()

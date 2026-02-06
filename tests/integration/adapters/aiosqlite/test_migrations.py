@@ -64,8 +64,8 @@ def down():
 
         users_result = await driver.execute(f"SELECT * FROM {users_table}")
         assert len(users_result.data) == 1
-        assert users_result.data[0]["name"] == "John Doe"
-        assert users_result.data[0]["email"] == "john@example.com"
+        assert users_result.get_data()[0]["name"] == "John Doe"
+        assert users_result.get_data()[0]["email"] == "john@example.com"
 
     try:
         await commands.downgrade("base")
@@ -145,7 +145,7 @@ def down():
 
         async with config.provide_session() as driver:
             tables_result = await driver.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            table_names = [t["name"] for t in tables_result.data]
+            table_names = [t["name"] for t in tables_result.get_data()]
             assert users_table in table_names
             assert posts_table in table_names
 
@@ -158,13 +158,13 @@ def down():
 
             posts_result = await driver.execute(f"SELECT * FROM {posts_table}")
             assert len(posts_result.data) == 1
-            assert posts_result.data[0]["title"] == "My Post"
+            assert posts_result.get_data()[0]["title"] == "My Post"
 
         await commands.downgrade("0001")
 
         async with config.provide_session() as driver:
             tables_result = await driver.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            table_names = [t["name"] for t in tables_result.data]
+            table_names = [t["name"] for t in tables_result.get_data()]
             assert users_table in table_names
             assert posts_table not in table_names
 
@@ -175,7 +175,7 @@ def down():
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
 
-            table_names = [t["name"] for t in tables_result.data if not t["name"].startswith("sqlspec_")]
+            table_names = [t["name"] for t in tables_result.get_data() if not t["name"].startswith("sqlspec_")]
             assert len(table_names) == 0
     finally:
         if config.connection_instance:
@@ -319,8 +319,8 @@ def down():
         async with config.provide_session() as driver:
             customers_result = await driver.execute(f"SELECT * FROM {customers_table} ORDER BY name")
             assert len(customers_result.data) == 2
-            assert customers_result.data[0]["name"] == "Customer 1"
-            assert customers_result.data[1]["name"] == "Customer 2"
+            assert customers_result.get_data()[0]["name"] == "Customer 1"
+            assert customers_result.get_data()[1]["name"] == "Customer 2"
 
         await commands.downgrade("base")
 

@@ -214,6 +214,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 column_names=column_names,
                 data_row_count=len(fetched_data),
                 is_select_result=True,
+                row_format="tuple",
             )
 
         affected_rows = resolve_rowcount(cursor)
@@ -655,6 +656,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 column_names=column_names,
                 data_row_count=len(fetched_data),
                 is_select_result=True,
+                row_format="tuple",
             )
 
         affected_rows = resolve_rowcount(cursor)

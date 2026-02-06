@@ -617,7 +617,6 @@ PYDANTIC_INSTALLED = dependency_flag("pydantic")
 ALLOYDB_CONNECTOR_INSTALLED = dependency_flag("google.cloud.alloydb.connector")
 NANOID_INSTALLED = dependency_flag("fastnanoid")
 UUID_UTILS_INSTALLED = dependency_flag("uuid_utils")
-
 __all__ = (
     "ALLOYDB_CONNECTOR_INSTALLED",
     "ATTRS_INSTALLED",

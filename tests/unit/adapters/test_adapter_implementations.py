@@ -365,15 +365,16 @@ def test_execution_result_creation() -> None:
     try:
         select_result = driver.create_execution_result(
             cursor_result="mock_cursor",
-            selected_data=[{"id": 1}, {"id": 2}],
+            selected_data=[(1,), (2,)],
             column_names=["id"],
             data_row_count=2,
             is_select_result=True,
+            row_format="tuple",
         )
 
         assert isinstance(select_result, ExecutionResult)
         assert select_result.is_select_result is True
-        assert select_result.selected_data == [{"id": 1}, {"id": 2}]
+        assert select_result.selected_data == [(1,), (2,)]
         assert select_result.column_names == ["id"]
         assert select_result.data_row_count == 2
 
@@ -412,10 +413,11 @@ def test_sql_result_building() -> None:
         statement = SQL("SELECT * FROM users", statement_config=config)
         execution_result = driver.create_execution_result(
             cursor_result="mock",
-            selected_data=[{"id": 1, "name": "test"}],
+            selected_data=[(1, "test")],
             column_names=["id", "name"],
             data_row_count=1,
             is_select_result=True,
+            row_format="tuple",
         )
 
         sql_result = driver.build_statement_result(statement, execution_result)

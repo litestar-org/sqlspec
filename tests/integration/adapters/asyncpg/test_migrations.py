@@ -68,8 +68,8 @@ def down():
 
             users_result = await driver.execute("SELECT * FROM users")
             assert len(users_result.data) == 1
-            assert users_result.data[0]["name"] == "John Doe"
-            assert users_result.data[0]["email"] == "john@example.com"
+            assert users_result.get_data()[0]["name"] == "John Doe"
+            assert users_result.get_data()[0]["email"] == "john@example.com"
 
         await commands.downgrade("base")
 

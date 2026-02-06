@@ -1,5 +1,6 @@
 """Shared statement pipeline registry and instrumentation."""
 
+import contextlib
 import hashlib
 import os
 from collections import OrderedDict
@@ -250,6 +251,12 @@ class StatementPipelineRegistry:
         return snapshots
 
     def _fingerprint_config(self, config: "Any") -> str:
+        # Optimization: Use cached fingerprint if available
+        # Configs are effectively immutable after creation, so caching is safe
+        cached = getattr(config, "_fingerprint_cache", None)
+        if isinstance(cached, str):
+            return cached
+
         param_config = config.parameter_config
         param_config_hash = param_config.hash()
         converter_type = type(config.parameter_converter) if config.parameter_converter else None
@@ -288,7 +295,13 @@ class StatementPipelineRegistry:
             param_config.preserve_original_params_for_many,
         )
         fingerprint = hashlib.blake2b(repr(finger_components).encode(), digest_size=8).hexdigest()
-        return f"pipeline::{fingerprint}"
+        full_fingerprint = f"pipeline::{fingerprint}"
+
+        # Cache the fingerprint for future calls - configs are immutable in practice
+        with contextlib.suppress(AttributeError, TypeError):
+            config._fingerprint_cache = full_fingerprint
+
+        return full_fingerprint
 
 
 _PIPELINE_REGISTRY: "StatementPipelineRegistry" = StatementPipelineRegistry()

@@ -330,7 +330,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
 
         if result.rows_affected == 0:
             check_result = driver.execute(self._get_applied_migrations_sql())
-            applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
+            applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
 
             if new_version in applied_versions:
                 logger.debug("Version already updated: %s -> %s", old_version, new_version)
@@ -527,7 +527,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
 
         if result.rows_affected == 0:
             check_result = await driver.execute(self._get_applied_migrations_sql())
-            applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
+            applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
 
             if new_version in applied_versions:
                 logger.debug("Version already updated: %s -> %s", old_version, new_version)

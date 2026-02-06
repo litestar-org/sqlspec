@@ -154,7 +154,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             The current version number or None if no migrations applied.
         """
         result = driver.execute(self._get_current_version_sql())
-        current = result.data[0]["version_num"] if result.data else None
+        current = result.get_data()[0]["version_num"] if result.data else None
         log_with_context(
             logger,
             logging.DEBUG,
@@ -175,7 +175,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             List of migration records.
         """
         result = driver.execute(self._get_applied_migrations_sql())
-        applied = result.data or []
+        applied = result.get_data()
         log_with_context(
             logger,
             logging.DEBUG,
@@ -205,7 +205,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         version_type = parsed_version.type.value
 
         result = driver.execute(self._get_next_execution_sequence_sql())
-        next_sequence = result.data[0]["next_seq"] if result.data else 1
+        next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
 
         driver.execute(
             self._get_record_migration_sql(
@@ -272,7 +272,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
 
         if result.rows_affected == 0:
             check_result = driver.execute(self._get_applied_migrations_sql())
-            applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
+            applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
 
             if new_version in applied_versions:
                 log_with_context(
@@ -325,7 +325,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         driver.execute(self._get_delete_versions_sql(replaced_versions))
 
         result = driver.execute(self._get_next_execution_sequence_sql())
-        next_sequence = result.data[0]["next_seq"] if result.data else 1
+        next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
 
         parsed_version = parse_version(squashed_version)
         version_type = parsed_version.type.value
@@ -373,7 +373,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             True if any replaced version exists (squash already applied), False otherwise.
         """
         result = driver.execute(self._get_applied_migrations_sql())
-        applied_versions = {row["version_num"] for row in result.data} if result.data else set()
+        applied_versions = {row["version_num"] for row in result.get_data()} if result.data else set()
 
         # Check if any replaced version exists in applied migrations
         return any(version in applied_versions for version in replaced_versions)
@@ -529,7 +529,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             The current version number or None if no migrations applied.
         """
         result = await driver.execute(self._get_current_version_sql())
-        current = result.data[0]["version_num"] if result.data else None
+        current = result.get_data()[0]["version_num"] if result.data else None
         log_with_context(
             logger,
             logging.DEBUG,
@@ -550,7 +550,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             List of migration records.
         """
         result = await driver.execute(self._get_applied_migrations_sql())
-        applied = result.data or []
+        applied = result.get_data()
         log_with_context(
             logger,
             logging.DEBUG,
@@ -580,7 +580,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         version_type = parsed_version.type.value
 
         result = await driver.execute(self._get_next_execution_sequence_sql())
-        next_sequence = result.data[0]["next_seq"] if result.data else 1
+        next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
 
         await driver.execute(
             self._get_record_migration_sql(
@@ -647,7 +647,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
 
         if result.rows_affected == 0:
             check_result = await driver.execute(self._get_applied_migrations_sql())
-            applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
+            applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
 
             if new_version in applied_versions:
                 log_with_context(
@@ -700,7 +700,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         await driver.execute(self._get_delete_versions_sql(replaced_versions))
 
         result = await driver.execute(self._get_next_execution_sequence_sql())
-        next_sequence = result.data[0]["next_seq"] if result.data else 1
+        next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
 
         parsed_version = parse_version(squashed_version)
         version_type = parsed_version.type.value
@@ -748,7 +748,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             True if any replaced version exists (squash already applied), False otherwise.
         """
         result = await driver.execute(self._get_applied_migrations_sql())
-        applied_versions = {row["version_num"] for row in result.data} if result.data else set()
+        applied_versions = {row["version_num"] for row in result.get_data()} if result.data else set()
 
         # Check if any replaced version exists in applied migrations
         return any(version in applied_versions for version in replaced_versions)

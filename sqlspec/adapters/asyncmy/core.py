@@ -298,7 +298,7 @@ def detect_json_columns(cursor: Any, json_type_codes: "set[int]") -> "list[int]"
     return json_indexes
 
 
-def _deserialize_asyncmy_json_rows(
+def _deserialize_asyncmy_json_dict_rows(
     column_names: "list[str]",
     rows: "list[dict[str, Any]]",
     json_indexes: "list[int]",
@@ -306,7 +306,7 @@ def _deserialize_asyncmy_json_rows(
     *,
     logger: Any | None = None,
 ) -> "list[dict[str, Any]]":
-    """Apply JSON deserialization to selected columns.
+    """Apply JSON deserialization to dict rows (DictCursor path).
 
     Args:
         column_names: Ordered column names from the cursor description.
@@ -344,6 +344,47 @@ def _deserialize_asyncmy_json_rows(
     return rows
 
 
+def _deserialize_asyncmy_json_tuple_rows(
+    rows: "list[Any]", json_indexes: "list[int]", deserializer: "Callable[[Any], Any]", *, logger: Any | None = None
+) -> "list[Any]":
+    """Apply JSON deserialization to tuple rows using index-based access.
+
+    Args:
+        rows: Result rows as tuples.
+        json_indexes: Column indexes to deserialize.
+        deserializer: Callable used to decode JSON values.
+        logger: Optional logger for debug output.
+
+    Returns:
+        Rows with JSON columns decoded when possible.
+    """
+    if not rows or not json_indexes:
+        return rows
+
+    result: list[Any] = []
+    for row in rows:
+        row_list = list(row)
+        mutated = False
+        for idx in json_indexes:
+            if idx >= len(row_list):
+                continue
+            raw_value = row_list[idx]
+            if raw_value is None:
+                continue
+            if isinstance(raw_value, bytearray):
+                raw_value = bytes(raw_value)
+            if not isinstance(raw_value, (str, bytes)):
+                continue
+            try:
+                row_list[idx] = deserializer(raw_value)
+                mutated = True
+            except Exception:
+                if logger is not None:
+                    logger.debug("Failed to deserialize JSON column index %d", idx, exc_info=True)
+        result.append(tuple(row_list) if mutated else row)
+    return result
+
+
 def collect_rows(
     fetched_data: "Sequence[Any] | None",
     description: "Sequence[Any] | None",
@@ -351,8 +392,8 @@ def collect_rows(
     deserializer: "Callable[[Any], Any]",
     *,
     logger: Any | None = None,
-) -> "tuple[list[dict[str, Any]], list[str]]":
-    """Collect AsyncMy rows into dictionaries with JSON decoding.
+) -> "tuple[list[Any], list[str], str]":
+    """Collect AsyncMy rows with JSON decoding, preserving raw format.
 
     Args:
         fetched_data: Rows returned from cursor.fetchall().
@@ -362,19 +403,20 @@ def collect_rows(
         logger: Optional logger for debug output.
 
     Returns:
-        Tuple of (rows, column_names).
+        Tuple of (rows, column_names, row_format).
     """
     if not description:
-        return [], []
+        return [], [], "tuple"
     column_names = [desc[0] for desc in description]
     if not fetched_data:
-        return [], column_names
-    if not isinstance(fetched_data[0], dict):
-        rows = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-    else:
+        return [], column_names, "tuple"
+    if isinstance(fetched_data[0], dict):
         rows = [dict(row) for row in fetched_data]
-    rows = _deserialize_asyncmy_json_rows(column_names, rows, json_indexes, deserializer, logger=logger)
-    return rows, column_names
+        rows = _deserialize_asyncmy_json_dict_rows(column_names, rows, json_indexes, deserializer, logger=logger)
+        return rows, column_names, "dict"
+    rows = list(fetched_data)
+    rows = _deserialize_asyncmy_json_tuple_rows(rows, json_indexes, deserializer, logger=logger)
+    return rows, column_names, "tuple"
 
 
 def resolve_rowcount(cursor: Any) -> int:

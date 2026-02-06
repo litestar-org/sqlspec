@@ -30,7 +30,7 @@ def test_connection(bigquery_config: "BigQueryConfig") -> None:
         result = driver.execute("SELECT 1 as one")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data == [{"one": 1}]
+        assert result.get_data() == [{"one": 1}]
 
 
 @pytest.fixture
@@ -73,8 +73,8 @@ def test_bigquery_basic_crud(bigquery_session: "BigQueryDriver", driver_test_tab
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["value"] == 42
+    assert select_result.get_data()[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["value"] == 42
 
     update_result = bigquery_session.execute(
         f"UPDATE {driver_test_table} SET value = ? WHERE name = ?", (100, "test_name")
@@ -85,7 +85,7 @@ def test_bigquery_basic_crud(bigquery_session: "BigQueryDriver", driver_test_tab
     verify_result = bigquery_session.execute(f"SELECT value FROM {driver_test_table} WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
-    assert verify_result.data[0]["value"] == 100
+    assert verify_result.get_data()[0]["value"] == 100
 
     delete_result = bigquery_session.execute(f"DELETE FROM {driver_test_table} WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
@@ -94,7 +94,7 @@ def test_bigquery_basic_crud(bigquery_session: "BigQueryDriver", driver_test_tab
     empty_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {driver_test_table}")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
-    assert empty_result.data[0]["count"] == 0
+    assert empty_result.get_data()[0]["count"] == 0
 
 
 def test_bigquery_parameter_styles(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -111,7 +111,7 @@ def test_bigquery_parameter_styles(bigquery_session: "BigQueryDriver", driver_te
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test_value"
+    assert result.get_data()[0]["name"] == "test_value"
 
 
 def test_bigquery_execute_many(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -128,14 +128,14 @@ def test_bigquery_execute_many(bigquery_session: "BigQueryDriver", driver_test_t
     select_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {driver_test_table}")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(parameters_list)
+    assert select_result.get_data()[0]["count"] == len(parameters_list)
 
     ordered_result = bigquery_session.execute(f"SELECT name, value FROM {driver_test_table} ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
-    assert ordered_result.data[0]["name"] == "name1"
-    assert ordered_result.data[0]["value"] == 1
+    assert ordered_result.get_data()[0]["name"] == "name1"
+    assert ordered_result.get_data()[0]["value"] == 1
 
 
 def test_bigquery_execute_script(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -157,10 +157,10 @@ def test_bigquery_execute_script(bigquery_session: "BigQueryDriver", driver_test
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
-    assert select_result.data[0]["name"] == "script_test1"
-    assert select_result.data[0]["value"] == 1000
-    assert select_result.data[1]["name"] == "script_test2"
-    assert select_result.data[1]["value"] == 888
+    assert select_result.get_data()[0]["name"] == "script_test1"
+    assert select_result.get_data()[0]["value"] == 1000
+    assert select_result.get_data()[1]["name"] == "script_test2"
+    assert select_result.get_data()[1]["value"] == 888
 
 
 def test_bigquery_result_methods(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -217,10 +217,10 @@ def test_bigquery_complex_queries(bigquery_session: "BigQueryDriver", driver_tes
     """)
     assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
-    assert agg_result.data[0]["total_count"] == 4
-    assert agg_result.data[0]["avg_value"] == 29.5
-    assert agg_result.data[0]["min_value"] == 25
-    assert agg_result.data[0]["max_value"] == 35
+    assert agg_result.get_data()[0]["total_count"] == 4
+    assert agg_result.get_data()[0]["avg_value"] == 29.5
+    assert agg_result.get_data()[0]["min_value"] == 25
+    assert agg_result.get_data()[0]["max_value"] == 35
 
     subquery_result = bigquery_session.execute(f"""
         SELECT name, value
@@ -231,8 +231,8 @@ def test_bigquery_complex_queries(bigquery_session: "BigQueryDriver", driver_tes
     assert isinstance(subquery_result, SQLResult)
     assert subquery_result.data is not None
     assert len(subquery_result.data) == 2
-    assert subquery_result.data[0]["name"] == "Bob"
-    assert subquery_result.data[1]["name"] == "Charlie"
+    assert subquery_result.get_data()[0]["name"] == "Bob"
+    assert subquery_result.get_data()[1]["name"] == "Charlie"
 
 
 def test_bigquery_statement_stack_sequential(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -250,9 +250,10 @@ def test_bigquery_statement_stack_sequential(bigquery_session: "BigQueryDriver",
     results = bigquery_session.execute_stack(stack)
 
     assert len(results) == 3
-    assert results[2].result is not None
-    assert results[2].result.data is not None
-    assert results[2].result.data[0]["total"] == 2
+    count_result = results[2].result
+    assert isinstance(count_result, SQLResult)
+    assert count_result.data is not None
+    assert count_result.get_data()[0]["total"] == 2
 
 
 @requires_interpreted
@@ -277,7 +278,7 @@ def test_bigquery_statement_stack_continue_on_error(bigquery_session: "BigQueryD
 
     verify = bigquery_session.execute(f"SELECT COUNT(*) AS total FROM {driver_test_table}")
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 def test_bigquery_schema_operations(bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService") -> None:
@@ -316,7 +317,7 @@ def test_bigquery_column_names_and_metadata(bigquery_session: "BigQueryDriver", 
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["name"] == "metadata_test"
     assert row["value"] == 123
     assert row["id"] is not None
@@ -340,7 +341,7 @@ def test_bigquery_performance_bulk_operations(bigquery_session: "BigQueryDriver"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 100
+    assert select_result.get_data()[0]["count"] == 100
 
     page_result = bigquery_session.execute(f"""
         SELECT name, value FROM {driver_test_table}
@@ -351,7 +352,7 @@ def test_bigquery_performance_bulk_operations(bigquery_session: "BigQueryDriver"
     assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
-    assert page_result.data[0]["name"] == "bulk_user_21"
+    assert page_result.get_data()[0]["name"] == "bulk_user_21"
 
 
 def test_bigquery_specific_features(bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService") -> None:
@@ -364,8 +365,8 @@ def test_bigquery_specific_features(bigquery_session: "BigQueryDriver", bigquery
     """)
     assert isinstance(functions_result, SQLResult)
     assert functions_result.data is not None
-    assert functions_result.data[0]["uuid_val"] is not None
-    assert functions_result.data[0]["fingerprint"] is not None
+    assert functions_result.get_data()[0]["uuid_val"] is not None
+    assert functions_result.get_data()[0]["fingerprint"] is not None
 
     array_result = bigquery_session.execute("""
         SELECT
@@ -374,8 +375,8 @@ def test_bigquery_specific_features(bigquery_session: "BigQueryDriver", bigquery
     """)
     assert isinstance(array_result, SQLResult)
     assert array_result.data is not None
-    assert array_result.data[0]["numbers"] == [1, 2, 3, 4, 5]
-    assert array_result.data[0]["array_len"] == 5
+    assert array_result.get_data()[0]["numbers"] == [1, 2, 3, 4, 5]
+    assert array_result.get_data()[0]["array_len"] == 5
 
     struct_result = bigquery_session.execute("""
         SELECT
@@ -384,9 +385,9 @@ def test_bigquery_specific_features(bigquery_session: "BigQueryDriver", bigquery
     """)
     assert isinstance(struct_result, SQLResult)
     assert struct_result.data is not None
-    assert struct_result.data[0]["person"]["name"] == "Alice"
-    assert struct_result.data[0]["person"]["age"] == 25
-    assert struct_result.data[0]["person_name"] == "Alice"
+    assert struct_result.get_data()[0]["person"]["name"] == "Alice"
+    assert struct_result.get_data()[0]["person"]["age"] == 25
+    assert struct_result.get_data()[0]["person_name"] == "Alice"
 
 
 def test_bigquery_analytical_functions(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -417,7 +418,7 @@ def test_bigquery_analytical_functions(bigquery_session: "BigQueryDriver", drive
     assert window_result.data is not None
     assert len(window_result.data) == 5
 
-    product_a_rows = [row for row in window_result.data if row["name"] == "Product A"]
+    product_a_rows = [row for row in window_result.get_data() if row["name"] == "Product A"]
     assert len(product_a_rows) == 2
 
     highest_a = max(product_a_rows, key=operator.itemgetter("value"))
@@ -494,10 +495,10 @@ def test_bigquery_execute_many_qmark_with_dict_params(
     )
     assert verify.data is not None
     assert len(verify.data) == 2
-    assert verify.data[0]["name"] == "qmark_dict_a"
-    assert verify.data[0]["value"] == 100
-    assert verify.data[1]["name"] == "qmark_dict_b"
-    assert verify.data[1]["value"] == 200
+    assert verify.get_data()[0]["name"] == "qmark_dict_a"
+    assert verify.get_data()[0]["value"] == 100
+    assert verify.get_data()[1]["name"] == "qmark_dict_b"
+    assert verify.get_data()[1]["value"] == 200
 
 
 def test_bigquery_execute_many_named_params(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -513,8 +514,8 @@ def test_bigquery_execute_many_named_params(bigquery_session: "BigQueryDriver", 
     )
     assert verify.data is not None
     assert len(verify.data) == 2
-    assert verify.data[0]["name"] == "named_a"
-    assert verify.data[1]["name"] == "named_b"
+    assert verify.get_data()[0]["name"] == "named_a"
+    assert verify.get_data()[1]["name"] == "named_b"
 
 
 def test_bigquery_execute_many_update_with_inlining(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -536,5 +537,5 @@ def test_bigquery_execute_many_update_with_inlining(bigquery_session: "BigQueryD
     )
     assert verify.data is not None
     assert len(verify.data) == 2
-    assert verify.data[0]["value"] == 100
-    assert verify.data[1]["value"] == 200
+    assert verify.get_data()[0]["value"] == 100
+    assert verify.get_data()[1]["value"] == 200

@@ -86,7 +86,7 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["jsonb_col"] is not None
     assert row["array_col"] == [1, 2, 3, 4, 5]
     assert row["uuid_col"] is not None
@@ -102,9 +102,9 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
     """)
 
     assert json_query.data is not None
-    assert json_query.data[0]["name"] == "John"
-    assert json_query.data[0]["age"] == "30"
-    assert json_query.data[0]["array_len"] == 5
+    assert json_query.get_data()[0]["name"] == "John"
+    assert json_query.get_data()[0]["age"] == "30"
+    assert json_query.get_data()[0]["array_len"] == 5
 
     postgresql_session.execute_script("DROP TABLE IF EXISTS pg_test_adbc")
 
@@ -144,13 +144,13 @@ def test_sqlite_adbc_specific_features(sqlite_session: AdbcDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 3
 
-    first_row = result.data[0]
+    first_row = result.get_data()[0]
     assert first_row["name"] == "test1"
     assert first_row["data"] == test_blob
     assert first_row["blob_length"] == len(test_blob)
     assert first_row["value_type"] == "real"
 
-    second_row = result.data[1]
+    second_row = result.get_data()[1]
     assert second_row["data"] is None
     assert second_row["blob_length"] is None
 
@@ -164,10 +164,10 @@ def test_sqlite_adbc_specific_features(sqlite_session: AdbcDriver) -> None:
     """)
 
     assert func_result.data is not None
-    assert func_result.data[0]["total"] == 3
-    assert func_result.data[0]["avg_value"] is not None
-    assert "test1" in func_result.data[0]["all_names"]
-    assert func_result.data[0]["version"] is not None
+    assert func_result.get_data()[0]["total"] == 3
+    assert func_result.get_data()[0]["avg_value"] is not None
+    assert "test1" in func_result.get_data()[0]["all_names"]
+    assert func_result.get_data()[0]["version"] is not None
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -204,7 +204,7 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["name"] == "DuckDB Test"
     assert row["numbers"] == [1, 2, 3, 4, 5]
     assert row["nested_data"] is not None
@@ -223,9 +223,9 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
     """)
 
     assert analytical_result.data is not None
-    assert analytical_result.data[0]["array_len"] == 5
-    assert analytical_result.data[0]["numbers_sum"] == 15
-    assert analytical_result.data[0]["json_type"] == "test"
+    assert analytical_result.get_data()[0]["array_len"] == 5
+    assert analytical_result.get_data()[0]["numbers_sum"] == 15
+    assert analytical_result.get_data()[0]["json_type"] == "test"
 
 
 @pytest.mark.xdist_group("postgres")
@@ -238,7 +238,7 @@ def test_postgresql_dialect_detection(postgresql_session: AdbcDriver) -> None:
     result = postgresql_session.execute("SELECT $1 as param_value", ("postgresql_test",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["param_value"] == "postgresql_test"
+    assert result.get_data()[0]["param_value"] == "postgresql_test"
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -251,7 +251,7 @@ def test_sqlite_adbc_dialect_detection(sqlite_session: AdbcDriver) -> None:
     result = sqlite_session.execute("SELECT ? as param_value", ("test_sqlite_adbc",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["param_value"] == "test_sqlite_adbc"
+    assert result.get_data()[0]["param_value"] == "test_sqlite_adbc"
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -266,4 +266,4 @@ def test_duckdb_dialect_detection(duckdb_session: AdbcDriver) -> None:
     result = duckdb_session.execute("SELECT ? as param_value", ("duckdb_test_adbc",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["param_value"] == "duckdb_test_adbc"
+    assert result.get_data()[0]["param_value"] == "duckdb_test_adbc"

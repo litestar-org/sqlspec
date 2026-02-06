@@ -104,10 +104,8 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def collect_rows(
-    fetched_data: "list[Any]", description: "Sequence[Any] | None"
-) -> "tuple[list[dict[str, Any]], list[str], int]":
-    """Collect SQLite result rows into dictionaries.
+def collect_rows(fetched_data: "list[Any]", description: "Sequence[Any] | None") -> "tuple[list[Any], list[str], int]":
+    """Collect mock result rows as raw tuples.
 
     Args:
         fetched_data: Raw rows from cursor.fetchall()
@@ -120,8 +118,7 @@ def collect_rows(
         return [], [], 0
 
     column_names = [col[0] for col in description]
-    data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
-    return data, column_names, len(data)
+    return fetched_data, column_names, len(fetched_data)
 
 
 def resolve_rowcount(cursor: Any) -> int:

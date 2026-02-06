@@ -25,10 +25,12 @@ from sqlspec.core import (
     get_cache_config,
     split_sql_script,
 )
+from sqlspec.core._pool import get_sql_pool
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import structural_fingerprint, value_fingerprint
+from sqlspec.core.parameters import ParameterProcessor, structural_fingerprint, value_fingerprint
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.driver._query_cache import QC_MAX_SIZE, CachedQuery, QueryCache
 from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
@@ -47,11 +49,12 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
+    from sqlspec.core.statement import ProcessedState
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.storage import AsyncStoragePipeline, StorageCapabilities, SyncStoragePipeline
     from sqlspec.typing import ForeignKeyMetadata, SchemaT, StatementParameters
@@ -65,6 +68,7 @@ __all__ = (
     "VERSION_GROUPS_MIN_FOR_MINOR",
     "VERSION_GROUPS_MIN_FOR_PATCH",
     "AsyncExceptionHandler",
+    "CachedQuery",
     "CommonDriverAttributesMixin",
     "DataDictionaryDialectMixin",
     "DataDictionaryMixin",
@@ -114,6 +118,7 @@ def _extract_pagination_placeholders_from_expression(expression: "exp.Expression
 
     Returns:
         Set of placeholder names found in LIMIT/OFFSET clauses.
+
     """
     pagination_placeholders: set[str] = set()
 
@@ -149,6 +154,7 @@ def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
 
     Returns:
         Set of placeholder names found in LIMIT/OFFSET clauses.
+
     """
     import sqlglot
 
@@ -239,6 +245,7 @@ def make_cache_key_hashable(obj: Any) -> Any:
     Returns:
         A hashable representation of the object. Collections become tuples,
         arrays become structural tuples like ("ndarray", dtype, shape).
+
     """
     if isinstance(obj, (int, str, bytes, bool, float, type(None))):
         return obj
@@ -331,6 +338,7 @@ def _callable_cache_key(func: Any) -> Any:
 
     Returns:
         Tuple identifying the callable, or None for missing callables.
+
     """
     if func is None:
         return None
@@ -641,14 +649,12 @@ class DataDictionaryMixin:
 
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
         """Log detected database version with db.system context."""
-
         logger.debug(
             "Detected database version", extra={"db.system": resolve_db_system(adapter), "db.version": str(version)}
         )
 
     def _log_version_unavailable(self, adapter: str, reason: str) -> None:
         """Log that database version could not be determined."""
-
         logger.debug("Database version unavailable", extra={"db.system": resolve_db_system(adapter), "reason": reason})
 
     def _log_schema_introspect(
@@ -775,7 +781,7 @@ class ExecutionResult(NamedTuple):
     cursor_result: Any
     rowcount_override: int | None
     special_data: Any
-    selected_data: "list[dict[str, Any]] | None"
+    selected_data: "list[Any] | None"
     column_names: "list[str] | None"
     data_row_count: int | None
     statement_count: int | None
@@ -783,6 +789,7 @@ class ExecutionResult(NamedTuple):
     is_script_result: bool
     is_select_result: bool
     is_many_result: bool
+    row_format: str = "dict"
     last_inserted_id: int | str | None = None
 
 
@@ -792,11 +799,22 @@ EXEC_SPECIAL_DATA: Final[int] = 2
 DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
 
 
+_DEFAULT_METADATA: Final = {"status_message": "OK"}
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("_observability", "connection", "driver_features", "statement_config")
+    __slots__ = (
+        "_observability",
+        "_qc",
+        "_qc_enabled",
+        "_statement_cache",
+        "connection",
+        "driver_features",
+        "statement_config",
+    )
     connection: "Any"
     statement_config: "StatementConfig"
     driver_features: "dict[str, Any]"
@@ -821,10 +839,18 @@ class CommonDriverAttributesMixin:
         self.statement_config = statement_config
         self.driver_features = driver_features or {}
         self._observability = observability
+        self._statement_cache: dict[str, SQL] = {}
+        self._qc = QueryCache(QC_MAX_SIZE)
+        self._qc_enabled = False
+        self._update_qc_flag()
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Attach or replace the observability runtime."""
         self._observability = runtime
+        self._update_qc_flag()
+
+    def _update_qc_flag(self) -> None:
+        self._qc_enabled = bool(not self.statement_config.statement_transformers and self.observability.is_idle)
 
     @property
     def observability(self) -> "ObservabilityRuntime":
@@ -898,6 +924,179 @@ class CommonDriverAttributesMixin:
         remediation = "Override storage methods on the adapter to enable this capability."
         raise StorageCapabilityError(msg, capability=capability, remediation=remediation)
 
+    def _release_pooled_statement(self, statement: "SQL") -> None:
+        if getattr(statement, "_pooled", False):
+            get_sql_pool().release(statement)
+
+    def qc_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
+        """Rebind parameters for a cached query."""
+        config = self.statement_config.parameter_config
+        if not cached.input_named_parameters and not cached.applied_wrap_types and not config.type_coercion_map:
+            return params
+        processor = ParameterProcessor(
+            converter=self.statement_config.parameter_converter,
+            validator=self.statement_config.parameter_validator,
+            cache_max_size=0,
+            validator_cache_max_size=0,
+        )
+        return processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
+            params,
+            cached.parameter_profile,
+            config,
+            input_named_parameters=cached.input_named_parameters,
+            is_many=False,
+            apply_wrap_types=cached.applied_wrap_types,
+        )
+
+    def _qc_build(
+        self,
+        sql: str,
+        params: "tuple[Any, ...] | list[Any]",
+        cached: "CachedQuery",
+        execution_parameters: "ConvertedParameters",
+    ) -> "SQL":
+        statement = get_sql_pool().acquire()
+        # Fast-path: directly set internal attributes to avoid constructor overhead
+        # pyright: ignore[reportPrivateUsage]
+        statement._raw_sql = sql  # pyright: ignore[reportPrivateUsage]
+        statement._raw_expression = None  # pyright: ignore[reportPrivateUsage]
+        statement._statement_config = self.statement_config  # pyright: ignore[reportPrivateUsage]
+        statement._dialect = statement._normalize_dialect(self.statement_config.dialect)  # pyright: ignore[reportPrivateUsage]
+        statement._is_many = False  # pyright: ignore[reportPrivateUsage]
+        statement._is_script = False  # pyright: ignore[reportPrivateUsage]
+        statement._original_parameters = ()  # pyright: ignore[reportPrivateUsage]
+        statement._pooled = True  # pyright: ignore[reportPrivateUsage]
+        statement._compiled_from_cache = False  # pyright: ignore[reportPrivateUsage]
+        statement._hash = None  # pyright: ignore[reportPrivateUsage]
+        statement._filters = []  # pyright: ignore[reportPrivateUsage]
+        statement._named_parameters = {}  # pyright: ignore[reportPrivateUsage]
+        statement._positional_parameters = list(params)  # pyright: ignore[reportPrivateUsage]
+        statement._sql_param_counters = {}  # pyright: ignore[reportPrivateUsage]
+        statement._processed_state = statement._build_processed_state(  # pyright: ignore[reportPrivateUsage]
+            compiled_sql=cached.compiled_sql,
+            execution_parameters=execution_parameters,
+            parsed_expression=None,
+            operation_type=cached.operation_type,
+            input_named_parameters=cached.input_named_parameters,
+            applied_wrap_types=cached.applied_wrap_types,
+            filter_hash=0,
+            parameter_fingerprint=None,
+            parameter_casts=cached.parameter_casts,
+            parameter_profile=cached.parameter_profile,
+            operation_profile=cached.operation_profile,
+            validation_errors=[],
+            is_many=False,
+        )
+        return statement
+
+    def _qc_prepare(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQL | None":
+        """Prepare fast-path execution if cache hit.
+
+        Only essential checks in the hot lookup path. All detailed eligibility
+        validation happens at store time in _qc_store().
+
+        Args:
+            statement: Raw SQL string.
+            params: Query parameters (tuple or list).
+
+        Returns:
+            Prepared SQL object with processed state if cache hit, None otherwise.
+        """
+        if not self._qc_enabled:
+            return None
+        cached = self._qc.get(statement)
+        if cached is None or cached.param_count != len(params):
+            return None
+        # When an AST transformer is configured (e.g. null pruning for ADBC/PostgreSQL),
+        # it may rewrite SQL based on which parameters are None. The cached compiled_sql
+        # was produced from a specific set of None positions, so we must fall back to the
+        # normal path whenever any parameter is None to let the transformer run.
+        if self.statement_config.parameter_config.ast_transformer is not None and any(p is None for p in params):
+            return None
+
+        rebound_params = self.qc_rebind(params, cached)
+        compiled_sql = cached.compiled_sql
+
+        output_transformer = self.statement_config.output_transformer
+        if output_transformer:
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+
+        return self._qc_build(statement, params, cached, rebound_params)
+
+    def _qc_lookup(
+        self, statement: str, params: "tuple[Any, ...] | list[Any]"
+    ) -> "SQLResult | Awaitable[SQLResult | None] | None":
+        """Attempt fast-path execution for cached query.
+
+        Args:
+            statement: Raw SQL string.
+            params: Query parameters.
+
+        Returns:
+            SQLResult (sync) or Awaitable[SQLResult | None] (async) if cache hit,
+            None if cache miss (sync only - async always returns Awaitable).
+        """
+        prepared = self._qc_prepare(statement, params)
+        if prepared is None:
+            return None
+        return self._qc_execute(prepared)
+
+    def _qc_execute(self, statement: "SQL") -> "SQLResult | Awaitable[SQLResult]":
+        raise NotImplementedError
+
+    def _qc_store(self, statement: "SQL") -> None:
+        """Store statement in cache if eligible.
+
+        All eligibility validation happens here (executed once per unique query).
+        This keeps the hot lookup path (qc_prepare) minimal - just a flag check
+        and cache lookup.
+
+        Ineligible queries:
+        - QC disabled or config mismatch
+        - Scripts or execute-many (multiple statements/param sets)
+        - Raw expressions (dynamic SQL)
+        - Static script compilation (parameters embedded in SQL)
+        - Filtered statements (dynamic WHERE clauses)
+        - Unprocessed statements (no compiled metadata)
+        """
+        if not self._qc_enabled:
+            return
+        if statement.statement_config is not self.statement_config:
+            return
+        if statement.is_script or statement.is_many:
+            return
+        if statement.raw_expression is not None:
+            return
+        if not statement.raw_sql:
+            return
+        if statement.statement_config.parameter_config.needs_static_script_compilation:
+            return
+        if len(statement.get_filters_view()) > 0:
+            return
+        if not statement.is_processed:
+            return
+        # When an AST transformer is configured, compiled SQL may depend on which
+        # parameters are None (e.g. null pruning rewrites placeholders to NULL literals).
+        # Don't cache these results as they'd corrupt the cache for non-None calls.
+        if statement.statement_config.parameter_config.ast_transformer is not None:
+            params = statement.positional_parameters
+            if any(p is None for p in params):
+                return
+
+        processed = cast("ProcessedState", statement.get_processed_state())
+        param_profile = processed.parameter_profile
+        cached = CachedQuery(
+            compiled_sql=processed.compiled_sql,
+            parameter_profile=param_profile,
+            input_named_parameters=processed.input_named_parameters,
+            applied_wrap_types=processed.applied_wrap_types,
+            parameter_casts=dict(processed.parameter_casts),
+            operation_type=processed.operation_type,
+            operation_profile=processed.operation_profile,
+            param_count=param_profile.total_count,
+        )
+        self._qc.set(statement.raw_sql, cached)
+
     @overload
     @staticmethod
     def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
@@ -945,7 +1144,7 @@ class CommonDriverAttributesMixin:
         *,
         rowcount_override: int | None = None,
         special_data: Any = None,
-        selected_data: "list[dict[str, Any]] | None" = None,
+        selected_data: "list[Any] | None" = None,
         column_names: "list[str] | None" = None,
         data_row_count: int | None = None,
         statement_count: int | None = None,
@@ -953,6 +1152,7 @@ class CommonDriverAttributesMixin:
         is_script_result: bool = False,
         is_select_result: bool = False,
         is_many_result: bool = False,
+        row_format: str = "dict",
         last_inserted_id: int | str | None = None,
     ) -> ExecutionResult:
         """Create ExecutionResult with all necessary data for any operation type.
@@ -961,7 +1161,7 @@ class CommonDriverAttributesMixin:
             cursor_result: The raw result returned by the database cursor/driver
             rowcount_override: Optional override for the number of affected rows
             special_data: Any special metadata or additional information
-            selected_data: For SELECT operations, the extracted row data
+            selected_data: For SELECT operations, the extracted row data (raw driver-native format)
             column_names: For SELECT operations, the column names
             data_row_count: For SELECT operations, the number of rows returned
             statement_count: For script operations, total number of statements
@@ -969,25 +1169,28 @@ class CommonDriverAttributesMixin:
             is_script_result: Whether this result is from script execution
             is_select_result: Whether this result is from a SELECT operation
             is_many_result: Whether this result is from an execute_many operation
+            row_format: Format of raw rows - "tuple", "dict", or "record"
             last_inserted_id: The ID of the last inserted row (if applicable)
 
         Returns:
             ExecutionResult configured for the specified operation type
 
         """
+        # Positional arguments are slightly faster for NamedTuple
         return ExecutionResult(
-            cursor_result=cursor_result,
-            rowcount_override=rowcount_override,
-            special_data=special_data,
-            selected_data=selected_data,
-            column_names=column_names,
-            data_row_count=data_row_count,
-            statement_count=statement_count,
-            successful_statements=successful_statements,
-            is_script_result=is_script_result,
-            is_select_result=is_select_result,
-            is_many_result=is_many_result,
-            last_inserted_id=last_inserted_id,
+            cursor_result,
+            rowcount_override,
+            special_data,
+            selected_data,
+            column_names,
+            data_row_count,
+            statement_count,
+            successful_statements,
+            is_script_result,
+            is_select_result,
+            is_many_result,
+            row_format,
+            last_inserted_id,
         )
 
     def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
@@ -1009,7 +1212,7 @@ class CommonDriverAttributesMixin:
                 operation_type="SCRIPT",
                 total_statements=execution_result.statement_count or 0,
                 successful_statements=execution_result.successful_statements or 0,
-                metadata=execution_result.special_data or {"status_message": "OK"},
+                metadata=execution_result.special_data or _DEFAULT_METADATA,
             )
 
         if execution_result.is_select_result:
@@ -1020,6 +1223,7 @@ class CommonDriverAttributesMixin:
                 rows_affected=execution_result.data_row_count or 0,
                 operation_type="SELECT",
                 metadata=execution_result.special_data or {},
+                row_format=execution_result.row_format,
             )
 
         return SQLResult(
@@ -1028,7 +1232,7 @@ class CommonDriverAttributesMixin:
             rows_affected=execution_result.rowcount_override or 0,
             operation_type=statement.operation_type,
             last_inserted_id=execution_result.last_inserted_id,
-            metadata=execution_result.special_data or {"status_message": "OK"},
+            metadata=execution_result.special_data or _DEFAULT_METADATA,
         )
 
     def _should_force_select(self, statement: "SQL", cursor: object) -> bool:
@@ -1085,6 +1289,18 @@ class CommonDriverAttributesMixin:
         """
         if statement_config is None:
             statement_config = self.statement_config
+
+        # FAST PATH: String statement with simple parameters
+        if isinstance(statement, str):
+            cached_sql = self._statement_cache.get(statement)
+            if cached_sql is not None and not kwargs:
+                # Check if parameters contain filters
+                has_filters = any(is_statement_filter(p) for p in parameters)
+                if not has_filters:
+                    # Reuse cached SQL object and just update its parameters
+                    # This avoids SQL.__init__ overhead
+                    return cached_sql.copy(parameters=parameters)
+
         kwargs = kwargs or {}
         filters, data_parameters = self._split_parameters(parameters)
 
@@ -1094,6 +1310,9 @@ class CommonDriverAttributesMixin:
             sql_statement = self._prepare_from_sql(statement, data_parameters, statement_config, kwargs)
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
+            # Cache the newly created SQL object for future use
+            if not filters and not kwargs and isinstance(statement, str):
+                self._statement_cache[statement] = sql_statement
 
         return self._apply_filters(sql_statement, filters)
 
@@ -1355,7 +1574,41 @@ class CommonDriverAttributesMixin:
     def _get_compiled_statement(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[CachedStatement, object]":
-        """Compile SQL and return cached statement metadata plus prepared parameters."""
+        """Compile SQL and return cached statement metadata plus prepared parameters.
+
+        FAST PATH: If the statement is already processed (compiled), we reuse
+        its ProcessedState directly. This eliminates redundant compilation when
+        dispatch_statement_execution() has already triggered compile().
+        """
+        # FAST PATH: Statement already compiled - reuse its processed state
+        # This is the key optimization: avoid double compilation
+        if statement.is_processed:
+            if getattr(statement, "_compiled_from_cache", False):
+                compiled_sql, execution_parameters = statement.compile()
+                prepared_parameters = self.prepare_driver_parameters(
+                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
+                )
+                cached_statement = CachedStatement(
+                    compiled_sql=compiled_sql, parameters=prepared_parameters, expression=statement.expression
+                )
+                self._qc_store(statement)
+                return cached_statement, prepared_parameters
+
+            processed = statement.get_processed_state()
+            prepared_parameters = self.prepare_driver_parameters(
+                processed.execution_parameters,
+                statement_config,
+                is_many=statement.is_many,
+                prepared_statement=statement,
+            )
+            cached_statement = CachedStatement(
+                compiled_sql=processed.compiled_sql,
+                parameters=prepared_parameters,
+                expression=processed.parsed_expression,
+            )
+            self._qc_store(statement)
+            return cached_statement, prepared_parameters
+
         # Materialize iterators before cache key generation to prevent exhaustion.
         # If statement.parameters is an iterator (e.g., generator), structural_fingerprint
         # will consume it during cache key generation, leaving empty parameters for execution.
@@ -1380,14 +1633,10 @@ class CommonDriverAttributesMixin:
             if cached_result is not None and isinstance(cached_result, CachedStatement):
                 # Structural fingerprinting means same SQL structure = same cache entry,
                 # but we must still use the caller's actual parameter values.
-                # Recompile with the NEW parameters to get correctly processed values.
-                prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
-                _, execution_parameters = prepared_statement.compile()
+                # Compile with the statement's parameters to get correctly processed values.
+                compiled_sql, execution_parameters = statement.compile()
                 prepared_parameters = self.prepare_driver_parameters(
-                    execution_parameters,
-                    statement_config,
-                    is_many=prepared_statement.is_many,
-                    prepared_statement=prepared_statement,
+                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
                 )
                 # Return cached SQL metadata but with newly processed parameters
                 # Preserve list type for execute_many operations (some drivers require list, not tuple)
@@ -1396,26 +1645,25 @@ class CommonDriverAttributesMixin:
                     parameters=prepared_parameters,
                     expression=cached_result.expression,
                 )
+                self._qc_store(statement)
                 return updated_cached, prepared_parameters
 
-        prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
-        compiled_sql, execution_parameters = prepared_statement.compile()
+        # Compile the statement directly (no need for prepare_statement indirection)
+        compiled_sql, execution_parameters = statement.compile()
 
         prepared_parameters = self.prepare_driver_parameters(
-            execution_parameters,
-            statement_config,
-            is_many=prepared_statement.is_many,
-            prepared_statement=prepared_statement,
+            execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
         )
 
         cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
         cached_statement = CachedStatement(
-            compiled_sql=compiled_sql, parameters=cached_parameters, expression=prepared_statement.expression
+            compiled_sql=compiled_sql, parameters=cached_parameters, expression=statement.expression
         )
 
         if cache_key is not None and cache is not None:
             cache.put_statement(cache_key, cached_statement, dialect_key)
 
+        self._qc_store(statement)
         return cached_statement, prepared_parameters
 
     def _generate_compilation_cache_key(
@@ -1644,6 +1892,7 @@ class CommonDriverAttributesMixin:
         Example:
             Original: SELECT id, name FROM users WHERE status = :status LIMIT 10
             Result: SELECT id, name, COUNT(*) OVER() AS _total_count FROM users WHERE status = :status LIMIT 10
+
         """
         if not original_sql.expression:
             original_sql.compile()

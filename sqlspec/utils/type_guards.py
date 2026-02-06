@@ -396,9 +396,7 @@ def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":
     Returns:
         True if the object is a StatementFilter, False otherwise
     """
-    from sqlspec.core.filters import StatementFilter as FilterProtocol
-
-    return isinstance(obj, FilterProtocol)
+    return getattr(obj, "_is_statement_filter", False) is True
 
 
 def is_dict_row(row: Any) -> "TypeGuard[dict[str, Any]]":

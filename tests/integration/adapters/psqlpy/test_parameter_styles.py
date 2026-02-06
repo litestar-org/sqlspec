@@ -37,19 +37,19 @@ async def test_parameter_styles(psqlpy_session: PsqlpyDriver, sql: str, paramete
     assert len(result.data) == 1
 
     if style == "positional":
-        if "val1" in result.data[0]:
-            assert result.data[0]["val1"] == "test"
-            assert result.data[0]["val2"] == 42
+        if "val1" in result.get_data()[0]:
+            assert result.get_data()[0]["val1"] == "test"
+            assert result.get_data()[0]["val2"] == 42
         else:
-            assert result.data[0]["value"] == "test_value"
+            assert result.get_data()[0]["value"] == "test_value"
     elif style == "named":
-        if "name" in result.data[0]:
-            assert result.data[0]["name"] == "John"
-            assert result.data[0]["age"] == 30
+        if "name" in result.get_data()[0]:
+            assert result.get_data()[0]["name"] == "John"
+            assert result.get_data()[0]["age"] == 30
         else:
-            assert result.data[0]["value"] == "named_test"
+            assert result.get_data()[0]["value"] == "named_test"
     else:
-        assert result.data[0]["name"] == "Mixed"
+        assert result.get_data()[0]["name"] == "Mixed"
 
 
 @pytest.mark.parametrize("param_count", [1, 5, 10, 20], ids=["single", "few", "medium", "many"])
@@ -66,7 +66,7 @@ async def test_many_parameters(psqlpy_session: PsqlpyDriver, param_count: int) -
     assert len(result.data) == 1
 
     for i in range(param_count):
-        assert result.data[0][f"val{i + 1}"] == i
+        assert result.get_data()[0][f"val{i + 1}"] == i
 
 
 async def test_parameter_types(psqlpy_session: PsqlpyDriver) -> None:
@@ -88,7 +88,7 @@ async def test_parameter_types(psqlpy_session: PsqlpyDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["text_val"] == "string_value"
     assert row["int_val"] == 42
     assert abs(row["float_val"] - math.pi) < 0.001
@@ -103,8 +103,8 @@ async def test_null_parameters(psqlpy_session: PsqlpyDriver) -> None:
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["val1"] is None
-    assert result.data[0]["val2"] is None
+    assert result.get_data()[0]["val1"] is None
+    assert result.get_data()[0]["val2"] is None
 
 
 async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> None:
@@ -116,13 +116,13 @@ async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> No
     assert isinstance(insert_result, SQLResult)
     assert insert_result.data is not None
     assert len(insert_result.data) == 1
-    record_id = insert_result.data[0]["id"]
+    record_id = insert_result.get_data()[0]["id"]
 
     select_result = await psqlpy_session.execute("SELECT name FROM test_table_psqlpy WHERE id = $1", (record_id,))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "param_test"
+    assert select_result.get_data()[0]["name"] == "param_test"
 
     update_result = await psqlpy_session.execute(
         "UPDATE test_table_psqlpy SET name = $1 WHERE id = $2", ("updated_param", record_id)
@@ -132,7 +132,7 @@ async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> No
     verify_result = await psqlpy_session.execute("SELECT name FROM test_table_psqlpy WHERE id = $1", (record_id,))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
-    assert verify_result.data[0]["name"] == "updated_param"
+    assert verify_result.get_data()[0]["name"] == "updated_param"
 
     delete_result = await psqlpy_session.execute("DELETE FROM test_table_psqlpy WHERE id = $1", (record_id,))
     assert isinstance(delete_result, SQLResult)
@@ -147,16 +147,16 @@ async def test_parameters_with_sql_object(psqlpy_session: PsqlpyDriver) -> None:
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "sql_object_test"
-    assert result.data[0]["id"] is not None
+    assert result.get_data()[0]["name"] == "sql_object_test"
+    assert result.get_data()[0]["id"] is not None
 
     multi_sql = SQL("SELECT $1::text as msg, $2::int as num, $3::bool as flag", ("test", 123, False))
     multi_result = await psqlpy_session.execute(multi_sql)
     assert isinstance(multi_result, SQLResult)
     assert multi_result.data is not None
-    assert multi_result.data[0]["msg"] == "test"
-    assert multi_result.data[0]["num"] == 123
-    assert multi_result.data[0]["flag"] is False
+    assert multi_result.get_data()[0]["msg"] == "test"
+    assert multi_result.get_data()[0]["num"] == 123
+    assert multi_result.get_data()[0]["flag"] is False
 
 
 async def test_parameter_edge_cases(psqlpy_session: PsqlpyDriver) -> None:
@@ -165,18 +165,18 @@ async def test_parameter_edge_cases(psqlpy_session: PsqlpyDriver) -> None:
     result1 = await psqlpy_session.execute("SELECT $1::text as empty_str", ("",))
     assert isinstance(result1, SQLResult)
     assert result1.data is not None
-    assert result1.data[0]["empty_str"] == ""
+    assert result1.get_data()[0]["empty_str"] == ""
 
     result2 = await psqlpy_session.execute("SELECT $1::int as zero_val", (0,))
     assert isinstance(result2, SQLResult)
     assert result2.data is not None
-    assert result2.data[0]["zero_val"] == 0
+    assert result2.get_data()[0]["zero_val"] == 0
 
     large_num = 9999999999
     result3 = await psqlpy_session.execute("SELECT $1::bigint as large_num", (large_num,))
     assert isinstance(result3, SQLResult)
     assert result3.data is not None
-    assert result3.data[0]["large_num"] == large_num
+    assert result3.get_data()[0]["large_num"] == large_num
 
 
 async def test_parameter_conversion_accuracy(psqlpy_session: PsqlpyDriver) -> None:
@@ -187,7 +187,7 @@ async def test_parameter_conversion_accuracy(psqlpy_session: PsqlpyDriver) -> No
     assert isinstance(result1, SQLResult)
     assert result1.data is not None
 
-    returned_val = result1.data[0]["decimal_val"]
+    returned_val = result1.get_data()[0]["decimal_val"]
     assert abs(float(returned_val) - float(decimal_val)) < 0.000001
 
     now = datetime.datetime.now()
@@ -195,7 +195,7 @@ async def test_parameter_conversion_accuracy(psqlpy_session: PsqlpyDriver) -> No
     assert isinstance(result2, SQLResult)
     assert result2.data is not None
 
-    assert result2.data[0]["datetime_val"] is not None
+    assert result2.get_data()[0]["datetime_val"] is not None
 
 
 @pytest.mark.parametrize("batch_size", [1, 5, 10, 50], ids=["single", "small", "medium", "large"])
@@ -211,7 +211,7 @@ async def test_execute_many_parameter_handling(psqlpy_session: PsqlpyDriver, bat
     count_result = await psqlpy_session.execute("SELECT COUNT(*) as count FROM test_table_psqlpy")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["count"] == batch_size
+    assert count_result.get_data()[0]["count"] == batch_size
 
     for i in range(batch_size):
         check_result = await psqlpy_session.execute(
@@ -220,7 +220,7 @@ async def test_execute_many_parameter_handling(psqlpy_session: PsqlpyDriver, bat
         assert isinstance(check_result, SQLResult)
         assert check_result.data is not None
         assert len(check_result.data) == 1
-        assert check_result.data[0]["name"] == f"batch_item_{i}"
+        assert check_result.get_data()[0]["name"] == f"batch_item_{i}"
 
 
 async def test_comprehensive_none_parameters(psqlpy_session: PsqlpyDriver) -> None:
@@ -249,7 +249,7 @@ async def test_comprehensive_none_parameters(psqlpy_session: PsqlpyDriver) -> No
     assert result1.data is not None
     assert len(result1.data) == 1
 
-    row = result1.data[0]
+    row = result1.get_data()[0]
     assert row["text_col"] == "test_value"
     assert row["nullable_text"] is None
     assert row["int_col"] == 42
@@ -275,8 +275,8 @@ async def test_comprehensive_none_parameters(psqlpy_session: PsqlpyDriver) -> No
     assert isinstance(result2, SQLResult)
     assert result2.data is not None
     assert len(result2.data) == 1
-    assert result2.data[0]["text_col"] == "named_test"
-    assert result2.data[0]["nullable_text"] is None
+    assert result2.get_data()[0]["text_col"] == "named_test"
+    assert result2.get_data()[0]["nullable_text"] is None
 
     # Test all parameters being None
     result3 = await psqlpy_session.execute(
@@ -285,10 +285,10 @@ async def test_comprehensive_none_parameters(psqlpy_session: PsqlpyDriver) -> No
     assert isinstance(result3, SQLResult)
     assert result3.data is not None
     assert len(result3.data) == 1
-    assert result3.data[0]["val1"] is None
-    assert result3.data[0]["val2"] is None
-    assert result3.data[0]["val3"] is None
-    assert result3.data[0]["val4"] is None
+    assert result3.get_data()[0]["val1"] is None
+    assert result3.get_data()[0]["val2"] is None
+    assert result3.get_data()[0]["val3"] is None
+    assert result3.get_data()[0]["val4"] is None
 
     # Test None with named parameters (all None)
     result4 = await psqlpy_session.execute(
@@ -298,9 +298,9 @@ async def test_comprehensive_none_parameters(psqlpy_session: PsqlpyDriver) -> No
     assert isinstance(result4, SQLResult)
     assert result4.data is not None
     assert len(result4.data) == 1
-    assert result4.data[0]["val1"] is None
-    assert result4.data[0]["val2"] is None
-    assert result4.data[0]["val3"] is None
+    assert result4.get_data()[0]["val1"] is None
+    assert result4.get_data()[0]["val2"] is None
+    assert result4.get_data()[0]["val3"] is None
 
 
 async def test_none_values_with_execute_many(psqlpy_session: PsqlpyDriver) -> None:
@@ -339,21 +339,21 @@ async def test_none_values_with_execute_many(psqlpy_session: PsqlpyDriver) -> No
     assert len(verify_result.data) == 5
 
     # Check specific None value handling
-    assert verify_result.data[0]["name"] == "item1"
-    assert verify_result.data[0]["description"] == "description1"
-    assert verify_result.data[0]["value"] == 100
+    assert verify_result.get_data()[0]["name"] == "item1"
+    assert verify_result.get_data()[0]["description"] == "description1"
+    assert verify_result.get_data()[0]["value"] == 100
 
-    assert verify_result.data[1]["name"] == "item2"
-    assert verify_result.data[1]["description"] is None
-    assert verify_result.data[1]["value"] == 200
+    assert verify_result.get_data()[1]["name"] == "item2"
+    assert verify_result.get_data()[1]["description"] is None
+    assert verify_result.get_data()[1]["value"] == 200
 
-    assert verify_result.data[2]["name"] is None
-    assert verify_result.data[2]["description"] == "description3"
-    assert verify_result.data[2]["value"] is None
+    assert verify_result.get_data()[2]["name"] is None
+    assert verify_result.get_data()[2]["description"] == "description3"
+    assert verify_result.get_data()[2]["value"] is None
 
-    assert verify_result.data[4]["name"] is None
-    assert verify_result.data[4]["description"] is None
-    assert verify_result.data[4]["value"] is None
+    assert verify_result.get_data()[4]["name"] is None
+    assert verify_result.get_data()[4]["description"] is None
+    assert verify_result.get_data()[4]["value"] is None
 
 
 async def test_parameter_count_validation_with_none(psqlpy_session: PsqlpyDriver) -> None:
@@ -365,9 +365,9 @@ async def test_parameter_count_validation_with_none(psqlpy_session: PsqlpyDriver
     )
     assert isinstance(result1, SQLResult)
     assert result1.data is not None
-    assert result1.data[0]["val1"] == "test"
-    assert result1.data[0]["val2"] is None
-    assert result1.data[0]["val3"] is True
+    assert result1.get_data()[0]["val1"] == "test"
+    assert result1.get_data()[0]["val2"] is None
+    assert result1.get_data()[0]["val3"] is True
 
     # Test named parameters with None - all parameters provided
     result2 = await psqlpy_session.execute(
@@ -376,9 +376,9 @@ async def test_parameter_count_validation_with_none(psqlpy_session: PsqlpyDriver
     )
     assert isinstance(result2, SQLResult)
     assert result2.data is not None
-    assert result2.data[0]["name"] is None
-    assert result2.data[0]["age"] == 25
-    assert result2.data[0]["active"] is None
+    assert result2.get_data()[0]["name"] is None
+    assert result2.get_data()[0]["age"] == 25
+    assert result2.get_data()[0]["active"] is None
 
     # Test that parameter count mismatch still raises errors (not affected by None values)
     with pytest.raises(Exception):  # Should raise some kind of database or parameter error
@@ -417,7 +417,7 @@ async def test_none_parameters_in_where_clauses(psqlpy_session: PsqlpyDriver) ->
     assert isinstance(result2, SQLResult)
     assert result2.data is not None
     assert len(result2.data) == 1
-    assert result2.data[0]["name"] == "item2"
+    assert result2.get_data()[0]["name"] == "item2"
 
     # Test COALESCE with None parameter
     result3 = await psqlpy_session.execute(
@@ -427,7 +427,7 @@ async def test_none_parameters_in_where_clauses(psqlpy_session: PsqlpyDriver) ->
     assert isinstance(result3, SQLResult)
     assert result3.data is not None
     assert len(result3.data) == 1
-    assert result3.data[0]["category"] == "default_category"
+    assert result3.get_data()[0]["category"] == "default_category"
 
 
 async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> None:
@@ -452,10 +452,10 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result1, SQLResult)
     assert result1.data is not None
     assert len(result1.data) == 1
-    assert result1.data[0]["name"] == "test_none_jsonb"
-    assert result1.data[0]["metadata"] is None
-    assert result1.data[0]["config"] is None
-    assert result1.data[0]["tags"] is None
+    assert result1.get_data()[0]["name"] == "test_none_jsonb"
+    assert result1.get_data()[0]["metadata"] is None
+    assert result1.get_data()[0]["config"] is None
+    assert result1.get_data()[0]["tags"] is None
 
     # Test 2: Insert mixed JSON data and None values using positional parameters
     json_data = {"user_id": 123, "preferences": {"theme": "dark", "notifications": True}}
@@ -470,11 +470,11 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert result2.data is not None
     assert len(result2.data) == 1
     # PSQLPy should parse JSONB back to dict objects
-    assert isinstance(result2.data[0]["metadata"], dict)
-    assert result2.data[0]["metadata"]["user_id"] == 123
-    assert result2.data[0]["config"] is None
-    assert isinstance(result2.data[0]["tags"], dict)
-    assert result2.data[0]["tags"]["total"] == 2
+    assert isinstance(result2.get_data()[0]["metadata"], dict)
+    assert result2.get_data()[0]["metadata"]["user_id"] == 123
+    assert result2.get_data()[0]["config"] is None
+    assert isinstance(result2.get_data()[0]["tags"], dict)
+    assert result2.get_data()[0]["tags"]["total"] == 2
 
     # Test 3: Query JSONB columns with None values
     result3 = await psqlpy_session.execute("SELECT * FROM test_jsonb_none_psqlpy WHERE metadata IS NULL")
@@ -482,7 +482,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result3, SQLResult)
     assert result3.data is not None
     assert len(result3.data) == 1
-    assert result3.data[0]["name"] == "test_none_jsonb"
+    assert result3.get_data()[0]["name"] == "test_none_jsonb"
 
     # Test 4: Query JSONB columns filtering by JSON content using positional parameters
     result4 = await psqlpy_session.execute(
@@ -492,7 +492,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result4, SQLResult)
     assert result4.data is not None
     assert len(result4.data) == 1
-    assert result4.data[0]["name"] == "test_mixed_jsonb"
+    assert result4.get_data()[0]["name"] == "test_mixed_jsonb"
 
     # Test 5: Insert using named parameters with JSONB and None
     # Note: psqlpy has known issues with Python list parameters as JSONB,
@@ -509,9 +509,9 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result5, SQLResult)
     assert result5.data is not None
     assert len(result5.data) == 1
-    assert result5.data[0]["name"] == "named_jsonb_test"
-    assert result5.data[0]["metadata"]["type"] == "test"
-    assert result5.data[0]["config"] is None
+    assert result5.get_data()[0]["name"] == "named_jsonb_test"
+    assert result5.get_data()[0]["metadata"]["type"] == "test"
+    assert result5.get_data()[0]["config"] is None
 
     # Test 6: Update JSONB columns with None values using positional parameters
     await psqlpy_session.execute(
@@ -526,8 +526,8 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result6, SQLResult)
     assert result6.data is not None
     assert len(result6.data) == 1
-    assert result6.data[0]["metadata"] is None
-    assert result6.data[0]["config"]["updated"] is True
+    assert result6.get_data()[0]["metadata"] is None
+    assert result6.get_data()[0]["config"]["updated"] is True
 
     # Test 7: Update JSONB columns with None values using named parameters
     await psqlpy_session.execute(
@@ -542,7 +542,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result7, SQLResult)
     assert result7.data is not None
     assert len(result7.data) == 1
-    assert result7.data[0]["tags"] is None
+    assert result7.get_data()[0]["tags"] is None
 
     # Test 8: Test JSONB operations with None parameters
     result8 = await psqlpy_session.execute(
@@ -552,7 +552,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result8, SQLResult)
     assert result8.data is not None
     assert len(result8.data) == 1
-    assert result8.data[0]["name"] == "named_jsonb_test"
+    assert result8.get_data()[0]["name"] == "named_jsonb_test"
 
     # Test 9: Test COALESCE with JSONB and None values
     result9 = await psqlpy_session.execute(
@@ -563,7 +563,7 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result9, SQLResult)
     assert result9.data is not None
     assert len(result9.data) == 1
-    assert result9.data[0]["metadata_or_default"]["default"] == "value"
+    assert result9.get_data()[0]["metadata_or_default"]["default"] == "value"
 
     # Test 10: execute_many with JSONB None values
     # Note: Using dict instead of array for tags to avoid psqlpy list expansion issues
@@ -590,22 +590,22 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert len(result11.data) == 3
 
     # Verify batch1
-    assert result11.data[0]["name"] == "batch1"
-    assert result11.data[0]["metadata"]["batch"] == 1
-    assert result11.data[0]["config"] is None
-    assert result11.data[0]["tags"]["tags"] == ["batch"]
+    assert result11.get_data()[0]["name"] == "batch1"
+    assert result11.get_data()[0]["metadata"]["batch"] == 1
+    assert result11.get_data()[0]["config"] is None
+    assert result11.get_data()[0]["tags"]["tags"] == ["batch"]
 
     # Verify batch2
-    assert result11.data[1]["name"] == "batch2"
-    assert result11.data[1]["metadata"] is None
-    assert result11.data[1]["config"]["config"] == "batch2"
-    assert result11.data[1]["tags"] is None
+    assert result11.get_data()[1]["name"] == "batch2"
+    assert result11.get_data()[1]["metadata"] is None
+    assert result11.get_data()[1]["config"]["config"] == "batch2"
+    assert result11.get_data()[1]["tags"] is None
 
     # Verify batch3
-    assert result11.data[2]["name"] == "batch3"
-    assert result11.data[2]["metadata"] is None
-    assert result11.data[2]["config"] is None
-    assert result11.data[2]["tags"] is None
+    assert result11.get_data()[2]["name"] == "batch3"
+    assert result11.get_data()[2]["metadata"] is None
+    assert result11.get_data()[2]["config"] is None
+    assert result11.get_data()[2]["tags"] is None
 
     # Test 11: Test JSONB array operations with None values
     # Note: Using dicts instead of direct arrays to avoid psqlpy list expansion issues
@@ -621,8 +621,8 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(result12, SQLResult)
     assert result12.data is not None
     assert len(result12.data) == 1
-    assert result12.data[0]["metadata"]["numbers"] == [1, 2, 3]
-    assert result12.data[0]["tags"]["array"] == [None, "value", None]
+    assert result12.get_data()[0]["metadata"]["numbers"] == [1, 2, 3]
+    assert result12.get_data()[0]["tags"]["array"] == [None, "value", None]
 
     # Test 12: Test checking for NULL JSONB fields (simplified to avoid path operator issues)
     result13 = await psqlpy_session.execute(
@@ -651,12 +651,12 @@ async def test_psqlpy_jsonb_none_parameters(psqlpy_session: PsqlpyDriver) -> Non
     assert len(result14.data) == 3
 
     # Verify None status for each record
-    batch3_row = next(r for r in result14.data if r["name"] == "batch3")
+    batch3_row = next(r for r in result14.get_data() if r["name"] == "batch3")
     assert batch3_row["metadata_is_null"] is True
     assert batch3_row["config_is_null"] is True
     assert batch3_row["tags_is_null"] is True
 
-    named_test_row = next(r for r in result14.data if r["name"] == "named_jsonb_test")
+    named_test_row = next(r for r in result14.get_data() if r["name"] == "named_jsonb_test")
     assert named_test_row["metadata_is_null"] is True  # Was set to None in earlier test
     assert named_test_row["config_is_null"] is False  # Has {"updated": True}
     assert named_test_row["tags_is_null"] is True  # Originally had array but no explicit reset

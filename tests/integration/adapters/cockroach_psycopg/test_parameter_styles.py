@@ -111,7 +111,7 @@ class TestSyncNumericParameterStyle:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_numeric_multiple_parameters(
         self, cockroach_psycopg_sync_parameter_session: CockroachPsycopgSyncDriver
@@ -123,8 +123,8 @@ class TestSyncNumericParameterStyle:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 2
-        assert result.data[0]["value"] == 100
-        assert result.data[1]["value"] == 200
+        assert result.get_data()[0]["value"] == 100
+        assert result.get_data()[1]["value"] == 200
 
 
 class TestSyncQmarkConversion:
@@ -138,7 +138,7 @@ class TestSyncQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_qmark_multiple_parameters(
         self, cockroach_psycopg_sync_parameter_session: CockroachPsycopgSyncDriver
@@ -150,7 +150,7 @@ class TestSyncQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestSyncNamedColonConversion:
@@ -166,7 +166,7 @@ class TestSyncNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_named_colon_multiple_parameters(
         self, cockroach_psycopg_sync_parameter_session: CockroachPsycopgSyncDriver
@@ -179,7 +179,7 @@ class TestSyncNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestSyncNamedPyformatConversion:
@@ -196,7 +196,7 @@ class TestSyncNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
 
 class TestSyncSQLObject:
@@ -247,7 +247,7 @@ class TestSyncEdgeCases:
         count_result = cockroach_psycopg_sync_parameter_session.execute(
             "SELECT COUNT(*) as count FROM test_parameter_conversion"
         )
-        assert count_result.data[0]["count"] >= 3
+        assert count_result.get_data()[0]["count"] >= 3
 
 
 # =============================================================================
@@ -269,7 +269,7 @@ class TestAsyncNumericParameterStyle:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_numeric_multiple_parameters(
@@ -282,8 +282,8 @@ class TestAsyncNumericParameterStyle:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 2
-        assert result.data[0]["value"] == 100
-        assert result.data[1]["value"] == 200
+        assert result.get_data()[0]["value"] == 100
+        assert result.get_data()[1]["value"] == 200
 
 
 class TestAsyncQmarkConversion:
@@ -300,7 +300,7 @@ class TestAsyncQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_qmark_multiple_parameters(
@@ -313,7 +313,7 @@ class TestAsyncQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestAsyncNamedColonConversion:
@@ -330,7 +330,7 @@ class TestAsyncNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_named_colon_multiple_parameters(
@@ -344,7 +344,7 @@ class TestAsyncNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestAsyncNamedPyformatConversion:
@@ -362,7 +362,7 @@ class TestAsyncNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
 
 class TestAsyncSQLObject:
@@ -418,4 +418,4 @@ class TestAsyncEdgeCases:
         count_result = await cockroach_psycopg_async_parameter_session.execute(
             "SELECT COUNT(*) as count FROM test_parameter_conversion_async"
         )
-        assert count_result.data[0]["count"] >= 3
+        assert count_result.get_data()[0]["count"] >= 3

@@ -22,7 +22,7 @@ async def test_aiosqlite_load_from_arrow(aiosqlite_session: AiosqliteDriver) -> 
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
 
     result = await aiosqlite_session.execute("SELECT id, label FROM storage_bridge_aiosqlite ORDER BY id")
-    assert result.data == [{"id": 1, "label": "north"}, {"id": 2, "label": "south"}]
+    assert result.get_data() == [{"id": 1, "label": "north"}, {"id": 2, "label": "south"}]
 
 
 async def test_aiosqlite_load_from_storage(aiosqlite_session: AiosqliteDriver, tmp_path: Path) -> None:
@@ -41,4 +41,4 @@ async def test_aiosqlite_load_from_storage(aiosqlite_session: AiosqliteDriver, t
     assert job.telemetry["extra"]["source"]["backend"]  # type: ignore[index]
 
     result = await aiosqlite_session.execute("SELECT id, label FROM storage_bridge_aiosqlite ORDER BY id")
-    assert result.data == [{"id": 3, "label": "east"}, {"id": 4, "label": "west"}]
+    assert result.get_data() == [{"id": 3, "label": "east"}, {"id": 4, "label": "west"}]

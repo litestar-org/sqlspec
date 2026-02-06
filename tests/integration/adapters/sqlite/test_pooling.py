@@ -34,7 +34,7 @@ def test_shared_memory_pooling(sqlite_config_shared_memory: SqliteConfig) -> Non
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
-        assert result.data[0]["value"] == "shared_data"
+        assert result.get_data()[0]["value"] == "shared_data"
 
     config.close_pool()
 
@@ -66,7 +66,7 @@ def test_regular_memory_auto_conversion(sqlite_config_regular_memory: SqliteConf
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
-        assert result.data[0]["value"] == "auto_converted_data"
+        assert result.get_data()[0]["value"] == "auto_converted_data"
 
     config.close_pool()
 
@@ -93,7 +93,7 @@ def test_file_database_pooling_enabled(sqlite_temp_file_config: SqliteConfig) ->
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
-        assert result.data[0]["value"] == "test_data"
+        assert result.get_data()[0]["value"] == "test_data"
 
     config.close_pool()
 
@@ -125,7 +125,7 @@ def test_pool_session_isolation(sqlite_config_shared_memory: SqliteConfig) -> No
             result = session2.execute("SELECT COUNT(*) as count FROM isolation_test")
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            assert result.data[0]["count"] == 2
+            assert result.get_data()[0]["count"] == 2
 
             session2.execute("UPDATE isolation_test SET value = ? WHERE value = ?", ("updated_data", "session1_data"))
 
@@ -133,7 +133,7 @@ def test_pool_session_isolation(sqlite_config_shared_memory: SqliteConfig) -> No
             assert isinstance(result, SQLResult)
             assert result.data is not None
             assert len(result.data) == 1
-            assert result.data[0]["value"] == "updated_data"
+            assert result.get_data()[0]["value"] == "updated_data"
 
     finally:
         config.close_pool()
@@ -163,13 +163,13 @@ def test_pool_error_handling(sqlite_config_shared_memory: SqliteConfig) -> None:
             result = session.execute("SELECT COUNT(*) as count FROM error_test")
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            assert result.data[0]["count"] == 1
+            assert result.get_data()[0]["count"] == 1
 
         with config.provide_session() as session:
             result = session.execute("SELECT COUNT(*) as count FROM error_test")
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            assert result.data[0]["count"] == 1
+            assert result.get_data()[0]["count"] == 1
 
     finally:
         config.close_pool()
@@ -196,20 +196,20 @@ def test_pool_transaction_rollback(sqlite_config_shared_memory: SqliteConfig) ->
             result = session.execute("SELECT COUNT(*) as count FROM transaction_test")
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            assert result.data[0]["count"] == 2
+            assert result.get_data()[0]["count"] == 2
 
             session.rollback()
 
             result = session.execute("SELECT COUNT(*) as count FROM transaction_test")
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            assert result.data[0]["count"] == 1
+            assert result.get_data()[0]["count"] == 1
 
         with config.provide_session() as session:
             result = session.execute("SELECT COUNT(*) as count FROM transaction_test")
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            assert result.data[0]["count"] == 1
+            assert result.get_data()[0]["count"] == 1
 
     finally:
         config.close_pool()
@@ -235,7 +235,7 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
         with config.provide_session() as session:
             result = session.execute("SELECT 1 as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == 1
+            assert result.get_data()[0]["test"] == 1
 
     finally:
         config._close_pool()
@@ -254,7 +254,7 @@ def test_config_memory_database_conversion() -> None:
         with config.provide_session() as session:
             result = session.execute("SELECT 'memory_test' as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == "memory_test"
+            assert result.get_data()[0]["test"] == "memory_test"
 
     finally:
         config._close_pool()
@@ -273,7 +273,7 @@ def test_config_default_database() -> None:
         with config.provide_session() as session:
             result = session.execute("SELECT 'default_test' as test")
             assert isinstance(result, SQLResult)
-            assert result.data[0]["test"] == "default_test"
+            assert result.get_data()[0]["test"] == "default_test"
 
     finally:
         config._close_pool()

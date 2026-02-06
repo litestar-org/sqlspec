@@ -43,7 +43,7 @@ def test_bigquery_config_session_context_manager(bigquery_service: BigQueryServi
         result = session.execute("SELECT 1 as test_value")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["test_value"] == 1
+        assert result.get_data()[0]["test_value"] == 1
 
 
 def test_bigquery_config_with_query_job_config(bigquery_service: BigQueryService) -> None:
@@ -62,7 +62,7 @@ def test_bigquery_config_with_query_job_config(bigquery_service: BigQueryService
         result = session.execute("SELECT 'BigQuery Config Test' as message")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["message"] == "BigQuery Config Test"
+        assert result.get_data()[0]["message"] == "BigQuery Config Test"
 
 
 def test_bigquery_config_connection_reuse(bigquery_service: BigQueryService) -> None:
@@ -81,13 +81,13 @@ def test_bigquery_config_connection_reuse(bigquery_service: BigQueryService) -> 
         result1 = session1.execute("SELECT 'Session 1' as session_name")
         assert isinstance(result1, SQLResult)
         assert result1.data is not None
-        assert result1.data[0]["session_name"] == "Session 1"
+        assert result1.get_data()[0]["session_name"] == "Session 1"
 
     with config.provide_session() as session2:
         result2 = session2.execute("SELECT 'Session 2' as session_name")
         assert isinstance(result2, SQLResult)
         assert result2.data is not None
-        assert result2.data[0]["session_name"] == "Session 2"
+        assert result2.get_data()[0]["session_name"] == "Session 2"
 
 
 def test_bigquery_config_error_handling(bigquery_service: BigQueryService) -> None:
@@ -141,7 +141,7 @@ def test_bigquery_config_dataset_scoping(bigquery_service: BigQueryService) -> N
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["message"] == "config test"
+        assert result.get_data()[0]["message"] == "config test"
 
         # Cleanup
         session.execute_script(f"DROP TABLE `{bigquery_service.project}.{bigquery_service.dataset}.config_test`")

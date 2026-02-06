@@ -152,7 +152,12 @@ class SqliteDriver(SyncDriverAdapterBase):
             data, column_names, row_count = collect_rows(fetched_data, cursor.description)
 
             return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=row_count, is_select_result=True
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=row_count,
+                is_select_result=True,
+                row_format="tuple",
             )
 
         affected_rows = resolve_rowcount(cursor)
@@ -169,11 +174,8 @@ class SqliteDriver(SyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
         cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
-
         affected_rows = resolve_rowcount(cursor)
-
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
