@@ -435,7 +435,12 @@ async def test_async_driver_create_execution_result(mock_async_driver: MockAsync
     cursor = mock_async_driver.with_cursor(mock_async_driver.connection)
 
     result = mock_async_driver.create_execution_result(
-        cursor, selected_data=[(1,), (2,)], column_names=["id"], data_row_count=2, is_select_result=True, row_format="tuple"
+        cursor,
+        selected_data=[(1,), (2,)],
+        column_names=["id"],
+        data_row_count=2,
+        is_select_result=True,
+        row_format="tuple",
     )
 
     assert result.is_select_result is True

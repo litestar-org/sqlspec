@@ -471,7 +471,12 @@ def test_sync_driver_create_execution_result(mock_sync_driver: MockSyncDriver) -
     cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
     result = mock_sync_driver.create_execution_result(
-        cursor, selected_data=[(1,), (2,)], column_names=["id"], data_row_count=2, is_select_result=True, row_format="tuple"
+        cursor,
+        selected_data=[(1,), (2,)],
+        column_names=["id"],
+        data_row_count=2,
+        is_select_result=True,
+        row_format="tuple",
     )
 
     assert result.is_select_result is True

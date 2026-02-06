@@ -343,7 +343,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if normalized.statement.returns_rows():
             rows = await invoke_prepared_statement(prepared, normalized.parameters, fetch=True)
             data, _ = collect_rows(rows)
-            sql_result = create_sql_result(normalized.statement, data=data, rows_affected=len(data), metadata=metadata, row_format="record")
+            sql_result = create_sql_result(
+                normalized.statement, data=data, rows_affected=len(data), metadata=metadata, row_format="record"
+            )
             return StackResult.from_sql_result(sql_result)
 
         status = await invoke_prepared_statement(prepared, normalized.parameters, fetch=False)

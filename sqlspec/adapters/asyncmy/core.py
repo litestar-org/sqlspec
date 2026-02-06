@@ -345,11 +345,7 @@ def _deserialize_asyncmy_json_dict_rows(
 
 
 def _deserialize_asyncmy_json_tuple_rows(
-    rows: "list[Any]",
-    json_indexes: "list[int]",
-    deserializer: "Callable[[Any], Any]",
-    *,
-    logger: Any | None = None,
+    rows: "list[Any]", json_indexes: "list[int]", deserializer: "Callable[[Any], Any]", *, logger: Any | None = None
 ) -> "list[Any]":
     """Apply JSON deserialization to tuple rows using index-based access.
 

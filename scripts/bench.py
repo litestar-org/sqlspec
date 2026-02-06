@@ -109,18 +109,8 @@ POOL_SIZE = 5  # Default pool size for async adapters
     show_default=True,
     help="Connection pool size for async adapters (1=single connection, matches sync behavior)",
 )
-@click.option(
-    "--iterations",
-    default=3,
-    show_default=True,
-    help="Number of timed iterations per scenario",
-)
-@click.option(
-    "--warmup",
-    default=1,
-    show_default=True,
-    help="Number of warmup iterations (not timed)",
-)
+@click.option("--iterations", default=3, show_default=True, help="Number of timed iterations per scenario")
+@click.option("--warmup", default=1, show_default=True, help="Number of warmup iterations (not timed)")
 def main(driver: tuple[str, ...], rows: int, pool_size: int, iterations: int, warmup: int) -> None:
     """Run benchmarks for the specified drivers.
 
@@ -156,9 +146,7 @@ def main(driver: tuple[str, ...], rows: int, pool_size: int, iterations: int, wa
     click.echo(f"Benchmarks complete for drivers: {', '.join(driver)}")
 
 
-def run_benchmark(
-    driver: str, errors: list[str], *, iterations: int = 3, warmup: int = 1
-) -> list[dict[str, Any]]:
+def run_benchmark(driver: str, errors: list[str], *, iterations: int = 3, warmup: int = 1) -> list[dict[str, Any]]:
     """Run all benchmark scenarios for a driver.
 
     Args:
@@ -1289,10 +1277,7 @@ def print_benchmark_table(results: list[dict[str, Any]]) -> None:
         else:
             raw_time = raw_times.get((driver, scenario))
             percent_slower = f"{100 * (t - raw_time) / raw_time:.1f}%" if raw_time and raw_time > 0 else "n/a"
-        if multi_iter and len(times) > 1:
-            time_str = f"{t:.4f} ({min(times):.4f}–{max(times):.4f})"
-        else:
-            time_str = f"{t:.4f}"
+        time_str = f"{t:.4f} ({min(times):.4f}-{max(times):.4f})" if multi_iter and len(times) > 1 else f"{t:.4f}"
         table.add_row(driver, lib, scenario, time_str, percent_slower)
     console.print(table)
 

@@ -89,9 +89,7 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def collect_rows(
-    fetched_data: "list[Any]", description: "Sequence[Any] | None"
-) -> "tuple[list[Any], list[str], int]":
+def collect_rows(fetched_data: "list[Any]", description: "Sequence[Any] | None") -> "tuple[list[Any], list[str], int]":
     """Collect SQLite result rows as raw tuples.
 
     Returns raw driver-native rows without dict conversion for lazy materialization.

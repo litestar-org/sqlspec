@@ -396,7 +396,12 @@ class MockSyncDriver(SyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
 
             return self.create_execution_result(
-                cursor, selected_data=fetched_data, column_names=column_names, data_row_count=len(fetched_data), is_select_result=True, row_format="tuple"
+                cursor,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+                row_format="tuple",
             )
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
@@ -496,7 +501,12 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
 
             return self.create_execution_result(
-                cursor, selected_data=fetched_data, column_names=column_names, data_row_count=len(fetched_data), is_select_result=True, row_format="tuple"
+                cursor,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+                row_format="tuple",
             )
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)

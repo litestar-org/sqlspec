@@ -19,6 +19,7 @@ def _mock_result(**kwargs: Any) -> Mock:
     m.get_data.return_value = m.data
     return m
 
+
 pytestmark = pytest.mark.xdist_group("migrations")
 
 

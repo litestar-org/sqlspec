@@ -50,9 +50,7 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def collect_rows(
-    fetched_data: "list[Any] | None", description: "list[Any] | None"
-) -> "tuple[list[Any], list[str]]":
+def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":
     """Collect DuckDB rows and column names.
 
     Returns raw data without dict conversion. The row format is detected

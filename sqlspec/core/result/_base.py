@@ -282,7 +282,7 @@ class SQLResult(StatementResult):
             self._materialized_dicts = raw
         elif fmt == "tuple":
             col_names = self.column_names
-            self._materialized_dicts = [dict(zip(col_names, row)) for row in raw]
+            self._materialized_dicts = [dict(zip(col_names, row, strict=False)) for row in raw]
         else:
             # "record" — dict-like objects (asyncpg.Record, sqlite3.Row, bigquery.Row)
             self._materialized_dicts = [dict(record) for record in raw]

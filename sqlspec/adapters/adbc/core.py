@@ -704,9 +704,7 @@ def apply_driver_features(
     return statement_config, processed_features
 
 
-def collect_rows(
-    fetched_data: "list[Any] | None", description: "list[Any] | None"
-) -> "tuple[list[Any], list[str]]":
+def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":
     """Collect ADBC rows and column names.
 
     Returns raw data without dict conversion. The row format is detected

@@ -313,11 +313,7 @@ def _deserialize_mysqlconnector_json_dict_rows(
 
 
 def _deserialize_mysqlconnector_json_tuple_rows(
-    rows: "list[Any]",
-    json_indexes: "list[int]",
-    deserializer: "Callable[[Any], Any]",
-    *,
-    logger: Any | None = None,
+    rows: "list[Any]", json_indexes: "list[int]", deserializer: "Callable[[Any], Any]", *, logger: Any | None = None
 ) -> "list[Any]":
     """Apply JSON deserialization to tuple rows using index-based access."""
     if not rows or not json_indexes:
@@ -367,9 +363,7 @@ def collect_rows(
         return [], column_names, "tuple"
     if isinstance(fetched_data[0], dict):
         rows = [dict(row) for row in fetched_data]
-        rows = _deserialize_mysqlconnector_json_dict_rows(
-            column_names, rows, json_indexes, deserializer, logger=logger
-        )
+        rows = _deserialize_mysqlconnector_json_dict_rows(column_names, rows, json_indexes, deserializer, logger=logger)
         return rows, column_names, "dict"
     rows = list(fetched_data)
     rows = _deserialize_mysqlconnector_json_tuple_rows(rows, json_indexes, deserializer, logger=logger)
