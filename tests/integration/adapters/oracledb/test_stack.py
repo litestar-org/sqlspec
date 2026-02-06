@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec import StackExecutionError, StatementStack
+from sqlspec import SQLResult, StackExecutionError, StatementStack
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 
 pytestmark = pytest.mark.xdist_group("oracle")
@@ -77,9 +77,10 @@ async def test_async_statement_stack_native_pipeline(
     assert len(results) == 3
     assert results[0].rows_affected == 1
     assert results[1].rows_affected == 1
-    assert results[2].result is not None
-    assert results[2].result.data is not None
-    assert results[2].result.get_data()[0]["name"] == "beta"
+    last_result = results[2].result
+    assert isinstance(last_result, SQLResult)
+    assert last_result.data is not None
+    assert last_result.get_data()[0]["name"] == "beta"
 
     await oracle_async_session.execute_script(DROP_TEMPLATE.format(table_name=table_name))
 
@@ -135,8 +136,9 @@ def test_sync_statement_stack_sequential_fallback(oracle_sync_session: OracleSyn
 
     assert len(results) == 2
     assert results[0].rows_affected == 1
-    assert results[1].result is not None
-    assert results[1].result.data is not None
-    assert results[1].result.get_data()[0]["name"] == "sync-alpha"
+    select_result = results[1].result
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert select_result.get_data()[0]["name"] == "sync-alpha"
 
     oracle_sync_session.execute_script(DROP_TEMPLATE.format(table_name=table_name))

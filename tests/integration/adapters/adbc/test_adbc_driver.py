@@ -228,9 +228,10 @@ def test_adbc_postgresql_statement_stack_sequential(adbc_postgresql_session: Adb
     results = adbc_postgresql_session.execute_stack(stack)
 
     assert len(results) == 3
-    assert results[2].result is not None
-    assert results[2].result.data is not None
-    assert results[2].result.get_data()[0]["total"] == 2
+    count_result = results[2].result
+    assert isinstance(count_result, SQLResult)
+    assert count_result.data is not None
+    assert count_result.get_data()[0]["total"] == 2
 
 
 @pytest.mark.xdist_group("postgres")

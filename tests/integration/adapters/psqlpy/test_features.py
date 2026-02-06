@@ -175,7 +175,7 @@ async def test_psqlpy_with_core_round_3_sql(psqlpy_session: PsqlpyDriver) -> Non
     assert result.data is not None
     assert len(result.data) == 10
 
-    for i, row in enumerate(result.data, 1):
+    for i, row in enumerate(result.get_data(), 1):
         assert row["number"] == i
         assert row["square"] == i * i
         assert row["parity"] == ("even" if i % 2 == 0 else "odd")

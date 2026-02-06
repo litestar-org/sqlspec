@@ -123,7 +123,7 @@ async def test_asyncpg_tracker_migration_preserves_data(postgres_service: "Postg
             await tracker.ensure_tracking_table(driver)
 
             result = await driver.execute(f"SELECT * FROM {tracker.version_table}")
-            records = result.data or []
+            records = result.get_data()
 
             assert len(records) == 1
             assert records[0]["version_num"] == "0001"
@@ -152,7 +152,7 @@ async def test_asyncpg_tracker_version_type_recording(postgres_service: "Postgre
                 FROM {tracker.version_table}
                 ORDER BY execution_sequence
             """)
-            records = result.data or []
+            records = result.get_data()
 
             assert len(records) == 2
             assert records[0]["version_num"] == "0001"
@@ -184,7 +184,7 @@ async def test_asyncpg_tracker_execution_sequence(postgres_service: "PostgresSer
                 FROM {tracker.version_table}
                 ORDER BY execution_sequence
             """)
-            records = result.data or []
+            records = result.get_data()
 
             assert len(records) == 3
             assert records[0]["execution_sequence"] == 1
@@ -240,7 +240,7 @@ async def test_asyncpg_update_version_record_preserves_metadata(postgres_service
                 FROM {tracker.version_table}
                 WHERE version_num = '20251011120000'
             """)
-            record_before = (result_before.data or [])[0]
+            record_before = result_before.get_data()[0]
 
             await tracker.update_version_record(driver, "20251011120000", "0001")
 
@@ -249,7 +249,7 @@ async def test_asyncpg_update_version_record_preserves_metadata(postgres_service
                 FROM {tracker.version_table}
                 WHERE version_num = '0001'
             """)
-            record_after = (result_after.data or [])[0]
+            record_after = result_after.get_data()[0]
 
             assert record_after["version_num"] == "0001"
             assert record_after["version_type"] == "sequential"
@@ -276,7 +276,7 @@ async def test_asyncpg_update_version_record_idempotent(postgres_service: "Postg
             await tracker.update_version_record(driver, "20251011120000", "0001")
 
             result = await driver.execute(f"SELECT COUNT(*) as count FROM {tracker.version_table}")
-            count = (result.data or [])[0]["count"]
+            count = result.get_data()[0]["count"]
 
             assert count == 1
     finally:

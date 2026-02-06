@@ -98,7 +98,7 @@ def test_tracker_migration_preserves_existing_data(sqlite_session: SqliteDriver)
     tracker.ensure_tracking_table(sqlite_session)
 
     result = sqlite_session.execute(f"SELECT * FROM {tracker.version_table}")
-    records = result.data or []
+    records = result.get_data()
 
     assert len(records) == 1
     record = records[0]
@@ -145,7 +145,7 @@ def test_tracker_uses_version_type_for_recording(sqlite_session: SqliteDriver) -
     result = sqlite_session.execute(
         f"SELECT version_num, version_type FROM {tracker.version_table} ORDER BY execution_sequence"
     )
-    records = result.data or []
+    records = result.get_data()
 
     assert len(records) == 2
     assert records[0]["version_num"] == "0001"
@@ -166,7 +166,7 @@ def test_tracker_execution_sequence_auto_increments(sqlite_session: SqliteDriver
     result = sqlite_session.execute(
         f"SELECT version_num, execution_sequence FROM {tracker.version_table} ORDER BY execution_sequence"
     )
-    records = result.data or []
+    records = result.get_data()
 
     assert len(records) == 3
     assert records[0]["execution_sequence"] == 1
@@ -198,14 +198,14 @@ def test_tracker_update_version_record_preserves_execution_sequence(sqlite_sessi
     result_before = sqlite_session.execute(
         f"SELECT execution_sequence, applied_at FROM {tracker.version_table} WHERE version_num = '20251011120000'"
     )
-    record_before = (result_before.data or [])[0]
+    record_before = result_before.get_data()[0]
 
     tracker.update_version_record(sqlite_session, "20251011120000", "0001")
 
     result_after = sqlite_session.execute(
         f"SELECT version_num, version_type, execution_sequence, applied_at FROM {tracker.version_table} WHERE version_num = '0001'"
     )
-    record_after = (result_after.data or [])[0]
+    record_after = result_after.get_data()[0]
 
     assert record_after["version_num"] == "0001"
     assert record_after["version_type"] == "sequential"
@@ -225,7 +225,7 @@ def test_tracker_update_version_record_idempotent(sqlite_session: SqliteDriver) 
     tracker.update_version_record(sqlite_session, "20251011120000", "0001")
 
     result = sqlite_session.execute(f"SELECT COUNT(*) as count FROM {tracker.version_table}")
-    count = (result.data or [])[0]["count"]
+    count = result.get_data()[0]["count"]
 
     assert count == 1
 
@@ -276,7 +276,7 @@ def test_tracker_checksum_column_stores_md5_hashes(sqlite_session: SqliteDriver)
     tracker.record_migration(sqlite_session, "0001", "Create users", 100, checksum)
 
     result = sqlite_session.execute(f"SELECT checksum FROM {tracker.version_table} WHERE version_num = '0001'")
-    stored_checksum = (result.data or [])[0]["checksum"]
+    stored_checksum = result.get_data()[0]["checksum"]
 
     assert stored_checksum == checksum
     assert len(stored_checksum) == 32
@@ -292,7 +292,7 @@ def test_tracker_applied_by_column_stores_user(sqlite_session: SqliteDriver) -> 
     tracker.record_migration(sqlite_session, "0001", "Migration", 100, "checksum")
 
     result = sqlite_session.execute(f"SELECT applied_by FROM {tracker.version_table} WHERE version_num = '0001'")
-    applied_by = (result.data or [])[0]["applied_by"]
+    applied_by = result.get_data()[0]["applied_by"]
 
     expected_user = os.environ.get("USER", "unknown")
     assert applied_by == expected_user

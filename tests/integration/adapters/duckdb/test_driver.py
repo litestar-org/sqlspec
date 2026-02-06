@@ -621,9 +621,10 @@ def test_duckdb_statement_stack_sequential(duckdb_session: DuckDBDriver) -> None
     assert len(results) == 3
     assert results[0].rows_affected == 1
     assert results[1].rows_affected == 1
-    assert results[2].result is not None
-    assert results[2].result.data is not None
-    assert results[2].result.get_data()[0]["total"] == 2
+    count_result = results[2].result
+    assert isinstance(count_result, SQLResult)
+    assert count_result.data is not None
+    assert count_result.get_data()[0]["total"] == 2
 
 
 @requires_interpreted
