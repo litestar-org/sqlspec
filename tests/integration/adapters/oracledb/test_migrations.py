@@ -72,8 +72,8 @@ def down():
 
             users_result = driver.execute(f"SELECT * FROM {users_table}")
             assert len(users_result.data) == 1
-            assert users_result.data[0]["name"] == "John Doe"
-            assert users_result.data[0]["email"] == "john@example.com"
+            assert users_result.get_data()[0]["name"] == "John Doe"
+            assert users_result.get_data()[0]["email"] == "john@example.com"
 
         commands.downgrade("base")
 
@@ -151,8 +151,8 @@ def down():
 
             users_result = await driver.execute(f"SELECT * FROM {users_table}")
             assert len(users_result.data) == 1
-            assert users_result.data[0]["name"] == "John Doe"
-            assert users_result.data[0]["email"] == "john@example.com"
+            assert users_result.get_data()[0]["name"] == "John Doe"
+            assert users_result.get_data()[0]["email"] == "john@example.com"
 
         await commands.downgrade("base")
 
@@ -840,7 +840,7 @@ async def test_oracledb_async_schema_migration_from_old_format(
                 ORDER BY column_name
             """
             result = await driver.execute(column_check_sql)
-            column_names = {str(row["column_name"]).lower() for row in result.data}
+            column_names = {str(row["column_name"]).lower() for row in result.get_data()}
 
             assert "version_type" in column_names, "VERSION_TYPE column should be added"
             assert "execution_sequence" in column_names, "EXECUTION_SEQUENCE column should be added"
@@ -849,7 +849,7 @@ async def test_oracledb_async_schema_migration_from_old_format(
 
             migration_data = await driver.execute(f"SELECT * FROM {migration_table}")
             assert len(migration_data.data) == 1
-            assert migration_data.data[0]["version_num"] == "0001"
+            assert migration_data.get_data()[0]["version_num"] == "0001"
     finally:
         if config.connection_instance:
             await config.close_pool()
@@ -912,7 +912,7 @@ def test_oracledb_sync_schema_migration_from_old_format(tmp_path: Path, oracle_2
                 ORDER BY column_name
             """
             result = driver.execute(column_check_sql)
-            column_names = {str(row["column_name"]).lower() for row in result.data}
+            column_names = {str(row["column_name"]).lower() for row in result.get_data()}
 
             assert "version_type" in column_names, "VERSION_TYPE column should be added"
             assert "execution_sequence" in column_names, "EXECUTION_SEQUENCE column should be added"
@@ -921,7 +921,7 @@ def test_oracledb_sync_schema_migration_from_old_format(tmp_path: Path, oracle_2
 
             migration_data = driver.execute(f"SELECT * FROM {migration_table}")
             assert len(migration_data.data) == 1
-            assert migration_data.data[0]["version_num"] == "0001"
+            assert migration_data.get_data()[0]["version_num"] == "0001"
     finally:
         if config.connection_instance:
             config.close_pool()

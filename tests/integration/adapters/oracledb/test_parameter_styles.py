@@ -116,7 +116,7 @@ def test_sync_oracle_insert_with_named_params(oracle_sync_session: OracleSyncDri
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = _lower_dict(select_result.data[0])
+    row = _lower_dict(select_result.get_data()[0])
     assert row["name"] == "Alice Johnson"
     assert row["age"] == 30
     assert row["city"] == "Oracle City"
@@ -166,7 +166,7 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = _lower_dict(select_result.data[0])
+    row = _lower_dict(select_result.get_data()[0])
     assert row["name"] == "Updated User"
     assert row["status"] == "ACTIVE"
 
@@ -306,7 +306,7 @@ def test_sync_oracle_date_parameter_handling(oracle_sync_session: OracleSyncDriv
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = _lower_dict(select_result.data[0])
+    row = _lower_dict(select_result.get_data()[0])
     assert row["event_name"] == "Oracle Conference"
     assert row["formatted_date"] == "2024-06-15"
 
@@ -320,7 +320,7 @@ def test_sync_oracle_date_parameter_handling(oracle_sync_session: OracleSyncDriv
     range_result = oracle_sync_session.execute(range_sql, {"start_date": "2024-01-01", "end_date": "2024-12-31"})
     assert isinstance(range_result, SQLResult)
     assert range_result.data is not None
-    assert range_result.data[0]["event_count"] == 1
+    assert range_result.get_data()[0]["event_count"] == 1
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_date_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -374,7 +374,7 @@ def test_sync_oracle_comprehensive_none_parameter_handling(oracle_sync_session: 
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = _lower_dict(select_result.data[0])
+    row = _lower_dict(select_result.get_data()[0])
     assert row["id"] == 1
     assert row["text_field"] == "Test Value"
     assert row["number_field"] is None
@@ -423,7 +423,7 @@ def test_sync_oracle_all_none_parameters(oracle_sync_session: OracleSyncDriver) 
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = _lower_dict(select_result.data[0])
+    row = _lower_dict(select_result.get_data()[0])
     assert row["id"] is None
     assert row["field1"] is None
     assert row["field2"] is None
@@ -767,7 +767,7 @@ def test_sync_oracle_parameter_count_validation_with_none(oracle_sync_session: O
         assert isinstance(select_result, SQLResult)
         if select_result.data and len(select_result.data) > 0:
             # If a record was inserted, field3 should be NULL due to missing parameter
-            row = _lower_dict(select_result.data[0])
+            row = _lower_dict(select_result.get_data()[0])
             assert row["field3"] is None
     except Exception as e:
         # If it fails, that's also acceptable behavior - missing parameters should fail
@@ -801,7 +801,7 @@ def test_sync_oracle_parameter_count_validation_with_none(oracle_sync_session: O
     assert num_records in [1, 2]  # Either 1 (missing param failed) or 2 (missing param succeeded)
 
     # First insert - explicit None values (this should always be present)
-    row1 = _lower_dict(select_result.data[0])
+    row1 = _lower_dict(select_result.get_data()[0])
     assert row1["id"] == 1
     assert row1["field1"] is None
     assert row1["field2"] == 42
@@ -810,7 +810,7 @@ def test_sync_oracle_parameter_count_validation_with_none(oracle_sync_session: O
     # If there's a second record, it should be from the missing parameter case
     if num_records == 2:
         # Second insert - missing parameter treated as None/NULL
-        row2 = _lower_dict(select_result.data[1])
+        row2 = _lower_dict(select_result.get_data()[1])
         assert row2["id"] == 2
         assert row2["field1"] == "test"
         assert row2["field2"] is None

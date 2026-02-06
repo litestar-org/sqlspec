@@ -29,8 +29,8 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["value"] == 42
+    assert select_result.get_data()[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["value"] == 42
 
     update_result = await aiosqlite_session.execute(
         "UPDATE test_table SET value = ? WHERE name = ?", (100, "test_name")
@@ -41,7 +41,7 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     verify_result = await aiosqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
-    assert verify_result.data[0]["value"] == 100
+    assert verify_result.get_data()[0]["value"] == 100
 
     delete_result = await aiosqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
@@ -50,7 +50,7 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     empty_result = await aiosqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
-    assert empty_result.data[0]["count"] == 0
+    assert empty_result.get_data()[0]["count"] == 0
 
 
 @pytest.mark.parametrize(
@@ -79,7 +79,7 @@ async def test_aiosqlite_parameter_styles(
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test_value"
+    assert result.get_data()[0]["name"] == "test_value"
 
 
 async def test_aiosqlite_execute_many(aiosqlite_session: AiosqliteDriver) -> None:
@@ -97,14 +97,14 @@ async def test_aiosqlite_execute_many(aiosqlite_session: AiosqliteDriver) -> Non
     select_result = await aiosqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(parameters_list)
+    assert select_result.get_data()[0]["count"] == len(parameters_list)
 
     ordered_result = await aiosqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
-    assert ordered_result.data[0]["name"] == "name1"
-    assert ordered_result.data[0]["value"] == 1
+    assert ordered_result.get_data()[0]["name"] == "name1"
+    assert ordered_result.get_data()[0]["value"] == 1
 
 
 async def test_aiosqlite_execute_script(aiosqlite_session: AiosqliteDriver) -> None:
@@ -126,10 +126,10 @@ async def test_aiosqlite_execute_script(aiosqlite_session: AiosqliteDriver) -> N
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
-    assert select_result.data[0]["name"] == "script_test1"
-    assert select_result.data[0]["value"] == 1000
-    assert select_result.data[1]["name"] == "script_test2"
-    assert select_result.data[1]["value"] == 888
+    assert select_result.get_data()[0]["name"] == "script_test1"
+    assert select_result.get_data()[0]["value"] == 1000
+    assert select_result.get_data()[1]["name"] == "script_test2"
+    assert select_result.get_data()[1]["value"] == 888
 
 
 async def test_aiosqlite_result_methods(aiosqlite_session: AiosqliteDriver) -> None:
@@ -201,7 +201,7 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
+    row = select_result.get_data()[0]
     assert row["text_col"] == "text_value"
     assert row["integer_col"] == 42
     assert row["real_col"] == math.pi
@@ -231,7 +231,7 @@ async def test_aiosqlite_statement_stack_sequential(aiosqlite_session: Aiosqlite
     assert results[1].rows_affected == 1
     assert results[2].result is not None
     assert results[2].result.data is not None
-    assert results[2].result.data[0]["total"] == 2
+    assert results[2].result.get_data()[0]["total"] == 2
 
 
 @requires_interpreted
@@ -257,7 +257,7 @@ async def test_aiosqlite_statement_stack_continue_on_error(aiosqlite_session: Ai
 
     verify = await aiosqlite_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> None:
@@ -270,7 +270,7 @@ async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> Non
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["count"] == 1
+    assert result.get_data()[0]["count"] == 1
 
 
 async def test_aiosqlite_complex_queries(aiosqlite_session: AiosqliteDriver) -> None:
@@ -305,10 +305,10 @@ async def test_aiosqlite_complex_queries(aiosqlite_session: AiosqliteDriver) -> 
     """)
     assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
-    assert agg_result.data[0]["total_count"] == 4
-    assert agg_result.data[0]["avg_value"] == 29.5
-    assert agg_result.data[0]["min_value"] == 25
-    assert agg_result.data[0]["max_value"] == 35
+    assert agg_result.get_data()[0]["total_count"] == 4
+    assert agg_result.get_data()[0]["avg_value"] == 29.5
+    assert agg_result.get_data()[0]["min_value"] == 25
+    assert agg_result.get_data()[0]["max_value"] == 35
 
     subquery_result = await aiosqlite_session.execute("""
         SELECT name, value
@@ -319,8 +319,8 @@ async def test_aiosqlite_complex_queries(aiosqlite_session: AiosqliteDriver) -> 
     assert isinstance(subquery_result, SQLResult)
     assert subquery_result.data is not None
     assert len(subquery_result.data) == 2
-    assert subquery_result.data[0]["name"] == "Bob"
-    assert subquery_result.data[1]["name"] == "Charlie"
+    assert subquery_result.get_data()[0]["name"] == "Bob"
+    assert subquery_result.get_data()[1]["name"] == "Charlie"
 
 
 async def test_aiosqlite_schema_operations(aiosqlite_session: AiosqliteDriver) -> None:
@@ -365,7 +365,7 @@ async def test_aiosqlite_column_names_and_metadata(aiosqlite_session: AiosqliteD
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["name"] == "metadata_test"
     assert row["value"] == 123
     assert row["id"] is not None
@@ -386,7 +386,7 @@ async def test_aiosqlite_performance_bulk_operations(aiosqlite_session: Aiosqlit
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 100
+    assert select_result.get_data()[0]["count"] == 100
 
     page_result = await aiosqlite_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
@@ -394,7 +394,7 @@ async def test_aiosqlite_performance_bulk_operations(aiosqlite_session: Aiosqlit
     assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
-    assert page_result.data[0]["name"] == "bulk_user_20"
+    assert page_result.get_data()[0]["name"] == "bulk_user_20"
 
 
 async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDriver) -> None:
@@ -407,7 +407,7 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     sqlite_result = await aiosqlite_session.execute("SELECT sqlite_version() as version")
     assert isinstance(sqlite_result, SQLResult)
     assert sqlite_result.data is not None
-    assert sqlite_result.data[0]["version"] is not None
+    assert sqlite_result.get_data()[0]["version"] is not None
 
     try:
         json_result = await aiosqlite_session.execute("SELECT json('{}') as json_test")
@@ -430,7 +430,7 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     assert isinstance(temp_result, SQLResult)
     assert temp_result.data is not None
     assert len(temp_result.data) == 1
-    assert temp_result.data[0]["name"] == "temp"
+    assert temp_result.get_data()[0]["name"] == "temp"
 
     try:
         await aiosqlite_session.execute("DETACH DATABASE temp_db", statement_config=non_strict_config)
@@ -449,8 +449,8 @@ async def test_aiosqlite_sql_object_integration(aiosqlite_session: AiosqliteDriv
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "sql_obj_test_unique"
-    assert result.data[0]["value"] == 50
+    assert result.get_data()[0]["name"] == "sql_obj_test_unique"
+    assert result.get_data()[0]["value"] == 50
 
 
 async def test_aiosqlite_core_result_features(aiosqlite_session: AiosqliteDriver) -> None:
@@ -473,7 +473,7 @@ async def test_aiosqlite_core_result_features(aiosqlite_session: AiosqliteDriver
     assert "value" in result.column_names
 
     assert len(result.data) == 3
-    assert all(row["name"].startswith("core") for row in result.data)
+    assert all(row["name"].startswith("core") for row in result.get_data())
 
 
 async def test_aiosqlite_for_update_generates_sql(aiosqlite_session: AiosqliteDriver) -> None:
@@ -503,7 +503,7 @@ async def test_aiosqlite_for_update_generates_sql(aiosqlite_session: AiosqliteDr
     result = await aiosqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "aiosqlite_test"
+    assert result.get_data()[0]["name"] == "aiosqlite_test"
 
 
 async def test_aiosqlite_for_share_generates_sql_but_may_not_work(aiosqlite_session: AiosqliteDriver) -> None:
@@ -533,7 +533,7 @@ async def test_aiosqlite_for_share_generates_sql_but_may_not_work(aiosqlite_sess
     result = await aiosqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "aiosqlite_share"
+    assert result.get_data()[0]["name"] == "aiosqlite_share"
 
 
 async def test_aiosqlite_for_update_skip_locked_generates_sql(aiosqlite_session: AiosqliteDriver) -> None:

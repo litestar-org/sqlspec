@@ -92,7 +92,7 @@ async def test_async_select(oracle_async_session: "OracleAsyncDriver", parameter
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["name"] == "test_name"
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -138,7 +138,7 @@ async def test_async_select_value(
     assert value_result.data is not None
     assert len(value_result.data) == 1
 
-    value = value_result.data[0][value_result.column_names[0]]
+    value = value_result.get_data()[0][value_result.column_names[0]]
     assert value == "test_value"
 
     await oracle_async_session.execute_script(
@@ -182,7 +182,7 @@ async def test_async_insert_with_sequence(oracle_async_session: "OracleAsyncDriv
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    last_id = result.data[0]["last_id"]
+    last_id = result.get_data()[0]["last_id"]
 
     verify_result = await oracle_async_session.execute(
         "SELECT id, name FROM test_table_oracledb_async WHERE id = :1", (last_id,)
@@ -190,8 +190,8 @@ async def test_async_insert_with_sequence(oracle_async_session: "OracleAsyncDriv
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    assert verify_result.data[0]["name"] == "test_name"
-    assert verify_result.data[0]["id"] == last_id
+    assert verify_result.get_data()[0]["name"] == "test_name"
+    assert verify_result.get_data()[0]["id"] == last_id
 
     await oracle_async_session.execute_script("""
         BEGIN
@@ -230,7 +230,7 @@ async def test_async_execute_many_insert(oracle_async_session: "OracleAsyncDrive
     count_result = await oracle_async_session.execute(select_sql)
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["count"] == len(parameters_list)
+    assert count_result.get_data()[0]["count"] == len(parameters_list)
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_many_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -259,7 +259,7 @@ async def test_async_execute_script(oracle_async_session: "OracleAsyncDriver") -
     select_result = await oracle_async_session.execute("SELECT COUNT(*) as count FROM test_script_table_oracledb_async")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 2
+    assert select_result.get_data()[0]["count"] == 2
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_script_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -298,7 +298,7 @@ async def test_async_update_operation(oracle_async_session: "OracleAsyncDriver")
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["name"] == "updated_name"
+    assert select_result.get_data()[0]["name"] == "updated_name"
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -335,7 +335,7 @@ async def test_async_delete_operation(oracle_async_session: "OracleAsyncDriver")
     select_result = await oracle_async_session.execute("SELECT COUNT(*) as count FROM test_table_oracledb_async")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 0
+    assert select_result.get_data()[0]["count"] == 0
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"

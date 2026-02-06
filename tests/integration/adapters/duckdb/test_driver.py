@@ -58,8 +58,8 @@ def test_insert(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["id"] == 1
+    assert select_result.get_data()[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["id"] == 1
 
     duckdb_session.execute_script("DELETE FROM test_table")
 
@@ -87,8 +87,8 @@ def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["id"] == 1
+    assert select_result.get_data()[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["id"] == 1
 
     if style == "tuple_binds":
         select_where_sql = "SELECT id FROM test_table WHERE name = ?"
@@ -101,7 +101,7 @@ def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
     assert isinstance(where_result, SQLResult)
     assert where_result.data is not None
     assert len(where_result.data) == 1
-    assert where_result.data[0]["id"] == 1
+    assert where_result.get_data()[0]["id"] == 1
 
     duckdb_session.execute_script("DELETE FROM test_table")
 
@@ -138,7 +138,7 @@ def test_select_value(duckdb_session: DuckDBDriver, parameters: Any, style: Para
     assert len(value_result.data) == 1
     assert value_result.column_names is not None
 
-    value = value_result.data[0][value_result.column_names[0]]
+    value = value_result.get_data()[0][value_result.column_names[0]]
     assert value == "test_name"
 
     duckdb_session.execute_script("DELETE FROM test_table")
@@ -156,7 +156,7 @@ def test_execute_many_insert(duckdb_session: DuckDBDriver) -> None:
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(parameters_list)
+    assert select_result.get_data()[0]["count"] == len(parameters_list)
 
 
 def test_execute_script(duckdb_session: DuckDBDriver) -> None:
@@ -172,7 +172,7 @@ def test_execute_script(duckdb_session: DuckDBDriver) -> None:
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 2
+    assert select_result.get_data()[0]["count"] == 2
 
 
 def test_update_operation(duckdb_session: DuckDBDriver) -> None:
@@ -189,7 +189,7 @@ def test_update_operation(duckdb_session: DuckDBDriver) -> None:
     select_result = duckdb_session.execute("SELECT name FROM test_table WHERE id = ?", (42))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["name"] == "updated_name"
+    assert select_result.get_data()[0]["name"] == "updated_name"
 
 
 def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
@@ -206,7 +206,7 @@ def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 0
+    assert select_result.get_data()[0]["count"] == 0
 
 
 def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
@@ -242,7 +242,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
 
     select_result = duckdb_session.execute("SELECT * FROM duckdb_data_types_test")
     assert len(select_result.data) == 1
-    row = select_result.data[0]
+    row = select_result.get_data()[0]
 
     assert row["id"] == 1
     assert row["text_col"] == "test_text"
@@ -294,7 +294,7 @@ def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
     result = duckdb_session.execute(complex_query)
     assert result.total_count == 3
 
-    engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")
+    engineering_row = next(row for row in result.get_data() if row["dept_name"] == "Engineering")
     assert engineering_row["employee_count"] == 2
     assert engineering_row["avg_salary"] == 77500.0
 
@@ -344,7 +344,7 @@ def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
     result = duckdb_session.execute(window_query)
     assert result.total_count == 5
 
-    product_a_rows = [row for row in result.data if row["product"] == "Product A"]
+    product_a_rows = [row for row in result.get_data() if row["product"] == "Product A"]
     assert len(product_a_rows) == 2
     assert product_a_rows[0]["rank_in_product"] == 1
 
@@ -376,8 +376,8 @@ def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
 
     select_result = duckdb_session.execute("SELECT id, name, email FROM schema_test")
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "Test User"
-    assert select_result.data[0]["email"] == "test@example.com"
+    assert select_result.get_data()[0]["name"] == "Test User"
+    assert select_result.get_data()[0]["email"] == "test@example.com"
 
     duckdb_session.execute("DROP INDEX idx_schema_test_name")
     duckdb_session.execute("DROP TABLE schema_test")
@@ -401,7 +401,7 @@ def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> Non
     assert bulk_result.rows_affected == 100
 
     bulk_select_result = duckdb_session.execute("SELECT COUNT(*) as total FROM bulk_test")
-    assert bulk_select_result.data[0]["total"] == 100
+    assert bulk_select_result.get_data()[0]["total"] == 100
 
     agg_result = duckdb_session.execute("""
         SELECT
@@ -412,10 +412,10 @@ def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> Non
         FROM bulk_test
     """)
 
-    assert agg_result.data[0]["count"] == 100
-    assert agg_result.data[0]["avg_number"] > 0
-    assert agg_result.data[0]["min_number"] == 10.5
-    assert agg_result.data[0]["max_number"] == 1050.0
+    assert agg_result.get_data()[0]["count"] == 100
+    assert agg_result.get_data()[0]["avg_number"] > 0
+    assert agg_result.get_data()[0]["min_number"] == 10.5
+    assert agg_result.get_data()[0]["max_number"] == 1050.0
 
     duckdb_session.execute_script("DROP TABLE bulk_test")
 
@@ -623,7 +623,7 @@ def test_duckdb_statement_stack_sequential(duckdb_session: DuckDBDriver) -> None
     assert results[1].rows_affected == 1
     assert results[2].result is not None
     assert results[2].result.data is not None
-    assert results[2].result.data[0]["total"] == 2
+    assert results[2].result.get_data()[0]["total"] == 2
 
 
 @requires_interpreted
@@ -648,7 +648,7 @@ def test_duckdb_statement_stack_continue_on_error(duckdb_session: DuckDBDriver) 
 
     verify = duckdb_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 # =============================================================================
@@ -674,7 +674,7 @@ def test_variable_persistence_across_execute_calls(duckdb_basic_session: DuckDBD
 
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["var_value"] == "test_value"
+    assert result.get_data()[0]["var_value"] == "test_value"
 
 
 def test_variable_update_and_override(duckdb_basic_session: DuckDBDriver) -> None:
@@ -689,7 +689,7 @@ def test_variable_update_and_override(duckdb_basic_session: DuckDBDriver) -> Non
     # Verify initial value
     result1 = duckdb_basic_session.execute("SELECT getvariable('counter') AS val")
     assert result1.data is not None
-    assert result1.data[0]["val"] == 1
+    assert result1.get_data()[0]["val"] == 1
 
     # Update value
     duckdb_basic_session.execute("SET VARIABLE counter = 42")
@@ -697,7 +697,7 @@ def test_variable_update_and_override(duckdb_basic_session: DuckDBDriver) -> Non
     # Verify updated value
     result2 = duckdb_basic_session.execute("SELECT getvariable('counter') AS val")
     assert result2.data is not None
-    assert result2.data[0]["val"] == 42
+    assert result2.get_data()[0]["val"] == 42
 
     # Override with string
     duckdb_basic_session.execute("SET VARIABLE counter = 'now_a_string'")
@@ -705,7 +705,7 @@ def test_variable_update_and_override(duckdb_basic_session: DuckDBDriver) -> Non
     # Verify override
     result3 = duckdb_basic_session.execute("SELECT getvariable('counter') AS val")
     assert result3.data is not None
-    assert result3.data[0]["val"] == "now_a_string"
+    assert result3.get_data()[0]["val"] == "now_a_string"
 
 
 def test_multiple_variables_persistence(duckdb_basic_session: DuckDBDriver) -> None:
@@ -725,9 +725,9 @@ def test_multiple_variables_persistence(duckdb_basic_session: DuckDBDriver) -> N
 
     assert result.data is not None
     assert len(result.data) == 1
-    assert result.data[0]["a"] == "alpha"
-    assert result.data[0]["b"] == 100
-    assert result.data[0]["c"] == 314
+    assert result.get_data()[0]["a"] == "alpha"
+    assert result.get_data()[0]["b"] == 100
+    assert result.get_data()[0]["c"] == 314
 
 
 def test_workspace_isolation_etl_pattern(duckdb_basic_session: DuckDBDriver) -> None:
@@ -765,8 +765,8 @@ def test_workspace_isolation_etl_pattern(duckdb_basic_session: DuckDBDriver) -> 
 
         assert result.data is not None
         assert len(result.data) == 2
-        assert result.data[0]["item_name"] == "item_a"
-        assert result.data[1]["item_name"] == "item_b"
+        assert result.get_data()[0]["item_name"] == "item_a"
+        assert result.get_data()[1]["item_name"] == "item_b"
 
         # Switch workspace context
         duckdb_basic_session.execute("SET VARIABLE current_workspace = 'ws_002'")
@@ -781,8 +781,8 @@ def test_workspace_isolation_etl_pattern(duckdb_basic_session: DuckDBDriver) -> 
 
         assert result2.data is not None
         assert len(result2.data) == 2
-        assert result2.data[0]["item_name"] == "item_c"
-        assert result2.data[1]["item_name"] == "item_d"
+        assert result2.get_data()[0]["item_name"] == "item_c"
+        assert result2.get_data()[1]["item_name"] == "item_d"
 
     finally:
         duckdb_basic_session.execute_script("DROP TABLE workspace_data")
@@ -801,4 +801,4 @@ def test_variable_in_expression(duckdb_basic_session: DuckDBDriver) -> None:
     """)
 
     assert result.data is not None
-    assert result.data[0]["calculated"] == 35  # 10 * 3 + 5
+    assert result.get_data()[0]["calculated"] == 35  # 10 * 3 + 5

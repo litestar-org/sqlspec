@@ -79,7 +79,7 @@ async def test_async_statement_stack_native_pipeline(
     assert results[1].rows_affected == 1
     assert results[2].result is not None
     assert results[2].result.data is not None
-    assert results[2].result.data[0]["name"] == "beta"
+    assert results[2].result.get_data()[0]["name"] == "beta"
 
     await oracle_async_session.execute_script(DROP_TEMPLATE.format(table_name=table_name))
 
@@ -114,7 +114,7 @@ async def test_async_statement_stack_continue_on_error_pipeline(oracle_async_ses
         f"SELECT COUNT(*) as total_rows FROM {table_name} WHERE id = :id", {"id": 2}
     )
     assert verify_result.data is not None
-    assert verify_result.data[0]["total_rows"] == 1
+    assert verify_result.get_data()[0]["total_rows"] == 1
 
     await oracle_async_session.execute_script(DROP_TEMPLATE.format(table_name=table_name))
 
@@ -137,6 +137,6 @@ def test_sync_statement_stack_sequential_fallback(oracle_sync_session: OracleSyn
     assert results[0].rows_affected == 1
     assert results[1].result is not None
     assert results[1].result.data is not None
-    assert results[1].result.data[0]["name"] == "sync-alpha"
+    assert results[1].result.get_data()[0]["name"] == "sync-alpha"
 
     oracle_sync_session.execute_script(DROP_TEMPLATE.format(table_name=table_name))

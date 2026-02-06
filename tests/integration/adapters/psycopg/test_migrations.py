@@ -71,8 +71,8 @@ def down():
 
             users_result = driver.execute(f"SELECT * FROM {users_table}")
             assert len(users_result.data) == 1
-            assert users_result.data[0]["name"] == "John Doe"
-            assert users_result.data[0]["email"] == "john@example.com"
+            assert users_result.get_data()[0]["name"] == "John Doe"
+            assert users_result.get_data()[0]["email"] == "john@example.com"
 
         commands.downgrade("base")
 
@@ -146,8 +146,8 @@ def down():
 
             users_result = await driver.execute(f"SELECT * FROM {users_table}")
             assert len(users_result.data) == 1
-            assert users_result.data[0]["name"] == "John Doe"
-            assert users_result.data[0]["email"] == "john@example.com"
+            assert users_result.get_data()[0]["name"] == "John Doe"
+            assert users_result.get_data()[0]["email"] == "john@example.com"
 
         await commands.downgrade("base")
 

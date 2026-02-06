@@ -103,7 +103,7 @@ def test_sql_result_arrow_data_types(adbc_postgresql_session: AdbcDriver) -> Non
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
 
     assert isinstance(row["name"], str)
     assert row["name"] == "Product A"
@@ -160,7 +160,7 @@ def test_sql_result_null_value_handling(adbc_postgresql_session: AdbcDriver) -> 
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["name"] == "Null Product"
     assert row["value"] is None
     assert row["price"] is None
@@ -188,7 +188,7 @@ def test_sql_result_aggregation_results(adbc_postgresql_session: AdbcDriver) -> 
     assert result.data is not None
     assert len(result.data) == 1
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["total_products"] == 3
     assert float(row["avg_value"]) == 150.0
     assert float(row["min_price"]) == 19.99
@@ -222,13 +222,13 @@ def test_sql_result_complex_queries(adbc_postgresql_session: AdbcDriver) -> None
     assert result.data is not None
     assert len(result.data) == 2
 
-    first_row = result.data[0]
+    first_row = result.get_data()[0]
     assert first_row["name"] == "Product C"
     assert first_row["value"] == 150
     assert first_row["value_category"] == "medium"
     assert first_row["tag_count"] == 2
 
-    second_row = result.data[1]
+    second_row = result.get_data()[1]
     assert second_row["name"] == "Product A"
     assert second_row["value"] == 100
     assert second_row["value_category"] == "low"
@@ -260,7 +260,7 @@ def test_sql_result_column_name_handling(adbc_postgresql_session: AdbcDriver) ->
     for col in expected_columns:
         assert col in result.column_names
 
-    row = result.data[0]
+    row = result.get_data()[0]
     assert row["product_name"] == "Product A"
     assert row["product_value"] == 100
     assert float(row["product_price"]) == 19.99
@@ -296,7 +296,7 @@ def test_sql_result_large_result_handling(adbc_postgresql_session: AdbcDriver) -
     assert page_result.data is not None
     assert len(page_result.data) == 10
 
-    values = [row["value"] for row in page_result.data]
+    values = [row["value"] for row in page_result.get_data()]
     assert values == sorted(values)
 
 
@@ -334,14 +334,14 @@ def test_sql_result_arrow_sqlite_types(adbc_sqlite_session: AdbcDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 3
 
-    first_row = result.data[0]
+    first_row = result.get_data()[0]
     assert isinstance(first_row["id"], int)
     assert isinstance(first_row["name"], str)
     assert first_row["name"] == "test1"
     assert first_row["data"] == b"binary_data_1"
     assert first_row["timestamp"] is not None
 
-    third_row = result.data[2]
+    third_row = result.get_data()[2]
     assert third_row["data"] is None
 
 
@@ -366,7 +366,7 @@ def test_sql_result_arrow_duckdb_advanced_types() -> None:
         assert result.data is not None
         assert len(result.data) == 1
 
-        row = result.data[0]
+        row = result.get_data()[0]
 
         assert row["int_array"] == [1, 2, 3, 4, 5]
         assert row["string_array"] == ["a", "b", "c"]

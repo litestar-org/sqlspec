@@ -75,7 +75,7 @@ class TestNumericParameterStyle:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_numeric_multiple_parameters(
@@ -88,8 +88,8 @@ class TestNumericParameterStyle:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 2
-        assert result.data[0]["value"] == 100
-        assert result.data[1]["value"] == 200
+        assert result.get_data()[0]["value"] == 100
+        assert result.get_data()[1]["value"] == 200
 
 
 class TestQmarkConversion:
@@ -104,7 +104,7 @@ class TestQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_qmark_multiple_parameters(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
@@ -115,7 +115,7 @@ class TestQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
     @pytest.mark.asyncio
     async def test_qmark_in_insert(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
@@ -129,7 +129,7 @@ class TestQmarkConversion:
             "SELECT * FROM test_parameter_conversion WHERE name = ?", ("qmark_insert",)
         )
         assert len(result.data) == 1
-        assert result.data[0]["value"] == 500
+        assert result.get_data()[0]["value"] == 500
 
 
 class TestNamedColonConversion:
@@ -146,7 +146,7 @@ class TestNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_named_colon_multiple_parameters(
@@ -160,7 +160,7 @@ class TestNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
     @pytest.mark.asyncio
     async def test_named_colon_repeated_parameter(
@@ -189,7 +189,7 @@ class TestNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_named_pyformat_multiple_parameters(
@@ -203,7 +203,7 @@ class TestNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
 
 class TestSQLObjectConversion:
@@ -217,7 +217,7 @@ class TestSQLObjectConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
     @pytest.mark.asyncio
     async def test_sql_object_with_qmark(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
@@ -227,7 +227,7 @@ class TestSQLObjectConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 2
-        names = [row["name"] for row in result.data]
+        names = [row["name"] for row in result.get_data()]
         assert "test1" in names
         assert "test3" in names
 
@@ -272,7 +272,7 @@ class TestEdgeCases:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
     @pytest.mark.asyncio
     async def test_sql_injection_prevention(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
@@ -289,7 +289,7 @@ class TestEdgeCases:
         count_result = await cockroach_asyncpg_parameter_session.execute(
             "SELECT COUNT(*) as count FROM test_parameter_conversion"
         )
-        assert count_result.data[0]["count"] >= 3
+        assert count_result.get_data()[0]["count"] >= 3
 
     @pytest.mark.asyncio
     async def test_special_characters_in_parameters(
@@ -306,7 +306,7 @@ class TestEdgeCases:
             "SELECT * FROM test_parameter_conversion WHERE name = $1", ("special",)
         )
         assert len(result.data) == 1
-        assert result.data[0]["description"] == special_value
+        assert result.get_data()[0]["description"] == special_value
 
     @pytest.mark.asyncio
     async def test_like_with_wildcards(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
@@ -316,5 +316,5 @@ class TestEdgeCases:
         )
 
         assert len(result.data) >= 3
-        for row in result.data:
+        for row in result.get_data():
             assert row["name"].startswith("test")

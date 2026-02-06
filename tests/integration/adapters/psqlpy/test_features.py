@@ -22,7 +22,7 @@ async def test_psqlpy_performance_features(psqlpy_session: PsqlpyDriver) -> None
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 1000
+    assert select_result.get_data()[0]["count"] == 1000
 
 
 async def test_psqlpy_connection_pooling(psqlpy_session: PsqlpyDriver) -> None:
@@ -34,7 +34,7 @@ async def test_psqlpy_connection_pooling(psqlpy_session: PsqlpyDriver) -> None:
         result = await psqlpy_session.execute("SELECT $1::int as operation_id", (i,))
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        operations.append(result.data[0]["operation_id"])
+        operations.append(result.get_data()[0]["operation_id"])
 
     assert operations == list(range(10))
 
@@ -73,7 +73,7 @@ async def test_psqlpy_advanced_postgresql_types(psqlpy_session: PsqlpyDriver) ->
 
     assert isinstance(insert_result, SQLResult)
     assert insert_result.data is not None
-    record_id = insert_result.data[0]["id"]
+    record_id = insert_result.get_data()[0]["id"]
 
     select_result = await psqlpy_session.execute("SELECT * FROM psqlpy_types_test_psqlpy WHERE id = $1", (record_id,))
 
@@ -81,7 +81,7 @@ async def test_psqlpy_advanced_postgresql_types(psqlpy_session: PsqlpyDriver) ->
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
+    row = select_result.get_data()[0]
     assert row["id"] == record_id
 
     assert row["json_col"] is not None
@@ -104,7 +104,7 @@ async def test_psqlpy_error_handling(psqlpy_session: PsqlpyDriver) -> None:
     result = await psqlpy_session.execute("SELECT 'recovery_test'::text as status")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["status"] == "recovery_test"
+    assert result.get_data()[0]["status"] == "recovery_test"
 
 
 async def test_psqlpy_large_result_sets(psqlpy_session: PsqlpyDriver) -> None:
@@ -137,7 +137,7 @@ async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["count"] == 1
+    assert result.get_data()[0]["count"] == 1
 
     await psqlpy_session.execute("COMMIT")
 
@@ -147,7 +147,7 @@ async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None
     assert isinstance(committed_result, SQLResult)
     assert committed_result.data is not None
     assert len(committed_result.data) == 1
-    assert committed_result.data[0]["name"] == "transaction_test"
+    assert committed_result.get_data()[0]["name"] == "transaction_test"
 
 
 async def test_psqlpy_with_core_round_3_sql(psqlpy_session: PsqlpyDriver) -> None:
@@ -192,8 +192,8 @@ async def test_psqlpy_prepared_statement_behavior(psqlpy_session: PsqlpyDriver) 
         result = await psqlpy_session.execute(sql, (value,))
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["param_value"] == value
-        assert result.data[0]["param_length"] == len(value)
+        assert result.get_data()[0]["param_value"] == value
+        assert result.get_data()[0]["param_length"] == len(value)
 
 
 async def test_psqlpy_rust_performance_indicators(psqlpy_session: PsqlpyDriver) -> None:
@@ -206,7 +206,7 @@ async def test_psqlpy_rust_performance_indicators(psqlpy_session: PsqlpyDriver) 
         result = await psqlpy_session.execute("SELECT $1::int + $2::int as sum", (i, i * 2))
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.data[0]["sum"] == i + (i * 2)
+        assert result.get_data()[0]["sum"] == i + (i * 2)
 
     elapsed_time = time.time() - start_time
 

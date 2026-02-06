@@ -33,7 +33,7 @@ def test_tracker_creates_full_schema_on_fresh_install(sqlite_session: SqliteDriv
     tracker.ensure_tracking_table(sqlite_session)
 
     result = sqlite_session.execute(f"PRAGMA table_info({tracker.version_table})")
-    columns = {row["name"] if isinstance(row, dict) else row[1] for row in result.data or []}
+    columns = {row["name"] if isinstance(row, dict) else row[1] for row in result.get_data()}
 
     expected_columns = {
         "version_num",
@@ -66,7 +66,7 @@ def test_tracker_migrates_legacy_schema(sqlite_session: SqliteDriver) -> None:
     tracker.ensure_tracking_table(sqlite_session)
 
     result = sqlite_session.execute(f"PRAGMA table_info({tracker.version_table})")
-    columns = {row["name"] if isinstance(row, dict) else row[1] for row in result.data or []}
+    columns = {row["name"] if isinstance(row, dict) else row[1] for row in result.get_data()}
 
     assert "version_type" in columns
     assert "execution_sequence" in columns
@@ -124,12 +124,12 @@ def test_tracker_migration_is_idempotent(sqlite_session: SqliteDriver) -> None:
     tracker.ensure_tracking_table(sqlite_session)
 
     result1 = sqlite_session.execute(f"PRAGMA table_info({tracker.version_table})")
-    columns1 = {row["name"] if isinstance(row, dict) else row[1] for row in result1.data or []}
+    columns1 = {row["name"] if isinstance(row, dict) else row[1] for row in result1.get_data()}
 
     tracker.ensure_tracking_table(sqlite_session)
 
     result2 = sqlite_session.execute(f"PRAGMA table_info({tracker.version_table})")
-    columns2 = {row["name"] if isinstance(row, dict) else row[1] for row in result2.data or []}
+    columns2 = {row["name"] if isinstance(row, dict) else row[1] for row in result2.get_data()}
 
     assert columns1 == columns2
 
@@ -254,7 +254,7 @@ def test_tracker_migration_adds_columns_in_sorted_order(sqlite_session: SqliteDr
     tracker.ensure_tracking_table(sqlite_session)
 
     result = sqlite_session.execute(f"PRAGMA table_info({tracker.version_table})")
-    columns = [row["name"] if isinstance(row, dict) else row[1] for row in result.data or []]
+    columns = [row["name"] if isinstance(row, dict) else row[1] for row in result.get_data()]
 
     version_num_idx = columns.index("version_num")
     description_idx = columns.index("description")

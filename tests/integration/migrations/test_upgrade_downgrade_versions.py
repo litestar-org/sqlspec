@@ -371,7 +371,7 @@ DROP TABLE {filename.split("_")[1]};
 
     with sqlite_config.provide_session() as session:
         result = session.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users', 'products')")
-        tables = [row["name"] for row in result.data or []]
+        tables = [row["name"] for row in result.get_data()]
 
     assert len(tables) == 0
 
@@ -405,7 +405,7 @@ DROP TABLE {table_name};
 
     with sqlite_config.provide_session() as session:
         result = session.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users', 'products')")
-        tables = [row["name"] for row in result.data or []]
+        tables = [row["name"] for row in result.get_data()]
 
     assert "users" in tables
     assert "products" in tables

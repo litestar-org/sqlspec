@@ -1228,7 +1228,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
 
         arrow_data = convert_dict_to_arrow_with_schema(
-            result.data, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
+            result.get_data(), return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
         )
         return create_arrow_result(
             statement=result.statement,

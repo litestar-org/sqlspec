@@ -68,7 +68,7 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
     assert select_result.data is not None
     assert len(select_result.data) == 4
 
-    rows = [_lower_keys(row) for row in select_result.data]
+    rows = [_lower_keys(row) for row in select_result.get_data()]
     first_row = rows[0]
     assert first_row["name"] == "plsql_test"
     assert first_row["calculated_value"] == 130
@@ -134,7 +134,7 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     assert select_result.data is not None
     assert len(select_result.data) == 2
 
-    rows = [_lower_keys(row) for row in select_result.data]
+    rows = [_lower_keys(row) for row in select_result.get_data()]
     first_row = rows[0]
     assert first_row["input_value"] == 5
     assert first_row["output_value"] == 20
@@ -188,7 +188,7 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = _lower_keys(select_result.data[0])
+    row = _lower_keys(select_result.get_data()[0])
     assert row["id"] == 1
     assert row["name"] == "Test Product"
 
@@ -245,7 +245,7 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
     assert result.data is not None
     assert len(result.data) == 6
 
-    rows = [_lower_keys(row) for row in result.data]
+    rows = [_lower_keys(row) for row in result.get_data()]
     it_employees = [row for row in rows if row["department"] == "IT"]
     assert len(it_employees) == 3
 
@@ -352,7 +352,7 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
     assert select_result.data is not None
     assert len(select_result.data) == 3
 
-    names = [row["name"] for row in (_lower_keys(row) for row in select_result.data)]
+    names = [row["name"] for row in (_lower_keys(row) for row in select_result.get_data())]
     assert "First Record" in names
     assert "Exception Handled" in names
     assert "Final Record" in names

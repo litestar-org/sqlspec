@@ -66,7 +66,7 @@ def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgSyncDriver) ->
     assert result.rows_affected == 5
 
     count_result = psycopg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch_psycopg_sync")
-    assert count_result.data[0]["count"] == 5
+    assert count_result.get_data()[0]["count"] == 5
 
 
 def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -88,7 +88,7 @@ def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -
 
     check_result = psycopg_batch_session.execute("SELECT name, value FROM test_batch_psycopg_sync ORDER BY name")
     assert len(check_result.data) == 3
-    assert all(row["value"] in (100, 200, 300) for row in check_result.data)
+    assert all(row["value"] in (100, 200, 300) for row in check_result.get_data())
 
 
 def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -101,7 +101,7 @@ def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgSyncDriver) ->
     assert result.rows_affected == 0
 
     count_result = psycopg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch_psycopg_sync")
-    assert count_result.data[0]["count"] == 0
+    assert count_result.get_data()[0]["count"] == 0
 
 
 def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -122,11 +122,11 @@ def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriv
 
     null_result = psycopg_batch_session.execute("SELECT * FROM test_batch_psycopg_sync WHERE category IS NULL")
     assert len(null_result.data) == 1
-    assert null_result.data[0]["name"] == "Another Item"
+    assert null_result.get_data()[0]["name"] == "Another Item"
 
     negative_result = psycopg_batch_session.execute("SELECT * FROM test_batch_psycopg_sync WHERE value < 0")
     assert len(negative_result.data) == 1
-    assert negative_result.data[0]["value"] == -50
+    assert negative_result.get_data()[0]["value"] == -50
 
 
 def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -153,10 +153,10 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
     assert result.rows_affected == 3
 
     remaining_result = psycopg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch_psycopg_sync")
-    assert remaining_result.data[0]["count"] == 2
+    assert remaining_result.get_data()[0]["count"] == 2
 
     names_result = psycopg_batch_session.execute("SELECT name FROM test_batch_psycopg_sync ORDER BY name")
-    remaining_names = [row["name"] for row in names_result.data]
+    remaining_names = [row["name"] for row in names_result.get_data()]
     assert remaining_names == ["Delete 3", "Keep 1"]
 
 
@@ -173,16 +173,16 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
     assert result.rows_affected == 1000
 
     count_result = psycopg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch_psycopg_sync")
-    assert count_result.data[0]["count"] == 1000
+    assert count_result.get_data()[0]["count"] == 1000
 
     sample_result = psycopg_batch_session.execute(
         "SELECT * FROM test_batch_psycopg_sync WHERE name = ANY(%s) ORDER BY value",
         (["Item 100", "Item 500", "Item 999"],),
     )
     assert len(sample_result.data) == 3
-    assert sample_result.data[0]["value"] == 1000
-    assert sample_result.data[1]["value"] == 5000
-    assert sample_result.data[2]["value"] == 9990
+    assert sample_result.get_data()[0]["value"] == 1000
+    assert sample_result.get_data()[1]["value"] == 5000
+    assert sample_result.get_data()[2]["value"] == 9990
 
 
 def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -202,7 +202,7 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
     check_result = psycopg_batch_session.execute(
         "SELECT COUNT(*) as count FROM test_batch_psycopg_sync WHERE category = %s", ("SOB",)
     )
-    assert check_result.data[0]["count"] == 3
+    assert check_result.get_data()[0]["count"] == 3
 
 
 def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -228,7 +228,7 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
         check_result = psycopg_batch_session.execute(
             "SELECT COUNT(*) as count FROM test_batch_psycopg_sync WHERE category = %s", ("RET",)
         )
-        assert check_result.data[0]["count"] == 3
+        assert check_result.get_data()[0]["count"] == 3
 
 
 def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -261,9 +261,9 @@ def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriv
         "SELECT name, array_length(tags, 1) as tag_count, array_length(scores, 1) as score_count FROM test_arrays_psycopg_sync ORDER BY name"
     )
     assert len(check_result.data) == 3
-    assert check_result.data[0]["tag_count"] == 2
-    assert check_result.data[1]["tag_count"] == 1
-    assert check_result.data[2]["tag_count"] == 3
+    assert check_result.get_data()[0]["tag_count"] == 2
+    assert check_result.get_data()[1]["tag_count"] == 1
+    assert check_result.get_data()[2]["tag_count"] == 3
 
 
 def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -296,10 +296,10 @@ def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver
         "SELECT name, metadata->>'type' as type, (metadata->>'value')::INTEGER as value FROM test_json_psycopg_sync ORDER BY name"
     )
     assert len(check_result.data) == 3
-    assert check_result.data[0]["type"] == "test"
-    assert check_result.data[0]["value"] == 100
-    assert check_result.data[1]["type"] == "prod"
-    assert check_result.data[1]["value"] == 200
+    assert check_result.get_data()[0]["type"] == "test"
+    assert check_result.get_data()[0]["value"] == 100
+    assert check_result.get_data()[1]["type"] == "prod"
+    assert check_result.get_data()[1]["value"] == 200
 
 
 def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriver) -> None:
@@ -332,5 +332,5 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriv
     check_result = psycopg_batch_session.execute("SELECT id, name, counter FROM test_upsert_psycopg_sync ORDER BY id")
     assert len(check_result.data) == 4
 
-    updated_items = [row for row in check_result.data if row["counter"] > 1]
+    updated_items = [row for row in check_result.get_data() if row["counter"] > 1]
     assert len(updated_items) == 2

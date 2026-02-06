@@ -47,8 +47,8 @@ def test_mixed_qmark_and_numeric_styles(duckdb_test_setup: tuple[DuckDBDriver, s
     result = session.execute(sql)
 
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test2"
-    assert result.data[0]["value"] == 200
+    assert result.get_data()[0]["name"] == "test2"
+    assert result.get_data()[0]["value"] == 200
 
 
 def test_numeric_style_extraction(duckdb_test_setup: tuple[DuckDBDriver, str]) -> None:
@@ -60,8 +60,8 @@ def test_numeric_style_extraction(duckdb_test_setup: tuple[DuckDBDriver, str]) -
     result = session.execute(sql)
 
     assert len(result.data) == 1
-    assert result.data[0]["id"] == 2
-    assert result.data[0]["value"] == 200
+    assert result.get_data()[0]["id"] == 2
+    assert result.get_data()[0]["value"] == 200
 
 
 def test_qmark_style_extraction(duckdb_test_setup: tuple[DuckDBDriver, str]) -> None:
@@ -73,8 +73,8 @@ def test_qmark_style_extraction(duckdb_test_setup: tuple[DuckDBDriver, str]) -> 
     result = session.execute(sql)
 
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test1"
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["name"] == "test1"
+    assert result.get_data()[0]["value"] == 100
 
 
 def test_complex_mixed_styles(duckdb_test_setup: tuple[DuckDBDriver, str]) -> None:
@@ -102,9 +102,9 @@ def test_complex_mixed_styles(duckdb_test_setup: tuple[DuckDBDriver, str]) -> No
     result = session.execute(sql)
 
     assert len(result.data) == 3
-    assert result.data[0]["value"] == 300
-    assert result.data[1]["value"] == 400
-    assert result.data[2]["value"] == 500
+    assert result.get_data()[0]["value"] == 300
+    assert result.get_data()[1]["value"] == 400
+    assert result.get_data()[2]["value"] == 500
 
 
 def test_parameter_info_detection(duckdb_test_setup: tuple[DuckDBDriver, str]) -> None:
@@ -126,7 +126,7 @@ def test_unsupported_style_fallback(duckdb_test_setup: tuple[DuckDBDriver, str])
 
     result = session.execute(sql)
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "test1"
+    assert result.get_data()[0]["name"] == "test1"
 
 
 def test_execute_many_with_numeric_style(duckdb_test_setup: tuple[DuckDBDriver, str]) -> None:
@@ -148,4 +148,4 @@ def test_execute_many_with_numeric_style(duckdb_test_setup: tuple[DuckDBDriver, 
     assert result.rows_affected == 3
 
     verify_result = session.execute("SELECT COUNT(*) as count FROM test_many")
-    assert verify_result.data[0]["count"] == 3
+    assert verify_result.get_data()[0]["count"] == 3

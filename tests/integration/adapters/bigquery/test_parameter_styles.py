@@ -96,7 +96,7 @@ class TestNamedAtParameterStyle:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_named_at_multiple_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
         """Test multiple @param placeholders work natively."""
@@ -108,8 +108,8 @@ class TestNamedAtParameterStyle:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 2
-        assert result.data[0]["value"] == 100
-        assert result.data[1]["value"] == 200
+        assert result.get_data()[0]["value"] == 100
+        assert result.get_data()[1]["value"] == 200
 
 
 class TestQmarkConversion:
@@ -122,7 +122,7 @@ class TestQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_qmark_multiple_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
         """Test multiple ? placeholders get converted to @p1, @p2, etc."""
@@ -131,7 +131,7 @@ class TestQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestNamedColonConversion:
@@ -144,7 +144,7 @@ class TestNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_named_colon_multiple_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
         """Test multiple :name placeholders get converted."""
@@ -155,7 +155,7 @@ class TestNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestNamedPyformatConversion:
@@ -168,7 +168,7 @@ class TestNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_named_pyformat_multiple_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
         """Test multiple %(name)s placeholders get converted."""
@@ -180,7 +180,7 @@ class TestNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
 
 class TestSQLObjectConversion:
@@ -196,7 +196,7 @@ class TestSQLObjectConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
     def test_sql_object_with_qmark(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
         """Test SQL object with ? placeholders."""
@@ -206,7 +206,7 @@ class TestSQLObjectConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 2
-        names = [row["name"] for row in result.data]
+        names = [row["name"] for row in result.get_data()]
         assert "test1" in names
         assert "test3" in names
 
@@ -221,7 +221,7 @@ class TestEdgeCases:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
     def test_sql_injection_prevention(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
         """Test that parameter escaping prevents SQL injection."""
@@ -234,7 +234,7 @@ class TestEdgeCases:
 
         # Verify table still exists
         count_result = session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
-        assert count_result.data[0]["count"] >= 3
+        assert count_result.get_data()[0]["count"] >= 3
 
     def test_special_characters_in_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
         """Test special characters in parameter values."""
@@ -248,7 +248,7 @@ class TestEdgeCases:
 
         result = session.execute(f"SELECT * FROM {table_name} WHERE name = @name", {"name": "special"})
         assert len(result.data) == 1
-        assert result.data[0]["description"] == special_value
+        assert result.get_data()[0]["description"] == special_value
 
     def test_like_with_wildcards(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
         """Test LIKE queries with wildcard parameters."""
@@ -256,5 +256,5 @@ class TestEdgeCases:
         result = session.execute(f"SELECT * FROM {table_name} WHERE name LIKE @pattern", {"pattern": "test%"})
 
         assert len(result.data) >= 3
-        for row in result.data:
+        for row in result.get_data():
             assert row["name"].startswith("test")

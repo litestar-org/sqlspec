@@ -39,7 +39,7 @@ async def test_asyncpg_tracker_creates_full_schema(postgres_service: "PostgresSe
                 WHERE table_name = '{tracker.version_table}'
             """)
 
-            columns = {row["column_name"] for row in result.data or []}
+            columns = {row["column_name"] for row in result.get_data()}
 
             expected_columns = {
                 "version_num",
@@ -85,7 +85,7 @@ async def test_asyncpg_tracker_migrates_legacy_schema(postgres_service: "Postgre
                 WHERE table_name = '{tracker.version_table}'
             """)
 
-            columns = {row["column_name"] for row in result.data or []}
+            columns = {row["column_name"] for row in result.get_data()}
 
             assert "version_type" in columns
             assert "execution_sequence" in columns
@@ -308,7 +308,7 @@ async def test_asyncpg_migration_schema_is_idempotent(postgres_service: "Postgre
                 FROM information_schema.columns
                 WHERE table_name = '{tracker.version_table}'
             """)
-            columns1 = {row["column_name"] for row in result1.data or []}
+            columns1 = {row["column_name"] for row in result1.get_data()}
 
             await tracker.ensure_tracking_table(driver)
 
@@ -317,7 +317,7 @@ async def test_asyncpg_migration_schema_is_idempotent(postgres_service: "Postgre
                 FROM information_schema.columns
                 WHERE table_name = '{tracker.version_table}'
             """)
-            columns2 = {row["column_name"] for row in result2.data or []}
+            columns2 = {row["column_name"] for row in result2.get_data()}
 
             assert columns1 == columns2
     finally:

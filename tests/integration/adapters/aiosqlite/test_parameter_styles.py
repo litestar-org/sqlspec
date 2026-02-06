@@ -146,7 +146,7 @@ async def test_aiosqlite_all_none_parameters() -> None:
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
-        row = select_result.data[0]
+        row = select_result.get_data()[0]
         assert row["id"] is not None  # Auto-generated
         assert row["col1"] is None
         assert row["col2"] is None
@@ -220,7 +220,7 @@ async def test_aiosqlite_none_in_where_clause() -> None:
         assert len(result.data) == 2  # Two rows with NULL category
 
         # Verify the correct rows were found
-        found_ids = {row["id"] for row in result.data}
+        found_ids = {row["id"] for row in result.get_data()}
         assert found_ids == {2, 4}
 
         # Test direct comparison with None parameter (should work with parameters)
@@ -337,7 +337,7 @@ async def test_aiosqlite_none_parameter_edge_cases() -> None:
         all_results = await driver.execute("SELECT COUNT(*) as count FROM test_position_none")
         assert isinstance(all_results, SQLResult)
         assert all_results.data is not None
-        assert all_results.data[0]["count"] == 5
+        assert all_results.get_data()[0]["count"] == 5
 
 
 async def test_aiosqlite_parameter_count_mismatch_with_none() -> None:

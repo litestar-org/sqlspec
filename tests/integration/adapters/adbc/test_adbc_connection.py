@@ -118,7 +118,7 @@ def test_connection_with_session_management(postgres_service: "PostgresService")
         result = session.execute("SELECT 1 as test_value")
         assert result is not None
         assert result.data is not None
-        assert result.data[0]["test_value"] == 1
+        assert result.get_data()[0]["test_value"] == 1
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -140,7 +140,7 @@ def test_sqlite_memory_connection() -> None:
 
         assert result.data is not None
         assert len(result.data) == 1
-        assert result.data[0]["data"] == "test_data"
+        assert result.get_data()[0]["data"] == "test_data"
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -160,7 +160,7 @@ def test_duckdb_connection_with_arrow_features() -> None:
 
         assert result.data is not None
         assert len(result.data) == 1
-        row = result.data[0]
+        row = result.get_data()[0]
 
         assert row["int_array"] is not None
         assert row["json_obj"] is not None
@@ -192,7 +192,7 @@ def test_connection_transaction_handling(postgres_service: "PostgresService") ->
 
             result = session.execute("SELECT COUNT(*) as count FROM transaction_test_adbc")
             assert result.data is not None
-            assert result.data[0]["count"] >= 1
+            assert result.get_data()[0]["count"] >= 1
 
         finally:
             try:

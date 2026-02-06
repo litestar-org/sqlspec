@@ -266,7 +266,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         result = self.execute(statement, *parameters, **kwargs)
 
         return_format = cast("ArrowReturnFormat", kwargs.get("return_format", "table"))
-        arrow_data = create_arrow_data(result.data or [], return_format)
+        arrow_data = create_arrow_data(result.get_data(), return_format)
         return create_arrow_result(result.statement, arrow_data, rows_affected=result.rows_affected)
 
     # ─────────────────────────────────────────────────────────────────────────────

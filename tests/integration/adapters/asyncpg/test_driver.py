@@ -554,7 +554,7 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: "AsyncpgDr
     )
 
     maintenance_result = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {asset_maint_table}")
-    assert maintenance_result.data[0]["count"] == 6
+    assert maintenance_result.get_data()[0]["count"] == 6
 
     result = await asyncpg_session.execute(
         f"""
@@ -592,14 +592,14 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: "AsyncpgDr
         assert len(check_result.data) == 3
 
     alert_users_count = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {alert_users_table}")
-    inserted_count = alert_users_count.data[0]["count"]
+    inserted_count = alert_users_count.get_data()[0]["count"]
 
     if inserted_count == 0:
         assert len(result.data) == 0
     else:
         assert len(result.data) == inserted_count
 
-    for row in result.data:
+    for row in result.get_data():
         assert "user_id" in row
         assert "asset_maintenance_id" in row
         assert "alert_definition_id" in row
@@ -638,7 +638,7 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: "AsyncpgDr
 
     count_result = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {alert_users_table}")
     assert count_result.data is not None
-    assert count_result.data[0]["count"] == 3
+    assert count_result.get_data()[0]["count"] == 3
 
     await asyncpg_session.execute_script(f"""
         DROP TABLE IF EXISTS {alert_users_table} CASCADE;
@@ -654,7 +654,7 @@ async def test_asyncpg_pgvector_integration(asyncpg_session: "AsyncpgDriver") ->
 
     result = await asyncpg_session.execute("SELECT 1 as test_value")
     assert result.data is not None
-    assert result.data[0]["test_value"] == 1
+    assert result.get_data()[0]["test_value"] == 1
 
 
 @pytest.mark.asyncpg
@@ -875,7 +875,7 @@ async def test_asyncpg_statement_stack_batch(asyncpg_session: "AsyncpgDriver") -
     assert results[1].rows_affected == 1
     assert results[2].result is not None
     assert results[2].result.data is not None
-    assert results[2].result.data[0]["total_rows"] == 2
+    assert results[2].result.get_data()[0]["total_rows"] == 2
 
 
 @requires_interpreted
@@ -902,7 +902,7 @@ async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: "Async
 
     verify = await asyncpg_session.execute("SELECT COUNT(*) AS total FROM test_table_asyncpg")
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 async def test_asyncpg_statement_stack_marks_prepared(asyncpg_session: "AsyncpgDriver") -> None:

@@ -77,7 +77,7 @@ class TestQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_qmark_multiple_parameters(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test multiple ? placeholders get converted to %s."""
@@ -87,8 +87,8 @@ class TestQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
-        assert result.data[0]["value"] == 100
+        assert result.get_data()[0]["name"] == "test1"
+        assert result.get_data()[0]["value"] == 100
 
     def test_qmark_in_insert(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test ? placeholders in INSERT statements."""
@@ -101,7 +101,7 @@ class TestQmarkConversion:
             "SELECT * FROM test_parameter_conversion WHERE name = ?", ("qmark_insert",)
         )
         assert len(result.data) == 1
-        assert result.data[0]["value"] == 500
+        assert result.get_data()[0]["value"] == 500
 
     def test_qmark_in_update(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test ? placeholders in UPDATE statements."""
@@ -110,7 +110,7 @@ class TestQmarkConversion:
         )
 
         result = pymysql_parameter_session.execute("SELECT * FROM test_parameter_conversion WHERE name = ?", ("test1",))
-        assert result.data[0]["value"] == 999
+        assert result.get_data()[0]["value"] == 999
 
 
 class TestNamedColonConversion:
@@ -124,7 +124,7 @@ class TestNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_named_colon_multiple_parameters(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test multiple :name placeholders get converted."""
@@ -135,7 +135,7 @@ class TestNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
     def test_named_colon_repeated_parameter(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test same :name used multiple times."""
@@ -157,7 +157,7 @@ class TestNamedColonConversion:
             "SELECT * FROM test_parameter_conversion WHERE name = :name", {"name": "colon_insert"}
         )
         assert len(result.data) == 1
-        assert result.data[0]["value"] == 600
+        assert result.get_data()[0]["value"] == 600
 
 
 class TestNamedPyformatConversion:
@@ -171,7 +171,7 @@ class TestNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_named_pyformat_multiple_parameters(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test multiple %(name)s placeholders get converted."""
@@ -182,7 +182,7 @@ class TestNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
 
 class TestPositionalPyformatNative:
@@ -196,7 +196,7 @@ class TestPositionalPyformatNative:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_pyformat_multiple_parameters(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test multiple %s placeholders work directly."""
@@ -206,7 +206,7 @@ class TestPositionalPyformatNative:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestSQLObjectConversion:
@@ -219,7 +219,7 @@ class TestSQLObjectConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 2
-        names = [row["name"] for row in result.data]
+        names = [row["name"] for row in result.get_data()]
         assert "test1" in names
         assert "test3" in names
 
@@ -230,7 +230,7 @@ class TestSQLObjectConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestDataTypeConversion:
@@ -260,7 +260,7 @@ class TestDataTypeConversion:
         result = pymysql_parameter_session.execute("SELECT * FROM test_floats WHERE float_val > ?", (3.0,))
 
         assert len(result.data) == 1
-        assert abs(result.data[0]["float_val"] - math.pi) < 0.0001
+        assert abs(result.get_data()[0]["float_val"] - math.pi) < 0.0001
 
         pymysql_parameter_session.execute_script("DROP TABLE IF EXISTS test_floats")
 
@@ -270,7 +270,7 @@ class TestDataTypeConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
     def test_boolean_parameters(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test boolean parameters are converted to integers for MySQL."""
@@ -287,7 +287,7 @@ class TestDataTypeConversion:
         result = pymysql_parameter_session.execute("SELECT * FROM test_bools WHERE active = ?", (True,))
 
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "bool_test"
+        assert result.get_data()[0]["name"] == "bool_test"
 
         pymysql_parameter_session.execute_script("DROP TABLE IF EXISTS test_bools")
 
@@ -336,7 +336,7 @@ class TestEdgeCases:
             "SELECT * FROM test_parameter_conversion WHERE description = ?", ("",)
         )
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "empty_desc"
+        assert result.get_data()[0]["name"] == "empty_desc"
 
     def test_special_characters_in_parameters(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test special characters in parameter values."""
@@ -350,7 +350,7 @@ class TestEdgeCases:
             "SELECT * FROM test_parameter_conversion WHERE name = ?", ("special",)
         )
         assert len(result.data) == 1
-        assert result.data[0]["description"] == special_value
+        assert result.get_data()[0]["description"] == special_value
 
     def test_sql_injection_prevention(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test that parameter escaping prevents SQL injection."""
@@ -364,7 +364,7 @@ class TestEdgeCases:
 
         # Verify table still exists
         count_result = pymysql_parameter_session.execute("SELECT COUNT(*) as count FROM test_parameter_conversion")
-        assert count_result.data[0]["count"] >= 3
+        assert count_result.get_data()[0]["count"] >= 3
 
     def test_like_with_wildcards(self, pymysql_parameter_session: PyMysqlDriver) -> None:
         """Test LIKE queries with wildcard parameters."""
@@ -373,5 +373,5 @@ class TestEdgeCases:
         )
 
         assert len(result.data) >= 3
-        for row in result.data:
+        for row in result.get_data():
             assert row["name"].startswith("test")

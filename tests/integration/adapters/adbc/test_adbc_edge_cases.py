@@ -186,8 +186,8 @@ def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 2
-    assert verify_result.data[0]["data"] == "updated_script_data1"
-    assert verify_result.data[1]["data"] == "script_data2"
+    assert verify_result.get_data()[0]["data"] == "updated_script_data1"
+    assert verify_result.get_data()[1]["data"] == "script_data2"
 
     comment_script = """
         -- This is a comment
@@ -215,7 +215,7 @@ def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     final_count = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM script_test_adbc")
     assert isinstance(final_count, SQLResult)
     assert final_count.data is not None
-    assert final_count.data[0]["count"] >= 4
+    assert final_count.get_data()[0]["count"] >= 4
 
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS script_test_adbc")
 
@@ -244,7 +244,7 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     assert insert_returning.data is not None
     assert len(insert_returning.data) == 1
 
-    returned_row = insert_returning.data[0]
+    returned_row = insert_returning.get_data()[0]
     assert returned_row["id"] is not None
     assert returned_row["name"] == "returning_test_adbc1"
     assert returned_row["created_at"] is not None
@@ -262,7 +262,7 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     assert isinstance(update_returning, SQLResult)
     assert update_returning.data is not None
     assert len(update_returning.data) == 1
-    assert update_returning.data[0]["name"] == "updated_name"
+    assert update_returning.get_data()[0]["name"] == "updated_name"
 
     delete_returning = adbc_postgresql_session.execute(
         """
@@ -276,12 +276,12 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     assert isinstance(delete_returning, SQLResult)
     assert delete_returning.data is not None
     assert len(delete_returning.data) == 1
-    assert delete_returning.data[0]["name"] == "updated_name"
+    assert delete_returning.get_data()[0]["name"] == "updated_name"
 
     count_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM returning_test_adbc")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["count"] == 0
+    assert count_result.get_data()[0]["count"] == 0
 
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS returning_test_adbc")
 
@@ -348,11 +348,11 @@ def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     assert edge_result.data is not None
     assert len(edge_result.data) == len(edge_cases)
 
-    max_row = edge_result.data[0]
+    max_row = edge_result.get_data()[0]
     assert max_row["big_integer"] == 9223372036854775807
     assert max_row["small_integer"] == 32767
 
-    min_row = edge_result.data[1]
+    min_row = edge_result.get_data()[1]
     assert min_row["big_integer"] == -9223372036854775808
     assert min_row["small_integer"] == -32768
 
@@ -395,7 +395,7 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
     assert dynamic_result.data is not None
     assert len(dynamic_result.data) == 5
 
-    types_found = [row["column_type"] for row in dynamic_result.data if row["column_type"]]
+    types_found = [row["column_type"] for row in dynamic_result.get_data() if row["column_type"]]
     assert "text" in types_found or "TEXT" in types_found
     assert "integer" in types_found or "INTEGER" in types_found
     assert "real" in types_found or "REAL" in types_found
@@ -412,7 +412,7 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
     assert isinstance(func_result, SQLResult)
     assert func_result.data is not None
 
-    func_row = func_result.data[0]
+    func_row = func_result.get_data()[0]
     assert func_row["total_rows"] == 5
     assert func_row["non_null_count"] == 4
     assert func_row["sqlite_ver"] is not None
@@ -465,7 +465,7 @@ def test_duckdb_specific_edge_cases() -> None:
         assert complex_result.data is not None
         assert len(complex_result.data) == 1
 
-        row = complex_result.data[0]
+        row = complex_result.get_data()[0]
         assert row["id"] == 1
         assert row["complex_array"] is not None
         assert row["nested_struct"] is not None
@@ -484,7 +484,7 @@ def test_connection_resilience(adbc_postgresql_session: AdbcDriver) -> None:
     recovery_result = adbc_postgresql_session.execute("SELECT 1 as recovery_test")
     assert isinstance(recovery_result, SQLResult)
     assert recovery_result.data is not None
-    assert recovery_result.data[0]["recovery_test"] == 1
+    assert recovery_result.get_data()[0]["recovery_test"] == 1
 
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS constraint_test_adbc (
@@ -501,6 +501,6 @@ def test_connection_resilience(adbc_postgresql_session: AdbcDriver) -> None:
     post_error_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM constraint_test_adbc")
     assert isinstance(post_error_result, SQLResult)
     assert post_error_result.data is not None
-    assert post_error_result.data[0]["count"] == 1
+    assert post_error_result.get_data()[0]["count"] == 1
 
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS constraint_test_adbc")

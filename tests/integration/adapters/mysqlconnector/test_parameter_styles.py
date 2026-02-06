@@ -145,7 +145,7 @@ class TestSyncQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_qmark_multiple_parameters(self, mysqlconnector_sync_parameter_session: MysqlConnectorSyncDriver) -> None:
         """Test multiple ? placeholders get converted to %s."""
@@ -155,8 +155,8 @@ class TestSyncQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
-        assert result.data[0]["value"] == 100
+        assert result.get_data()[0]["name"] == "test1"
+        assert result.get_data()[0]["value"] == 100
 
 
 class TestSyncNamedColonConversion:
@@ -172,7 +172,7 @@ class TestSyncNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     def test_named_colon_multiple_parameters(
         self, mysqlconnector_sync_parameter_session: MysqlConnectorSyncDriver
@@ -185,7 +185,7 @@ class TestSyncNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestSyncNamedPyformatConversion:
@@ -200,7 +200,7 @@ class TestSyncNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
 
 class TestSyncPositionalPyformatNative:
@@ -214,7 +214,7 @@ class TestSyncPositionalPyformatNative:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestSyncSQLObject:
@@ -264,7 +264,7 @@ class TestSyncEdgeCases:
         result = mysqlconnector_sync_parameter_session.execute("SELECT * FROM test_bools WHERE active = ?", (True,))
 
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "bool_test"
+        assert result.get_data()[0]["name"] == "bool_test"
 
         mysqlconnector_sync_parameter_session.execute_script("DROP TABLE IF EXISTS test_bools")
 
@@ -282,7 +282,7 @@ class TestSyncEdgeCases:
         count_result = mysqlconnector_sync_parameter_session.execute(
             "SELECT COUNT(*) as count FROM test_parameter_conversion"
         )
-        assert count_result.data[0]["count"] >= 3
+        assert count_result.get_data()[0]["count"] >= 3
 
 
 # =============================================================================
@@ -304,7 +304,7 @@ class TestAsyncQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_qmark_multiple_parameters(
@@ -317,8 +317,8 @@ class TestAsyncQmarkConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
-        assert result.data[0]["value"] == 100
+        assert result.get_data()[0]["name"] == "test1"
+        assert result.get_data()[0]["value"] == 100
 
 
 class TestAsyncNamedColonConversion:
@@ -335,7 +335,7 @@ class TestAsyncNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test1"
+        assert result.get_data()[0]["name"] == "test1"
 
     @pytest.mark.asyncio
     async def test_named_colon_multiple_parameters(
@@ -349,7 +349,7 @@ class TestAsyncNamedColonConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestAsyncNamedPyformatConversion:
@@ -367,7 +367,7 @@ class TestAsyncNamedPyformatConversion:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test3"
+        assert result.get_data()[0]["name"] == "test3"
 
 
 class TestAsyncPositionalPyformatNative:
@@ -382,7 +382,7 @@ class TestAsyncPositionalPyformatNative:
 
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "test2"
+        assert result.get_data()[0]["name"] == "test2"
 
 
 class TestAsyncSQLObject:
@@ -441,7 +441,7 @@ class TestAsyncEdgeCases:
         )
 
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "bool_test"
+        assert result.get_data()[0]["name"] == "bool_test"
 
         await mysqlconnector_async_parameter_session.execute_script("DROP TABLE IF EXISTS test_bools_async")
 
@@ -462,4 +462,4 @@ class TestAsyncEdgeCases:
         count_result = await mysqlconnector_async_parameter_session.execute(
             "SELECT COUNT(*) as count FROM test_parameter_conversion_async"
         )
-        assert count_result.data[0]["count"] >= 3
+        assert count_result.get_data()[0]["count"] >= 3

@@ -62,8 +62,8 @@ def test_cockroach_sync_basic_crud(cockroach_sync_session: CockroachPsycopgSyncD
 
     select_result = cockroach_sync_session.execute("SELECT name, value FROM test_table WHERE name = %s", "test_user")
     assert select_result.data is not None
-    assert select_result.data[0]["name"] == "test_user"
-    assert select_result.data[0]["value"] == 42
+    assert select_result.get_data()[0]["name"] == "test_user"
+    assert select_result.get_data()[0]["value"] == 42
 
     update_result = cockroach_sync_session.execute("UPDATE test_table SET value = %s WHERE name = %s", 100, "test_user")
     assert update_result.rows_affected == 1

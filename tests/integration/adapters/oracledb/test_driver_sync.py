@@ -92,7 +92,7 @@ def test_sync_select(oracle_sync_session: "OracleSyncDriver", parameters: Any, s
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["name"] == "test_name"
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -136,7 +136,7 @@ def test_sync_select_value(oracle_sync_session: "OracleSyncDriver", parameters: 
     assert value_result.data is not None
     assert len(value_result.data) == 1
 
-    value = value_result.data[0][value_result.column_names[0]]
+    value = value_result.get_data()[0][value_result.column_names[0]]
     assert value == "test_value"
 
     oracle_sync_session.execute_script(
@@ -180,7 +180,7 @@ def test_sync_insert_with_sequence(oracle_sync_session: "OracleSyncDriver") -> N
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    last_id = result.data[0]["last_id"]
+    last_id = result.get_data()[0]["last_id"]
 
     verify_result = oracle_sync_session.execute(
         "SELECT id, name FROM test_table_oracledb_sync WHERE id = :1", (last_id,)
@@ -188,8 +188,8 @@ def test_sync_insert_with_sequence(oracle_sync_session: "OracleSyncDriver") -> N
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    assert verify_result.data[0]["name"] == "test_name"
-    assert verify_result.data[0]["id"] == last_id
+    assert verify_result.get_data()[0]["name"] == "test_name"
+    assert verify_result.get_data()[0]["id"] == last_id
 
     oracle_sync_session.execute_script("""
         BEGIN
@@ -228,7 +228,7 @@ def test_sync_execute_many_insert(oracle_sync_session: "OracleSyncDriver") -> No
     count_result = oracle_sync_session.execute(select_sql)
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["count"] == len(parameters_list)
+    assert count_result.get_data()[0]["count"] == len(parameters_list)
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_many_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -257,7 +257,7 @@ def test_sync_execute_script(oracle_sync_session: "OracleSyncDriver") -> None:
     select_result = oracle_sync_session.execute("SELECT COUNT(*) as count FROM test_script_table_oracledb_sync")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 2
+    assert select_result.get_data()[0]["count"] == 2
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_script_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -296,7 +296,7 @@ def test_sync_update_operation(oracle_sync_session: "OracleSyncDriver") -> None:
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["name"] == "updated_name"
+    assert select_result.get_data()[0]["name"] == "updated_name"
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -331,7 +331,7 @@ def test_sync_delete_operation(oracle_sync_session: "OracleSyncDriver") -> None:
     select_result = oracle_sync_session.execute("SELECT COUNT(*) as count FROM test_table_oracledb_sync")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 0
+    assert select_result.get_data()[0]["count"] == 0
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"

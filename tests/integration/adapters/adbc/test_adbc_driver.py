@@ -28,8 +28,8 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["value"] == 42
+    assert select_result.get_data()[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["value"] == 42
 
     update_result = adbc_postgresql_session.execute(
         "UPDATE test_table_adbc SET value = $1 WHERE name = $2", (100, "test_name")
@@ -40,7 +40,7 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table_adbc WHERE name = $1", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
-    assert verify_result.data[0]["value"] == 100
+    assert verify_result.get_data()[0]["value"] == 100
 
     delete_result = adbc_postgresql_session.execute("DELETE FROM test_table_adbc WHERE name = $1", ("test_name",))
     assert isinstance(delete_result, SQLResult)
@@ -49,7 +49,7 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     empty_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table_adbc")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
-    assert empty_result.data[0]["count"] == 0
+    assert empty_result.get_data()[0]["count"] == 0
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -68,8 +68,8 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["value"] == 42
+    assert select_result.get_data()[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["value"] == 42
 
     update_result = adbc_sqlite_session.execute(
         "UPDATE test_table_adbc SET value = ? WHERE name = ?", (100, "test_name")
@@ -80,7 +80,7 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     verify_result = adbc_sqlite_session.execute("SELECT value FROM test_table_adbc WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
-    assert verify_result.data[0]["value"] == 100
+    assert verify_result.get_data()[0]["value"] == 100
 
     delete_result = adbc_sqlite_session.execute("DELETE FROM test_table_adbc WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
@@ -89,7 +89,7 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     empty_result = adbc_sqlite_session.execute("SELECT COUNT(*) as count FROM test_table_adbc")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
-    assert empty_result.data[0]["count"] == 0
+    assert empty_result.get_data()[0]["count"] == 0
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -109,8 +109,8 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["value"] == 42
+    assert select_result.get_data()[0]["name"] == "test_name"
+    assert select_result.get_data()[0]["value"] == 42
 
     update_result = adbc_duckdb_session.execute(
         "UPDATE test_table_adbc SET value = ? WHERE name = ?", (100, "test_name")
@@ -121,7 +121,7 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     verify_result = adbc_duckdb_session.execute("SELECT value FROM test_table_adbc WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
-    assert verify_result.data[0]["value"] == 100
+    assert verify_result.get_data()[0]["value"] == 100
 
     delete_result = adbc_duckdb_session.execute("DELETE FROM test_table_adbc WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
@@ -130,7 +130,7 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     empty_result = adbc_duckdb_session.execute("SELECT COUNT(*) as count FROM test_table_adbc")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
-    assert empty_result.data[0]["count"] == 0
+    assert empty_result.get_data()[0]["count"] == 0
 
 
 @pytest.mark.parametrize(
@@ -158,7 +158,7 @@ def test_adbc_postgresql_parameter_styles(
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() == 1
-    assert result.data[0]["name"] == "test_value"
+    assert result.get_data()[0]["name"] == "test_value"
 
 
 @pytest.mark.xdist_group("postgres")
@@ -176,14 +176,14 @@ def test_adbc_postgresql_execute_many(adbc_postgresql_session: AdbcDriver) -> No
     select_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table_adbc")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(parameters_list)
+    assert select_result.get_data()[0]["count"] == len(parameters_list)
 
     ordered_result = adbc_postgresql_session.execute("SELECT name, value FROM test_table_adbc ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
-    assert ordered_result.data[0]["name"] == "name1"
-    assert ordered_result.data[0]["value"] == 1
+    assert ordered_result.get_data()[0]["name"] == "name1"
+    assert ordered_result.get_data()[0]["value"] == 1
 
 
 @pytest.mark.xdist_group("postgres")
@@ -205,10 +205,10 @@ def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> 
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
-    assert select_result.data[0]["name"] == "script_test1"
-    assert select_result.data[0]["value"] == 1000
-    assert select_result.data[1]["name"] == "script_test2"
-    assert select_result.data[1]["value"] == 888
+    assert select_result.get_data()[0]["name"] == "script_test1"
+    assert select_result.get_data()[0]["value"] == 1000
+    assert select_result.get_data()[1]["name"] == "script_test2"
+    assert select_result.get_data()[1]["value"] == 888
 
 
 @pytest.mark.xdist_group("postgres")
@@ -230,7 +230,7 @@ def test_adbc_postgresql_statement_stack_sequential(adbc_postgresql_session: Adb
     assert len(results) == 3
     assert results[2].result is not None
     assert results[2].result.data is not None
-    assert results[2].result.data[0]["total"] == 2
+    assert results[2].result.get_data()[0]["total"] == 2
 
 
 @pytest.mark.xdist_group("postgres")
@@ -255,7 +255,7 @@ def test_adbc_postgresql_statement_stack_continue_on_error(adbc_postgresql_sessi
 
     verify = adbc_postgresql_session.execute("SELECT COUNT(*) AS total FROM test_table_adbc")
     assert verify.data is not None
-    assert verify.data[0]["total"] == 2
+    assert verify.get_data()[0]["total"] == 2
 
 
 @pytest.mark.xdist_group("postgres")
@@ -349,7 +349,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
+    row = select_result.get_data()[0]
     assert row["text_col"] == "text_value"
     assert row["integer_col"] == 42
     assert row["boolean_col"] is True
@@ -375,7 +375,7 @@ def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: Ad
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == 100
+    assert select_result.get_data()[0]["count"] == 100
 
     page_result = adbc_postgresql_session.execute(
         "SELECT name, value FROM test_table_adbc WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
@@ -383,7 +383,7 @@ def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: Ad
     assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
-    assert page_result.data[0]["name"] == "bulk_user_20"
+    assert page_result.get_data()[0]["name"] == "bulk_user_20"
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -397,14 +397,14 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() == 2
-    assert result.data[0]["name"] == "backend_test1"
-    assert result.data[0]["value"] == 100
+    assert result.get_data()[0]["name"] == "backend_test1"
+    assert result.get_data()[0]["value"] == 100
 
     agg_result = adbc_sqlite_session.execute("SELECT COUNT(*) as count, SUM(value) as total FROM test_table_adbc")
     assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
-    assert agg_result.data[0]["count"] == 2
-    assert agg_result.data[0]["total"] == 300
+    assert agg_result.get_data()[0]["count"] == 2
+    assert agg_result.get_data()[0]["total"] == 300
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -436,7 +436,7 @@ def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     result = adbc_sqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "adbc_lock"
+    assert result.get_data()[0]["name"] == "adbc_lock"
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -468,7 +468,7 @@ def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     result = adbc_sqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
-    assert result.data[0]["name"] == "adbc_share"
+    assert result.get_data()[0]["name"] == "adbc_share"
 
 
 @pytest.mark.xdist_group("sqlite")

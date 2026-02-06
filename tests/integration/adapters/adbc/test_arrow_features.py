@@ -58,7 +58,7 @@ def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> N
         assert col in result.column_names
 
     assert result.data is not None
-    row = result.data[0]
+    row = result.get_data()[0]
     assert isinstance(row["id"], int)
     assert isinstance(row["name"], str)
     assert isinstance(row["age"], int)
@@ -105,14 +105,14 @@ def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
     assert result.data is not None
     assert len(result.data) == 4
 
-    no_nulls_row = result.data[0]
+    no_nulls_row = result.get_data()[0]
     assert no_nulls_row["nullable_text"] == "text1"
     assert no_nulls_row["nullable_int"] == 42
     assert no_nulls_row["nullable_bool"] is True
     assert float(no_nulls_row["nullable_decimal"]) == 123.45
     assert no_nulls_row["nullable_array"] == [1, 2, 3]
 
-    all_nulls_row = result.data[1]
+    all_nulls_row = result.get_data()[1]
     assert all_nulls_row["nullable_text"] is None
     assert all_nulls_row["nullable_int"] is None
     assert all_nulls_row["nullable_bool"] is None
@@ -154,7 +154,7 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     result = adbc_postgresql_session.execute("SELECT COUNT(*) as total_count FROM arrow_large_test_adbc")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["total_count"] == total_rows
+    assert result.get_data()[0]["total_count"] == total_rows
 
     page_size = 50
     page_result = adbc_postgresql_session.execute(
@@ -188,7 +188,7 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
 
-    agg_row = agg_result.data[0]
+    agg_row = agg_result.get_data()[0]
     assert agg_row["count"] == total_rows
     assert agg_row["min_value"] == 0
     assert agg_row["max_value"] == (total_rows - 1) * 10
@@ -251,7 +251,7 @@ def test_arrow_duckdb_advanced_analytics() -> None:
         assert analytical_query.data is not None
         assert len(analytical_query.data) == 3
 
-        category_a = next(row for row in analytical_query.data if row["category"] == "A")
+        category_a = next(row for row in analytical_query.get_data() if row["category"] == "A")
         assert category_a["record_count"] == 2
         assert abs(category_a["avg_value"] - 125.6) < 0.1
 
@@ -310,7 +310,7 @@ def test_arrow_sqlite_binary_data() -> None:
         assert len(result.data) == len(binary_test_adbc_cases)
 
         expected_by_name = {name: (data, size) for name, data, size in binary_test_adbc_cases}
-        for row in result.data:
+        for row in result.get_data():
             expected_data, expected_size = expected_by_name[row["name"]]
             assert row["binary_data"] == expected_data
             assert row["binary_size"] == expected_size
@@ -325,7 +325,7 @@ def test_arrow_sqlite_binary_data() -> None:
         assert large_binary_result.data is not None
         assert len(large_binary_result.data) == 2
 
-        for row in large_binary_result.data:
+        for row in large_binary_result.get_data():
             assert row["actual_size"] == row["binary_size"]
 
 
@@ -371,7 +371,7 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
     assert array_ops_result.data is not None
     assert len(array_ops_result.data) == 3
 
-    first_row = array_ops_result.data[0]
+    first_row = array_ops_result.get_data()[0]
     assert first_row["name"] == "arrays1"
     assert first_row["int_array"] == [1, 2, 3, 4, 5]
     assert first_row["int_array_length"] == 5
@@ -395,7 +395,7 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
     assert isinstance(containment_result, SQLResult)
     assert containment_result.data is not None
 
-    arrays1_row = containment_result.data[0]
+    arrays1_row = containment_result.get_data()[0]
     assert arrays1_row["contains_2_3"] is True
     assert arrays1_row["overlaps_with_3_6_9"] is True
     assert arrays1_row["array_cardinality"] == 5

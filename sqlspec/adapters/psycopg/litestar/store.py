@@ -6,6 +6,8 @@ Provides both async and sync PostgreSQL session stores using psycopg3.
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+from psycopg.rows import dict_row
+
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -121,7 +123,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            async with conn.cursor() as cur:
+            async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), (key,))
                 row = await cur.fetchone()
 
@@ -234,7 +236,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            async with conn.cursor() as cur:
+            async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), (key,))
                 row = await cur.fetchone()
 
@@ -378,7 +380,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), (key,))
                 row = cur.fetchone()
 
@@ -504,7 +506,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), (key,))
                 row = cur.fetchone()
 

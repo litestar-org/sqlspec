@@ -23,7 +23,7 @@ def test_sqlite_load_from_arrow(sqlite_session: SqliteDriver) -> None:
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
 
     result = sqlite_session.execute("SELECT id, label FROM storage_bridge_sqlite ORDER BY id")
-    assert result.data == [{"id": 1, "label": "alpha"}, {"id": 2, "label": "beta"}]
+    assert result.get_data() == [{"id": 1, "label": "alpha"}, {"id": 2, "label": "beta"}]
 
 
 def test_sqlite_load_from_storage(sqlite_session: SqliteDriver, tmp_path: Path) -> None:
@@ -42,4 +42,4 @@ def test_sqlite_load_from_storage(sqlite_session: SqliteDriver, tmp_path: Path) 
     assert job.telemetry["extra"]["source"]["backend"]  # type: ignore[index]
 
     result = sqlite_session.execute("SELECT id, label FROM storage_bridge_sqlite ORDER BY id")
-    assert result.data == [{"id": 10, "label": "gamma"}, {"id": 11, "label": "delta"}]
+    assert result.get_data() == [{"id": 10, "label": "gamma"}, {"id": 11, "label": "delta"}]

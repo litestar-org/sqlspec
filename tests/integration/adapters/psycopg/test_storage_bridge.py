@@ -82,7 +82,11 @@ def test_psycopg_sync_storage_bridge_with_minio(
 
             result = session.execute(f"SELECT id, label FROM {target_table} ORDER BY id")
             assert isinstance(result, SQLResult)
-            assert result.data == [{"id": 1, "label": "alpha"}, {"id": 2, "label": "beta"}, {"id": 3, "label": "gamma"}]
+            assert result.get_data() == [
+                {"id": 1, "label": "alpha"},
+                {"id": 2, "label": "beta"},
+                {"id": 3, "label": "gamma"},
+            ]
 
         object_name = f"{prefix}/psycopg_sync/export.parquet"
         stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
