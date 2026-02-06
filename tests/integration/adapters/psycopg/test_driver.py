@@ -1,7 +1,7 @@
 """Integration tests for psycopg driver implementation."""
 
 from collections.abc import Generator
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -61,16 +61,14 @@ async def test_psycopg_async_connection(psycopg_async_config: "PsycopgAsyncConfi
         assert conn is not None
         async with conn.cursor() as cur:
             await cur.execute("SELECT 1 AS id")
-            result = await cur.fetchone()
-            assert result is not None
+            result = cast("tuple[Any, ...]", await cur.fetchone())
             assert result[0] == 1
 
     async with psycopg_async_config.provide_connection() as conn:
         assert conn is not None
         async with conn.cursor() as cur:
             await cur.execute("SELECT 1 AS value")
-            result = await cur.fetchone()
-            assert result is not None
+            result = cast("tuple[Any, ...]", await cur.fetchone())
             assert result[0] == 1
 
     await psycopg_async_config.close_pool()
@@ -88,8 +86,7 @@ def test_psycopg_sync_connection(postgres_service: "PostgresService") -> None:
             assert conn is not None
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 as id")
-                result = cur.fetchone()
-                assert result is not None
+                result = cast("tuple[Any, ...]", cur.fetchone())
                 assert result[0] == 1
     finally:
         sync_config.close_pool()
@@ -107,8 +104,7 @@ def test_psycopg_sync_connection(postgres_service: "PostgresService") -> None:
             assert conn is not None
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 AS id")
-                result = cur.fetchone()
-                assert result is not None
+                result = cast("tuple[Any, ...]", cur.fetchone())
                 assert result[0] == 1
     finally:
         another_config.close_pool()
