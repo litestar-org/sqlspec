@@ -4,6 +4,8 @@ import asyncio
 import logging
 import time
 from contextlib import suppress
+from inspect import isawaitable
+from threading import Thread
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -265,6 +267,82 @@ class AiosqliteConnectionPool:
         db = self._connection_parameters.get("database", "unknown")
         return str(db).split("/")[-1] if db else "unknown"
 
+    def _set_connect_proxy_daemon(self, connect_proxy: Any) -> None:
+        """Set daemon mode on aiosqlite worker thread before await.
+
+        aiosqlite <=0.21 used Connection as a Thread subclass.
+        aiosqlite >=0.22 stores an internal ``_thread`` attribute instead.
+        """
+        try:
+            if isinstance(connect_proxy, Thread):
+                connect_proxy.daemon = True
+                return
+
+            worker_thread = connect_proxy._thread  # pyright: ignore[reportAttributeAccessIssue]
+            if isinstance(worker_thread, Thread):
+                worker_thread.daemon = True
+        except Exception:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.daemon.configure.error",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+            )
+
+    async def _force_stop_connection(self, connection: AiosqlitePoolConnection, *, reason: str) -> None:
+        """Force-stop aiosqlite worker thread when graceful close times out."""
+        try:
+            stop_method = connection.connection.stop  # pyright: ignore[reportAttributeAccessIssue]
+        except Exception:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.force_stop.unavailable",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+                reason=reason,
+            )
+            return
+
+        try:
+            stop_result = stop_method()
+            if isawaitable(stop_result):
+                await asyncio.wait_for(stop_result, timeout=self._operation_timeout)
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.force_stop.success",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+                reason=reason,
+            )
+        except asyncio.TimeoutError:
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "pool.connection.force_stop.timeout",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+                timeout_seconds=self._operation_timeout,
+                reason=reason,
+            )
+        except Exception as e:
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "pool.connection.force_stop.error",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+                reason=reason,
+                error=str(e),
+            )
+
     def size(self) -> int:
         """Get total number of connections in pool.
 
@@ -289,7 +367,9 @@ class AiosqliteConnectionPool:
         Returns:
             New pool connection instance
         """
-        connection = await aiosqlite.connect(**self._connection_parameters)
+        connect_proxy = aiosqlite.connect(**self._connection_parameters)
+        self._set_connect_proxy_daemon(connect_proxy)
+        connection = await connect_proxy
 
         database_path = str(self._connection_parameters.get("database", ""))
         is_shared_cache = "cache=shared" in database_path
@@ -407,6 +487,7 @@ class AiosqliteConnectionPool:
                 connection_id=connection.id,
                 timeout_seconds=self._operation_timeout,
             )
+            await self._force_stop_connection(connection, reason="retire_close_timeout")
 
     async def _try_provision_new_connection(self) -> "AiosqlitePoolConnection | None":
         """Try to create a new connection if under capacity.
@@ -640,6 +721,8 @@ class AiosqliteConnectionPool:
 
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
+                    if isinstance(result, asyncio.TimeoutError):
+                        await self._force_stop_connection(connections[i], reason="pool_close_timeout")
                     log_with_context(
                         logger,
                         logging.WARNING,
