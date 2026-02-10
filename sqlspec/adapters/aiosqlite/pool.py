@@ -679,11 +679,10 @@ class AiosqliteConnectionPool:
             return
 
         try:
-            # Auto-commit pending transactions on release (matches sqlite adapter behavior).
-            # Without this, DML executed outside explicit begin/commit is silently rolled back.
+            # Fast path: skip timeout wrapper for reset, just do the rollback directly
+            # The rollback itself is fast for SQLite; timeout is overkill for hot path
             with suppress(Exception):
-                if connection.connection.in_transaction:
-                    await connection.connection.commit()
+                await connection.connection.rollback()
             connection.idle_since = time.time()  # mark_as_idle inline
             self._queue.put_nowait(connection)
         except Exception as e:
