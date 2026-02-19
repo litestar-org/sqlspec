@@ -232,20 +232,63 @@ def _coerce_parameter_value(value: object, type_coercion_map: "dict[type, Callab
     return value
 
 
+def _coerce_sequence_preserving_identity(
+    seq_value: "Sequence[Any]", type_coercion_map: "dict[type, Callable[[Any], Any]]"
+) -> "Sequence[Any] | list[Any]":
+    updated_seq: list[Any] | None = None
+    for idx, item in enumerate(seq_value):
+        coerced_value = _coerce_parameter_value(item, type_coercion_map)
+        if updated_seq is None:
+            if coerced_value is item:
+                continue
+            updated_seq = list(seq_value[:idx])
+        updated_seq.append(coerced_value)
+    if updated_seq is None:
+        return seq_value
+    return updated_seq
+
+
+def _coerce_mapping_preserving_identity(
+    mapping: "Mapping[Any, Any]", type_coercion_map: "dict[type, Callable[[Any], Any]]"
+) -> "Mapping[Any, Any] | dict[Any, Any]":
+    updated_mapping: dict[Any, Any] | None = None
+    for key, val in mapping.items():
+        coerced_value = _coerce_parameter_value(val, type_coercion_map)
+        if updated_mapping is None:
+            if coerced_value is val:
+                continue
+            updated_mapping = dict(mapping)
+        updated_mapping[key] = coerced_value
+    if updated_mapping is None:
+        return mapping
+    return updated_mapping
+
+
 def _coerce_parameter_set(param_set: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
     # Fast type dispatch for common types
     param_type = type(param_set)
-    if param_type is list or param_type is tuple:
-        seq_value = cast("Sequence[Any]", param_set)
-        return [_coerce_parameter_value(item, type_coercion_map) for item in seq_value]
+    if param_type is list:
+        return _coerce_sequence_preserving_identity(cast("list[Any]", param_set), type_coercion_map)
+    if param_type is tuple:
+        seq_value = cast("tuple[Any, ...]", param_set)
+        coerced_seq = _coerce_sequence_preserving_identity(seq_value, type_coercion_map)
+        if coerced_seq is seq_value:
+            return seq_value
+        return tuple(cast("list[Any]", coerced_seq))
     if param_type is dict:
-        dict_value = cast("dict[Any, Any]", param_set)
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in dict_value.items()}
+        return _coerce_mapping_preserving_identity(cast("dict[Any, Any]", param_set), type_coercion_map)
     # Fallback to ABC checks for custom types
     if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
-        return [_coerce_parameter_value(item, type_coercion_map) for item in param_set]
+        seq_value = cast("Sequence[Any]", param_set)
+        coerced_seq = _coerce_sequence_preserving_identity(seq_value, type_coercion_map)
+        if coerced_seq is seq_value:
+            return param_set
+        return coerced_seq
     if isinstance(param_set, Mapping):
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in param_set.items()}
+        coerced_mapping = _coerce_mapping_preserving_identity(param_set, type_coercion_map)
+        if coerced_mapping is param_set:
+            return param_set
+        return coerced_mapping
     return _coerce_parameter_value(param_set, type_coercion_map)
 
 
@@ -254,14 +297,50 @@ def _coerce_parameters_payload(
 ) -> object:
     # Fast type dispatch for common types
     param_type = type(parameters)
-    if param_type is list or param_type is tuple:
-        seq_params = cast("Sequence[Any]", parameters)
+    if param_type is list:
+        seq_params = cast("list[Any]", parameters)
+        if is_many:
+            updated_many: list[Any] | None = None
+            for idx, param_set in enumerate(seq_params):
+                coerced_set = _coerce_parameter_set(param_set, type_coercion_map)
+                if updated_many is None:
+                    if coerced_set is param_set:
+                        continue
+                    updated_many = seq_params[:idx]
+                updated_many.append(coerced_set)
+            if updated_many is None:
+                return seq_params
+            return updated_many
+
+        updated_seq: list[Any] | None = None
+        for idx, item in enumerate(seq_params):
+            coerced_item = _coerce_parameter_value(item, type_coercion_map)
+            if updated_seq is None:
+                if coerced_item is item:
+                    continue
+                updated_seq = seq_params[:idx]
+            updated_seq.append(coerced_item)
+        if updated_seq is None:
+            return seq_params
+        return updated_seq
+    if param_type is tuple:
+        seq_params = cast("tuple[Any, ...]", parameters)
         if is_many:
             return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in seq_params]
         return [_coerce_parameter_value(item, type_coercion_map) for item in seq_params]
     if param_type is dict:
         dict_params = cast("dict[Any, Any]", parameters)
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in dict_params.items()}
+        updated_mapping: dict[Any, Any] | None = None
+        for key, val in dict_params.items():
+            coerced_value = _coerce_parameter_value(val, type_coercion_map)
+            if updated_mapping is None:
+                if coerced_value is val:
+                    continue
+                updated_mapping = dict(dict_params)
+            updated_mapping[key] = coerced_value
+        if updated_mapping is None:
+            return dict_params
+        return updated_mapping
     # Fallback to ABC checks for custom types
     if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
         return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in parameters]

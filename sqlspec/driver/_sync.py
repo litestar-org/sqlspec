@@ -52,7 +52,6 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
-    from sqlspec.core.compiler import OperationType
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol
     from sqlspec.typing import (
@@ -388,7 +387,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                                 return self.build_statement_result(direct_statement, execution_result)
 
                             affected_rows = self.resolve_rowcount(cursor)
-                            return DMLResult(cast("OperationType", cached.operation_type), affected_rows)
+                            return DMLResult(cached.operation_type, affected_rows)
                         except (AttributeError, NotImplementedError, TypeError):
                             # Cursor is not DB-API compatible for direct execution.
                             # Fall back to adapter dispatch path.
@@ -406,7 +405,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                         if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0
                         else 0
                     )
-                    return DMLResult(cast("OperationType", cached.operation_type), affected_rows)
+                    return DMLResult(cached.operation_type, affected_rows)
             except Exception as exc:
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from exc
@@ -502,7 +501,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         ):
             fast_result = self._qc_lookup(statement, parameters[0])
             if fast_result is not None:
-                return cast("SQLResult", fast_result)
+                return fast_result  # type: ignore[return-value]
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )

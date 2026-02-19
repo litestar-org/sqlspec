@@ -1021,7 +1021,10 @@ class CommonDriverAttributesMixin:
         needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
         if not needs_rebind and config.type_coercion_map:
             coercion_types = config.type_coercion_map
-            needs_rebind = any(type(p) in coercion_types for p in params)
+            if len(params) == 1:
+                needs_rebind = type(params[0]) in coercion_types
+            else:
+                needs_rebind = any(type(p) in coercion_types for p in params)
         if needs_rebind:
             rebound_params = self.qc_rebind(params, cached)
             params_are_simple = False
@@ -1074,7 +1077,10 @@ class CommonDriverAttributesMixin:
         needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
         if not needs_rebind and param_config.type_coercion_map:
             coercion_types = param_config.type_coercion_map
-            needs_rebind = any(type(p) in coercion_types for p in params)
+            if len(params) == 1:
+                needs_rebind = type(params[0]) in coercion_types
+            else:
+                needs_rebind = any(type(p) in coercion_types for p in params)
 
         if not needs_rebind and not config._has_output_transformer:  # pyright: ignore[reportPrivateUsage]
             return self._qc_execute_direct(statement, params, cached)
@@ -1554,6 +1560,30 @@ class CommonDriverAttributesMixin:
 
         if is_many:
             if isinstance(parameters, list):
+                type_coercion_map = statement_config.parameter_config.type_coercion_map
+                needs_transform = False
+                for param_set in parameters:
+                    if isinstance(param_set, dict):
+                        values = param_set.values()
+                    elif isinstance(param_set, (list, tuple)):
+                        values = param_set
+                    else:
+                        values = (param_set,)
+
+                    for value in values:
+                        value_type = type(value)
+                        if value_type is TypedParameter:
+                            needs_transform = True
+                            break
+                        if type_coercion_map and value_type in type_coercion_map:
+                            needs_transform = True
+                            break
+                    if needs_transform:
+                        break
+
+                if not needs_transform:
+                    return parameters
+
                 formatted_many: list[Any] | None = None
                 for idx, param_set in enumerate(parameters):
                     formatted = self._format_parameter_set_for_many(param_set, statement_config)

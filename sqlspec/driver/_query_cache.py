@@ -18,6 +18,7 @@ class CachedQuery:
 
     __slots__ = (
         "applied_wrap_types",
+        "column_names",
         "compiled_sql",
         "input_named_parameters",
         "operation_profile",
@@ -39,6 +40,7 @@ class CachedQuery:
         operation_profile: "OperationProfile",
         param_count: int,
         processed_state: "ProcessedState",
+        column_names: "list[str] | None" = None,
     ) -> None:
         self.compiled_sql = compiled_sql
         self.parameter_profile = parameter_profile
@@ -49,6 +51,7 @@ class CachedQuery:
         self.operation_profile = operation_profile
         self.param_count = param_count
         self.processed_state = processed_state
+        self.column_names = column_names
 
 
 class QueryCache:

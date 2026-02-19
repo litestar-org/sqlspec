@@ -136,6 +136,41 @@ def test_qc_store_snapshots_processed_state() -> None:
     assert cached.processed_state.operation_type == "SELECT"
 
 
+def test_prepare_driver_parameters_many_passes_through_irrelevant_coercion_map() -> None:
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={bool: lambda value: 1 if value else 0},
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    parameters = [("a",), ("b",), ("c",)]
+
+    prepared = driver.prepare_driver_parameters(parameters, config, is_many=True)
+
+    assert prepared is parameters
+
+
+def test_prepare_driver_parameters_many_coerces_rows_when_needed() -> None:
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={bool: lambda value: 1 if value else 0},
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    parameters = [(True,), ("b",)]
+
+    prepared = driver.prepare_driver_parameters(parameters, config, is_many=True)
+
+    assert isinstance(prepared, list)
+    assert prepared is not parameters
+    assert tuple(prepared[0]) == (1,)
+    assert tuple(prepared[1]) == ("b",)
+
+
 def test_sync_qc_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch) -> None:
     class _CursorManager:
         def __enter__(self) -> object:

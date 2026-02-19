@@ -49,6 +49,12 @@ __all__ = ("ArrowResult", "DMLResult", "EmptyResult", "FastDMLResult", "SQLResul
 T = TypeVar("T")
 _EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
 _EMPTY_RESULT_DATA: list[Any] = []
+_EMPTY_DML_METADATA: dict[str, Any] = {}
+_EMPTY_DML_COLUMN_NAMES: list[str] = []
+_EMPTY_DML_INSERTED_IDS: list[int | str] = []
+_EMPTY_DML_STATEMENT_RESULTS: list["SQLResult"] = []
+_EMPTY_DML_ERRORS: list[str] = []
+_TWO_COLUMNS_FASTPATH = 2
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -288,6 +294,9 @@ class SQLResult(StatementResult):
             elif len(col_names) == 1:
                 key = col_names[0]
                 self._materialized_dicts = [{key: row[0]} for row in raw]
+            elif len(col_names) == _TWO_COLUMNS_FASTPATH:
+                key0, key1 = col_names
+                self._materialized_dicts = [{key0: row[0], key1: row[1]} for row in raw]
             else:
                 self._materialized_dicts = [dict(zip(col_names, row, strict=False)) for row in raw]
         else:
@@ -992,7 +1001,7 @@ class DMLResult(SQLResult):
         self.rows_affected = rows_affected
         self.last_inserted_id = None
         self.execution_time = None
-        self.metadata = {}
+        self.metadata = _EMPTY_DML_METADATA
 
         self.error = None
         self._operation_type = op_type
@@ -1001,13 +1010,12 @@ class DMLResult(SQLResult):
         self._row_format = "dict"
         self._materialized_dicts = None
 
-        empty_list = _EMPTY_RESULT_DATA
-        self.column_names = cast("list[str]", empty_list)
+        self.column_names = _EMPTY_DML_COLUMN_NAMES
         self.total_count = 0
         self.has_more = False
-        self.inserted_ids = cast("list[int | str]", empty_list)
-        self.statement_results = cast("list[SQLResult]", empty_list)
-        self.errors = cast("list[str]", empty_list)
+        self.inserted_ids = _EMPTY_DML_INSERTED_IDS
+        self.statement_results = _EMPTY_DML_STATEMENT_RESULTS
+        self.errors = _EMPTY_DML_ERRORS
         self.total_statements = 0
         self.successful_statements = 0
 
@@ -1019,6 +1027,13 @@ class DMLResult(SQLResult):
 
     def get_data(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[Any]":
         return _EMPTY_RESULT_DATA
+
+    def set_metadata(self, key: str, value: Any) -> None:
+        # Copy-on-write to preserve low-allocation defaults for hot DML paths.
+        if self.metadata is _EMPTY_DML_METADATA:
+            self.metadata = {key: value}
+            return
+        self.metadata[key] = value
 
 
 FastDMLResult = DMLResult
