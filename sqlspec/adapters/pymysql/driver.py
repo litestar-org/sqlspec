@@ -258,6 +258,21 @@ class PyMysqlDriver(SyncDriverAdapterBase):
             self._data_dictionary = PyMysqlDataDictionary()
         return self._data_dictionary
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect PyMySQL rows for the direct execution path."""
+        json_indexes = detect_json_columns(cursor, PYMYSQL_JSON_TYPE_CODES)
+        deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
+        fetched_rows = list(fetched) if fetched else None
+        description = list(cursor.description) if cursor.description else None
+        rows, column_names, _row_format = collect_rows(
+            fetched_rows, description, json_indexes, deserializer, logger=logger
+        )
+        return rows, column_names, len(rows)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from PyMySQL cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         get_autocommit = getattr(self.connection, "get_autocommit", None)
         if callable(get_autocommit):

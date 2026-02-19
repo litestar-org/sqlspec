@@ -274,6 +274,21 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             self._data_dictionary = MysqlConnectorSyncDataDictionary()
         return self._data_dictionary
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect mysql-connector sync rows for the direct execution path."""
+        json_indexes = detect_json_columns(cursor, MYSQLCONNECTOR_JSON_TYPE_CODES)
+        deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
+        fetched_rows = list(fetched) if fetched else None
+        description = list(cursor.description) if cursor.description else None
+        rows, column_names, _row_format = collect_rows(
+            fetched_rows, description, json_indexes, deserializer, logger=logger
+        )
+        return rows, column_names, len(rows)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from mysql-connector cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         autocommit = getattr(self.connection, "autocommit", None)
         if autocommit is not None:
@@ -497,6 +512,21 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = MysqlConnectorAsyncDataDictionary()
         return self._data_dictionary
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect mysql-connector async rows for the direct execution path."""
+        json_indexes = detect_json_columns(cursor, MYSQLCONNECTOR_JSON_TYPE_CODES)
+        deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
+        fetched_rows = list(fetched) if fetched else None
+        description = list(cursor.description) if cursor.description else None
+        rows, column_names, _row_format = collect_rows(
+            fetched_rows, description, json_indexes, deserializer, logger=logger
+        )
+        return rows, column_names, len(rows)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from mysql-connector cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         in_tx = getattr(self.connection, "in_transaction", None)

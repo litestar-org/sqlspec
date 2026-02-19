@@ -431,6 +431,15 @@ class DuckDBDriver(SyncDriverAdapterBase):
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect DuckDB rows for the direct execution path."""
+        data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from DuckDB cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 

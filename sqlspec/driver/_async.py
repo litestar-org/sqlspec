@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core import SQL, ProcessedState, StackResult, Statement, create_arrow_result
+from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
@@ -25,6 +26,7 @@ from sqlspec.driver._common import (
     handle_single_row_error,
     resolve_db_system,
 )
+from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
 from sqlspec.driver._storage_helpers import (
@@ -50,6 +52,7 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
+    from sqlspec.core.compiler import OperationType
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol
     from sqlspec.typing import (
@@ -302,6 +305,118 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect rows from cursor after fetchall for the direct execution path.
+
+        Adapters should override this method to provide optimized row collection
+        that bypasses full dispatch_execute overhead.
+
+        Args:
+            cursor: Database cursor with description metadata.
+            fetched: Rows returned from cursor.fetchall().
+
+        Returns:
+            Tuple of (data, column_names, row_count).
+
+        Raises:
+            NotImplementedError: If the adapter does not implement this method.
+
+        """
+        msg = "Adapter must implement collect_rows() for direct execution path"
+        raise NotImplementedError(msg)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve the number of affected rows from cursor for the direct execution path.
+
+        Adapters should override this method to provide optimized rowcount resolution
+        that bypasses full dispatch_execute overhead.
+
+        Args:
+            cursor: Database cursor with rowcount metadata.
+
+        Returns:
+            Number of affected rows, or 0 when unknown.
+
+        Raises:
+            NotImplementedError: If the adapter does not implement this method.
+
+        """
+        msg = "Adapter must implement resolve_rowcount() for direct execution path"
+        raise NotImplementedError(msg)
+
+    async def _qc_execute_direct(
+        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: CachedQuery
+    ) -> "SQLResult":
+        """Execute pre-compiled query via ultra-fast path (async).
+
+        Uses _qc_build_direct + dispatch_execute since async drivers can't
+        call cursor.execute directly. For DML operations, returns DMLResult
+        to bypass full SQLResult construction.
+
+        Args:
+            sql: Raw SQL string (original, not compiled).
+            params: Query parameters.
+            cached: Cached query metadata.
+
+        Returns:
+            SQLResult or DMLResult.
+        """
+        compiled_sql = cached.compiled_sql
+        direct_statement = self._qc_build_direct(
+            sql, params, cached, params, params_are_simple=True, compiled_sql=compiled_sql
+        )
+
+        exc_handler = self.handle_database_exceptions()
+        cursor_manager = self.with_cursor(self.connection)
+        cursor: Any | None = None
+        exc: Exception | None = None
+        exc_handler_entered = False
+        cursor_entered = False
+        result: SQLResult | None = None
+
+        try:
+            await exc_handler.__aenter__()
+            exc_handler_entered = True
+            cursor = await cursor_manager.__aenter__()
+            cursor_entered = True
+            execution_result = await self.dispatch_execute(cursor, direct_statement)
+
+            if cached.operation_profile.returns_rows:
+                result = self.build_statement_result(direct_statement, execution_result)
+            else:
+                # DML path: use DMLResult to bypass full SQLResult construction
+                affected_rows = execution_result.rowcount_override if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0 else 0
+                result = DMLResult(cast("OperationType", cached.operation_type), affected_rows)
+        except Exception as err:
+            exc = err
+        finally:
+            if cursor_entered:
+                if exc is None:
+                    await cursor_manager.__aexit__(None, None, None)
+                else:
+                    await cursor_manager.__aexit__(type(exc), exc, exc.__traceback__)
+            if exc_handler_entered:
+                if exc is None:
+                    await exc_handler.__aexit__(None, None, None)
+                else:
+                    await exc_handler.__aexit__(type(exc), exc, exc.__traceback__)
+
+        try:
+            if exc is not None:
+                mapped_exc = exc_handler.pending_exception or exc
+                if exc_handler.pending_exception is not None:
+                    raise mapped_exc from exc
+                raise exc
+
+            if exc_handler.pending_exception is not None:
+                mapped_exc = exc_handler.pending_exception
+                raise mapped_exc from None
+
+            assert result is not None
+            return result
+        finally:
+            self._release_pooled_statement(direct_statement)
+
     async def _qc_lookup(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
         """Attempt fast-path execution for cached query (async).
 
@@ -312,10 +427,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             SQLResult if cache hit and execution succeeds, None otherwise.
         """
-        prepared = self._qc_prepare(statement, params)
-        if prepared is None:
+        result = super()._qc_lookup(statement, params)
+        if result is None:
             return None
-        return await self._qc_execute(prepared)
+        return await result  # type: ignore[misc]
 
     async def _qc_execute(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path (async).
@@ -336,12 +451,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             exc_handler_entered = True
             cursor = await cursor_manager.__aenter__()
             cursor_entered = True
-            special_result = await self.dispatch_special_handling(cursor, statement)
-            if special_result is not None:
-                result = special_result
-            else:
-                execution_result = await self.dispatch_execute(cursor, statement)
-                result = self.build_statement_result(statement, execution_result)
+            execution_result = await self.dispatch_execute(cursor, statement)
+            result = self.build_statement_result(statement, execution_result)
         except Exception as err:
             exc = err
         finally:
@@ -451,7 +562,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         config = statement_config or self.statement_config
 
-        if isinstance(statement, SQL):
+        if isinstance(statement, str) and not filters and not kwargs:
+            sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+        elif isinstance(statement, SQL):
             statement_seed = statement.raw_expression or statement.raw_sql
             sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
         else:

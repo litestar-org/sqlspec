@@ -691,6 +691,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect Oracle sync rows for the direct execution path."""
+        data, column_names = collect_sync_rows(
+            cast("list[Any] | None", fetched), cursor.description, self.driver_features
+        )
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from Oracle cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return False
@@ -1156,6 +1167,21 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect Oracle async rows for the direct execution path.
+
+        Uses synchronous LOB coercion. For async LOB coercion, the standard
+        dispatch path via collect_async_rows is used instead.
+        """
+        data, column_names = collect_sync_rows(
+            cast("list[Any] | None", fetched), cursor.description, self.driver_features
+        )
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from Oracle cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

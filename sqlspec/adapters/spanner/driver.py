@@ -365,6 +365,29 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect Spanner rows for the direct execution path.
+
+        Note: Spanner's collect_rows requires result set fields and a type converter.
+        The direct execution path may not always have this metadata available,
+        so this falls back to basic collection.
+        """
+        # For direct path, we need fields metadata from the result set.
+        # If not available, return raw data with no column names.
+        if not fetched:
+            return [], [], 0
+        # Attempt to extract column names from dict keys if rows are dicts
+        if isinstance(fetched[0], dict):
+            column_names = list(fetched[0].keys())
+            return fetched, column_names, len(fetched)
+        # For tuple rows without metadata, return as-is
+        return fetched, [], len(fetched)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from Spanner cursor for the direct execution path."""
+        # Spanner uses execute_update return value, not cursor.rowcount
+        return 0
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return False

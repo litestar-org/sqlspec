@@ -545,6 +545,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect BigQuery rows for the direct execution path."""
+        schema = cursor.job.schema if cursor.job else None
+        data, column_names = collect_rows(fetched, schema)
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from BigQuery job for the direct execution path."""
+        return build_dml_rowcount(cursor.job, 0) if cursor.job else 0
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 

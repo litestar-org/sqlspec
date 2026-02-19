@@ -2,7 +2,7 @@
 
 import contextlib
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from typing_extensions import Self
 
@@ -20,13 +20,16 @@ from sqlspec.adapters.sqlite.core import (
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
+from sqlspec.core.result import DMLResult
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite._typing import SqliteConnection
-    from sqlspec.core import SQL, StatementConfig
+    from sqlspec.core import SQL, SQLResult, StatementConfig
+    from sqlspec.core.compiler import OperationType
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._query_cache import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
@@ -202,6 +205,49 @@ class SqliteDriver(SyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
+    def _qc_execute_direct(
+        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute cached query through SQLite connection.execute fast path.
+
+        This bypasses cursor context-manager overhead for repeated cached
+        statements while preserving driver exception mapping behavior.
+        """
+        direct_statement: SQL | None = None
+        try:
+            try:
+                cursor = self.connection.execute(cached.compiled_sql, params)
+            except sqlite3.Error as exc:
+                raise create_mapped_exception(exc) from exc
+
+            try:
+                if cached.operation_profile.returns_rows:
+                    fetched_data = cursor.fetchall()
+                    data, column_names, row_count = collect_rows(fetched_data, cursor.description)
+                    execution_result = self.create_execution_result(
+                        cursor,
+                        selected_data=data,
+                        column_names=column_names,
+                        data_row_count=row_count,
+                        is_select_result=True,
+                        row_format="tuple",
+                    )
+                    direct_statement = self._qc_build_direct(
+                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                    )
+                    return self.build_statement_result(direct_statement, execution_result)
+
+                affected_rows = resolve_rowcount(cursor)
+                return DMLResult(cast("OperationType", cached.operation_type), affected_rows)
+            finally:
+                with contextlib.suppress(Exception):
+                    cursor.close()
+        finally:
+            if direct_statement is not None:
+                self._release_pooled_statement(direct_statement)
+        msg = "unreachable"
+        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
+
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT
     # ─────────────────────────────────────────────────────────────────────────────
@@ -356,6 +402,14 @@ class SqliteDriver(SyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect SQLite rows for the direct execution path."""
+        return collect_rows(fetched, cursor.description)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from SQLite cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

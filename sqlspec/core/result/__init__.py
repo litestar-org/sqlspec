@@ -2,7 +2,9 @@
 
 from sqlspec.core.result._base import (
     ArrowResult,
+    DMLResult,
     EmptyResult,
+    FastDMLResult,
     SQLResult,
     StackResult,
     StatementResult,
@@ -13,7 +15,9 @@ from sqlspec.core.result._base import (
 
 __all__ = (
     "ArrowResult",
+    "DMLResult",
     "EmptyResult",
+    "FastDMLResult",
     "SQLResult",
     "StackResult",
     "StatementResult",

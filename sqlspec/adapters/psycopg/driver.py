@@ -548,6 +548,15 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect psycopg sync rows for the direct execution path."""
+        data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from psycopg cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
@@ -999,6 +1008,15 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect psycopg async rows for the direct execution path."""
+        data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from psycopg cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

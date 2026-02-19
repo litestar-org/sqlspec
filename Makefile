@@ -276,6 +276,46 @@ docs-linkcheck-full:                               ## Run full documentation lin
 	@echo "${OK} Full link check complete"
 
 # =============================================================================
+# Benchmarks and Performance
+# =============================================================================
+
+.PHONY: bench
+bench:                                              ## Run core benchmarks (sqlite)
+	@echo "${INFO} Running core benchmarks... 🏎️"
+	@uv run python tools/scripts/bench.py
+	@echo "${OK} Benchmarks complete"
+
+.PHONY: bench-extended
+bench-extended:                                     ## Run extended benchmarks (all scenarios)
+	@echo "${INFO} Running extended benchmarks... 🏎️"
+	@uv run python tools/scripts/bench.py --extended
+	@echo "${OK} Extended benchmarks complete"
+
+.PHONY: bench-profile
+bench-profile:                                      ## Run benchmarks with cProfile profiling
+	@echo "${INFO} Running profiled benchmarks... 🔬"
+	@uv run python tools/scripts/bench.py --profile
+	@echo "${OK} Profiled benchmarks complete. Profiles saved to tools/scripts/profiles/"
+
+.PHONY: bench-gate
+bench-gate:                                         ## Run performance regression gate
+	@echo "${INFO} Running performance gate... 🚦"
+	@uv run python tools/scripts/bench_gate.py
+	@echo "${OK} Performance gate complete"
+
+.PHONY: bench-subsystems
+bench-subsystems:                                   ## Run subsystem micro-benchmarks
+	@echo "${INFO} Running subsystem micro-benchmarks... 🔬"
+	@uv run python tools/scripts/bench_subsystems.py
+	@echo "${OK} Subsystem benchmarks complete"
+
+.PHONY: bench-analyze
+bench-analyze:                                      ## Analyze saved profile data
+	@echo "${INFO} Analyzing benchmark profiles... 📊"
+	@uv run python tools/scripts/analyze_profile.py tools/scripts/profiles/
+	@echo "${OK} Profile analysis complete"
+
+# =============================================================================
 # Development Infrastructure
 # =============================================================================
 

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core import SQL, StackResult, create_arrow_result
+from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
@@ -25,6 +26,7 @@ from sqlspec.driver._common import (
     handle_single_row_error,
     resolve_db_system,
 )
+from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
 from sqlspec.driver._storage_helpers import (
@@ -50,6 +52,7 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.core.compiler import OperationType
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol
     from sqlspec.typing import (
@@ -280,7 +283,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         for stmt in statements:
             single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
             self.dispatch_execute(cursor, single_stmt)
-        successful_count += 1
+            successful_count += 1
 
         return self.create_execution_result(
             cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
@@ -304,6 +307,119 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (cursor, statement)
         return None
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect rows from cursor after fetchall for the direct execution path.
+
+        Adapters should override this method to provide optimized row collection
+        that bypasses full dispatch_execute overhead.
+
+        Args:
+            cursor: Database cursor with description metadata.
+            fetched: Rows returned from cursor.fetchall().
+
+        Returns:
+            Tuple of (data, column_names, row_count).
+
+        Raises:
+            NotImplementedError: If the adapter does not implement this method.
+
+        """
+        msg = "Adapter must implement collect_rows() for direct execution path"
+        raise NotImplementedError(msg)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve the number of affected rows from cursor for the direct execution path.
+
+        Adapters should override this method to provide optimized rowcount resolution
+        that bypasses full dispatch_execute overhead.
+
+        Args:
+            cursor: Database cursor with rowcount metadata.
+
+        Returns:
+            Number of affected rows, or 0 when unknown.
+
+        Raises:
+            NotImplementedError: If the adapter does not implement this method.
+
+        """
+        msg = "Adapter must implement resolve_rowcount() for direct execution path"
+        raise NotImplementedError(msg)
+
+    def _qc_execute_direct(
+        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: CachedQuery
+    ) -> "SQLResult":
+        """Execute pre-compiled query via ultra-fast path (sync).
+
+        Uses a DB-API direct path when available (`cursor.execute`) and falls
+        back to dispatch_execute() for adapters with non-standard cursor APIs.
+        For DML operations, returns DMLResult to avoid full SQLResult costs.
+
+        Args:
+            sql: Raw SQL string (original, not compiled).
+            params: Query parameters.
+            cached: Cached query metadata.
+
+        Returns:
+            SQLResult or DMLResult.
+        """
+        direct_statement: SQL | None = None
+        exc_handler = self.handle_database_exceptions()
+        try:
+            try:
+                with exc_handler, self.with_cursor(self.connection) as cursor:
+                    if hasattr(cursor, "execute"):
+                        try:
+                            cursor.execute(cached.compiled_sql, params)
+                            if cached.operation_profile.returns_rows:
+                                fetched_data = cursor.fetchall()
+                                data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+                                execution_result = self.create_execution_result(
+                                    cursor,
+                                    selected_data=data,
+                                    column_names=column_names,
+                                    data_row_count=row_count,
+                                    is_select_result=True,
+                                    row_format="tuple",
+                                )
+                                direct_statement = self._qc_build_direct(
+                                    sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                                )
+                                return self.build_statement_result(direct_statement, execution_result)
+
+                            affected_rows = self.resolve_rowcount(cursor)
+                            return DMLResult(cast("OperationType", cached.operation_type), affected_rows)
+                        except (AttributeError, NotImplementedError, TypeError):
+                            # Cursor is not DB-API compatible for direct execution.
+                            # Fall back to adapter dispatch path.
+                            pass
+
+                    direct_statement = self._qc_build_direct(
+                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                    )
+                    execution_result = self.dispatch_execute(cursor, direct_statement)
+                    if cached.operation_profile.returns_rows:
+                        return self.build_statement_result(direct_statement, execution_result)
+
+                    affected_rows = (
+                        execution_result.rowcount_override
+                        if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0
+                        else 0
+                    )
+                    return DMLResult(cast("OperationType", cached.operation_type), affected_rows)
+            except Exception as exc:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from exc
+                raise
+            finally:
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+        finally:
+            if direct_statement is not None:
+                self._release_pooled_statement(direct_statement)
+        msg = "unreachable"
+        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
+
     def _qc_execute(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path.
 
@@ -314,9 +430,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         try:
             try:
                 with exc_handler, self.with_cursor(self.connection) as cursor:
-                    special_result = self.dispatch_special_handling(cursor, statement)
-                    if special_result is not None:
-                        return special_result
                     execution_result = self.dispatch_execute(cursor, statement)
                     return self.build_statement_result(statement, execution_result)
             except Exception as exc:
@@ -410,7 +523,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         config = statement_config or self.statement_config
 
-        if isinstance(statement, SQL):
+        if isinstance(statement, str) and not filters and not kwargs:
+            sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+        elif isinstance(statement, SQL):
             statement_seed = statement.raw_expression or statement.raw_sql
             sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
         else:
