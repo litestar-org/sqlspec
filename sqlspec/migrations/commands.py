@@ -987,9 +987,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
     def squash(
         self,
-        start_version: str,
-        end_version: str,
-        description: str,
+        start_version: str | None = None,
+        end_version: str | None = None,
+        description: str | None = None,
         *,
         dry_run: bool = False,
         update_database: bool = True,
@@ -1004,8 +1004,11 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
         Args:
             start_version: First version in the range to squash (inclusive).
+                When None, defaults to the first sequential migration found.
             end_version: Last version in the range to squash (inclusive).
+                When None, defaults to the last sequential migration found.
             description: Description for the squashed migration file.
+                When None, prompts interactively.
             dry_run: Preview changes without applying.
             update_database: Update migration records in database.
             yes: Skip confirmation prompt.
@@ -1016,6 +1019,25 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             SquashValidationError: If validation fails (invalid range, gaps, etc.).
         """
         squasher = MigrationSquasher(self.migrations_path, self.runner, self._template_settings)
+
+        # Infer start/end from all sequential migrations when not provided
+        if start_version is None or end_version is None:
+            all_migrations = self.runner.get_migration_files()
+            sequential = [(v, p) for v, p in all_migrations if v.isdigit() or v.lstrip("0").isdigit()]
+            if not sequential:
+                console.print("[yellow]No sequential migrations found to squash[/]")
+                return
+            if start_version is None:
+                start_version = sequential[0][0]
+            if end_version is None:
+                end_version = sequential[-1][0]
+            console.print(f"[cyan]Squashing range: {start_version} to {end_version}[/]")
+
+        # Prompt for description when not provided
+        if description is None:
+            from rich.prompt import Prompt
+
+            description = Prompt.ask("Migration description", default="squashed_migrations")
 
         plans = squasher.plan_squash(
             start_version, end_version, description, allow_gaps=allow_gaps, output_format=output_format
@@ -1899,9 +1921,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
     async def squash(
         self,
-        start_version: str,
-        end_version: str,
-        description: str,
+        start_version: str | None = None,
+        end_version: str | None = None,
+        description: str | None = None,
         *,
         dry_run: bool = False,
         update_database: bool = True,
@@ -1916,8 +1938,11 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
         Args:
             start_version: First version in the range to squash (inclusive).
+                When None, defaults to the first sequential migration found.
             end_version: Last version in the range to squash (inclusive).
+                When None, defaults to the last sequential migration found.
             description: Description for the squashed migration file.
+                When None, prompts interactively.
             dry_run: Preview changes without applying.
             update_database: Update migration records in database.
             yes: Skip confirmation prompt.
@@ -1937,6 +1962,27 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         )
 
         squasher = MigrationSquasher(self.migrations_path, sync_runner, self._template_settings)
+
+        # Infer start/end from all sequential migrations when not provided
+        if start_version is None or end_version is None:
+            all_migrations = sync_runner.get_migration_files()
+            sequential = [(v, p) for v, p in all_migrations if v.isdigit() or v.lstrip("0").isdigit()]
+            if not sequential:
+                console.print("[yellow]No sequential migrations found to squash[/]")
+                return
+            if start_version is None:
+                start_version = sequential[0][0]
+            if end_version is None:
+                end_version = sequential[-1][0]
+            console.print(f"[cyan]Squashing range: {start_version} to {end_version}[/]")
+
+        # Prompt for description when not provided
+        if description is None:
+            import anyio
+
+            from rich.prompt import Prompt
+
+            description = await anyio.to_thread.run_sync(lambda: Prompt.ask("Migration description", default="squashed_migrations"))  # pyright: ignore[reportAttributeAccessIssue]
 
         plans = squasher.plan_squash(
             start_version, end_version, description, allow_gaps=allow_gaps, output_format=output_format

@@ -4,6 +4,7 @@ This module provides utilities to consolidate multiple sequential migrations
 into a single "release" migration file, following the Django-style squash workflow.
 """
 
+import inspect
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,14 +13,40 @@ from typing import TYPE_CHECKING
 
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import await_
+from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
     from sqlspec.migrations.runner import SyncMigrationRunner
     from sqlspec.migrations.templates import MigrationTemplateSettings
 
-__all__ = ("MigrationSquasher", "SquashPlan", "group_migrations_by_type")
+__all__ = ("MigrationSquasher", "SquashPlan", "group_migrations_by_type", "parse_version_range")
 
 logger = get_logger("sqlspec.migrations.squash")
+
+
+def parse_version_range(range_str: str) -> tuple[str, str]:
+    """Parse a version range string into (start, end) tuple.
+
+    Accepts multiple formats: ``START:END``, ``START..END``, or ``START-END``.
+
+    Args:
+        range_str: Version range string.
+
+    Returns:
+        Tuple of (start_version, end_version) zero-padded to 4 digits.
+
+    Raises:
+        ValueError: If the format is not recognised.
+    """
+    for sep in (":", "..", "-"):
+        if sep in range_str:
+            parts = range_str.split(sep, 1)
+            start = parts[0].strip().zfill(4)
+            end = parts[1].strip().zfill(4)
+            return start, end
+    msg = f"Invalid VERSION_RANGE format: '{range_str}'. Use START:END, START..END, or START-END (e.g., 1:7)"
+    raise ValueError(msg)
 
 
 def group_migrations_by_type(migrations: list[tuple[str, Path]]) -> list[tuple[str, list[tuple[str, Path]]]]:
@@ -174,12 +201,15 @@ class MigrationSquasher:
                     msg = f"Gap detected in version sequence between {source_versions_int[i - 1]:04d} and {source_versions_int[i]:04d}"
                     raise SquashValidationError(msg)
 
+        # Slugify description for safe filenames
+        safe_description = slugify(description, separator="_")[:50] or "migration"
+
         # Group migrations by type (sql vs py) unless output_format forces a specific format
         if output_format == "py":
             # Force all output to Python format - single plan with all migrations
             extension = ".py"
             target_version = f"{int(start_version):04d}"
-            target_path = self.migrations_path / f"{target_version}_{description}{extension}"
+            target_path = self.migrations_path / f"{target_version}_{safe_description}{extension}"
             return [
                 SquashPlan(
                     source_migrations=source_migrations,
@@ -201,7 +231,7 @@ class MigrationSquasher:
             group_versions = [v for v, _ in group_migrations]
             target_version = f"{version_counter:04d}"
             extension = ".py" if file_type == "py" else ".sql"
-            target_path = self.migrations_path / f"{target_version}_{description}{extension}"
+            target_path = self.migrations_path / f"{target_version}_{safe_description}{extension}"
 
             plans.append(
                 SquashPlan(
@@ -238,16 +268,26 @@ class MigrationSquasher:
             migration_data = self.runner.load_migration(path, version)
             loader = migration_data["loader"]
 
-            # Get UP SQL
-            up_sql = loader.get_up_sql(path)
+            # Get UP SQL (handle async loaders via await_ bridge)
+            up_method = loader.get_up_sql
+            up_sql = (
+                await_(up_method, raise_sync_error=False)(path)
+                if inspect.iscoroutinefunction(up_method)
+                else up_method(path)
+            )
             if up_sql:
                 if isinstance(up_sql, list):
                     up_statements.extend(up_sql)
                 else:
                     up_statements.append(up_sql)
 
-            # Get DOWN SQL (collect for reverse ordering)
-            down_sql = loader.get_down_sql(path)
+            # Get DOWN SQL (handle async loaders via await_ bridge)
+            down_method = loader.get_down_sql
+            down_sql = (
+                await_(down_method, raise_sync_error=False)(path)
+                if inspect.iscoroutinefunction(down_method)
+                else down_method(path)
+            )
             if down_sql:
                 if isinstance(down_sql, list):
                     migration_sql.append((version, [], list(down_sql)))
@@ -431,14 +471,20 @@ class MigrationSquasher:
         if not self.backup_path or not self.backup_path.exists():
             return
 
+        backup_dir = self.backup_path
+
         # Delete any partially created files
         for file_path in self.migrations_path.iterdir():
             if file_path.is_file() and not file_path.name.startswith("."):
                 file_path.unlink()
 
         # Restore from backup
-        for backup_file in self.backup_path.iterdir():
+        for backup_file in backup_dir.iterdir():
             if backup_file.is_file():
                 shutil.copy2(backup_file, self.migrations_path / backup_file.name)
 
-        logger.debug("Rolled back from backup at %s", self.backup_path)
+        # Clean up the backup directory itself
+        shutil.rmtree(backup_dir)
+        self.backup_path = None
+
+        logger.debug("Rolled back from backup at %s", backup_dir)
