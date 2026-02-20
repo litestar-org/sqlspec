@@ -282,7 +282,9 @@ def detect_json_columns_from_description(
     return json_indexes
 
 
-def detect_json_columns(cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None) -> "list[int]":
+def detect_json_columns(
+    cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None
+) -> "list[int]":
     """Identify JSON column indexes from cursor metadata."""
     if description is None:
         if not has_cursor_metadata(cursor):
@@ -383,7 +385,9 @@ def collect_rows(
             rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
             return rows, resolved_column_names, "dict"
         rows = [dict(row) for row in fetched_data]
-        rows = _deserialize_pymysql_json_dict_rows(resolved_column_names, rows, json_indexes, deserializer, logger=logger)
+        rows = _deserialize_pymysql_json_dict_rows(
+            resolved_column_names, rows, json_indexes, deserializer, logger=logger
+        )
         return rows, resolved_column_names, "dict"
     rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
     if json_indexes:

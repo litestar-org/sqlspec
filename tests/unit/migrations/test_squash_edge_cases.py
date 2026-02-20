@@ -412,10 +412,7 @@ class TestExtractSqlAsyncBridge:
         (tmp_path / "0002_b.sql").write_text("-- b")
 
         runner = Mock()
-        runner.get_migration_files.return_value = [
-            ("0001", tmp_path / "0001_a.sql"),
-            ("0002", tmp_path / "0002_b.sql"),
-        ]
+        runner.get_migration_files.return_value = [("0001", tmp_path / "0001_a.sql"), ("0002", tmp_path / "0002_b.sql")]
 
         loader1 = Mock()
         loader1.get_up_sql = AsyncMock(return_value=["CREATE TABLE a;"])

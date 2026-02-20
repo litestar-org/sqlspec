@@ -286,7 +286,9 @@ def detect_json_columns_from_description(
     return json_indexes
 
 
-def detect_json_columns(cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None) -> "list[int]":
+def detect_json_columns(
+    cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None
+) -> "list[int]":
     """Identify JSON column indexes from cursor metadata."""
     if description is None:
         if not has_cursor_metadata(cursor):

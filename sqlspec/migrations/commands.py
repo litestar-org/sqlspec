@@ -1981,10 +1981,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             import anyio
             from rich.prompt import Prompt
 
-            description = await anyio.to_thread.run_sync(lambda: Prompt.ask("Migration description", default="squashed_migrations"))  # pyright: ignore[reportAttributeAccessIssue]
+            description = await anyio.to_thread.run_sync(  # pyright: ignore[reportAttributeAccessIssue]
+                lambda: Prompt.ask("Migration description", default="squashed_migrations")
+            )
 
         plans = squasher.plan_squash(
-            start_version, end_version, description, allow_gaps=allow_gaps, output_format=output_format
+            start_version,
+            end_version,
+            description,  # pyright: ignore[reportArgumentType]
+            allow_gaps=allow_gaps,
+            output_format=output_format,
         )
 
         # Display plan for each squash group

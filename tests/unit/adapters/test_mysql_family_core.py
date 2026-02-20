@@ -37,11 +37,7 @@ def test_collect_rows_accepts_precomputed_column_names(module_path: str) -> None
     rows = [{"id": 1, "payload": json.dumps({"a": 1})}]
 
     data, resolved_column_names, row_format = core.collect_rows(
-        rows,
-        description,
-        [1],
-        json.loads,
-        column_names=column_names,
+        rows, description, [1], json.loads, column_names=column_names
     )
 
     assert resolved_column_names is column_names

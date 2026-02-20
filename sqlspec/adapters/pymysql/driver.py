@@ -121,12 +121,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
             json_indexes = detect_json_columns_from_description(description, PYMYSQL_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
             rows, column_names, row_format = collect_rows(
-                fetched_data,
-                description,
-                json_indexes,
-                deserializer,
-                column_names=column_names,
-                logger=logger,
+                fetched_data, description, json_indexes, deserializer, column_names=column_names, logger=logger
             )
 
             return self.create_execution_result(
@@ -274,12 +269,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         json_indexes = detect_json_columns_from_description(description, PYMYSQL_JSON_TYPE_CODES)
         deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
         rows, column_names, _row_format = collect_rows(
-            fetched,
-            description,
-            json_indexes,
-            deserializer,
-            column_names=column_names,
-            logger=logger,
+            fetched, description, json_indexes, deserializer, column_names=column_names, logger=logger
         )
         return rows, column_names, len(rows)
 
