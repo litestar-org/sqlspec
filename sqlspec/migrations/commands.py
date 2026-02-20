@@ -1979,7 +1979,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         # Prompt for description when not provided
         if description is None:
             import anyio
-
             from rich.prompt import Prompt
 
             description = await anyio.to_thread.run_sync(lambda: Prompt.ask("Migration description", default="squashed_migrations"))  # pyright: ignore[reportAttributeAccessIssue]
