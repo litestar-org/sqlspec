@@ -196,6 +196,7 @@ exclude = [
   "sqlspec/observability/_formatting.py",     # Inherits from non-compiled logging.Formatter
   "sqlspec/utils/arrow_helpers.py",           # Arrow operations cause segfaults when compiled
   "sqlspec/utils/profiling.py",               # Uses sys.setprofile (dynamic, not mypyc compatible)
+  "sqlspec/_pgo_training.py",                 # PGO training script — runs against compiled modules
 ]
 include = [
   "sqlspec/core/**/*.py",                  # Core module

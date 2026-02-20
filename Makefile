@@ -316,6 +316,48 @@ bench-analyze:                                      ## Analyze saved profile dat
 	@echo "${OK} Profile analysis complete"
 
 # =============================================================================
+# PGO (Profile-Guided Optimization)
+# =============================================================================
+
+PGO_DIR := /tmp/sqlspec-pgo
+PGO_BUILD_DIR := /tmp/sqlspec-mypyc-build
+
+.PHONY: pgo-verify
+pgo-verify:                                         ## Verify CFLAGS reach the C compiler through hatch-mypyc
+	@echo "${INFO} Testing CFLAGS passthrough to C compiler..."
+	@CFLAGS="-DPGO_CANARY=1" uv run python -c "\
+	from distutils.sysconfig import customize_compiler; \
+	from distutils.ccompiler import new_compiler; \
+	cc = new_compiler(); customize_compiler(cc); \
+	cmd = ' '.join(cc.compiler_so); \
+	assert 'PGO_CANARY' in cmd, f'CFLAGS not found in: {cmd}'; \
+	print('CFLAGS reach compiler: ' + cmd)" 2>/dev/null
+	@echo "${OK} CFLAGS passthrough verified"
+
+.PHONY: pgo-local
+pgo-local:                                          ## Run full three-stage PGO build locally
+	@echo "${INFO} Running PGO three-stage build..."
+	@rm -rf $(PGO_DIR) $(PGO_BUILD_DIR) dist/
+	@mkdir -p $(PGO_DIR) $(PGO_BUILD_DIR)
+	@echo "${INFO} Stage 1: Building instrumented wheel..."
+	@CFLAGS="-fprofile-generate=$(PGO_DIR)" \
+		HATCH_MYPYC_BUILD_DIR=$(PGO_BUILD_DIR) \
+		HATCH_BUILD_HOOKS_ENABLE=1 uv build --wheel >/dev/null 2>&1
+	@echo "${OK} Instrumented wheel built"
+	@echo "${INFO} Stage 2: Running training workload..."
+	@uv pip install dist/*.whl --force-reinstall --no-deps >/dev/null 2>&1
+	@.venv/bin/python -m sqlspec._pgo_training
+	@echo "${OK} Training complete"
+	@rm -rf dist/ $(PGO_BUILD_DIR)/build $(PGO_BUILD_DIR)/tmp
+	@echo "${INFO} Stage 3: Building PGO-optimized wheel..."
+	@CFLAGS="-fprofile-use=$(PGO_DIR) -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch" \
+		HATCH_MYPYC_BUILD_DIR=$(PGO_BUILD_DIR) \
+		HATCH_BUILD_HOOKS_ENABLE=1 uv build --wheel >/dev/null 2>&1
+	@echo "${OK} PGO-optimized wheel built: $$(ls dist/*.whl)"
+	@uv pip install dist/*.whl --force-reinstall --no-deps >/dev/null 2>&1
+	@echo "${OK} PGO build complete 🚀"
+
+# =============================================================================
 # Development Infrastructure
 # =============================================================================
 
