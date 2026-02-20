@@ -18,6 +18,7 @@ def mock_transaction() -> MagicMock:
     # Create a MagicMock that specs Transaction but ensure execute_update is present
     m = MagicMock(spec=Transaction)
     m.execute_update = MagicMock()
+    m.batch_update = MagicMock()
     return m
 
 
@@ -77,3 +78,30 @@ def test_insert_requires_transaction_or_update_method(mock_connection: MagicMock
 
     with pytest.raises(SQLConversionError, match="Cannot execute DML"):
         driver.dispatch_execute(mock_connection, statement)  # type: ignore[protected-access]
+
+
+def test_execute_many_caches_inferred_param_types(mock_transaction: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = SpannerSyncDriver(mock_transaction)
+
+    infer_call_count = 0
+
+    def _mock_infer_param_types(params: dict[str, object] | list[object] | tuple[object, ...] | None) -> dict[str, str]:
+        nonlocal infer_call_count
+        infer_call_count += 1
+        if not isinstance(params, dict):
+            return {}
+        return dict.fromkeys(params, "TYPE")
+
+    monkeypatch.setattr("sqlspec.adapters.spanner.driver.infer_param_types", _mock_infer_param_types)
+
+    statement = driver.prepare_statement(
+        "UPDATE users SET name = @name WHERE id = @id",
+        parameters=([{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}],),
+        statement_config=driver.statement_config,
+    )
+    mock_transaction.batch_update.return_value = (None, [1, 1])
+
+    result = driver.dispatch_execute_many(mock_transaction, statement)  # type: ignore[protected-access]
+
+    assert result.rowcount_override == 2
+    assert infer_call_count == 1

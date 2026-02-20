@@ -24,6 +24,7 @@ from sqlspec.adapters.bigquery.core import (
     driver_profile,
     is_simple_insert,
     normalize_script_rowcount,
+    resolve_column_names,
     run_query_job,
     storage_api_available,
     try_bulk_insert,
@@ -127,6 +128,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
     """
 
     __slots__ = (
+        "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
         "_job_retry",
@@ -162,6 +164,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
         self._data_dictionary: BigQueryDataDictionary | None = None
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._using_emulator = detect_emulator(connection)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry = build_retry(self._job_retry_deadline, self._using_emulator)
@@ -196,7 +199,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
         if is_select_like:
-            rows_list, column_names = collect_rows(job_result, cursor.job.schema)
+            column_names = resolve_column_names(cursor.job.schema, self._column_name_cache)
+            rows_list, _ = collect_rows(job_result, cursor.job.schema, column_names=column_names)
 
             return self.create_execution_result(
                 cursor,
@@ -548,7 +552,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect BigQuery rows for the direct execution path."""
         schema = cursor.job.schema if cursor.job else None
-        data, column_names = collect_rows(fetched, schema)
+        column_names = resolve_column_names(schema, self._column_name_cache)
+        data, _ = collect_rows(fetched, schema, column_names=column_names)
         return data, column_names, len(data)
 
     def resolve_rowcount(self, cursor: Any) -> int:

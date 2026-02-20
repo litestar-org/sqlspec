@@ -1039,12 +1039,7 @@ class CommonDriverAttributesMixin:
             params_are_simple = False
 
         return self._qc_build_direct(
-            statement,
-            params,
-            cached,
-            rebound_params,
-            params_are_simple=params_are_simple,
-            compiled_sql=compiled_sql,
+            statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
         )
 
     def _qc_lookup(
@@ -1099,12 +1094,7 @@ class CommonDriverAttributesMixin:
             params_are_simple = False
 
         prepared = self._qc_build_direct(
-            statement,
-            params,
-            cached,
-            rebound_params,
-            params_are_simple=params_are_simple,
-            compiled_sql=compiled_sql,
+            statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
         )
         return self._qc_execute(prepared)
 
@@ -1121,12 +1111,7 @@ class CommonDriverAttributesMixin:
         implementations that bypass SQL object construction entirely.
         """
         prepared = self._qc_build_direct(
-            sql,
-            params,
-            cached,
-            params,
-            params_are_simple=True,
-            compiled_sql=cached.compiled_sql,
+            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
         )
         return self._qc_execute(prepared)
 
@@ -1564,20 +1549,27 @@ class CommonDriverAttributesMixin:
                 needs_transform = False
                 for param_set in parameters:
                     if isinstance(param_set, dict):
-                        values = param_set.values()
+                        for value in param_set.values():
+                            value_type = type(value)
+                            if value_type is TypedParameter:
+                                needs_transform = True
+                                break
+                            if type_coercion_map and value_type in type_coercion_map:
+                                needs_transform = True
+                                break
                     elif isinstance(param_set, (list, tuple)):
-                        values = param_set
+                        for value in param_set:
+                            value_type = type(value)
+                            if value_type is TypedParameter:
+                                needs_transform = True
+                                break
+                            if type_coercion_map and value_type in type_coercion_map:
+                                needs_transform = True
+                                break
                     else:
-                        values = (param_set,)
-
-                    for value in values:
-                        value_type = type(value)
-                        if value_type is TypedParameter:
+                        value_type = type(param_set)
+                        if value_type is TypedParameter or (type_coercion_map and value_type in type_coercion_map):
                             needs_transform = True
-                            break
-                        if type_coercion_map and value_type in type_coercion_map:
-                            needs_transform = True
-                            break
                     if needs_transform:
                         break
 
@@ -1654,17 +1646,17 @@ class CommonDriverAttributesMixin:
             return [coerce_value(parameters, type_coercion_map)]
 
         if isinstance(parameters, dict):
-            updated_mapping: dict[str, Any] | None = None
+            coerced_mapping: dict[str, Any] | None = None
             for key, value in parameters.items():
                 coerced_value = coerce_value(value, type_coercion_map)
-                if updated_mapping is None:
+                if coerced_mapping is None:
                     if coerced_value is value:
                         continue
-                    updated_mapping = dict(parameters)
-                updated_mapping[key] = coerced_value
-            if updated_mapping is None:
+                    coerced_mapping = dict(parameters)
+                coerced_mapping[key] = coerced_value
+            if coerced_mapping is None:
                 return parameters
-            return updated_mapping
+            return coerced_mapping
 
         updated_params: list[Any] | None = None
         for idx, value in enumerate(parameters):
@@ -1725,17 +1717,17 @@ class CommonDriverAttributesMixin:
                 sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
                 return [coerce_value(value, type_coercion_map) for _, value in sorted_items]
 
-            updated_mapping: dict[str, Any] | None = None
+            coerced_mapping: dict[str, Any] | None = None
             for key, value in parameters.items():
                 coerced_value = coerce_value(value, type_coercion_map)
-                if updated_mapping is None:
+                if coerced_mapping is None:
                     if coerced_value is value:
                         continue
-                    updated_mapping = dict(parameters)
-                updated_mapping[key] = coerced_value
-            if updated_mapping is None:
+                    coerced_mapping = dict(parameters)
+                coerced_mapping[key] = coerced_value
+            if coerced_mapping is None:
                 return parameters
-            return updated_mapping
+            return coerced_mapping
 
         updated_params: list[Any] | None = None
         for idx, value in enumerate(parameters):

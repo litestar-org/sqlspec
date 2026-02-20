@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "apply_driver_features",
+    "build_param_type_signature",
     "build_profile",
     "build_statement_config",
     "coerce_params",
@@ -35,9 +36,12 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "infer_param_types",
+    "resolve_column_names",
     "supports_batch_update",
     "supports_write",
 )
+
+_COLUMN_NAME_CACHE_MAX_SIZE: int = 128
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -107,6 +111,37 @@ def infer_param_types(params: "dict[str, Any] | list[Any] | tuple[Any, ...] | No
     return infer_spanner_param_types(params)
 
 
+def build_param_type_signature(params: "dict[str, Any] | None") -> "tuple[tuple[str, type[Any]], ...]":
+    """Build a hashable signature for Spanner param type inference caching.
+
+    Args:
+        params: Coerced parameter mapping.
+
+    Returns:
+        Tuple signature based on parameter keys and value runtime types.
+    """
+    if not params:
+        return ()
+    return tuple((key, type(value)) for key, value in params.items())
+
+
+def resolve_column_names(fields: "Sequence[Any] | None", cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:
+    """Resolve and cache Spanner field names for row materialization."""
+    if not fields:
+        return []
+
+    cache_key = id(fields)
+    cached = cache.get(cache_key)
+    if cached is not None and cached[0] is fields:
+        return cached[1]
+
+    column_names = [field.name for field in fields]
+    if len(cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+        cache.pop(next(iter(cache)))
+    cache[cache_key] = (fields, column_names)
+    return column_names
+
+
 def coerce_params(
     params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None",
     *,
@@ -119,7 +154,7 @@ def coerce_params(
 
 
 def collect_rows(
-    rows: "Sequence[Any]", fields: "Sequence[Any]", converter: Any
+    rows: "Sequence[Any]", fields: "Sequence[Any]", converter: Any, *, column_names: "list[str] | None" = None
 ) -> "tuple[list[tuple[Any, ...]], list[str]]":
     """Collect Spanner rows as tuples with type conversion applied.
 
@@ -131,16 +166,26 @@ def collect_rows(
         rows: Rows from result set.
         fields: Result set fields metadata.
         converter: Type converter for row values.
+        column_names: Optional precomputed column names.
 
     Returns:
         Tuple of (rows, column_names).
     """
-    column_names = [field.name for field in fields]
-    num_columns = len(column_names)
-    data: list[tuple[Any, ...]] = [
-        tuple(converter.convert_if_detected(row[i]) for i in range(num_columns)) for row in rows
-    ]
-    return data, column_names
+    resolved_column_names = column_names if column_names is not None else [field.name for field in fields]
+    num_columns = len(resolved_column_names)
+    string_converter = converter.convert_if_detected
+    data: list[tuple[Any, ...]] = []
+    append = data.append
+    for row in rows:
+        converted_row: list[Any] = []
+        append_value = converted_row.append
+        for index in range(num_columns):
+            value = row[index]
+            if isinstance(value, str):
+                value = string_converter(value)
+            append_value(value)
+        append(tuple(converted_row))
+    return data, resolved_column_names
 
 
 def create_arrow_data(

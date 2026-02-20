@@ -2,12 +2,12 @@
 """Unit tests for fast-path query cache behavior."""
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig
-from sqlspec.core.compiler import OperationProfile
+from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.parameters import ParameterInfo, ParameterProfile
 from sqlspec.core.statement import ProcessedState
 from sqlspec.driver._common import CachedQuery, CommonDriverAttributesMixin
@@ -19,7 +19,7 @@ _EMPTY_PS = ProcessedState("", [], None, "COMMAND")
 def _make_cached(
     compiled_sql: str = "SQL",
     param_count: int = 0,
-    operation_type: str = "COMMAND",
+    operation_type: "OperationType" = "COMMAND",
     operation_profile: "OperationProfile | None" = None,
     parameter_profile: "ParameterProfile | None" = None,
     processed_state: "ProcessedState | None" = None,
@@ -83,11 +83,7 @@ def test_qc_lookup_cache_hit_rebinds() -> None:
     driver = _FakeDriver(object(), config)
 
     profile = ParameterProfile((ParameterInfo(None, ParameterStyle.QMARK, 0, 0, "?"),))
-    ps = ProcessedState(
-        compiled_sql="SELECT * FROM t WHERE id = ?",
-        execution_parameters=[1],
-        operation_type="SELECT",
-    )
+    ps = ProcessedState(compiled_sql="SELECT * FROM t WHERE id = ?", execution_parameters=[1], operation_type="SELECT")
     cached = CachedQuery(
         compiled_sql="SELECT * FROM t WHERE id = ?",
         parameter_profile=profile,
@@ -176,7 +172,7 @@ def test_sync_qc_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch
         def __enter__(self) -> object:
             return object()
 
-        def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "Literal[False]":
             _ = (exc_type, exc_val, exc_tb)
             return False
 
@@ -197,9 +193,7 @@ def test_sync_qc_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch
         operation_type="INSERT",
         operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
         processed_state=ProcessedState(
-            compiled_sql="INSERT INTO t (id) VALUES (?)",
-            execution_parameters=[1],
-            operation_type="INSERT",
+            compiled_sql="INSERT INTO t (id) VALUES (?)", execution_parameters=[1], operation_type="INSERT"
         ),
     )
 

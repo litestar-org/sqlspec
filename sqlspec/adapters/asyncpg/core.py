@@ -3,6 +3,7 @@
 import datetime
 import importlib
 import re
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 import asyncpg
@@ -48,6 +49,7 @@ __all__ = (
     "parse_status",
     "register_json_codecs",
     "register_pgvector_support",
+    "resolve_many_rowcount",
 )
 
 ASYNC_PG_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
@@ -277,6 +279,15 @@ def parse_status(status: Any) -> int:
             except (ValueError, IndexError):
                 pass
 
+    return 0
+
+
+def resolve_many_rowcount(parameter_sets: Any, *, fallback_count: "int | None" = None) -> int:
+    """Resolve execute_many rowcount using the parameter payload size."""
+    if fallback_count is not None:
+        return fallback_count
+    if isinstance(parameter_sets, Sized):
+        return len(parameter_sets)
     return 0
 
 

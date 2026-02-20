@@ -9,6 +9,7 @@ from typing_extensions import Self
 
 from sqlspec.adapters.spanner._typing import SpannerSessionContext
 from sqlspec.adapters.spanner.core import (
+    build_param_type_signature,
     coerce_params,
     collect_rows,
     create_arrow_data,
@@ -16,6 +17,7 @@ from sqlspec.adapters.spanner.core import (
     default_statement_config,
     driver_profile,
     infer_param_types,
+    resolve_column_names,
     supports_batch_update,
     supports_write,
 )
@@ -120,7 +122,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
     dialect: "DialectType" = "spanner"
-    __slots__ = ("_data_dictionary", "_type_converter")
+    __slots__ = ("_column_name_cache", "_data_dictionary", "_type_converter")
 
     def __init__(
         self,
@@ -139,6 +141,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             enable_uuid_conversion=features.get("enable_uuid_conversion", True),
             json_deserializer=cast("Callable[[str], Any]", json_deserializer or from_json),
         )
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._data_dictionary: SpannerDataDictionary | None = None
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -164,7 +167,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             if not fields:
                 msg = "Result set metadata not available."
                 raise SQLConversionError(msg)
-            data, column_names = collect_rows(rows, fields, self._type_converter)
+            column_names = self._resolve_column_names(fields)
+            data, column_names = collect_rows(rows, fields, self._type_converter, column_names=column_names)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
@@ -193,12 +197,23 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             msg = "execute_many requires at least one parameter set"
             raise SQLConversionError(msg)
 
+        coerce_params = self._coerce_params
+        infer_param_types = self._infer_param_types
+        param_types_cache: dict[tuple[tuple[str, type[Any]], ...], dict[str, Any]] = {}
+        empty_param_types: dict[str, Any] = {}
         batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
+        append_batch_arg = batch_args.append
         for params in prepared_parameters:
-            coerced_params = self._coerce_params(cast("dict[str, Any] | None", params))
-            if coerced_params is None:
-                coerced_params = {}
-            batch_args.append((sql, coerced_params, self._infer_param_types(coerced_params)))
+            coerced_params = coerce_params(cast("dict[str, Any] | None", params))
+            if not coerced_params:
+                append_batch_arg((sql, {}, empty_param_types))
+                continue
+            signature = build_param_type_signature(coerced_params)
+            param_types = param_types_cache.get(signature)
+            if param_types is None:
+                param_types = infer_param_types(coerced_params)
+                param_types_cache[signature] = param_types
+            append_batch_arg((sql, coerced_params, param_types))
 
         writer = cast("_SpannerWriteProtocol", cursor)
         _status, row_counts = writer.batch_update(batch_args)
@@ -397,6 +412,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def _infer_param_types(self, params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any]":
         return infer_param_types(params)
+
+    def _resolve_column_names(self, fields: Any) -> list[str]:
+        return resolve_column_names(fields, self._column_name_cache)
 
 
 register_driver_profile("spanner", driver_profile)

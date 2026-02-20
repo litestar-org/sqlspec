@@ -5,7 +5,7 @@ import decimal
 import io
 import re
 import uuid
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -48,6 +48,7 @@ __all__ = (
     "driver_profile",
     "encode_records_for_binary_copy",
     "extract_rows_affected",
+    "format_execute_many_parameters",
     "format_table_identifier",
     "get_parameter_casts",
     "normalize_scalar_parameter",
@@ -70,6 +71,7 @@ _JSONB_RESOLVED: bool = False
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
+_NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple, dict)
 
 
 def _get_jsonb_type() -> "type[Any] | None":
@@ -263,9 +265,13 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     Returns:
         Tuple of (rows, column_names).
     """
-    dict_rows: list[dict[str, Any]] = query_result.result() if query_result else []
-    column_names = list(dict_rows[0].keys()) if dict_rows else []
-    return dict_rows, column_names
+    if not query_result:
+        return [], []
+
+    dict_rows = cast("list[dict[str, Any]]", query_result if isinstance(query_result, list) else query_result.result())
+    if not dict_rows:
+        return [], []
+    return dict_rows, list(dict_rows[0])
 
 
 def normalize_scalar_parameter(value: Any) -> Any:
@@ -496,14 +502,73 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     return f"INSERT INTO {format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[list[Any]]":
-    formatted_records: list[list[Any]] = []
-    for record in records:
-        coerced = coerce_numeric_for_write(record)
+def _sequence_needs_numeric_coercion(values: "list[Any] | tuple[Any, ...]") -> bool:
+    """Return True when any value in a parameter sequence needs numeric coercion."""
+    return any(type(value) in _NUMERIC_COERCE_TYPES for value in values)
+
+
+def _format_execute_many_param_set(param_set: Any, *, coerce_numeric: bool) -> "list[Any]":
+    """Normalize a single execute_many parameter set to list form."""
+    if isinstance(param_set, list):
+        if not coerce_numeric or not _sequence_needs_numeric_coercion(param_set):
+            return param_set
+        coerced = coerce_numeric_for_write(param_set)
+        if isinstance(coerced, list):
+            return coerced
         if isinstance(coerced, tuple):
-            formatted_records.append(list(coerced))
-        elif isinstance(coerced, list):
-            formatted_records.append(coerced)
-        else:
-            formatted_records.append([coerced])
-    return formatted_records
+            return list(coerced)
+        return [coerced]
+
+    if isinstance(param_set, tuple):
+        if not coerce_numeric or not _sequence_needs_numeric_coercion(param_set):
+            return list(param_set)
+        coerced = coerce_numeric_for_write(param_set)
+        if isinstance(coerced, tuple):
+            return list(coerced)
+        if isinstance(coerced, list):
+            return coerced
+        return [coerced]
+
+    if coerce_numeric:
+        coerced = coerce_numeric_for_write(param_set)
+        if isinstance(coerced, list):
+            return coerced
+        if isinstance(coerced, tuple):
+            return list(coerced)
+        return [coerced]
+
+    return [param_set]
+
+
+def format_execute_many_parameters(parameters: Any, *, coerce_numeric: bool) -> "list[list[Any]]":
+    """Normalize execute_many parameters for psqlpy.
+
+    Args:
+        parameters: Prepared parameter payload.
+        coerce_numeric: Whether numeric write coercion should be applied.
+
+    Returns:
+        Parameter payload normalized to ``list[list[Any]]``.
+    """
+    if not parameters:
+        return []
+
+    if (
+        isinstance(parameters, list)
+        and not coerce_numeric
+        and all(isinstance(param_set, list) for param_set in parameters)
+    ):
+        return cast("list[list[Any]]", parameters)
+
+    if isinstance(parameters, (list, tuple)):
+        formatted: list[list[Any]] = []
+        append = formatted.append
+        for param_set in parameters:
+            append(_format_execute_many_param_set(param_set, coerce_numeric=coerce_numeric))
+        return formatted
+
+    return [_format_execute_many_param_set(parameters, coerce_numeric=coerce_numeric)]
+
+
+def coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[list[Any]]":
+    return format_execute_many_parameters(records, coerce_numeric=True)

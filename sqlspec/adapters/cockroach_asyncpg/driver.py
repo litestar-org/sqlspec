@@ -75,25 +75,19 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         # Data dictionary is lazily initialized in property; use parent slot
         self._data_dictionary = None
 
-    async def _execute_with_retry(self, operation: "Callable[[], Any]") -> "ExecutionResult":
+    async def _execute_with_retry(self, operation: "Callable[..., Any]", *args: Any) -> "ExecutionResult":
         if not self._enable_retry:
-            return cast("ExecutionResult", await operation())
+            return cast("ExecutionResult", await operation(*args))
 
         last_error: Exception | None = None
 
-        async def attempt_operation() -> "tuple[ExecutionResult | None, Exception | None]":
-            try:
-                return await operation(), None
-            except Exception as exc:
-                return None, exc
-
         for attempt in range(self._retry_config.max_retries + 1):
-            result, exc = await attempt_operation()
-            if exc is None:
-                return cast("ExecutionResult", result)
-            last_error = exc
-            if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
-                raise exc
+            try:
+                return cast("ExecutionResult", await operation(*args))
+            except Exception as exc:
+                last_error = exc
+                if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
+                    raise
             with contextlib.suppress(Exception):
                 await self.connection.execute("ROLLBACK")
             delay = calculate_backoff_seconds(attempt, self._retry_config)
@@ -111,25 +105,35 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             return
         await cursor.execute(f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")
 
-    async def dispatch_execute(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
-        async def operation() -> "ExecutionResult":
-            if statement.returns_rows():
-                await self._apply_follower_reads(cursor)
-            return await super(CockroachAsyncpgDriver, self).dispatch_execute(cursor, statement)
+    async def _dispatch_execute_impl(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+        if statement.returns_rows():
+            await self._apply_follower_reads(cursor)
+        return await super().dispatch_execute(cursor, statement)
 
-        return await self._execute_with_retry(operation)
+    async def _dispatch_execute_many_impl(
+        self, cursor: "CockroachAsyncpgConnection", statement: SQL
+    ) -> "ExecutionResult":
+        return await super().dispatch_execute_many(cursor, statement)
+
+    async def _dispatch_execute_script_impl(
+        self, cursor: "CockroachAsyncpgConnection", statement: SQL
+    ) -> "ExecutionResult":
+        return await super().dispatch_execute_script(cursor, statement)
+
+    async def dispatch_execute(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+        if not self._enable_retry:
+            return await self._dispatch_execute_impl(cursor, statement)
+        return await self._execute_with_retry(self._dispatch_execute_impl, cursor, statement)
 
     async def dispatch_execute_many(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
-        async def operation() -> "ExecutionResult":
-            return await super(CockroachAsyncpgDriver, self).dispatch_execute_many(cursor, statement)
-
-        return await self._execute_with_retry(operation)
+        if not self._enable_retry:
+            return await super().dispatch_execute_many(cursor, statement)
+        return await self._execute_with_retry(self._dispatch_execute_many_impl, cursor, statement)
 
     async def dispatch_execute_script(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
-        async def operation() -> "ExecutionResult":
-            return await super(CockroachAsyncpgDriver, self).dispatch_execute_script(cursor, statement)
-
-        return await self._execute_with_retry(operation)
+        if not self._enable_retry:
+            return await super().dispatch_execute_script(cursor, statement)
+        return await self._execute_with_retry(self._dispatch_execute_script_impl, cursor, statement)
 
     def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":  # type: ignore[override]
         return CockroachAsyncpgExceptionHandler()

@@ -1,5 +1,6 @@
 """MysqlConnector adapter compiled helpers."""
 
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -20,7 +21,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate, has_type_code
+from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -34,11 +35,14 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "detect_json_columns",
+    "detect_json_columns_from_description",
     "driver_profile",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
+    "resolve_column_names",
+    "resolve_many_rowcount",
     "resolve_rowcount",
 )
 
@@ -256,25 +260,39 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
 
 
-def detect_json_columns(cursor: Any, json_type_codes: "set[int]") -> "list[int]":
-    """Identify JSON column indexes from cursor metadata."""
-    if not has_cursor_metadata(cursor):
+def resolve_column_names(description: "Sequence[Any] | None") -> "list[str]":
+    """Resolve ordered column names from cursor metadata."""
+    if not description:
         return []
-    description = cursor.description
+    return [desc[0] for desc in description]
+
+
+def detect_json_columns_from_description(
+    description: "Sequence[Any] | None", json_type_codes: "set[int]"
+) -> "list[int]":
+    """Identify JSON column indexes from pre-fetched cursor description metadata."""
     if not description or not json_type_codes:
         return []
 
     json_indexes: list[int] = []
+    append = json_indexes.append
     for index, column in enumerate(description):
-        if has_type_code(column):
-            type_code = column.type_code
-        elif isinstance(column, (tuple, list)) and len(column) > 1:
-            type_code = column[1]
+        if isinstance(column, (tuple, list)):
+            type_code = column[1] if len(column) > 1 else None
         else:
-            type_code = None
+            type_code = getattr(column, "type_code", None)
         if type_code in json_type_codes:
-            json_indexes.append(index)
+            append(index)
     return json_indexes
+
+
+def detect_json_columns(cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None) -> "list[int]":
+    """Identify JSON column indexes from cursor metadata."""
+    if description is None:
+        if not has_cursor_metadata(cursor):
+            return []
+        description = cursor.description
+    return detect_json_columns_from_description(description, json_type_codes)
 
 
 def _deserialize_mysqlconnector_json_dict_rows(
@@ -349,6 +367,7 @@ def collect_rows(
     json_indexes: "list[int]",
     deserializer: "Callable[[Any], Any]",
     *,
+    column_names: "list[str] | None" = None,
     logger: Any | None = None,
 ) -> "tuple[list[Any], list[str], str]":
     """Collect mysql-connector rows with JSON decoding, preserving raw format.
@@ -358,16 +377,24 @@ def collect_rows(
     """
     if not description:
         return [], [], "tuple"
-    column_names = [desc[0] for desc in description]
+    resolved_column_names = resolve_column_names(description) if column_names is None else column_names
     if not fetched_data:
-        return [], column_names, "tuple"
-    if isinstance(fetched_data[0], dict):
+        return [], resolved_column_names, "tuple"
+
+    first_row = fetched_data[0]
+    if isinstance(first_row, dict):
+        if not json_indexes:
+            rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
+            return rows, resolved_column_names, "dict"
         rows = [dict(row) for row in fetched_data]
-        rows = _deserialize_mysqlconnector_json_dict_rows(column_names, rows, json_indexes, deserializer, logger=logger)
-        return rows, column_names, "dict"
-    rows = list(fetched_data)
-    rows = _deserialize_mysqlconnector_json_tuple_rows(rows, json_indexes, deserializer, logger=logger)
-    return rows, column_names, "tuple"
+        rows = _deserialize_mysqlconnector_json_dict_rows(
+            resolved_column_names, rows, json_indexes, deserializer, logger=logger
+        )
+        return rows, resolved_column_names, "dict"
+    rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
+    if json_indexes:
+        rows = _deserialize_mysqlconnector_json_tuple_rows(rows, json_indexes, deserializer, logger=logger)
+    return rows, resolved_column_names, "tuple"
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -377,6 +404,18 @@ def resolve_rowcount(cursor: Any) -> int:
     rowcount = cursor.rowcount
     if isinstance(rowcount, int) and rowcount >= 0:
         return rowcount
+    return 0
+
+
+def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:
+    """Resolve execute_many rowcount using cursor metadata with payload fallback."""
+    rowcount = resolve_rowcount(cursor)
+    if rowcount > 0:
+        return rowcount
+    if fallback_count is not None:
+        return fallback_count
+    if isinstance(parameters, Sized):
+        return len(parameters)
     return 0
 
 

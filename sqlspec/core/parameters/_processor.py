@@ -279,9 +279,9 @@ def _coerce_parameter_set(param_set: object, type_coercion_map: "dict[type, Call
         return _coerce_mapping_preserving_identity(cast("dict[Any, Any]", param_set), type_coercion_map)
     # Fallback to ABC checks for custom types
     if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
-        seq_value = cast("Sequence[Any]", param_set)
-        coerced_seq = _coerce_sequence_preserving_identity(seq_value, type_coercion_map)
-        if coerced_seq is seq_value:
+        seq_fallback = param_set
+        coerced_seq = _coerce_sequence_preserving_identity(seq_fallback, type_coercion_map)
+        if coerced_seq is seq_fallback:
             return param_set
         return coerced_seq
     if isinstance(param_set, Mapping):
@@ -324,10 +324,10 @@ def _coerce_parameters_payload(
             return seq_params
         return updated_seq
     if param_type is tuple:
-        seq_params = cast("tuple[Any, ...]", parameters)
+        tuple_params = cast("tuple[Any, ...]", parameters)
         if is_many:
-            return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in seq_params]
-        return [_coerce_parameter_value(item, type_coercion_map) for item in seq_params]
+            return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in tuple_params]
+        return [_coerce_parameter_value(item, type_coercion_map) for item in tuple_params]
     if param_type is dict:
         dict_params = cast("dict[Any, Any]", parameters)
         updated_mapping: dict[Any, Any] | None = None
@@ -458,15 +458,56 @@ class ParameterProcessor:
     def _wrap_parameter_types(self, parameters: "ParameterPayload") -> "ConvertedParameters":
         # Fast type dispatch for common types
         param_type = type(parameters)
-        if param_type is list or param_type is tuple:
-            return [wrap_with_type(p) for p in parameters]  # type: ignore[union-attr]
+        if param_type is list:
+            source = cast("list[Any]", parameters)
+            wrapped_values: list[Any] | None = None
+            for idx, value in enumerate(source):
+                wrapped = wrap_with_type(value)
+                if wrapped_values is None:
+                    if wrapped is value:
+                        continue
+                    wrapped_values = source[:idx]
+                wrapped_values.append(wrapped)
+            if wrapped_values is None:
+                return parameters  # type: ignore[return-value]
+            return wrapped_values
+        if param_type is tuple:
+            tuple_source = cast("tuple[Any, ...]", parameters)
+            wrapped_values = [wrap_with_type(value) for value in tuple_source]
+            if all(wrapped is value for wrapped, value in zip(wrapped_values, tuple_source, strict=False)):
+                return parameters  # type: ignore[return-value]
+            return wrapped_values
         if param_type is dict:
-            return {k: wrap_with_type(v) for k, v in parameters.items()}  # type: ignore[union-attr]
+            source_mapping = cast("dict[str, Any]", parameters)
+            wrapped_mapping: dict[str, Any] | None = None
+            for key, value in source_mapping.items():
+                wrapped = wrap_with_type(value)
+                if wrapped_mapping is None:
+                    if wrapped is value:
+                        continue
+                    wrapped_mapping = dict(source_mapping)
+                wrapped_mapping[key] = wrapped
+            if wrapped_mapping is None:
+                return parameters  # type: ignore[return-value]
+            return wrapped_mapping
         # Fallback to ABC checks for custom types
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            return [wrap_with_type(p) for p in parameters]
+            wrapped_values = [wrap_with_type(value) for value in parameters]
+            if all(wrapped is value for wrapped, value in zip(wrapped_values, parameters, strict=False)):
+                return parameters  # type: ignore[return-value]
+            return wrapped_values
         if isinstance(parameters, Mapping):
-            return {k: wrap_with_type(v) for k, v in parameters.items()}
+            fallback_mapping: dict[str, Any] | None = None
+            for key, value in parameters.items():
+                wrapped = wrap_with_type(value)
+                if fallback_mapping is None:
+                    if wrapped is value:
+                        continue
+                    fallback_mapping = dict(parameters)
+                fallback_mapping[key] = wrapped
+            if fallback_mapping is None:
+                return parameters  # type: ignore[return-value]
+            return fallback_mapping
         return None
 
     def _coerce_parameter_types(
@@ -911,8 +952,10 @@ class ParameterProcessor:
 
         applied_wrap_types = False
         if processed_parameters and wrap_types:
-            processed_parameters = self._wrap_parameter_types(processed_parameters)
-            applied_wrap_types = True
+            wrapped_parameters = self._wrap_parameter_types(processed_parameters)
+            if wrapped_parameters is not processed_parameters:
+                processed_parameters = wrapped_parameters
+                applied_wrap_types = True
 
         if config.type_coercion_map and processed_parameters:
             processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)

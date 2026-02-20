@@ -16,6 +16,17 @@ QC_MAX_SIZE: Final[int] = 1024
 class CachedQuery:
     """Cached query metadata for fast-path execution."""
 
+    compiled_sql: str
+    parameter_profile: "ParameterProfile"
+    input_named_parameters: "tuple[str, ...]"
+    applied_wrap_types: bool
+    parameter_casts: "dict[int, str]"
+    operation_type: "OperationType"
+    operation_profile: "OperationProfile"
+    param_count: int
+    processed_state: "ProcessedState"
+    column_names: "list[str] | None"
+
     __slots__ = (
         "applied_wrap_types",
         "column_names",

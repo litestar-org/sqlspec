@@ -46,13 +46,12 @@ from sqlspec.utils.schema import ValueT, to_value_type
 from sqlspec.utils.type_guards import has_asdict_method, is_dict_row, is_mapping_like
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
-    from sqlspec.core.compiler import OperationType
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol
     from sqlspec.typing import (
@@ -385,8 +384,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 result = self.build_statement_result(direct_statement, execution_result)
             else:
                 # DML path: use DMLResult to bypass full SQLResult construction
-                affected_rows = execution_result.rowcount_override if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0 else 0
-                result = DMLResult(cast("OperationType", cached.operation_type), affected_rows)
+                affected_rows = (
+                    execution_result.rowcount_override
+                    if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0
+                    else 0
+                )
+                result = DMLResult(cached.operation_type, affected_rows)
         except Exception as err:
             exc = err
         finally:
@@ -430,7 +433,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         result = super()._qc_lookup(statement, params)
         if result is None:
             return None
-        return await result  # type: ignore[misc]
+        return await cast("Awaitable[SQLResult | None]", result)
 
     async def _qc_execute(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path (async).

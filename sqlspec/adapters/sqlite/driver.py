@@ -28,7 +28,9 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.sqlite._typing import SqliteConnection
-    from sqlspec.core import SQL, QueryBuilder, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import SQL, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.core.compiler import OperationType
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._query_cache import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -235,17 +237,9 @@ class SqliteDriver(SyncDriverAdapterBase):
             affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
             operation = self._resolve_dml_operation_type(statement)
             return DMLResult(operation, affected_rows)
-        return super().execute_many(
-            statement,
-            parameters,
-            *filters,
-            statement_config=statement_config,
-            **kwargs,
-        )
+        return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    def _qc_execute_direct(
-        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery"
-    ) -> "SQLResult":
+    def _qc_execute_direct(self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "SQLResult":
         """Execute cached query through SQLite connection.execute fast path.
 
         This bypasses cursor context-manager overhead for repeated cached
@@ -295,10 +289,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         raise AssertionError(msg)  # pragma: no cover - all paths return or raise
 
     def _can_use_execute_many_thin_path(
-        self,
-        statement: str,
-        parameters: "Sequence[StatementParameters]",
-        config: "StatementConfig",
+        self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"
     ) -> bool:
         if type(parameters) is not list:
             return False
@@ -326,61 +317,83 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _thin_path_parameters_are_eligible(
-        parameters: "list[StatementParameters]",
-        type_coercion_map: "dict[type, Any] | None",
+        parameters: "list[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
     ) -> bool:
         """Validate parameter payload for the SQLite execute-many thin path."""
-        first_set = parameters[0]
-        first_type = type(first_set)
-        if first_type is dict:
-            return False
-        if first_type is not tuple and first_type is not list:
+        first_sequence = SqliteDriver._as_sequence_parameter_set(parameters[0])
+        if first_sequence is None:
             return False
 
-        row_len = len(first_set)
-        has_type_coercion = bool(type_coercion_map)
+        first_type = type(first_sequence)
+        row_len = len(first_sequence)
+        coercion_map = type_coercion_map
+        has_type_coercion = bool(coercion_map)
 
         # Common benchmark shape: list[tuple[value]]
         if row_len == 1:
-            if has_type_coercion:
+            if has_type_coercion and coercion_map is not None:
                 for param_set in parameters:
-                    if type(param_set) is not first_type or len(param_set) != 1:
+                    sequence = SqliteDriver._as_sequence_parameter_set(param_set)
+                    if sequence is None or type(sequence) is not first_type:
                         return False
-                    value_type = type(param_set[0])
-                    if value_type is TypedParameter or value_type in type_coercion_map:
+                    if len(sequence) != 1:
+                        return False
+                    value_type = type(sequence[0])
+                    if value_type is TypedParameter or value_type in coercion_map:
                         return False
                 return True
 
             for param_set in parameters:
-                if type(param_set) is not first_type or len(param_set) != 1:
+                sequence = SqliteDriver._as_sequence_parameter_set(param_set)
+                if sequence is None or type(sequence) is not first_type:
                     return False
-                if type(param_set[0]) is TypedParameter:
+                if len(sequence) != 1:
+                    return False
+                if type(sequence[0]) is TypedParameter:
                     return False
             return True
 
-        if has_type_coercion:
+        if has_type_coercion and coercion_map is not None:
             for param_set in parameters:
-                if type(param_set) is not first_type or len(param_set) != row_len:
+                sequence = SqliteDriver._as_sequence_parameter_set(param_set)
+                if sequence is None or type(sequence) is not first_type:
                     return False
-                for value in param_set:
+                if len(sequence) != row_len:
+                    return False
+                for value in sequence:
                     value_type = type(value)
-                    if value_type is TypedParameter or value_type in type_coercion_map:
+                    if value_type is TypedParameter or value_type in coercion_map:
                         return False
             return True
 
         for param_set in parameters:
-            if type(param_set) is not first_type or len(param_set) != row_len:
+            sequence = SqliteDriver._as_sequence_parameter_set(param_set)
+            if sequence is None or type(sequence) is not first_type:
                 return False
-            for value in param_set:
+            if len(sequence) != row_len:
+                return False
+            for value in sequence:
                 if type(value) is TypedParameter:
                     return False
         return True
 
     @staticmethod
-    def _resolve_dml_operation_type(statement: str) -> str:
-        token = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "COMMAND"
-        if token in {"INSERT", "UPDATE", "DELETE"}:
-            return token
+    def _as_sequence_parameter_set(param_set: "StatementParameters") -> "list[Any] | tuple[Any, ...] | None":
+        if isinstance(param_set, list):
+            return param_set
+        if isinstance(param_set, tuple):
+            return param_set
+        return None
+
+    @staticmethod
+    def _resolve_dml_operation_type(statement: str) -> "OperationType":
+        command_keyword = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "COMMAND"
+        if command_keyword == "INSERT":
+            return "INSERT"
+        if command_keyword == "UPDATE":
+            return "UPDATE"
+        if command_keyword == "DELETE":
+            return "DELETE"
         return "COMMAND"
 
     # ─────────────────────────────────────────────────────────────────────────────

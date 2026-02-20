@@ -4,6 +4,7 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import mysql.connector
@@ -14,12 +15,14 @@ from sqlspec.adapters.mysqlconnector.core import (
     collect_rows,
     create_mapped_exception,
     default_statement_config,
-    detect_json_columns,
+    detect_json_columns_from_description,
     driver_profile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     normalize_lastrowid,
+    resolve_column_names,
+    resolve_many_rowcount,
     resolve_rowcount,
 )
 from sqlspec.adapters.mysqlconnector.data_dictionary import (
@@ -129,12 +132,17 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            fetched_rows = list(fetched_data) if fetched_data else None
-            description = list(cursor.description) if cursor.description else None
-            json_indexes = detect_json_columns(cursor, MYSQLCONNECTOR_JSON_TYPE_CODES)
+            description = cursor.description or None
+            column_names = resolve_column_names(description)
+            json_indexes = detect_json_columns_from_description(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
             rows, column_names, row_format = collect_rows(
-                fetched_rows, description, json_indexes, deserializer, logger=logger
+                fetched_data,
+                description,
+                json_indexes,
+                deserializer,
+                column_names=column_names,
+                logger=logger,
             )
 
             return self.create_execution_result(
@@ -154,9 +162,10 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
+        parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
         cursor.executemany(sql, prepared_parameters)
 
-        affected_rows = len(prepared_parameters)
+        affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
@@ -276,12 +285,17 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector sync rows for the direct execution path."""
-        json_indexes = detect_json_columns(cursor, MYSQLCONNECTOR_JSON_TYPE_CODES)
+        description = cursor.description or None
+        column_names = resolve_column_names(description)
+        json_indexes = detect_json_columns_from_description(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
         deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-        fetched_rows = list(fetched) if fetched else None
-        description = list(cursor.description) if cursor.description else None
         rows, column_names, _row_format = collect_rows(
-            fetched_rows, description, json_indexes, deserializer, logger=logger
+            fetched,
+            description,
+            json_indexes,
+            deserializer,
+            column_names=column_names,
+            logger=logger,
         )
         return rows, column_names, len(rows)
 
@@ -366,12 +380,17 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
-            fetched_rows = list(fetched_data) if fetched_data else None
-            description = list(cursor.description) if cursor.description else None
-            json_indexes = detect_json_columns(cursor, MYSQLCONNECTOR_JSON_TYPE_CODES)
+            description = cursor.description or None
+            column_names = resolve_column_names(description)
+            json_indexes = detect_json_columns_from_description(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
             rows, column_names, row_format = collect_rows(
-                fetched_rows, description, json_indexes, deserializer, logger=logger
+                fetched_data,
+                description,
+                json_indexes,
+                deserializer,
+                column_names=column_names,
+                logger=logger,
             )
 
             return self.create_execution_result(
@@ -391,9 +410,10 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
+        parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
         await cursor.executemany(sql, prepared_parameters)
 
-        affected_rows = len(prepared_parameters)
+        affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
@@ -515,12 +535,17 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector async rows for the direct execution path."""
-        json_indexes = detect_json_columns(cursor, MYSQLCONNECTOR_JSON_TYPE_CODES)
+        description = cursor.description or None
+        column_names = resolve_column_names(description)
+        json_indexes = detect_json_columns_from_description(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
         deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-        fetched_rows = list(fetched) if fetched else None
-        description = list(cursor.description) if cursor.description else None
         rows, column_names, _row_format = collect_rows(
-            fetched_rows, description, json_indexes, deserializer, logger=logger
+            fetched,
+            description,
+            json_indexes,
+            deserializer,
+            column_names=column_names,
+            logger=logger,
         )
         return rows, column_names, len(rows)
 

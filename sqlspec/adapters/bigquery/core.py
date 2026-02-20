@@ -61,6 +61,7 @@ __all__ = (
     "extract_insert_table",
     "is_simple_insert",
     "normalize_script_rowcount",
+    "resolve_column_names",
     "run_query_job",
     "storage_api_available",
     "try_bulk_insert",
@@ -71,6 +72,7 @@ HTTP_NOT_FOUND = 404
 HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
+_COLUMN_NAME_CACHE_MAX_SIZE = 256
 
 
 def _identity(value: Any) -> Any:
@@ -525,7 +527,38 @@ def _map_bigquery_source_format(file_format: "StorageFormat") -> str:
     raise StorageCapabilityError(msg, capability="parquet_import_enabled")
 
 
-def collect_rows(job_result: Any, schema: Any | None) -> "tuple[list[Any], list[str]]":
+def resolve_column_names(schema: Any | None, cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:
+    """Resolve and cache BigQuery schema column names.
+
+    Args:
+        schema: BigQuery schema object.
+        cache: Driver-local cache keyed by ``id(schema)``.
+
+    Returns:
+        Resolved column names.
+    """
+    if not schema:
+        return []
+
+    cache_key = id(schema)
+    cached = cache.get(cache_key)
+    if cached is not None and cached[0] is schema:
+        return cached[1]
+
+    column_names = [field.name for field in schema]
+    if len(cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+        cache.pop(next(iter(cache)))
+    cache[cache_key] = (schema, column_names)
+    return column_names
+
+
+def collect_rows(
+    job_result: Any,
+    schema: Any | None,
+    *,
+    column_names: "list[str] | None" = None,
+    column_name_cache: "dict[int, tuple[Any, list[str]]] | None" = None,
+) -> "tuple[list[Any], list[str]]":
     """Collect BigQuery rows and schema into structured lists.
 
     Returns raw BigQuery Row objects without copying to dicts.
@@ -534,13 +567,20 @@ def collect_rows(job_result: Any, schema: Any | None) -> "tuple[list[Any], list[
     Args:
         job_result: BigQuery job result iterator.
         schema: BigQuery schema object (or None).
+        column_names: Optional precomputed column names.
+        column_name_cache: Optional cache used when column names are not precomputed.
 
     Returns:
         Tuple of (rows_list, column_names).
     """
-    rows_list = list(iter(job_result))
-    column_names = [field.name for field in schema] if schema else []
-    return rows_list, column_names
+    rows_list = job_result if isinstance(job_result, list) else list(iter(job_result))
+    if column_names is not None:
+        resolved_column_names = column_names
+    elif column_name_cache is not None:
+        resolved_column_names = resolve_column_names(schema, column_name_cache)
+    else:
+        resolved_column_names = [field.name for field in schema] if schema else []
+    return rows_list, resolved_column_names
 
 
 def build_dml_rowcount(job: Any, fallback: int) -> int:

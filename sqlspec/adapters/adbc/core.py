@@ -2,6 +2,7 @@
 
 import datetime
 import decimal
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
@@ -56,16 +57,20 @@ __all__ = (
     "normalize_script_rowcount",
     "prepare_parameters_with_casts",
     "prepare_postgres_parameters",
+    "resolve_column_names",
     "resolve_dialect_from_config",
     "resolve_dialect_from_driver_path",
     "resolve_dialect_name",
     "resolve_driver_connect_func",
     "resolve_driver_name",
     "resolve_driver_name_from_config",
+    "resolve_many_rowcount",
     "resolve_parameter_casts",
     "resolve_parameter_styles",
     "resolve_rowcount",
 )
+
+_COLUMN_NAME_CACHE_MAX_SIZE: int = 256
 
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
@@ -406,6 +411,8 @@ def prepare_postgres_parameters(
 ) -> Any:
     """Prepare Postgres parameters with cast-aware coercion."""
     postgres_compatible = normalize_postgres_empty_parameters(dialect, parameters)
+    if not parameter_casts:
+        return postgres_compatible
     return prepare_parameters_with_casts(
         postgres_compatible, parameter_casts, statement_config, dialect=dialect, json_serializer=json_serializer
     )
@@ -704,7 +711,26 @@ def apply_driver_features(
     return statement_config, processed_features
 
 
-def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":
+def resolve_column_names(description: "list[Any] | None", cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:
+    """Resolve and cache ADBC cursor description column names."""
+    if not description:
+        return []
+
+    cache_key = id(description)
+    cached = cache.get(cache_key)
+    if cached is not None and cached[0] is description:
+        return cached[1]
+
+    column_names = [col[0] for col in description]
+    if len(cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+        cache.pop(next(iter(cache)))
+    cache[cache_key] = (description, column_names)
+    return column_names
+
+
+def collect_rows(
+    fetched_data: "list[Any] | None", description: "list[Any] | None", *, column_names: "list[str] | None" = None
+) -> "tuple[list[Any], list[str]]":
     """Collect ADBC rows and column names.
 
     Returns raw data without dict conversion. The row format is detected
@@ -714,16 +740,17 @@ def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | Non
     Args:
         fetched_data: Rows returned from cursor.fetchall().
         description: Cursor description metadata.
+        column_names: Optional precomputed column names.
 
     Returns:
         Tuple of (rows, column_names).
     """
     if not description:
         return [], []
-    column_names = [col[0] for col in description]
+    resolved_column_names = [col[0] for col in description] if column_names is None else column_names
     if not fetched_data:
-        return [], column_names
-    return fetched_data, column_names
+        return [], resolved_column_names
+    return fetched_data, resolved_column_names
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -740,6 +767,27 @@ def resolve_rowcount(cursor: Any) -> int:
     rowcount = cursor.rowcount
     if isinstance(rowcount, int):
         return rowcount
+    return -1
+
+
+def resolve_many_rowcount(cursor: Any, parameter_sets: Any, *, fallback_count: "int | None" = None) -> int:
+    """Resolve execute_many rowcount with a parameter-count fallback.
+
+    Args:
+        cursor: ADBC cursor with optional rowcount metadata.
+        parameter_sets: Execute-many payload.
+        fallback_count: Optional precomputed execute-many payload size.
+
+    Returns:
+        Driver rowcount when available, otherwise parameter count when sized.
+    """
+    rowcount = resolve_rowcount(cursor)
+    if rowcount != -1:
+        return rowcount
+    if fallback_count is not None:
+        return fallback_count
+    if isinstance(parameter_sets, Sized):
+        return len(parameter_sets)
     return -1
 
 

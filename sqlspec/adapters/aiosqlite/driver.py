@@ -316,7 +316,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect aiosqlite rows for the direct execution path."""
-        return collect_rows(cast("list[Any]", fetched), cursor.description)
+        return collect_rows(fetched, cursor.description)
 
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from aiosqlite cursor for the direct execution path."""

@@ -345,9 +345,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
 
-    def _qc_execute_direct(
-        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: CachedQuery
-    ) -> "SQLResult":
+    def _qc_execute_direct(self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: CachedQuery) -> "SQLResult":
         """Execute pre-compiled query via ultra-fast path (sync).
 
         Uses a DB-API direct path when available (`cursor.execute`) and falls
@@ -382,7 +380,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                                     row_format="tuple",
                                 )
                                 direct_statement = self._qc_build_direct(
-                                    sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                                    sql,
+                                    params,
+                                    cached,
+                                    params,
+                                    params_are_simple=True,
+                                    compiled_sql=cached.compiled_sql,
                                 )
                                 return self.build_statement_result(direct_statement, execution_result)
 

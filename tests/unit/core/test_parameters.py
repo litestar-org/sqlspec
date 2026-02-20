@@ -1130,9 +1130,7 @@ def test_process_execute_many_named_to_positional(processor: "ParameterProcessor
     assert [tuple(param_set) for param_set in final_params] == [(10, 20), (30, 40)]
 
 
-def test_process_execute_many_skips_coercion_allocations_when_no_types_match(
-    processor: "ParameterProcessor",
-) -> None:
+def test_process_execute_many_skips_coercion_allocations_when_no_types_match(processor: "ParameterProcessor") -> None:
     """Execute_many should preserve payload identity when coercion map is irrelevant."""
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
@@ -1149,13 +1147,10 @@ def test_process_execute_many_skips_coercion_allocations_when_no_types_match(
     assert result.parameters == parameters
 
 
-def test_process_execute_many_coerces_only_rows_that_require_conversion(
-    processor: "ParameterProcessor",
-) -> None:
+def test_process_execute_many_coerces_only_rows_that_require_conversion(processor: "ParameterProcessor") -> None:
     """Execute_many should still coerce values when a matching type is present."""
     config = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        type_coercion_map={bool: lambda value: 1 if value else 0},
+        default_parameter_style=ParameterStyle.QMARK, type_coercion_map={bool: lambda value: 1 if value else 0}
     )
     sql = "INSERT INTO metrics (value) VALUES (?)"
     parameters = [(True,), ("v2",)]
