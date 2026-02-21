@@ -1,5 +1,6 @@
 """PostgreSQL psycopg driver implementation."""
 
+from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
@@ -20,15 +21,13 @@ from sqlspec.adapters.psycopg.core import (
     build_copy_from_command,
     build_pipeline_execution_result,
     build_truncate_command,
-    collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
     execute_with_optional_parameters,
     execute_with_optional_parameters_async,
-    executemany_or_skip,
-    executemany_or_skip_async,
     pipeline_supported,
+    resolve_many_rowcount,
     resolve_rowcount,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
@@ -73,6 +72,7 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.adapters.psycopg")
+_COLUMN_NAME_CACHE_MAX_SIZE = 256
 
 
 class PsycopgPipelineMixin:
@@ -169,7 +169,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     bulk data transfer, and PostgreSQL-specific error handling.
     """
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_column_name_cache", "_data_dictionary")
     dialect = "postgres"
 
     def __init__(
@@ -185,6 +185,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsycopgSyncDataDictionary | None = None
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -206,13 +207,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
-            fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            data = cast("list[Any] | None", fetched_data) or []
+            column_names = self._resolve_column_names(cursor.description)
 
             return self.create_execution_result(
                 cursor,
-                selected_data=fetched_data,
+                selected_data=data,
                 column_names=column_names,
-                data_row_count=len(fetched_data),
+                data_row_count=len(data),
                 is_select_result=True,
                 row_format="tuple",
             )
@@ -232,10 +234,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        if not executemany_or_skip(cursor, sql, prepared_parameters):
+        if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        affected_rows = resolve_rowcount(cursor)
+        parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
+        cursor.executemany(sql, prepared_parameters)
+        affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -432,7 +436,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                         statement = entry.prepared.statement
                         cursor = entry.cursor
 
-                        execution_result = build_pipeline_execution_result(statement, cursor)
+                        execution_result = build_pipeline_execution_result(
+                            statement, cursor, column_name_resolver=self._resolve_column_names
+                        )
                         sql_result = self.build_statement_result(statement, execution_result)
                         results.append(StackResult.from_sql_result(sql_result))
 
@@ -548,6 +554,33 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def _resolve_column_names(self, description: Any) -> list[str]:
+        """Resolve and cache psycopg column names for hot row materialization paths."""
+        if not description:
+            return []
+
+        cache_key = id(description)
+        cached = self._column_name_cache.get(cache_key)
+        if cached is not None and cached[0] is description:
+            return cached[1]
+
+        column_names = [col.name for col in description]
+
+        if len(self._column_name_cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+            self._column_name_cache.pop(next(iter(self._column_name_cache)))
+        self._column_name_cache[cache_key] = (description, column_names)
+        return column_names
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect psycopg sync rows for the direct execution path."""
+        data = cast("list[Any] | None", fetched) or []
+        column_names = self._resolve_column_names(cursor.description)
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from psycopg cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
@@ -611,7 +644,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     and async pub/sub support.
     """
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_column_name_cache", "_data_dictionary")
     dialect = "postgres"
 
     def __init__(
@@ -627,6 +660,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsycopgAsyncDataDictionary | None = None
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -648,13 +682,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
-            fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
+            data = cast("list[Any] | None", fetched_data) or []
+            column_names = self._resolve_column_names(cursor.description)
 
             return self.create_execution_result(
                 cursor,
-                selected_data=fetched_data,
+                selected_data=data,
                 column_names=column_names,
-                data_row_count=len(fetched_data),
+                data_row_count=len(data),
                 is_select_result=True,
                 row_format="tuple",
             )
@@ -674,10 +709,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        if not await executemany_or_skip_async(cursor, sql, prepared_parameters):
+        if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        affected_rows = resolve_rowcount(cursor)
+        parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
+        await cursor.executemany(sql, prepared_parameters)
+        affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -882,7 +919,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                         statement = entry.prepared.statement
                         cursor = entry.cursor
 
-                        execution_result = await build_async_pipeline_execution_result(statement, cursor)
+                        execution_result = await build_async_pipeline_execution_result(
+                            statement, cursor, column_name_resolver=self._resolve_column_names
+                        )
                         sql_result = self.build_statement_result(statement, execution_result)
                         results.append(StackResult.from_sql_result(sql_result))
 
@@ -999,6 +1038,33 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def _resolve_column_names(self, description: Any) -> list[str]:
+        """Resolve and cache psycopg column names for hot row materialization paths."""
+        if not description:
+            return []
+
+        cache_key = id(description)
+        cached = self._column_name_cache.get(cache_key)
+        if cached is not None and cached[0] is description:
+            return cached[1]
+
+        column_names = [col.name for col in description]
+
+        if len(self._column_name_cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+            self._column_name_cache.pop(next(iter(self._column_name_cache)))
+        self._column_name_cache[cache_key] = (description, column_names)
+        return column_names
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect psycopg async rows for the direct execution path."""
+        data = cast("list[Any] | None", fetched) or []
+        column_names = self._resolve_column_names(cursor.description)
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from psycopg cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

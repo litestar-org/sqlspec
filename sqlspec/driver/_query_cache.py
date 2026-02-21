@@ -1,18 +1,19 @@
 """Query cache for fast-path statement execution."""
 
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Final, NamedTuple
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from sqlspec.core.compiler import OperationProfile, OperationType
     from sqlspec.core.parameters import ParameterProfile
+    from sqlspec.core.statement import ProcessedState
 
 __all__ = ("QC_MAX_SIZE", "CachedQuery", "QueryCache")
 
 QC_MAX_SIZE: Final[int] = 1024
 
 
-class CachedQuery(NamedTuple):
+class CachedQuery:
     """Cached query metadata for fast-path execution."""
 
     compiled_sql: str
@@ -23,6 +24,45 @@ class CachedQuery(NamedTuple):
     operation_type: "OperationType"
     operation_profile: "OperationProfile"
     param_count: int
+    processed_state: "ProcessedState"
+    column_names: "list[str] | None"
+
+    __slots__ = (
+        "applied_wrap_types",
+        "column_names",
+        "compiled_sql",
+        "input_named_parameters",
+        "operation_profile",
+        "operation_type",
+        "param_count",
+        "parameter_casts",
+        "parameter_profile",
+        "processed_state",
+    )
+
+    def __init__(
+        self,
+        compiled_sql: str,
+        parameter_profile: "ParameterProfile",
+        input_named_parameters: "tuple[str, ...]",
+        applied_wrap_types: bool,
+        parameter_casts: "dict[int, str]",
+        operation_type: "OperationType",
+        operation_profile: "OperationProfile",
+        param_count: int,
+        processed_state: "ProcessedState",
+        column_names: "list[str] | None" = None,
+    ) -> None:
+        self.compiled_sql = compiled_sql
+        self.parameter_profile = parameter_profile
+        self.input_named_parameters = input_named_parameters
+        self.applied_wrap_types = applied_wrap_types
+        self.parameter_casts = parameter_casts
+        self.operation_type = operation_type
+        self.operation_profile = operation_profile
+        self.param_count = param_count
+        self.processed_state = processed_state
+        self.column_names = column_names
 
 
 class QueryCache:

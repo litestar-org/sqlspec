@@ -19,15 +19,22 @@ from sqlspec.adapters.sqlite.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
-from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
+from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_config, register_driver_profile
+from sqlspec.core.result import DMLResult
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.sqlite._typing import SqliteConnection
-    from sqlspec.core import SQL, StatementConfig
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import SQL, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.core.compiler import OperationType
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._query_cache import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.typing import StatementParameters
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
 
@@ -202,6 +209,193 @@ class SqliteDriver(SyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
+    def execute_many(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        parameters: "Sequence[StatementParameters]",
+        *filters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SQLResult":
+        """Execute many with a SQLite thin path for simple qmark batches."""
+        config = statement_config or self.statement_config
+        if (
+            isinstance(statement, str)
+            and not filters
+            and not kwargs
+            and config is self.statement_config
+            and self.observability.is_idle
+            and self._can_use_execute_many_thin_path(statement, parameters, config)
+        ):
+            try:
+                cursor = self.connection.executemany(statement, parameters)
+            except sqlite3.Error as exc:
+                raise create_mapped_exception(exc) from exc
+
+            rowcount = cursor.rowcount
+            affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+            operation = self._resolve_dml_operation_type(statement)
+            return DMLResult(operation, affected_rows)
+        return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
+
+    def _qc_execute_direct(self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "SQLResult":
+        """Execute cached query through SQLite connection.execute fast path.
+
+        This bypasses cursor context-manager overhead for repeated cached
+        statements while preserving driver exception mapping behavior.
+        """
+        direct_statement: SQL | None = None
+        returns_rows = cached.operation_profile.returns_rows
+        try:
+            if not returns_rows:
+                try:
+                    cursor = self.connection.execute(cached.compiled_sql, params)
+                except sqlite3.Error as exc:
+                    raise create_mapped_exception(exc) from exc
+
+                rowcount = cursor.rowcount
+                affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+                return DMLResult(cached.operation_type, affected_rows)
+
+            try:
+                cursor = self.connection.execute(cached.compiled_sql, params)
+            except sqlite3.Error as exc:
+                raise create_mapped_exception(exc) from exc
+
+            if returns_rows:
+                fetched_data = cursor.fetchall()
+                column_names = cached.column_names
+                if column_names is None:
+                    description = cursor.description
+                    column_names = [col[0] for col in description] if description else []
+                    cached.column_names = column_names
+                execution_result = self.create_execution_result(
+                    cursor,
+                    selected_data=fetched_data,
+                    column_names=column_names,
+                    data_row_count=len(fetched_data),
+                    is_select_result=True,
+                    row_format="tuple",
+                )
+                direct_statement = self._qc_build_direct(
+                    sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                )
+                return self.build_statement_result(direct_statement, execution_result)
+        finally:
+            if direct_statement is not None:
+                self._release_pooled_statement(direct_statement)
+        msg = "unreachable"
+        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
+
+    def _can_use_execute_many_thin_path(
+        self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"
+    ) -> bool:
+        if type(parameters) is not list:
+            return False
+        if not parameters:
+            return False
+        if "?" not in statement:
+            return False
+
+        parameter_config = config.parameter_config
+        if parameter_config.default_parameter_style is not ParameterStyle.QMARK:
+            return False
+        if (
+            parameter_config.default_execution_parameter_style is not None
+            and parameter_config.default_execution_parameter_style is not ParameterStyle.QMARK
+        ):
+            return False
+        if parameter_config.ast_transformer is not None or parameter_config.output_transformer is not None:
+            return False
+        if parameter_config.needs_static_script_compilation:
+            return False
+        if config.output_transformer is not None or config.statement_transformers:
+            return False
+
+        return self._thin_path_parameters_are_eligible(parameters, parameter_config.type_coercion_map)
+
+    @staticmethod
+    def _thin_path_parameters_are_eligible(
+        parameters: "list[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
+    ) -> bool:
+        """Validate parameter payload for the SQLite execute-many thin path."""
+        first_sequence = SqliteDriver._as_sequence_parameter_set(parameters[0])
+        if first_sequence is None:
+            return False
+
+        first_type = type(first_sequence)
+        row_len = len(first_sequence)
+        coercion_map = type_coercion_map
+        has_type_coercion = bool(coercion_map)
+
+        # Common benchmark shape: list[tuple[value]]
+        if row_len == 1:
+            if has_type_coercion and coercion_map is not None:
+                for param_set in parameters:
+                    sequence = SqliteDriver._as_sequence_parameter_set(param_set)
+                    if sequence is None or type(sequence) is not first_type:
+                        return False
+                    if len(sequence) != 1:
+                        return False
+                    value_type = type(sequence[0])
+                    if value_type is TypedParameter or value_type in coercion_map:
+                        return False
+                return True
+
+            for param_set in parameters:
+                sequence = SqliteDriver._as_sequence_parameter_set(param_set)
+                if sequence is None or type(sequence) is not first_type:
+                    return False
+                if len(sequence) != 1:
+                    return False
+                if type(sequence[0]) is TypedParameter:
+                    return False
+            return True
+
+        if has_type_coercion and coercion_map is not None:
+            for param_set in parameters:
+                sequence = SqliteDriver._as_sequence_parameter_set(param_set)
+                if sequence is None or type(sequence) is not first_type:
+                    return False
+                if len(sequence) != row_len:
+                    return False
+                for value in sequence:
+                    value_type = type(value)
+                    if value_type is TypedParameter or value_type in coercion_map:
+                        return False
+            return True
+
+        for param_set in parameters:
+            sequence = SqliteDriver._as_sequence_parameter_set(param_set)
+            if sequence is None or type(sequence) is not first_type:
+                return False
+            if len(sequence) != row_len:
+                return False
+            for value in sequence:
+                if type(value) is TypedParameter:
+                    return False
+        return True
+
+    @staticmethod
+    def _as_sequence_parameter_set(param_set: "StatementParameters") -> "list[Any] | tuple[Any, ...] | None":
+        if isinstance(param_set, list):
+            return param_set
+        if isinstance(param_set, tuple):
+            return param_set
+        return None
+
+    @staticmethod
+    def _resolve_dml_operation_type(statement: str) -> "OperationType":
+        command_keyword = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "COMMAND"
+        if command_keyword == "INSERT":
+            return "INSERT"
+        if command_keyword == "UPDATE":
+            return "UPDATE"
+        if command_keyword == "DELETE":
+            return "DELETE"
+        return "COMMAND"
+
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT
     # ─────────────────────────────────────────────────────────────────────────────
@@ -356,6 +550,14 @@ class SqliteDriver(SyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect SQLite rows for the direct execution path."""
+        return collect_rows(fetched, cursor.description)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from SQLite cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

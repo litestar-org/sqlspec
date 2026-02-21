@@ -17,54 +17,16 @@ from typing_extensions import is_typeddict
 
 from sqlspec._typing import Empty
 from sqlspec.protocols import (
-    ArrowTableStatsProtocol,
-    AsyncDeleteProtocol,
-    AsyncReadableProtocol,
-    AsyncReadBytesProtocol,
-    AsyncWriteBytesProtocol,
-    CursorMetadataProtocol,
     DictProtocol,
-    HasAddListenerProtocol,
-    HasAsDictProtocol,
-    HasConfigProtocol,
-    HasConnectionConfigProtocol,
-    HasDatabaseUrlAndBindKeyProtocol,
-    HasErrorsProtocol,
     HasExpressionAndParametersProtocol,
     HasExpressionAndSQLProtocol,
     HasExpressionProtocol,
-    HasExtensionConfigProtocol,
-    HasFieldNameProtocol,
-    HasFilterAttributesProtocol,
-    HasGetDataProtocol,
-    HasLastRowIdProtocol,
     HasMigrationConfigProtocol,
-    HasNameProtocol,
-    HasNotifiesProtocol,
     HasParameterBuilderProtocol,
-    HasRowcountProtocol,
     HasSQLGlotExpressionProtocol,
-    HasSqliteErrorProtocol,
-    HasSqlStateProtocol,
     HasStatementConfigFactoryProtocol,
-    HasStatementTypeProtocol,
-    HasTracerProviderProtocol,
-    HasTypeCodeProtocol,
-    HasTypecodeProtocol,
-    HasTypecodeSizedProtocol,
     HasValueProtocol,
-    HasWhereProtocol,
-    MappingLikeProtocol,
-    NotificationProtocol,
-    PipelineCapableProtocol,
-    QueryResultProtocol,
-    ReadableProtocol,
-    SpanAttributeProtocol,
-    SupportsArrayProtocol,
     SupportsArrowResults,
-    SupportsCloseProtocol,
-    SupportsDtypeStrProtocol,
-    SupportsJsonTypeProtocol,
     WithMethodProtocol,
 )
 from sqlspec.typing import (
@@ -87,6 +49,46 @@ if TYPE_CHECKING:
     from sqlspec._typing import AttrsInstanceStub, BaseModelStub, DTODataStub, StructStub
     from sqlspec.core import StatementFilter
     from sqlspec.core.parameters import TypedParameter
+    from sqlspec.protocols import (
+        ArrowTableStatsProtocol,
+        AsyncDeleteProtocol,
+        AsyncReadableProtocol,
+        AsyncReadBytesProtocol,
+        AsyncWriteBytesProtocol,
+        CursorMetadataProtocol,
+        HasAddListenerProtocol,
+        HasAsDictProtocol,
+        HasConfigProtocol,
+        HasConnectionConfigProtocol,
+        HasDatabaseUrlAndBindKeyProtocol,
+        HasErrorsProtocol,
+        HasExtensionConfigProtocol,
+        HasFieldNameProtocol,
+        HasFilterAttributesProtocol,
+        HasGetDataProtocol,
+        HasLastRowIdProtocol,
+        HasNameProtocol,
+        HasNotifiesProtocol,
+        HasRowcountProtocol,
+        HasSqliteErrorProtocol,
+        HasSqlStateProtocol,
+        HasStatementTypeProtocol,
+        HasTracerProviderProtocol,
+        HasTypeCodeProtocol,
+        HasTypecodeProtocol,
+        HasTypecodeSizedProtocol,
+        HasWhereProtocol,
+        MappingLikeProtocol,
+        NotificationProtocol,
+        PipelineCapableProtocol,
+        QueryResultProtocol,
+        ReadableProtocol,
+        SpanAttributeProtocol,
+        SupportsArrayProtocol,
+        SupportsCloseProtocol,
+        SupportsDtypeStrProtocol,
+        SupportsJsonTypeProtocol,
+    )
     from sqlspec.typing import SupportedSchemaModel
 
 __all__ = (
@@ -192,187 +194,298 @@ __all__ = (
 
 def is_readable(obj: Any) -> "TypeGuard[ReadableProtocol]":
     """Check if an object is readable (has a read method)."""
-    return isinstance(obj, ReadableProtocol)
+    try:
+        return callable(obj.read)
+    except AttributeError:
+        return False
 
 
 def is_async_readable(obj: Any) -> "TypeGuard[AsyncReadableProtocol]":
     """Check if an object exposes an async read method."""
-    return isinstance(obj, AsyncReadableProtocol)
+    try:
+        return callable(obj.read)
+    except AttributeError:
+        return False
 
 
 def is_notification(obj: Any) -> "TypeGuard[NotificationProtocol]":
     """Check if an object is a database notification with channel and payload."""
-    return isinstance(obj, NotificationProtocol)
+    try:
+        return hasattr(obj, "channel") and hasattr(obj, "payload")
+    except AttributeError:
+        return False
 
 
 def has_pipeline_capability(obj: Any) -> "TypeGuard[PipelineCapableProtocol]":
     """Check if a connection supports pipeline execution."""
-    return isinstance(obj, PipelineCapableProtocol)
+    try:
+        return callable(obj.run_pipeline)
+    except AttributeError:
+        return False
 
 
 def has_query_result_metadata(obj: Any) -> "TypeGuard[QueryResultProtocol]":
     """Check if an object has query result metadata (tag/status)."""
-    return isinstance(obj, QueryResultProtocol)
+    try:
+        return hasattr(obj, "tag") or hasattr(obj, "status")
+    except AttributeError:
+        return False
 
 
 def has_array_interface(obj: Any) -> "TypeGuard[SupportsArrayProtocol]":
     """Check if an object supports the array interface (like NumPy arrays)."""
-    return isinstance(obj, SupportsArrayProtocol)
+    try:
+        return hasattr(obj, "__array__")
+    except AttributeError:
+        return False
 
 
 def has_cursor_metadata(obj: Any) -> "TypeGuard[CursorMetadataProtocol]":
     """Check if an object has cursor metadata (description)."""
-    return isinstance(obj, CursorMetadataProtocol)
+    try:
+        return hasattr(obj, "description")
+    except AttributeError:
+        return False
 
 
 def has_add_listener(obj: Any) -> "TypeGuard[HasAddListenerProtocol]":
     """Check if an object exposes add_listener()."""
-    return isinstance(obj, HasAddListenerProtocol)
+    try:
+        return callable(obj.add_listener)
+    except AttributeError:
+        return False
 
 
 def has_notifies(obj: Any) -> "TypeGuard[HasNotifiesProtocol]":
     """Check if an object exposes notifies."""
-    return isinstance(obj, HasNotifiesProtocol)
+    try:
+        return hasattr(obj, "notifies")
+    except AttributeError:
+        return False
 
 
 def has_extension_config(obj: Any) -> "TypeGuard[HasExtensionConfigProtocol]":
     """Check if an object exposes extension_config mapping."""
-    return isinstance(obj, HasExtensionConfigProtocol)
+    try:
+        return hasattr(obj, "extension_config")
+    except AttributeError:
+        return False
 
 
 def has_config_attribute(obj: Any) -> "TypeGuard[HasConfigProtocol]":
     """Check if an object exposes config attribute."""
-    return isinstance(obj, HasConfigProtocol)
+    try:
+        return hasattr(obj, "config")
+    except AttributeError:
+        return False
 
 
 def has_connection_config(obj: Any) -> "TypeGuard[HasConnectionConfigProtocol]":
     """Check if an object exposes connection_config mapping."""
-    return isinstance(obj, HasConnectionConfigProtocol)
+    try:
+        return hasattr(obj, "connection_config")
+    except AttributeError:
+        return False
 
 
 def has_database_url_and_bind_key(obj: Any) -> "TypeGuard[HasDatabaseUrlAndBindKeyProtocol]":
     """Check if an object exposes database_url and bind_key."""
-    return isinstance(obj, HasDatabaseUrlAndBindKeyProtocol)
+    try:
+        return hasattr(obj, "database_url") and hasattr(obj, "bind_key")
+    except AttributeError:
+        return False
 
 
 def has_name(obj: Any) -> "TypeGuard[HasNameProtocol]":
     """Check if an object exposes __name__."""
-    return isinstance(obj, HasNameProtocol)
+    try:
+        return hasattr(obj, "__name__")
+    except AttributeError:
+        return False
 
 
 def has_field_name(obj: Any) -> "TypeGuard[HasFieldNameProtocol]":
     """Check if an object exposes field_name attribute."""
-    return isinstance(obj, HasFieldNameProtocol)
+    try:
+        return hasattr(obj, "field_name")
+    except AttributeError:
+        return False
 
 
 def has_filter_attributes(obj: Any) -> "TypeGuard[HasFilterAttributesProtocol]":
     """Check if an object exposes filter attribute set."""
-    return isinstance(obj, HasFilterAttributesProtocol)
+    try:
+        return hasattr(obj, "field_name") and hasattr(obj, "operation") and hasattr(obj, "value")
+    except AttributeError:
+        return False
 
 
 def has_get_data(obj: Any) -> "TypeGuard[HasGetDataProtocol]":
     """Check if an object exposes get_data()."""
-    return isinstance(obj, HasGetDataProtocol)
+    try:
+        return callable(obj.get_data)
+    except AttributeError:
+        return False
 
 
 def has_arrow_table_stats(obj: Any) -> "TypeGuard[ArrowTableStatsProtocol]":
     """Check if an object exposes Arrow row/byte stats."""
-    return isinstance(obj, ArrowTableStatsProtocol)
+    try:
+        return hasattr(obj, "num_rows") and hasattr(obj, "nbytes")
+    except AttributeError:
+        return False
 
 
 def has_rowcount(obj: Any) -> "TypeGuard[HasRowcountProtocol]":
     """Check if a cursor exposes rowcount metadata."""
-    return isinstance(obj, HasRowcountProtocol)
+    try:
+        return hasattr(obj, "rowcount")
+    except AttributeError:
+        return False
 
 
 def has_lastrowid(obj: Any) -> "TypeGuard[HasLastRowIdProtocol]":
     """Check if a cursor exposes lastrowid metadata."""
-    return isinstance(obj, HasLastRowIdProtocol)
+    try:
+        return hasattr(obj, "lastrowid")
+    except AttributeError:
+        return False
 
 
 def has_dtype_str(obj: Any) -> "TypeGuard[SupportsDtypeStrProtocol]":
     """Check if a dtype exposes string descriptor."""
-    return isinstance(obj, SupportsDtypeStrProtocol)
+    try:
+        return hasattr(obj, "str")
+    except AttributeError:
+        return False
 
 
 def has_statement_type(obj: Any) -> "TypeGuard[HasStatementTypeProtocol]":
     """Check if a cursor exposes statement_type metadata."""
-    return isinstance(obj, HasStatementTypeProtocol)
+    try:
+        return hasattr(obj, "statement_type")
+    except AttributeError:
+        return False
 
 
 def has_typecode(obj: Any) -> "TypeGuard[HasTypecodeProtocol]":
     """Check if an array-like object exposes typecode."""
-    return isinstance(obj, HasTypecodeProtocol)
+    try:
+        return hasattr(obj, "typecode")
+    except AttributeError:
+        return False
 
 
 def has_typecode_and_len(obj: Any) -> "TypeGuard[HasTypecodeSizedProtocol]":
     """Check if an array-like object exposes typecode and length."""
-    return isinstance(obj, HasTypecodeSizedProtocol)
+    try:
+        return hasattr(obj, "typecode") and hasattr(obj, "__len__")
+    except AttributeError:
+        return False
 
 
 def has_type_code(obj: Any) -> "TypeGuard[HasTypeCodeProtocol]":
     """Check if an object exposes type_code."""
-    return isinstance(obj, HasTypeCodeProtocol)
+    try:
+        return hasattr(obj, "type_code")
+    except AttributeError:
+        return False
 
 
 def has_sqlstate(obj: Any) -> "TypeGuard[HasSqlStateProtocol]":
     """Check if an exception exposes sqlstate."""
-    return isinstance(obj, HasSqlStateProtocol)
+    try:
+        return hasattr(obj, "sqlstate")
+    except AttributeError:
+        return False
 
 
 def has_sqlite_error(obj: Any) -> "TypeGuard[HasSqliteErrorProtocol]":
     """Check if an exception exposes sqlite error details."""
-    return isinstance(obj, HasSqliteErrorProtocol)
+    try:
+        return hasattr(obj, "sqlite_errorcode")
+    except AttributeError:
+        return False
 
 
 def has_value_attribute(obj: Any) -> "TypeGuard[HasValueProtocol]":
     """Check if an object exposes a value attribute."""
-    return isinstance(obj, HasValueProtocol)
+    try:
+        return hasattr(obj, "value")
+    except AttributeError:
+        return False
 
 
 def has_errors(obj: Any) -> "TypeGuard[HasErrorsProtocol]":
     """Check if an exception exposes errors."""
-    return isinstance(obj, HasErrorsProtocol)
+    try:
+        return hasattr(obj, "errors")
+    except AttributeError:
+        return False
 
 
 def has_span_attribute(obj: Any) -> "TypeGuard[SpanAttributeProtocol]":
     """Check if a span exposes set_attribute."""
-    return isinstance(obj, SpanAttributeProtocol)
+    try:
+        return callable(obj.set_attribute)
+    except AttributeError:
+        return False
 
 
 def has_tracer_provider(obj: Any) -> "TypeGuard[HasTracerProviderProtocol]":
     """Check if an object exposes get_tracer."""
-    return isinstance(obj, HasTracerProviderProtocol)
+    try:
+        return callable(obj.get_tracer)
+    except AttributeError:
+        return False
 
 
 def supports_async_read_bytes(obj: Any) -> "TypeGuard[AsyncReadBytesProtocol]":
     """Check if backend supports async read_bytes."""
-    return isinstance(obj, AsyncReadBytesProtocol)
+    try:
+        return callable(obj.read_bytes_async)
+    except AttributeError:
+        return False
 
 
 def supports_async_write_bytes(obj: Any) -> "TypeGuard[AsyncWriteBytesProtocol]":
     """Check if backend supports async write_bytes."""
-    return isinstance(obj, AsyncWriteBytesProtocol)
+    try:
+        return callable(obj.write_bytes_async)
+    except AttributeError:
+        return False
 
 
 def supports_json_type(obj: Any) -> "TypeGuard[SupportsJsonTypeProtocol]":
     """Check if an object exposes JSON type support."""
-    return isinstance(obj, SupportsJsonTypeProtocol)
+    try:
+        return hasattr(obj, "JSON")
+    except AttributeError:
+        return False
 
 
 def supports_close(obj: Any) -> "TypeGuard[SupportsCloseProtocol]":
     """Check if an object exposes close()."""
-    return isinstance(obj, SupportsCloseProtocol)
+    try:
+        return callable(obj.close)
+    except AttributeError:
+        return False
 
 
 def supports_async_delete(obj: Any) -> "TypeGuard[AsyncDeleteProtocol]":
     """Check if backend supports async delete."""
-    return isinstance(obj, AsyncDeleteProtocol)
+    try:
+        return callable(obj.delete_async)
+    except AttributeError:
+        return False
 
 
 def supports_where(obj: Any) -> "TypeGuard[HasWhereProtocol]":
     """Check if an SQL expression supports WHERE clauses."""
-    return isinstance(obj, HasWhereProtocol)
+    try:
+        return callable(obj.where)
+    except AttributeError:
+        return False
 
 
 def is_typed_dict(obj: Any) -> "TypeGuard[type]":
@@ -408,7 +521,7 @@ def is_dict_row(row: Any) -> "TypeGuard[dict[str, Any]]":
     Returns:
         True if the row is a dictionary, False otherwise
     """
-    return isinstance(row, dict)
+    return type(row) is dict
 
 
 def is_mapping_like(obj: Any) -> "TypeGuard[MappingLikeProtocol]":
@@ -423,7 +536,10 @@ def is_mapping_like(obj: Any) -> "TypeGuard[MappingLikeProtocol]":
     Returns:
         True if the object has keys() method and __getitem__, False otherwise
     """
-    return isinstance(obj, MappingLikeProtocol)
+    try:
+        return callable(obj.keys)
+    except AttributeError:
+        return False
 
 
 def has_asdict_method(obj: Any) -> "TypeGuard[HasAsDictProtocol]":
@@ -435,7 +551,10 @@ def has_asdict_method(obj: Any) -> "TypeGuard[HasAsDictProtocol]":
     Returns:
         True if the object has _asdict() method, False otherwise
     """
-    return isinstance(obj, HasAsDictProtocol)
+    try:
+        return callable(obj._asdict)
+    except AttributeError:
+        return False
 
 
 def is_iterable_parameters(parameters: Any) -> "TypeGuard[Sequence[Any]]":
@@ -769,7 +888,7 @@ def is_dict(obj: Any) -> "TypeGuard[dict[str, Any]]":
     Returns:
         bool
     """
-    return isinstance(obj, dict)
+    return type(obj) is dict
 
 
 def is_dict_with_field(obj: Any, field_name: str) -> "TypeGuard[dict[str, Any]]":

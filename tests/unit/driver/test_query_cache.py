@@ -2,15 +2,40 @@
 """Unit tests for fast-path query cache behavior."""
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
-from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
-from sqlspec.core.compiler import OperationProfile
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig
+from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.parameters import ParameterInfo, ParameterProfile
+from sqlspec.core.statement import ProcessedState
 from sqlspec.driver._common import CachedQuery, CommonDriverAttributesMixin
 from sqlspec.driver._query_cache import QueryCache
+
+_EMPTY_PS = ProcessedState("", [], None, "COMMAND")
+
+
+def _make_cached(
+    compiled_sql: str = "SQL",
+    param_count: int = 0,
+    operation_type: "OperationType" = "COMMAND",
+    operation_profile: "OperationProfile | None" = None,
+    parameter_profile: "ParameterProfile | None" = None,
+    processed_state: "ProcessedState | None" = None,
+) -> CachedQuery:
+    """Helper to create CachedQuery instances with sensible defaults."""
+    return CachedQuery(
+        compiled_sql=compiled_sql,
+        parameter_profile=parameter_profile or ParameterProfile.empty(),
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type=operation_type,
+        operation_profile=operation_profile or OperationProfile.empty(),
+        param_count=param_count,
+        processed_state=processed_state or _EMPTY_PS,
+    )
 
 
 class _FakeDriver(CommonDriverAttributesMixin):
@@ -23,17 +48,11 @@ class _FakeDriver(CommonDriverAttributesMixin):
 def test_qc_lru_eviction() -> None:
     cache = QueryCache(max_size=2)
 
-    cache.set(
-        "a", CachedQuery("SQL_A", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
-    )
-    cache.set(
-        "b", CachedQuery("SQL_B", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
-    )
+    cache.set("a", _make_cached("SQL_A", 1))
+    cache.set("b", _make_cached("SQL_B", 1))
     assert cache.get("a") is not None
 
-    cache.set(
-        "c", CachedQuery("SQL_C", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
-    )
+    cache.set("c", _make_cached("SQL_C", 1))
 
     assert cache.get("b") is None
     assert cache.get("a") is not None
@@ -43,18 +62,10 @@ def test_qc_lru_eviction() -> None:
 def test_qc_update_moves_to_end() -> None:
     cache = QueryCache(max_size=2)
 
-    cache.set(
-        "a", CachedQuery("SQL_A", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
-    )
-    cache.set(
-        "b", CachedQuery("SQL_B", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
-    )
-    cache.set(
-        "a", CachedQuery("SQL_A2", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 2)
-    )
-    cache.set(
-        "c", CachedQuery("SQL_C", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 1)
-    )
+    cache.set("a", _make_cached("SQL_A", 1))
+    cache.set("b", _make_cached("SQL_B", 1))
+    cache.set("a", _make_cached("SQL_A2", 2))
+    cache.set("c", _make_cached("SQL_C", 1))
 
     assert cache.get("b") is None
     entry = cache.get("a")
@@ -72,6 +83,7 @@ def test_qc_lookup_cache_hit_rebinds() -> None:
     driver = _FakeDriver(object(), config)
 
     profile = ParameterProfile((ParameterInfo(None, ParameterStyle.QMARK, 0, 0, "?"),))
+    ps = ProcessedState(compiled_sql="SELECT * FROM t WHERE id = ?", execution_parameters=[1], operation_type="SELECT")
     cached = CachedQuery(
         compiled_sql="SELECT * FROM t WHERE id = ?",
         parameter_profile=profile,
@@ -81,6 +93,7 @@ def test_qc_lookup_cache_hit_rebinds() -> None:
         operation_type="SELECT",
         operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
         param_count=1,
+        processed_state=ps,
     )
     driver._qc.set("SELECT * FROM t WHERE id = ?", cached)
 
@@ -93,6 +106,100 @@ def test_qc_lookup_cache_hit_rebinds() -> None:
     compiled_sql, params = statement.compile()
     assert compiled_sql == "SELECT * FROM t WHERE id = ?"
     assert params == (1,)
+
+
+def test_qc_store_snapshots_processed_state() -> None:
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    statement = SQL("SELECT ?", (1,), statement_config=config)
+    statement.compile()
+
+    driver._qc_store(statement)
+    cached = driver._qc.get("SELECT ?")
+    assert cached is not None
+
+    # Mutate/reset the original state after cache storage; cached metadata
+    # should remain stable and independent.
+    processed = cast("ProcessedState", statement.get_processed_state())
+    processed.reset()
+
+    assert cached.compiled_sql == "SELECT ?"
+    assert cached.processed_state.compiled_sql == "SELECT ?"
+    assert cached.processed_state.operation_type == "SELECT"
+
+
+def test_prepare_driver_parameters_many_passes_through_irrelevant_coercion_map() -> None:
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={bool: lambda value: 1 if value else 0},
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    parameters = [("a",), ("b",), ("c",)]
+
+    prepared = driver.prepare_driver_parameters(parameters, config, is_many=True)
+
+    assert prepared is parameters
+
+
+def test_prepare_driver_parameters_many_coerces_rows_when_needed() -> None:
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={bool: lambda value: 1 if value else 0},
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    parameters = [(True,), ("b",)]
+
+    prepared = driver.prepare_driver_parameters(parameters, config, is_many=True)
+
+    assert isinstance(prepared, list)
+    assert prepared is not parameters
+    assert tuple(prepared[0]) == (1,)
+    assert tuple(prepared[1]) == ("b",)
+
+
+def test_sync_qc_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch) -> None:
+    class _CursorManager:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "Literal[False]":
+            _ = (exc_type, exc_val, exc_tb)
+            return False
+
+    def _fake_with_cursor(_connection: Any) -> _CursorManager:
+        return _CursorManager()
+
+    def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
+        # Regression test: direct QC execution should not require cursor.execute().
+        assert not hasattr(cursor, "execute")
+        return mock_sync_driver.create_execution_result(cursor, rowcount_override=7)
+
+    monkeypatch.setattr(mock_sync_driver, "with_cursor", _fake_with_cursor)
+    monkeypatch.setattr(mock_sync_driver, "dispatch_execute", _fake_dispatch_execute)
+
+    cached = _make_cached(
+        compiled_sql="INSERT INTO t (id) VALUES (?)",
+        param_count=1,
+        operation_type="INSERT",
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+        processed_state=ProcessedState(
+            compiled_sql="INSERT INTO t (id) VALUES (?)", execution_parameters=[1], operation_type="INSERT"
+        ),
+    )
+
+    result = mock_sync_driver._qc_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+    assert result.operation_type == "INSERT"
+    assert result.rows_affected == 7
 
 
 def test_execute_uses_fast_path_when_eligible(mock_sync_driver, monkeypatch) -> None:
@@ -198,7 +305,7 @@ async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async
 
 def test_qc_thread_safety() -> None:
     cache = QueryCache(max_size=32)
-    cached = CachedQuery("SQL", ParameterProfile.empty(), (), False, {}, "COMMAND", OperationProfile.empty(), 0)
+    cached = _make_cached()
     for idx in range(16):
         cache.set(str(idx), cached)
 

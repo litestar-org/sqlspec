@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
@@ -57,6 +57,7 @@ __all__ = (
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
     "requires_session_callback",
+    "resolve_row_metadata",
     "resolve_rowcount",
 )
 
@@ -64,6 +65,9 @@ __all__ = (
 IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _VERSION_COMPONENTS: int = 3
 TYPE_CONVERTER = OracleOutputConverter()
+_LOB_TYPE_NAME_MARKERS: "tuple[str, ...]" = ("LOB", "BFILE")
+_FAST_SCALAR_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, bytes, bytearray, type(None))
+_ROW_METADATA_CACHE_MAX_SIZE: int = 256
 
 # Oracle ORA error code ranges for category detection
 ORA_CHECK_CONSTRAINT = 2290
@@ -362,7 +366,73 @@ def requires_session_callback(driver_features: "dict[str, Any]") -> bool:
     return enable_numpy_vectors or enable_uuid_binary
 
 
-def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+def _description_requires_lob_coercion(description: "list[Any]") -> bool:
+    """Return True when cursor metadata indicates LOB-compatible columns."""
+    for column in description:
+        try:
+            type_code = column[1]
+        except (TypeError, IndexError, KeyError):
+            type_code = getattr(column, "type_code", None)
+            if type_code is None:
+                # Unknown metadata shape: keep conservative behavior.
+                return True
+
+        type_name = getattr(type_code, "name", None)
+        if isinstance(type_name, str):
+            upper_name = type_name.upper()
+            if any(marker in upper_name for marker in _LOB_TYPE_NAME_MARKERS):
+                return True
+            continue
+
+        type_text = str(type_code).upper()
+        if any(marker in type_text for marker in _LOB_TYPE_NAME_MARKERS):
+            return True
+    return False
+
+
+def resolve_row_metadata(
+    description: "list[Any] | None", driver_features: "dict[str, Any]", cache: "dict[int, tuple[Any, list[str], bool]]"
+) -> "tuple[list[str], bool]":
+    """Resolve and cache Oracle row metadata for hot row materialization paths.
+
+    Args:
+        description: Cursor description metadata.
+        driver_features: Driver feature configuration.
+        cache: Driver-local metadata cache keyed by ``id(description)``.
+
+    Returns:
+        Tuple of (normalized column names, requires_lob_coercion).
+    """
+    if not description:
+        return [], False
+
+    cache_key = id(description)
+    cached = cache.get(cache_key)
+    if cached is not None and cached[0] is description:
+        return cached[1], cached[2]
+
+    column_names = [col[0] for col in description]
+    normalized_column_names = normalize_column_names(column_names, driver_features)
+    requires_lob_coercion = _description_requires_lob_coercion(description)
+
+    if len(cache) >= _ROW_METADATA_CACHE_MAX_SIZE:
+        cache.pop(next(iter(cache)))
+    cache[cache_key] = (description, normalized_column_names, requires_lob_coercion)
+    return normalized_column_names, requires_lob_coercion
+
+
+def _row_requires_lob_coercion(row: "tuple[Any, ...]") -> bool:
+    """Return True when a row contains readable values that need LOB coercion."""
+    for value in row:
+        value_type = type(value)
+        if value_type in _FAST_SCALAR_TYPES:
+            continue
+        if is_readable(value):
+            return True
+    return False
+
+
+def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
     """Coerce LOB handles to concrete values for synchronous execution.
 
     Processes each value in the row, reading LOB objects and applying
@@ -372,26 +442,43 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
         row: Tuple of column values from database fetch.
 
     Returns:
-        List of coerced values with LOBs read to strings/bytes.
+        Tuple of coerced values with LOBs read to strings/bytes.
 
     """
-    coerced_values: list[Any] = []
-    for value in row:
+    coerced_values: list[Any] | None = None
+    for index, value in enumerate(row):
+        value_type = type(value)
+        if value_type in _FAST_SCALAR_TYPES:
+            if coerced_values is not None:
+                coerced_values.append(value)
+            continue
+
         if is_readable(value):
             try:
                 processed_value = value.read()
             except Exception:
-                coerced_values.append(value)
+                if coerced_values is not None:
+                    coerced_values.append(value)
                 continue
             if isinstance(processed_value, str):
                 processed_value = TYPE_CONVERTER.convert_if_detected(processed_value)
+
+            if coerced_values is None:
+                if processed_value is value:
+                    continue
+                coerced_values = list(row[:index])
             coerced_values.append(processed_value)
             continue
-        coerced_values.append(value)
-    return coerced_values
+
+        if coerced_values is not None:
+            coerced_values.append(value)
+
+    if coerced_values is None:
+        return row
+    return tuple(coerced_values)
 
 
-async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
     """Coerce LOB handles to concrete values for asynchronous execution.
 
     Processes each value in the row, reading LOB objects asynchronously
@@ -401,27 +488,49 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
         row: Tuple of column values from database fetch.
 
     Returns:
-        List of coerced values with LOBs read to strings/bytes.
+        Tuple of coerced values with LOBs read to strings/bytes.
 
     """
-    coerced_values: list[Any] = []
-    for value in row:
+    coerced_values: list[Any] | None = None
+    for index, value in enumerate(row):
+        value_type = type(value)
+        if value_type in _FAST_SCALAR_TYPES:
+            if coerced_values is not None:
+                coerced_values.append(value)
+            continue
+
         if is_readable(value):
             try:
                 processed_value = await TYPE_CONVERTER.process_lob(value)
             except Exception:
-                coerced_values.append(value)
+                if coerced_values is not None:
+                    coerced_values.append(value)
                 continue
             if isinstance(processed_value, str):
                 processed_value = TYPE_CONVERTER.convert_if_detected(processed_value)
+
+            if coerced_values is None:
+                if processed_value is value:
+                    continue
+                coerced_values = list(row[:index])
             coerced_values.append(processed_value)
-        else:
+            continue
+
+        if coerced_values is not None:
             coerced_values.append(value)
-    return coerced_values
+
+    if coerced_values is None:
+        return row
+    return tuple(coerced_values)
 
 
 def collect_sync_rows(
-    fetched_data: "list[Any] | None", description: "list[Any] | None", driver_features: "dict[str, Any]"
+    fetched_data: "list[Any] | None",
+    description: "list[Any] | None",
+    driver_features: "dict[str, Any]",
+    *,
+    column_names: "list[str] | None" = None,
+    requires_lob_coercion: "bool | None" = None,
 ) -> "tuple[list[tuple[Any, ...]], list[str]]":
     """Collect OracleDB sync rows as tuples with normalized column names.
 
@@ -433,22 +542,44 @@ def collect_sync_rows(
         fetched_data: Rows returned from cursor.fetchall().
         description: Cursor description metadata.
         driver_features: Driver feature configuration.
+        column_names: Optional precomputed normalized column names.
+        requires_lob_coercion: Optional precomputed LOB-coercion flag.
 
     Returns:
         Tuple of (rows, column_names).
     """
     if not description:
         return [], []
-    column_names = [col[0] for col in description]
-    column_names = normalize_column_names(column_names, driver_features)
+    resolved_column_names = (
+        normalize_column_names([col[0] for col in description], driver_features)
+        if column_names is None
+        else column_names
+    )
     if not fetched_data:
-        return [], column_names
-    data = [tuple(_coerce_sync_row_values(row)) for row in fetched_data]
-    return data, column_names
+        return [], resolved_column_names
+
+    if requires_lob_coercion is None:
+        requires_lob_coercion = _description_requires_lob_coercion(description)
+    if not requires_lob_coercion:
+        first_row = fetched_data[0]
+        first_row_tuple = first_row if isinstance(first_row, tuple) else tuple(first_row)
+        if not _row_requires_lob_coercion(first_row_tuple):
+            return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
+
+    data: list[tuple[Any, ...]] = []
+    for row in fetched_data:
+        row_tuple = row if isinstance(row, tuple) else tuple(row)
+        data.append(_coerce_sync_row_values(row_tuple))
+    return data, resolved_column_names
 
 
 async def collect_async_rows(
-    fetched_data: "list[Any] | None", description: "list[Any] | None", driver_features: "dict[str, Any]"
+    fetched_data: "list[Any] | None",
+    description: "list[Any] | None",
+    driver_features: "dict[str, Any]",
+    *,
+    column_names: "list[str] | None" = None,
+    requires_lob_coercion: "bool | None" = None,
 ) -> "tuple[list[tuple[Any, ...]], list[str]]":
     """Collect OracleDB async rows as tuples with normalized column names.
 
@@ -460,21 +591,35 @@ async def collect_async_rows(
         fetched_data: Rows returned from cursor.fetchall().
         description: Cursor description metadata.
         driver_features: Driver feature configuration.
+        column_names: Optional precomputed normalized column names.
+        requires_lob_coercion: Optional precomputed LOB-coercion flag.
 
     Returns:
         Tuple of (rows, column_names).
     """
     if not description:
         return [], []
-    column_names = [col[0] for col in description]
-    column_names = normalize_column_names(column_names, driver_features)
+    resolved_column_names = (
+        normalize_column_names([col[0] for col in description], driver_features)
+        if column_names is None
+        else column_names
+    )
     if not fetched_data:
-        return [], column_names
+        return [], resolved_column_names
+
+    if requires_lob_coercion is None:
+        requires_lob_coercion = _description_requires_lob_coercion(description)
+    if not requires_lob_coercion:
+        first_row = fetched_data[0]
+        first_row_tuple = first_row if isinstance(first_row, tuple) else tuple(first_row)
+        if not _row_requires_lob_coercion(first_row_tuple):
+            return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
+
     data: list[tuple[Any, ...]] = []
     for row in fetched_data:
-        coerced_row = await _coerce_async_row_values(row)
-        data.append(tuple(coerced_row))
-    return data, column_names
+        row_tuple = row if isinstance(row, tuple) else tuple(row)
+        data.append(await _coerce_async_row_values(row_tuple))
+    return data, resolved_column_names
 
 
 def _create_oracle_error(

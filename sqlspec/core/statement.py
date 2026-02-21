@@ -199,6 +199,7 @@ class SQL:
         "_pooled",
         "_positional_parameters",
         "_processed_state",
+        "_qc_is_direct",
         "_raw_expression",
         "_raw_sql",
         "_sql_param_counters",
@@ -207,6 +208,24 @@ class SQL:
 
     # Type annotation for mypyc compatibility
     _sql_param_counters: "dict[str, int]"
+
+    @classmethod
+    def _qc_create_direct_sql(cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState") -> "SQL":
+        """Create a minimal SQL object for direct (fast-path) execution.
+
+        Bypasses standard __init__ and parameter processing.
+        Only for use by direct execution paths.
+        """
+        stmt = get_sql_pool().acquire()
+        stmt._raw_sql = sql
+        stmt._statement_config = config
+        stmt._dialect = stmt._normalize_dialect(config.dialect)
+        stmt._processed_state = processed_state
+        stmt._pooled = True
+        stmt._qc_is_direct = True
+        stmt._is_many = False
+        stmt._is_script = False
+        return stmt
 
     def __init__(
         self,
@@ -230,6 +249,7 @@ class SQL:
         self._dialect = self._normalize_dialect(config.dialect)
         self._compiled_from_cache = False
         self._pooled = False
+        self._qc_is_direct = False
         self._processed_state: EmptyEnum | ProcessedState = Empty
         self._hash: int | None = None
         self._filters: list[StatementFilter] = []
@@ -276,6 +296,7 @@ class SQL:
         if self._pooled and not self._compiled_from_cache and self._processed_state is not Empty:
             get_processed_state_pool().release(self._processed_state)
         self._compiled_from_cache = False
+        self._qc_is_direct = False
         self._processed_state = Empty
         self._hash = None
         self._filters.clear()
@@ -1580,7 +1601,7 @@ class StatementConfig:
     and other processing options for SQL statements.
     """
 
-    __slots__ = SQL_CONFIG_SLOTS
+    __slots__ = (*SQL_CONFIG_SLOTS, "_has_transformers", "_has_output_transformer")
 
     def __init__(
         self,
@@ -1656,6 +1677,8 @@ class StatementConfig:
         self._fingerprint_cache: str | None = None
         self._hash_cache: int | None = None
         self._is_frozen = False
+        self._has_transformers = bool(self.statement_transformers)
+        self._has_output_transformer = output_transformer is not None
 
     def freeze(self) -> None:
         """Mark the configuration as immutable to enable caching."""

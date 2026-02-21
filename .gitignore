@@ -64,3 +64,4 @@ uv.toml
 .agent/
 .geminiignore
 .beads/
+tools/scripts/profiles/*.prof

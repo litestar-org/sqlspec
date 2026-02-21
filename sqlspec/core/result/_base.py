@@ -44,10 +44,17 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowReturnFormat, ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
 
-__all__ = ("ArrowResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
+__all__ = ("ArrowResult", "DMLResult", "EmptyResult", "FastDMLResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
 _EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
+_EMPTY_RESULT_DATA: list[Any] = []
+_EMPTY_DML_METADATA: dict[str, Any] = {}
+_EMPTY_DML_COLUMN_NAMES: list[str] = []
+_EMPTY_DML_INSERTED_IDS: list[int | str] = []
+_EMPTY_DML_STATEMENT_RESULTS: list["SQLResult"] = []
+_EMPTY_DML_ERRORS: list[str] = []
+_TWO_COLUMNS_FASTPATH = 2
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -282,7 +289,16 @@ class SQLResult(StatementResult):
             self._materialized_dicts = raw
         elif fmt == "tuple":
             col_names = self.column_names
-            self._materialized_dicts = [dict(zip(col_names, row, strict=False)) for row in raw]
+            if not col_names:
+                self._materialized_dicts = []
+            elif len(col_names) == 1:
+                key = col_names[0]
+                self._materialized_dicts = [{key: row[0]} for row in raw]
+            elif len(col_names) == _TWO_COLUMNS_FASTPATH:
+                key0, key1 = col_names
+                self._materialized_dicts = [{key0: row[0], key1: row[1]} for row in raw]
+            else:
+                self._materialized_dicts = [dict(zip(col_names, row, strict=False)) for row in raw]
         else:
             # "record" — dict-like objects (asyncpg.Record, sqlite3.Row, bigquery.Row)
             self._materialized_dicts = [dict(record) for record in raw]
@@ -955,7 +971,7 @@ class EmptyResult(StatementResult):
     __slots__ = ()
 
     def __init__(self) -> None:
-        super().__init__(statement=_EMPTY_RESULT_STATEMENT, data=[], rows_affected=0)
+        super().__init__(statement=_EMPTY_RESULT_STATEMENT, data=_EMPTY_RESULT_DATA, rows_affected=0)
 
     def __iter__(self) -> "Iterator[Any]":
         return iter(())
@@ -964,7 +980,63 @@ class EmptyResult(StatementResult):
         return True
 
     def get_data(self) -> "list[Any]":
-        return []
+        return _EMPTY_RESULT_DATA
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class DMLResult(SQLResult):
+    """Optimized result for simple DML operations (INSERT/UPDATE/DELETE).
+
+    Used by the ultra-fast execution path to bypass full SQLResult construction
+    and pooling for non-SELECT operations.
+    """
+
+    __slots__ = ()
+
+    def __init__(self, op_type: "OperationType", rows_affected: int = 0) -> None:
+        # Fast-path initialization for DML results: assign slot values directly
+        # instead of routing through SQLResult.__init__.
+        self.statement = _EMPTY_RESULT_STATEMENT
+        self.data = _EMPTY_RESULT_DATA
+        self.rows_affected = rows_affected
+        self.last_inserted_id = None
+        self.execution_time = None
+        self.metadata = _EMPTY_DML_METADATA
+
+        self.error = None
+        self._operation_type = op_type
+        self.operation_index = None
+        self.parameters = None
+        self._row_format = "dict"
+        self._materialized_dicts = None
+
+        self.column_names = _EMPTY_DML_COLUMN_NAMES
+        self.total_count = 0
+        self.has_more = False
+        self.inserted_ids = _EMPTY_DML_INSERTED_IDS
+        self.statement_results = _EMPTY_DML_STATEMENT_RESULTS
+        self.errors = _EMPTY_DML_ERRORS
+        self.total_statements = 0
+        self.successful_statements = 0
+
+    def __iter__(self) -> "Iterator[Any]":
+        return iter(())
+
+    def is_success(self) -> bool:
+        return self.rows_affected >= 0
+
+    def get_data(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[Any]":
+        return _EMPTY_RESULT_DATA
+
+    def set_metadata(self, key: str, value: Any) -> None:
+        # Copy-on-write to preserve low-allocation defaults for hot DML paths.
+        if self.metadata is _EMPTY_DML_METADATA:
+            self.metadata = {key: value}
+            return
+        self.metadata[key] = value
+
+
+FastDMLResult = DMLResult
 
 
 class StackResult:

@@ -122,25 +122,19 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         # Data dictionary is lazily initialized in property; use parent slot
         self._data_dictionary = None
 
-    def _execute_with_retry(self, operation: "Callable[[], ExecutionResult]") -> "ExecutionResult":
+    def _execute_with_retry(self, operation: "Callable[..., ExecutionResult]", *args: Any) -> "ExecutionResult":
         if not self._enable_retry:
-            return operation()
+            return operation(*args)
 
         last_error: Exception | None = None
 
-        def attempt_operation() -> "tuple[ExecutionResult | None, Exception | None]":
-            try:
-                return operation(), None
-            except Exception as exc:
-                return None, exc
-
         for attempt in range(self._retry_config.max_retries + 1):
-            result, exc = attempt_operation()
-            if exc is None:
-                return cast("ExecutionResult", result)
-            last_error = exc
-            if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
-                raise exc
+            try:
+                return operation(*args)
+            except Exception as exc:
+                last_error = exc
+                if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
+                    raise
             with contextlib.suppress(Exception):
                 self.connection.rollback()
             delay = calculate_backoff_seconds(attempt, self._retry_config)
@@ -158,25 +152,31 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             return
         cursor.execute(f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")
 
-    def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        def operation() -> "ExecutionResult":
-            if statement.returns_rows():
-                self._apply_follower_reads(cursor)
-            return super(CockroachPsycopgSyncDriver, self).dispatch_execute(cursor, statement)
+    def _dispatch_execute_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        if statement.returns_rows():
+            self._apply_follower_reads(cursor)
+        return super().dispatch_execute(cursor, statement)
 
-        return self._execute_with_retry(operation)
+    def _dispatch_execute_many_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        return super().dispatch_execute_many(cursor, statement)
+
+    def _dispatch_execute_script_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        return super().dispatch_execute_script(cursor, statement)
+
+    def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        if not self._enable_retry:
+            return self._dispatch_execute_impl(cursor, statement)
+        return self._execute_with_retry(self._dispatch_execute_impl, cursor, statement)
 
     def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        def operation() -> "ExecutionResult":
-            return super(CockroachPsycopgSyncDriver, self).dispatch_execute_many(cursor, statement)
-
-        return self._execute_with_retry(operation)
+        if not self._enable_retry:
+            return super().dispatch_execute_many(cursor, statement)
+        return self._execute_with_retry(self._dispatch_execute_many_impl, cursor, statement)
 
     def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        def operation() -> "ExecutionResult":
-            return super(CockroachPsycopgSyncDriver, self).dispatch_execute_script(cursor, statement)
-
-        return self._execute_with_retry(operation)
+        if not self._enable_retry:
+            return super().dispatch_execute_script(cursor, statement)
+        return self._execute_with_retry(self._dispatch_execute_script_impl, cursor, statement)
 
     def handle_database_exceptions(self) -> "CockroachPsycopgSyncExceptionHandler":  # type: ignore[override]
         return CockroachPsycopgSyncExceptionHandler()
@@ -215,25 +215,19 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         # Data dictionary is lazily initialized in property; use parent slot
         self._data_dictionary = None
 
-    async def _execute_with_retry(self, operation: "Callable[[], Any]") -> "ExecutionResult":
+    async def _execute_with_retry(self, operation: "Callable[..., Any]", *args: Any) -> "ExecutionResult":
         if not self._enable_retry:
-            return cast("ExecutionResult", await operation())
+            return cast("ExecutionResult", await operation(*args))
 
         last_error: Exception | None = None
 
-        async def attempt_operation() -> "tuple[ExecutionResult | None, Exception | None]":
-            try:
-                return await operation(), None
-            except Exception as exc:
-                return None, exc
-
         for attempt in range(self._retry_config.max_retries + 1):
-            result, exc = await attempt_operation()
-            if exc is None:
-                return cast("ExecutionResult", result)
-            last_error = exc
-            if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
-                raise exc
+            try:
+                return cast("ExecutionResult", await operation(*args))
+            except Exception as exc:
+                last_error = exc
+                if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
+                    raise
             with contextlib.suppress(Exception):
                 await self.connection.rollback()
             delay = calculate_backoff_seconds(attempt, self._retry_config)
@@ -251,25 +245,31 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             return
         await cursor.execute(f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")
 
-    async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        async def operation() -> "ExecutionResult":
-            if statement.returns_rows():
-                await self._apply_follower_reads(cursor)
-            return await super(CockroachPsycopgAsyncDriver, self).dispatch_execute(cursor, statement)
+    async def _dispatch_execute_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        if statement.returns_rows():
+            await self._apply_follower_reads(cursor)
+        return await super().dispatch_execute(cursor, statement)
 
-        return await self._execute_with_retry(operation)
+    async def _dispatch_execute_many_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        return await super().dispatch_execute_many(cursor, statement)
+
+    async def _dispatch_execute_script_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        return await super().dispatch_execute_script(cursor, statement)
+
+    async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        if not self._enable_retry:
+            return await self._dispatch_execute_impl(cursor, statement)
+        return await self._execute_with_retry(self._dispatch_execute_impl, cursor, statement)
 
     async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        async def operation() -> "ExecutionResult":
-            return await super(CockroachPsycopgAsyncDriver, self).dispatch_execute_many(cursor, statement)
-
-        return await self._execute_with_retry(operation)
+        if not self._enable_retry:
+            return await super().dispatch_execute_many(cursor, statement)
+        return await self._execute_with_retry(self._dispatch_execute_many_impl, cursor, statement)
 
     async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        async def operation() -> "ExecutionResult":
-            return await super(CockroachPsycopgAsyncDriver, self).dispatch_execute_script(cursor, statement)
-
-        return await self._execute_with_retry(operation)
+        if not self._enable_retry:
+            return await super().dispatch_execute_script(cursor, statement)
+        return await self._execute_with_retry(self._dispatch_execute_script_impl, cursor, statement)
 
     def handle_database_exceptions(self) -> "CockroachPsycopgAsyncExceptionHandler":  # type: ignore[override]
         return CockroachPsycopgAsyncExceptionHandler()

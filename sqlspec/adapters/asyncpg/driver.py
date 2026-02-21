@@ -15,6 +15,7 @@ from sqlspec.adapters.asyncpg.core import (
     driver_profile,
     invoke_prepared_statement,
     parse_status,
+    resolve_many_rowcount,
 )
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.core import (
@@ -170,8 +171,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if prepared_parameters:
             parameter_sets = cast("list[Sequence[object]]", prepared_parameters)
             await cursor.executemany(sql, parameter_sets)
-
-            affected_rows = len(parameter_sets)
+            affected_rows = resolve_many_rowcount(parameter_sets)
         else:
             affected_rows = 0
 
@@ -441,6 +441,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect asyncpg rows for the direct execution path."""
+        data, column_names = collect_rows(fetched)
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from asyncpg status for the direct execution path."""
+        return parse_status(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

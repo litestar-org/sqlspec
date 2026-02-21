@@ -123,7 +123,12 @@ class TestSingleCompilation:
         assert call_count == 1, f"compile() called {call_count} times, expected 1"
 
     def test_compile_called_once_for_execute_many(self, sqlite_spec):
-        """execute_many should compile exactly once for the batch."""
+        """execute_many should compile at most once for the batch.
+
+        SQLite's thin path optimization bypasses compile() entirely for simple
+        qmark batches, so compile may be called 0 times. The key guarantee is
+        that it is never called more than once (i.e., not once per row).
+        """
         spec, config = sqlite_spec
         original_compile = SQL.compile
 
@@ -140,8 +145,9 @@ class TestSingleCompilation:
             with patch.object(SQL, "compile", counting_compile):
                 session.execute_many("INSERT INTO batch_test (id) VALUES (?)", [(1,), (2,), (3,)])
 
-        # execute_many should compile once, not once per row
-        assert call_count == 1, f"compile() called {call_count} times, expected 1"
+        # execute_many should compile at most once, not once per row.
+        # SQLite thin path may bypass compile() entirely (call_count == 0).
+        assert call_count <= 1, f"compile() called {call_count} times, expected at most 1"
 
 
 class TestPerformanceOverhead:

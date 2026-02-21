@@ -7,7 +7,7 @@ Tests for:
 """
 
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -139,3 +139,61 @@ class TestAsyncMigrationCommandsSquash:
 
         with pytest.raises(SquashValidationError, match="Invalid range"):
             await commands.squash(start_version="0003", end_version="0001", description="release")
+
+
+class TestSyncSquashDefaults:
+    """Tests for default range and message in SyncMigrationCommands.squash() (sqlspec-lz9, sqlspec-wa2)."""
+
+    def test_squash_defaults_to_all_migrations(self, tmp_path: Path) -> None:
+        """Test that omitting start/end squashes all sequential migrations."""
+        from sqlspec.migrations.commands import SyncMigrationCommands
+
+        (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
+        (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
+        (tmp_path / "0003_posts.sql").write_text("-- name: migrate-0003-up\nCREATE TABLE t3 (id INT);")
+
+        config = Mock()
+        config.is_async = False
+        config.migration_tracker_type = Mock(return_value=Mock())
+        config.migration_config = {"script_location": str(tmp_path)}
+        config.provide_session = Mock()
+        config.get_observability_runtime = Mock(return_value=None)
+
+        commands = SyncMigrationCommands(config)
+
+        # Omit start_version and end_version — should squash all (0001 to 0003)
+        commands.squash(description="all_squashed", dry_run=True)
+
+    def test_squash_prompts_for_description(self, tmp_path: Path) -> None:
+        """Test that missing description triggers interactive prompt."""
+        from sqlspec.migrations.commands import SyncMigrationCommands
+
+        (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
+
+        config = Mock()
+        config.is_async = False
+        config.migration_tracker_type = Mock(return_value=Mock())
+        config.migration_config = {"script_location": str(tmp_path)}
+        config.provide_session = Mock()
+        config.get_observability_runtime = Mock(return_value=None)
+
+        commands = SyncMigrationCommands(config)
+
+        with patch("rich.prompt.Prompt.ask", return_value="prompted_description") as mock_prompt:
+            commands.squash(start_version="0001", end_version="0001", dry_run=True)
+            mock_prompt.assert_called_once()
+
+    def test_squash_no_migrations_returns_early(self, tmp_path: Path) -> None:
+        """Test that empty directory returns early when no range given."""
+        from sqlspec.migrations.commands import SyncMigrationCommands
+
+        config = Mock()
+        config.is_async = False
+        config.migration_tracker_type = Mock(return_value=Mock())
+        config.migration_config = {"script_location": str(tmp_path)}
+        config.provide_session = Mock()
+        config.get_observability_runtime = Mock(return_value=None)
+
+        commands = SyncMigrationCommands(config)
+        # No migrations in tmp_path — should return early without error
+        commands.squash(description="empty", dry_run=True)

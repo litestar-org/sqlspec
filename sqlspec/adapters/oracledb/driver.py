@@ -29,6 +29,7 @@ from sqlspec.adapters.oracledb.core import (
     normalize_column_names,
     normalize_execute_many_parameters_async,
     normalize_execute_many_parameters_sync,
+    resolve_row_metadata,
     resolve_rowcount,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
@@ -328,7 +329,13 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     error handling, and transaction management.
     """
 
-    __slots__ = ("_data_dictionary", "_oracle_version", "_pipeline_support", "_pipeline_support_reason")
+    __slots__ = (
+        "_data_dictionary",
+        "_oracle_version",
+        "_pipeline_support",
+        "_pipeline_support_reason",
+        "_row_metadata_cache",
+    )
     dialect = "oracle"
 
     def __init__(
@@ -347,6 +354,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
+        self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -375,8 +383,13 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         # SELECT result processing for Oracle
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
+            column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = collect_sync_rows(
-                cast("list[Any] | None", fetched_data), cursor.description, self.driver_features
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                self.driver_features,
+                column_names=column_names,
+                requires_lob_coercion=requires_lob_coercion,
             )
 
             return self.create_execution_result(
@@ -691,6 +704,22 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect Oracle sync rows for the direct execution path."""
+        column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+        data, column_names = collect_sync_rows(
+            cast("list[Any] | None", fetched),
+            cursor.description,
+            self.driver_features,
+            column_names=column_names,
+            requires_lob_coercion=requires_lob_coercion,
+        )
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from Oracle cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return False
@@ -704,6 +733,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
+
+    def _resolve_row_metadata(self, description: Any) -> "tuple[list[str], bool]":
+        return resolve_row_metadata(description, self.driver_features, self._row_metadata_cache)
 
     def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
         """Execute SQL and return an Oracle DataFrame."""
@@ -788,7 +820,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     error handling, and transaction management for async operations.
     """
 
-    __slots__ = ("_data_dictionary", "_oracle_version", "_pipeline_support", "_pipeline_support_reason")
+    __slots__ = (
+        "_data_dictionary",
+        "_oracle_version",
+        "_pipeline_support",
+        "_pipeline_support_reason",
+        "_row_metadata_cache",
+    )
     dialect = "oracle"
 
     def __init__(
@@ -807,6 +845,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
+        self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -837,8 +876,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         if is_select_like:
             fetched_data = await cursor.fetchall()
+            column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = await collect_async_rows(
-                cast("list[Any] | None", fetched_data), cursor.description, self.driver_features
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                self.driver_features,
+                column_names=column_names,
+                requires_lob_coercion=requires_lob_coercion,
             )
 
             return self.create_execution_result(
@@ -1157,6 +1201,26 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect Oracle async rows for the direct execution path.
+
+        Uses synchronous LOB coercion. For async LOB coercion, the standard
+        dispatch path via collect_async_rows is used instead.
+        """
+        column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+        data, column_names = collect_sync_rows(
+            cast("list[Any] | None", fetched),
+            cursor.description,
+            self.driver_features,
+            column_names=column_names,
+            requires_lob_coercion=requires_lob_coercion,
+        )
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from Oracle cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return False
@@ -1170,6 +1234,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
+
+    def _resolve_row_metadata(self, description: Any) -> "tuple[list[str], bool]":
+        return resolve_row_metadata(description, self.driver_features, self._row_metadata_cache)
 
     async def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
         """Execute SQL and return an Oracle DataFrame."""

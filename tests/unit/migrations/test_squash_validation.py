@@ -220,3 +220,51 @@ class TestValidateSquashIdempotency:
         status = validate_squash_idempotency(source_files, target_file)
 
         assert status == "partial"
+
+
+class TestParseVersionRange:
+    """Tests for parse_version_range() function (sqlspec-2bo)."""
+
+    def test_colon_separator(self) -> None:
+        """Test START:END format."""
+        from sqlspec.migrations.squash import parse_version_range
+
+        assert parse_version_range("1:7") == ("0001", "0007")
+
+    def test_double_dot_separator(self) -> None:
+        """Test START..END format."""
+        from sqlspec.migrations.squash import parse_version_range
+
+        assert parse_version_range("1..7") == ("0001", "0007")
+
+    def test_hyphen_separator(self) -> None:
+        """Test START-END format."""
+        from sqlspec.migrations.squash import parse_version_range
+
+        assert parse_version_range("1-7") == ("0001", "0007")
+
+    def test_zero_padded_input(self) -> None:
+        """Test that already-padded input is preserved."""
+        from sqlspec.migrations.squash import parse_version_range
+
+        assert parse_version_range("0001:0007") == ("0001", "0007")
+
+    def test_whitespace_stripped(self) -> None:
+        """Test that whitespace around versions is stripped."""
+        from sqlspec.migrations.squash import parse_version_range
+
+        assert parse_version_range(" 1 : 7 ") == ("0001", "0007")
+
+    def test_invalid_format_raises(self) -> None:
+        """Test that unsupported format raises ValueError."""
+        from sqlspec.migrations.squash import parse_version_range
+
+        with pytest.raises(ValueError, match="Invalid VERSION_RANGE"):
+            parse_version_range("1to7")
+
+    def test_double_dot_preferred_over_hyphen(self) -> None:
+        """Test that '..' separator is tried before '-' to avoid ambiguity."""
+        from sqlspec.migrations.squash import parse_version_range
+
+        # "1..7" should split on ".." not on "-"
+        assert parse_version_range("1..7") == ("0001", "0007")

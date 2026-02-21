@@ -1,6 +1,7 @@
 """psycopg adapter compiled helpers."""
 
 import datetime
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from psycopg import sql as psycopg_sql
@@ -60,9 +61,8 @@ __all__ = (
     "driver_profile",
     "execute_with_optional_parameters",
     "execute_with_optional_parameters_async",
-    "executemany_or_skip",
-    "executemany_or_skip_async",
     "pipeline_supported",
+    "resolve_many_rowcount",
     "resolve_rowcount",
 )
 
@@ -249,40 +249,6 @@ async def execute_with_optional_parameters_async(cursor: Any, sql: str, paramete
         await cursor.execute(sql)
 
 
-def executemany_or_skip(cursor: Any, sql: str, parameters: Any) -> bool:
-    """Execute executemany when parameters are provided.
-
-    Args:
-        cursor: Psycopg cursor object.
-        sql: SQL string to execute.
-        parameters: Prepared parameters payload.
-
-    Returns:
-        True when executemany was executed.
-    """
-    if not parameters:
-        return False
-    cursor.executemany(sql, parameters)
-    return True
-
-
-async def executemany_or_skip_async(cursor: Any, sql: str, parameters: Any) -> bool:
-    """Execute executemany when parameters are provided in async mode.
-
-    Args:
-        cursor: Psycopg async cursor object.
-        sql: SQL string to execute.
-        parameters: Prepared parameters payload.
-
-    Returns:
-        True when executemany was executed.
-    """
-    if not parameters:
-        return False
-    await cursor.executemany(sql, parameters)
-    return True
-
-
 def resolve_rowcount(cursor: Any) -> int:
     """Resolve rowcount from a psycopg cursor.
 
@@ -301,20 +267,54 @@ def resolve_rowcount(cursor: Any) -> int:
     return 0
 
 
-def build_pipeline_execution_result(statement: "SQL", cursor: Any) -> "ExecutionResult":
+def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:
+    """Resolve rowcount for execute_many operations.
+
+    Prefers the driver-provided rowcount when available, with a fallback to
+    the number of parameter sets when the driver reports unknown rowcount.
+
+    Args:
+        cursor: Psycopg cursor with optional rowcount metadata.
+        parameters: Prepared executemany parameter payload.
+        fallback_count: Optional precomputed parameter payload size.
+
+    Returns:
+        Positive rowcount value, parameter set count, or 0 when unknown.
+    """
+
+    try:
+        rowcount = cursor.rowcount
+    except AttributeError:
+        rowcount = None
+    if isinstance(rowcount, int) and rowcount > 0:
+        return rowcount
+    if fallback_count is not None:
+        return fallback_count
+    if isinstance(parameters, Sized):
+        return len(parameters)
+    return 0
+
+
+def build_pipeline_execution_result(
+    statement: "SQL", cursor: Any, *, column_name_resolver: "Callable[[Any], list[str]] | None" = None
+) -> "ExecutionResult":
     """Build an ExecutionResult for psycopg pipeline execution.
 
     Args:
         statement: SQL statement executed by the pipeline.
         cursor: Psycopg cursor holding the pipeline result.
+        column_name_resolver: Optional cached column-name resolver.
 
     Returns:
         ExecutionResult representing the pipeline operation.
     """
 
     if statement.returns_rows():
-        fetched_data = cursor.fetchall()
-        fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
+        fetched_data = cast("list[Any] | None", cursor.fetchall()) or []
+        if column_name_resolver is None:
+            fetched_data, column_names = collect_rows(fetched_data, cursor.description)
+        else:
+            column_names = column_name_resolver(cursor.description)
         return ExecutionResult(
             cursor_result=cursor,
             rowcount_override=None,
@@ -348,20 +348,26 @@ def build_pipeline_execution_result(statement: "SQL", cursor: Any) -> "Execution
     )
 
 
-async def build_async_pipeline_execution_result(statement: "SQL", cursor: Any) -> "ExecutionResult":
+async def build_async_pipeline_execution_result(
+    statement: "SQL", cursor: Any, *, column_name_resolver: "Callable[[Any], list[str]] | None" = None
+) -> "ExecutionResult":
     """Build an ExecutionResult for psycopg async pipeline execution.
 
     Args:
         statement: SQL statement executed by the pipeline.
         cursor: Psycopg cursor holding the pipeline result.
+        column_name_resolver: Optional cached column-name resolver.
 
     Returns:
         ExecutionResult representing the pipeline operation.
     """
 
     if statement.returns_rows():
-        fetched_data = await cursor.fetchall()
-        fetched_data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
+        fetched_data = cast("list[Any] | None", await cursor.fetchall()) or []
+        if column_name_resolver is None:
+            fetched_data, column_names = collect_rows(fetched_data, cursor.description)
+        else:
+            column_names = column_name_resolver(cursor.description)
         return ExecutionResult(
             cursor_result=cursor,
             rowcount_override=None,

@@ -437,6 +437,14 @@ class MockSyncDriver(SyncDriverAdapterBase):
             return sql
         return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
 
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect mock sync rows for the direct execution path."""
+        return collect_rows(fetched, cursor.description)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from mock cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
@@ -732,6 +740,14 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             sql, _ = self._get_compiled_sql(statement, self.statement_config)
             return sql
         return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect mock async rows for the direct execution path."""
+        return collect_rows(fetched, cursor.description)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from mock cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

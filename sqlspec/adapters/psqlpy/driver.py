@@ -21,6 +21,7 @@ from sqlspec.adapters.psqlpy.core import (
     driver_profile,
     encode_records_for_binary_copy,
     extract_rows_affected,
+    format_execute_many_parameters,
     format_table_identifier,
     get_parameter_casts,
     normalize_scalar_parameter,
@@ -193,21 +194,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        driver_parameters = self.prepare_driver_parameters(
-            prepared_parameters, self.statement_config, is_many=True, prepared_statement=statement
-        )
-
         operation_type = statement.operation_type
         should_coerce = operation_type != "SELECT"
-
-        formatted_parameters = []
-        for param_set in driver_parameters:
-            values = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
-
-            if should_coerce:
-                values = list(coerce_numeric_for_write(values))
-
-            formatted_parameters.append(values)
+        formatted_parameters = format_execute_many_parameters(prepared_parameters, coerce_numeric=should_coerce)
 
         await cursor.execute_many(sql, formatted_parameters)
 
@@ -437,6 +426,18 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect psqlpy rows for the direct execution path.
+
+        The ``fetched`` argument may be a psqlpy query result or a plain list.
+        """
+        dict_rows, column_names = collect_rows(fetched)
+        return dict_rows, column_names, len(dict_rows)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from psqlpy result for the direct execution path."""
+        return extract_rows_affected(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

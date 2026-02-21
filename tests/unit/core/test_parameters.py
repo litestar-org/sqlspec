@@ -1130,6 +1130,39 @@ def test_process_execute_many_named_to_positional(processor: "ParameterProcessor
     assert [tuple(param_set) for param_set in final_params] == [(10, 20), (30, 40)]
 
 
+def test_process_execute_many_skips_coercion_allocations_when_no_types_match(processor: "ParameterProcessor") -> None:
+    """Execute_many should preserve payload identity when coercion map is irrelevant."""
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        type_coercion_map={bool: lambda value: 1 if value else 0},
+    )
+    sql = "INSERT INTO metrics (value) VALUES (?)"
+    parameters = [("v1",), ("v2",), ("v3",)]
+
+    result = processor.process(sql, parameters, config, is_many=True, wrap_types=False)
+
+    assert result.parameters is parameters
+    assert result.parameters == parameters
+
+
+def test_process_execute_many_coerces_only_rows_that_require_conversion(processor: "ParameterProcessor") -> None:
+    """Execute_many should still coerce values when a matching type is present."""
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK, type_coercion_map={bool: lambda value: 1 if value else 0}
+    )
+    sql = "INSERT INTO metrics (value) VALUES (?)"
+    parameters = [(True,), ("v2",)]
+
+    result = processor.process(sql, parameters, config, is_many=True, wrap_types=False)
+
+    assert isinstance(result.parameters, list)
+    assert result.parameters is not parameters
+    assert tuple(result.parameters[0]) == (1,)
+    assert tuple(result.parameters[1]) == ("v2",)
+
+
 def test_list_parameter_preservation(converter: ParameterConverter) -> None:
     """Test that list parameters are properly handled."""
     sql = "INSERT INTO users (id, name, active) VALUES (?, ?, ?)"
