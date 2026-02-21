@@ -269,7 +269,6 @@ class SqliteDriver(SyncDriverAdapterBase):
                 if column_names is None:
                     description = cursor.description
                     column_names = [col[0] for col in description] if description else []
-                    cached.column_names = column_names
                 execution_result = self.create_execution_result(
                     cursor,
                     selected_data=fetched_data,

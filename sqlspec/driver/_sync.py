@@ -391,7 +391,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
                             affected_rows = self.resolve_rowcount(cursor)
                             return DMLResult(cached.operation_type, affected_rows)
-                        except (AttributeError, NotImplementedError, TypeError):
+                        except (AttributeError, NotImplementedError):
                             # Cursor is not DB-API compatible for direct execution.
                             # Fall back to adapter dispatch path.
                             pass

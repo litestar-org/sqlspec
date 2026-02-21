@@ -800,8 +800,7 @@ DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]
 
 
 _DEFAULT_METADATA: Final = {"status_message": "OK"}
-_EMPTY_DATA: Final["list[Any]"] = []
-_FAST_NO_COERCION_TYPES: Final = (str, int, float, bytes, bytearray, memoryview, type(None))
+_EMPTY_DATA: Final[tuple[()]] = ()
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -1609,9 +1608,6 @@ class CommonDriverAttributesMixin:
         exact_converter = type_coercion_map.get(value_type)
         if exact_converter is not None:
             return exact_converter(unwrapped_value)
-
-        if value_type in _FAST_NO_COERCION_TYPES:
-            return unwrapped_value
 
         for type_check, converter in type_coercion_map.items():
             if type_check is value_type:

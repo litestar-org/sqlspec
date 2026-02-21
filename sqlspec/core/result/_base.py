@@ -10,7 +10,7 @@ Classes:
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, cast, overload
 
 from mypy_extensions import mypyc_attr
@@ -48,12 +48,12 @@ __all__ = ("ArrowResult", "DMLResult", "EmptyResult", "FastDMLResult", "SQLResul
 
 T = TypeVar("T")
 _EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
-_EMPTY_RESULT_DATA: list[Any] = []
+_EMPTY_RESULT_DATA: "tuple[()]" = ()
 _EMPTY_DML_METADATA: dict[str, Any] = {}
-_EMPTY_DML_COLUMN_NAMES: list[str] = []
-_EMPTY_DML_INSERTED_IDS: list[int | str] = []
-_EMPTY_DML_STATEMENT_RESULTS: list["SQLResult"] = []
-_EMPTY_DML_ERRORS: list[str] = []
+_EMPTY_DML_COLUMN_NAMES: "tuple[()]" = ()
+_EMPTY_DML_INSERTED_IDS: "tuple[()]" = ()
+_EMPTY_DML_STATEMENT_RESULTS: "tuple[()]" = ()
+_EMPTY_DML_ERRORS: "tuple[()]" = ()
 _TWO_COLUMNS_FASTPATH = 2
 
 
@@ -186,7 +186,7 @@ class SQLResult(StatementResult):
     def __init__(
         self,
         statement: "SQL",
-        data: "list[Any] | None" = None,
+        data: "Sequence[Any] | None" = None,
         rows_affected: int = 0,
         last_inserted_id: int | str | None = None,
         execution_time: float | None = None,
@@ -980,7 +980,7 @@ class EmptyResult(StatementResult):
         return True
 
     def get_data(self) -> "list[Any]":
-        return _EMPTY_RESULT_DATA
+        return []
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1026,7 +1026,7 @@ class DMLResult(SQLResult):
         return self.rows_affected >= 0
 
     def get_data(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[Any]":
-        return _EMPTY_RESULT_DATA
+        return []
 
     def set_metadata(self, key: str, value: Any) -> None:
         # Copy-on-write to preserve low-allocation defaults for hot DML paths.
