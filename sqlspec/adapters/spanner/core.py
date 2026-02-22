@@ -41,7 +41,7 @@ __all__ = (
     "supports_write",
 )
 
-_COLUMN_NAME_CACHE_MAX_SIZE: int = 128
+COLUMN_CACHE_MAX_SIZE: int = 128
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -136,7 +136,7 @@ def resolve_column_names(fields: "Sequence[Any] | None", cache: "dict[int, tuple
         return cached[1]
 
     column_names = [field.name for field in fields]
-    if len(cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+    if len(cache) >= COLUMN_CACHE_MAX_SIZE:
         cache.pop(next(iter(cache)))
     cache[cache_key] = (fields, column_names)
     return column_names

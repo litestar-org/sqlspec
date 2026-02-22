@@ -8,9 +8,9 @@ if TYPE_CHECKING:
     from sqlspec.core.parameters import ParameterProfile
     from sqlspec.core.statement import ProcessedState
 
-__all__ = ("QC_MAX_SIZE", "CachedQuery", "QueryCache")
+__all__ = ("STMT_CACHE_MAX_SIZE", "CachedQuery", "QueryCache")
 
-QC_MAX_SIZE: Final[int] = 1024
+STMT_CACHE_MAX_SIZE: Final[int] = 1024
 
 
 class CachedQuery:
@@ -70,7 +70,7 @@ class QueryCache:
 
     __slots__ = ("_cache", "_max_size")
 
-    def __init__(self, max_size: int = QC_MAX_SIZE) -> None:
+    def __init__(self, max_size: int = STMT_CACHE_MAX_SIZE) -> None:
         self._cache: OrderedDict[str, CachedQuery] = OrderedDict()
         self._max_size = max_size
 

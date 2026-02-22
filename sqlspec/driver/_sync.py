@@ -345,7 +345,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
 
-    def _qc_execute_direct(self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: CachedQuery) -> "SQLResult":
+    def _stmt_cache_execute_direct(
+        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: CachedQuery
+    ) -> "SQLResult":
         """Execute pre-compiled query via ultra-fast path (sync).
 
         Uses a DB-API direct path when available (`cursor.execute`) and falls
@@ -379,7 +381,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                                     is_select_result=True,
                                     row_format="tuple",
                                 )
-                                direct_statement = self._qc_build_direct(
+                                direct_statement = self._stmt_cache_build_direct(
                                     sql,
                                     params,
                                     cached,
@@ -396,7 +398,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                             # Fall back to adapter dispatch path.
                             pass
 
-                    direct_statement = self._qc_build_direct(
+                    direct_statement = self._stmt_cache_build_direct(
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = self.dispatch_execute(cursor, direct_statement)
@@ -422,10 +424,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "unreachable"
         raise AssertionError(msg)  # pragma: no cover - all paths return or raise
 
-    def _qc_execute(self, statement: "SQL") -> "SQLResult":
+    def _stmt_cache_execute(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path.
 
-        The statement is already compiled by _qc_prepare, so dispatch_execute
+        The statement is already compiled by _stmt_cache_prepare_direct, so dispatch_execute
         will hit the fast path in _get_compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
@@ -495,14 +497,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
         if (
-            self._qc_enabled
+            self._stmt_cache_enabled
             and (statement_config is None or statement_config is self.statement_config)
             and isinstance(statement, str)
             and len(parameters) == 1
             and isinstance(parameters[0], (tuple, list))
             and not kwargs
         ):
-            fast_result = self._qc_lookup(statement, parameters[0])
+            fast_result = self._stmt_cache_lookup(statement, parameters[0])
             if fast_result is not None:
                 return fast_result  # type: ignore[return-value]
         sql_statement = self.prepare_statement(

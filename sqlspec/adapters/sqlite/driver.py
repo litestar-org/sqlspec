@@ -239,7 +239,9 @@ class SqliteDriver(SyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    def _qc_execute_direct(self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "SQLResult":
+    def _stmt_cache_execute_direct(
+        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
         """Execute cached query through SQLite connection.execute fast path.
 
         This bypasses cursor context-manager overhead for repeated cached
@@ -277,7 +279,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                     is_select_result=True,
                     row_format="tuple",
                 )
-                direct_statement = self._qc_build_direct(
+                direct_statement = self._stmt_cache_build_direct(
                     sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                 )
                 return self.build_statement_result(direct_statement, execution_result)

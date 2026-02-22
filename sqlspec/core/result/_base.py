@@ -49,12 +49,12 @@ __all__ = ("ArrowResult", "DMLResult", "EmptyResult", "FastDMLResult", "SQLResul
 T = TypeVar("T")
 _EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
 _EMPTY_RESULT_DATA: "tuple[()]" = ()
-_EMPTY_DML_METADATA: dict[str, Any] = {}
+_DEFAULT_DML_METADATA: dict[str, Any] = {}
 _EMPTY_DML_COLUMN_NAMES: "tuple[()]" = ()
 _EMPTY_DML_INSERTED_IDS: "tuple[()]" = ()
 _EMPTY_DML_STATEMENT_RESULTS: "tuple[()]" = ()
 _EMPTY_DML_ERRORS: "tuple[()]" = ()
-_TWO_COLUMNS_FASTPATH = 2
+_TWO_COLUMN_THRESHOLD = 2
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -294,7 +294,7 @@ class SQLResult(StatementResult):
             elif len(col_names) == 1:
                 key = col_names[0]
                 self._materialized_dicts = [{key: row[0]} for row in raw]
-            elif len(col_names) == _TWO_COLUMNS_FASTPATH:
+            elif len(col_names) == _TWO_COLUMN_THRESHOLD:
                 key0, key1 = col_names
                 self._materialized_dicts = [{key0: row[0], key1: row[1]} for row in raw]
             else:
@@ -1001,7 +1001,7 @@ class DMLResult(SQLResult):
         self.rows_affected = rows_affected
         self.last_inserted_id = None
         self.execution_time = None
-        self.metadata = _EMPTY_DML_METADATA
+        self.metadata = _DEFAULT_DML_METADATA
 
         self.error = None
         self._operation_type = op_type
@@ -1030,7 +1030,7 @@ class DMLResult(SQLResult):
 
     def set_metadata(self, key: str, value: Any) -> None:
         # Copy-on-write to preserve low-allocation defaults for hot DML paths.
-        if self.metadata is _EMPTY_DML_METADATA:
+        if self.metadata is _DEFAULT_DML_METADATA:
             self.metadata = {key: value}
             return
         self.metadata[key] = value

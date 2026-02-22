@@ -206,40 +206,40 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     session.execute("INSERT INTO test (value) VALUES (?)", ("cache_prime2",))
 
     # Now benchmark the direct prepare path
-    def bench_qc_prepare_hit() -> None:
-        session._qc_prepare_direct("INSERT INTO test (value) VALUES (?)", ("bench_val",))
+    def bench_cache_prepare_hit() -> None:
+        session._stmt_cache_prepare_direct("INSERT INTO test (value) VALUES (?)", ("bench_val",))
 
     benchmarks.append(
         SubsystemBenchmark(
-            name="QC _qc_prepare_direct() - cache hit",
-            bench_fn=bench_qc_prepare_hit,
+            name="QC _stmt_cache_prepare_direct() - cache hit",
+            bench_fn=bench_cache_prepare_hit,
             iterations=iterations,
             description="Direct prepare with cache hit",
         )
     )
 
-    def bench_qc_prepare_miss() -> None:
-        session._qc_prepare_direct("INSERT INTO unique_table (col) VALUES (?)", ("val",))
+    def bench_cache_prepare_miss() -> None:
+        session._stmt_cache_prepare_direct("INSERT INTO unique_table (col) VALUES (?)", ("val",))
 
     benchmarks.append(
         SubsystemBenchmark(
-            name="QC _qc_prepare_direct() - cache miss",
-            bench_fn=bench_qc_prepare_miss,
+            name="QC _stmt_cache_prepare_direct() - cache miss",
+            bench_fn=bench_cache_prepare_miss,
             iterations=iterations,
             description="Direct prepare with cache miss",
         )
     )
 
-    # Full QC lookup cycle
-    def bench_qc_lookup() -> None:
-        session._qc_lookup("INSERT INTO test (value) VALUES (?)", ("bench_val",))
+    # Full statement cache lookup cycle
+    def bench_stmt_cache_lookup() -> None:
+        session._stmt_cache_lookup("INSERT INTO test (value) VALUES (?)", ("bench_val",))
 
     benchmarks.append(
         SubsystemBenchmark(
-            name="QC _qc_lookup() - full cycle",
-            bench_fn=bench_qc_lookup,
+            name="QC _stmt_cache_lookup() - full cycle",
+            bench_fn=bench_stmt_cache_lookup,
             iterations=iterations,
-            description="Full QC lookup -> prepare -> execute cycle",
+            description="Full stmt_cache lookup -> prepare -> execute cycle",
         )
     )
 

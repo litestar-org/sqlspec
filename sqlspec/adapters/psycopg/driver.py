@@ -72,7 +72,7 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.adapters.psycopg")
-_COLUMN_NAME_CACHE_MAX_SIZE = 256
+COLUMN_CACHE_MAX_SIZE = 256
 
 
 class PsycopgPipelineMixin:
@@ -566,7 +566,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         column_names = [col.name for col in description]
 
-        if len(self._column_name_cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+        if len(self._column_name_cache) >= COLUMN_CACHE_MAX_SIZE:
             self._column_name_cache.pop(next(iter(self._column_name_cache)))
         self._column_name_cache[cache_key] = (description, column_names)
         return column_names
@@ -1051,7 +1051,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         column_names = [col.name for col in description]
 
-        if len(self._column_name_cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+        if len(self._column_name_cache) >= COLUMN_CACHE_MAX_SIZE:
             self._column_name_cache.pop(next(iter(self._column_name_cache)))
         self._column_name_cache[cache_key] = (description, column_names)
         return column_names
