@@ -50,10 +50,6 @@ T = TypeVar("T")
 _EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
 _EMPTY_RESULT_DATA: "tuple[()]" = ()
 _DEFAULT_DML_METADATA: dict[str, Any] = {}
-_EMPTY_DML_COLUMN_NAMES: "tuple[()]" = ()
-_EMPTY_DML_INSERTED_IDS: "tuple[()]" = ()
-_EMPTY_DML_STATEMENT_RESULTS: "tuple[()]" = ()
-_EMPTY_DML_ERRORS: "tuple[()]" = ()
 _TWO_COLUMN_THRESHOLD = 2
 
 
@@ -1010,12 +1006,12 @@ class DMLResult(SQLResult):
         self._row_format = "dict"
         self._materialized_dicts = None
 
-        self.column_names = _EMPTY_DML_COLUMN_NAMES
+        self.column_names: list[str] = []
         self.total_count = 0
         self.has_more = False
-        self.inserted_ids = _EMPTY_DML_INSERTED_IDS
-        self.statement_results = _EMPTY_DML_STATEMENT_RESULTS
-        self.errors = _EMPTY_DML_ERRORS
+        self.inserted_ids: list[int | str] = []
+        self.statement_results: list[SQLResult] = []
+        self.errors: list[str] = []
         self.total_statements = 0
         self.successful_statements = 0
 
