@@ -41,11 +41,11 @@ def _make_cached(
 class _FakeDriver(CommonDriverAttributesMixin):
     __slots__ = ()
 
-    def _qc_execute(self, statement: Any) -> Any:
+    def _stmt_cache_execute(self, statement: Any) -> Any:
         return statement
 
 
-def test_qc_lru_eviction() -> None:
+def test_stmt_cache_lru_eviction() -> None:
     cache = QueryCache(max_size=2)
 
     cache.set("a", _make_cached("SQL_A", 1))
@@ -59,7 +59,7 @@ def test_qc_lru_eviction() -> None:
     assert cache.get("c") is not None
 
 
-def test_qc_update_moves_to_end() -> None:
+def test_stmt_cache_update_moves_to_end() -> None:
     cache = QueryCache(max_size=2)
 
     cache.set("a", _make_cached("SQL_A", 1))
@@ -74,7 +74,7 @@ def test_qc_update_moves_to_end() -> None:
     assert entry.param_count == 2
 
 
-def test_qc_lookup_cache_hit_rebinds() -> None:
+def test_stmt_cache_lookup_cache_hit_rebinds() -> None:
     config = StatementConfig(
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
@@ -95,9 +95,9 @@ def test_qc_lookup_cache_hit_rebinds() -> None:
         param_count=1,
         processed_state=ps,
     )
-    driver._qc.set("SELECT * FROM t WHERE id = ?", cached)
+    driver._stmt_cache.set("SELECT * FROM t WHERE id = ?", cached)
 
-    result = driver._qc_lookup("SELECT * FROM t WHERE id = ?", (1,))
+    result = driver._stmt_cache_lookup("SELECT * FROM t WHERE id = ?", (1,))
 
     assert result is not None
     # Result is the SQL statement with processed state
@@ -108,7 +108,7 @@ def test_qc_lookup_cache_hit_rebinds() -> None:
     assert params == (1,)
 
 
-def test_qc_store_snapshots_processed_state() -> None:
+def test_stmt_cache_store_snapshots_processed_state() -> None:
     config = StatementConfig(
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
@@ -118,8 +118,8 @@ def test_qc_store_snapshots_processed_state() -> None:
     statement = SQL("SELECT ?", (1,), statement_config=config)
     statement.compile()
 
-    driver._qc_store(statement)
-    cached = driver._qc.get("SELECT ?")
+    driver._stmt_cache_store(statement)
+    cached = driver._stmt_cache.get("SELECT ?")
     assert cached is not None
 
     # Mutate/reset the original state after cache storage; cached metadata
@@ -167,7 +167,7 @@ def test_prepare_driver_parameters_many_coerces_rows_when_needed() -> None:
     assert tuple(prepared[1]) == ("b",)
 
 
-def test_sync_qc_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch) -> None:
+def test_sync_stmt_cache_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch) -> None:
     class _CursorManager:
         def __enter__(self) -> object:
             return object()
@@ -180,7 +180,7 @@ def test_sync_qc_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch
         return _CursorManager()
 
     def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
-        # Regression test: direct QC execution should not require cursor.execute().
+        # Regression test: direct cache execution should not require cursor.execute().
         assert not hasattr(cursor, "execute")
         return mock_sync_driver.create_execution_result(cursor, rowcount_override=7)
 
@@ -197,7 +197,7 @@ def test_sync_qc_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch
         ),
     )
 
-    result = mock_sync_driver._qc_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+    result = mock_sync_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
     assert result.operation_type == "INSERT"
     assert result.rows_affected == 7
 
@@ -210,8 +210,8 @@ def test_execute_uses_fast_path_when_eligible(mock_sync_driver, monkeypatch) -> 
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(mock_sync_driver, "_qc_lookup", _fake_try)
-    mock_sync_driver._qc_enabled = True
+    monkeypatch.setattr(mock_sync_driver, "_stmt_cache_lookup", _fake_try)
+    mock_sync_driver._stmt_cache_enabled = True
 
     result = mock_sync_driver.execute("SELECT ?", (1,))
 
@@ -227,8 +227,8 @@ def test_execute_skips_fast_path_with_statement_config_override(mock_sync_driver
         called = True
         return object()
 
-    monkeypatch.setattr(mock_sync_driver, "_qc_lookup", _fake_try)
-    mock_sync_driver._qc_enabled = True
+    monkeypatch.setattr(mock_sync_driver, "_stmt_cache_lookup", _fake_try)
+    mock_sync_driver._stmt_cache_enabled = True
 
     statement_config = mock_sync_driver.statement_config.replace()
     result = mock_sync_driver.execute("SELECT ?", (1,), statement_config=statement_config)
@@ -238,13 +238,13 @@ def test_execute_skips_fast_path_with_statement_config_override(mock_sync_driver
 
 
 def test_execute_populates_fast_path_cache_on_normal_path(mock_sync_driver) -> None:
-    mock_sync_driver._qc_enabled = True
+    mock_sync_driver._stmt_cache_enabled = True
 
-    assert mock_sync_driver._qc.get("SELECT ?") is None
+    assert mock_sync_driver._stmt_cache.get("SELECT ?") is None
 
     result = mock_sync_driver.execute("SELECT ?", (1,))
 
-    cached = mock_sync_driver._qc.get("SELECT ?")
+    cached = mock_sync_driver._stmt_cache.get("SELECT ?")
     assert cached is not None
     assert cached.param_count == 1
     assert cached.operation_type == "SELECT"
@@ -260,8 +260,8 @@ async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, mon
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(mock_async_driver, "_qc_lookup", _fake_try)
-    mock_async_driver._qc_enabled = True
+    monkeypatch.setattr(mock_async_driver, "_stmt_cache_lookup", _fake_try)
+    mock_async_driver._stmt_cache_enabled = True
 
     result = await mock_async_driver.execute("SELECT ?", (1,))
 
@@ -278,8 +278,8 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(mock
         called = True
         return object()
 
-    monkeypatch.setattr(mock_async_driver, "_qc_lookup", _fake_try)
-    mock_async_driver._qc_enabled = True
+    monkeypatch.setattr(mock_async_driver, "_stmt_cache_lookup", _fake_try)
+    mock_async_driver._stmt_cache_enabled = True
 
     statement_config = mock_async_driver.statement_config.replace()
     result = await mock_async_driver.execute("SELECT ?", (1,), statement_config=statement_config)
@@ -290,20 +290,20 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(mock
 
 @pytest.mark.asyncio
 async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async_driver) -> None:
-    mock_async_driver._qc_enabled = True
+    mock_async_driver._stmt_cache_enabled = True
 
-    assert mock_async_driver._qc.get("SELECT ?") is None
+    assert mock_async_driver._stmt_cache.get("SELECT ?") is None
 
     result = await mock_async_driver.execute("SELECT ?", (1,))
 
-    cached = mock_async_driver._qc.get("SELECT ?")
+    cached = mock_async_driver._stmt_cache.get("SELECT ?")
     assert cached is not None
     assert cached.param_count == 1
     assert cached.operation_type == "SELECT"
     assert result.operation_type == "SELECT"
 
 
-def test_qc_thread_safety() -> None:
+def test_stmt_cache_thread_safety() -> None:
     cache = QueryCache(max_size=32)
     cached = _make_cached()
     for idx in range(16):

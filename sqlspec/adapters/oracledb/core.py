@@ -66,8 +66,8 @@ IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-
 _VERSION_COMPONENTS: int = 3
 TYPE_CONVERTER = OracleOutputConverter()
 _LOB_TYPE_NAME_MARKERS: "tuple[str, ...]" = ("LOB", "BFILE")
-_FAST_SCALAR_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, bytes, bytearray, type(None))
-_ROW_METADATA_CACHE_MAX_SIZE: int = 256
+_SCALAR_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, bytes, bytearray, type(None))
+ROW_CACHE_MAX_SIZE: int = 256
 
 # Oracle ORA error code ranges for category detection
 ORA_CHECK_CONSTRAINT = 2290
@@ -415,7 +415,7 @@ def resolve_row_metadata(
     normalized_column_names = normalize_column_names(column_names, driver_features)
     requires_lob_coercion = _description_requires_lob_coercion(description)
 
-    if len(cache) >= _ROW_METADATA_CACHE_MAX_SIZE:
+    if len(cache) >= ROW_CACHE_MAX_SIZE:
         cache.pop(next(iter(cache)))
     cache[cache_key] = (description, normalized_column_names, requires_lob_coercion)
     return normalized_column_names, requires_lob_coercion
@@ -425,7 +425,7 @@ def _row_requires_lob_coercion(row: "tuple[Any, ...]") -> bool:
     """Return True when a row contains readable values that need LOB coercion."""
     for value in row:
         value_type = type(value)
-        if value_type in _FAST_SCALAR_TYPES:
+        if value_type in _SCALAR_PASSTHROUGH_TYPES:
             continue
         if is_readable(value):
             return True
@@ -448,7 +448,7 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
     coerced_values: list[Any] | None = None
     for index, value in enumerate(row):
         value_type = type(value)
-        if value_type in _FAST_SCALAR_TYPES:
+        if value_type in _SCALAR_PASSTHROUGH_TYPES:
             if coerced_values is not None:
                 coerced_values.append(value)
             continue
@@ -494,7 +494,7 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
     coerced_values: list[Any] | None = None
     for index, value in enumerate(row):
         value_type = type(value)
-        if value_type in _FAST_SCALAR_TYPES:
+        if value_type in _SCALAR_PASSTHROUGH_TYPES:
             if coerced_values is not None:
                 coerced_values.append(value)
             continue

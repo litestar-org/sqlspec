@@ -192,6 +192,7 @@ class SQL:
         "_dialect",
         "_filters",
         "_hash",
+        "_is_cache_direct",
         "_is_many",
         "_is_script",
         "_named_parameters",
@@ -199,7 +200,6 @@ class SQL:
         "_pooled",
         "_positional_parameters",
         "_processed_state",
-        "_qc_is_direct",
         "_raw_expression",
         "_raw_sql",
         "_sql_param_counters",
@@ -210,7 +210,7 @@ class SQL:
     _sql_param_counters: "dict[str, int]"
 
     @classmethod
-    def _qc_create_direct_sql(cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState") -> "SQL":
+    def _create_cached_direct(cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState") -> "SQL":
         """Create a minimal SQL object for direct (fast-path) execution.
 
         Bypasses standard __init__ and parameter processing.
@@ -222,7 +222,7 @@ class SQL:
         stmt._dialect = stmt._normalize_dialect(config.dialect)
         stmt._processed_state = processed_state
         stmt._pooled = True
-        stmt._qc_is_direct = True
+        stmt._is_cache_direct = True
         stmt._is_many = False
         stmt._is_script = False
         return stmt
@@ -249,7 +249,7 @@ class SQL:
         self._dialect = self._normalize_dialect(config.dialect)
         self._compiled_from_cache = False
         self._pooled = False
-        self._qc_is_direct = False
+        self._is_cache_direct = False
         self._processed_state: EmptyEnum | ProcessedState = Empty
         self._hash: int | None = None
         self._filters: list[StatementFilter] = []
@@ -296,7 +296,7 @@ class SQL:
         if self._pooled and not self._compiled_from_cache and self._processed_state is not Empty:
             get_processed_state_pool().release(self._processed_state)
         self._compiled_from_cache = False
-        self._qc_is_direct = False
+        self._is_cache_direct = False
         self._processed_state = Empty
         self._hash = None
         self._filters.clear()

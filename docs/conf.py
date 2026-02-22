@@ -77,7 +77,6 @@ extensions = [
     "sphinxcontrib.mermaid",
     "numpydoc",
     "sphinx_iconify",
-    "sphinx_docsearch",
     "sphinx_datatables",
     "jupyter_sphinx",
     "nbsphinx",
@@ -167,9 +166,6 @@ autosectionlabel_prefix_document = True
 # https://sphinx-copybutton.readthedocs.io/en/latest/use.html#strip-and-configure-input-prompts-for-code-cells
 copybutton_prompt_text = "$ "
 
-docsearch_app_id = os.getenv("DOCSEARCH_APP_ID", "disabled")
-docsearch_api_key = os.getenv("DOCSEARCH_SEARCH_API_KEY", "disabled")
-docsearch_index_name = os.getenv("DOCSEARCH_INDEX_NAME", "disabled")
 nbsphinx_requirejs_path = ""
 jupyter_sphinx_require_url = ""
 

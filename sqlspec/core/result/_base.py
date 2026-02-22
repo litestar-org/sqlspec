@@ -10,7 +10,7 @@ Classes:
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, cast, overload
 
 from mypy_extensions import mypyc_attr
@@ -48,13 +48,9 @@ __all__ = ("ArrowResult", "DMLResult", "EmptyResult", "FastDMLResult", "SQLResul
 
 T = TypeVar("T")
 _EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
-_EMPTY_RESULT_DATA: list[Any] = []
-_EMPTY_DML_METADATA: dict[str, Any] = {}
-_EMPTY_DML_COLUMN_NAMES: list[str] = []
-_EMPTY_DML_INSERTED_IDS: list[int | str] = []
-_EMPTY_DML_STATEMENT_RESULTS: list["SQLResult"] = []
-_EMPTY_DML_ERRORS: list[str] = []
-_TWO_COLUMNS_FASTPATH = 2
+_EMPTY_RESULT_DATA: "tuple[()]" = ()
+_DEFAULT_DML_METADATA: dict[str, Any] = {}
+_TWO_COLUMN_THRESHOLD = 2
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -186,7 +182,7 @@ class SQLResult(StatementResult):
     def __init__(
         self,
         statement: "SQL",
-        data: "list[Any] | None" = None,
+        data: "Sequence[Any] | None" = None,
         rows_affected: int = 0,
         last_inserted_id: int | str | None = None,
         execution_time: float | None = None,
@@ -294,7 +290,7 @@ class SQLResult(StatementResult):
             elif len(col_names) == 1:
                 key = col_names[0]
                 self._materialized_dicts = [{key: row[0]} for row in raw]
-            elif len(col_names) == _TWO_COLUMNS_FASTPATH:
+            elif len(col_names) == _TWO_COLUMN_THRESHOLD:
                 key0, key1 = col_names
                 self._materialized_dicts = [{key0: row[0], key1: row[1]} for row in raw]
             else:
@@ -980,7 +976,7 @@ class EmptyResult(StatementResult):
         return True
 
     def get_data(self) -> "list[Any]":
-        return _EMPTY_RESULT_DATA
+        return []
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1001,7 +997,7 @@ class DMLResult(SQLResult):
         self.rows_affected = rows_affected
         self.last_inserted_id = None
         self.execution_time = None
-        self.metadata = _EMPTY_DML_METADATA
+        self.metadata = _DEFAULT_DML_METADATA
 
         self.error = None
         self._operation_type = op_type
@@ -1010,12 +1006,12 @@ class DMLResult(SQLResult):
         self._row_format = "dict"
         self._materialized_dicts = None
 
-        self.column_names = _EMPTY_DML_COLUMN_NAMES
+        self.column_names: list[str] = []
         self.total_count = 0
         self.has_more = False
-        self.inserted_ids = _EMPTY_DML_INSERTED_IDS
-        self.statement_results = _EMPTY_DML_STATEMENT_RESULTS
-        self.errors = _EMPTY_DML_ERRORS
+        self.inserted_ids: list[int | str] = []
+        self.statement_results: list[SQLResult] = []
+        self.errors: list[str] = []
         self.total_statements = 0
         self.successful_statements = 0
 
@@ -1026,11 +1022,11 @@ class DMLResult(SQLResult):
         return self.rows_affected >= 0
 
     def get_data(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[Any]":
-        return _EMPTY_RESULT_DATA
+        return []
 
     def set_metadata(self, key: str, value: Any) -> None:
         # Copy-on-write to preserve low-allocation defaults for hot DML paths.
-        if self.metadata is _EMPTY_DML_METADATA:
+        if self.metadata is _DEFAULT_DML_METADATA:
             self.metadata = {key: value}
             return
         self.metadata[key] = value

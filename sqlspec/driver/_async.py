@@ -343,12 +343,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
 
-    async def _qc_execute_direct(
+    async def _stmt_cache_execute_direct(
         self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: CachedQuery
     ) -> "SQLResult":
         """Execute pre-compiled query via ultra-fast path (async).
 
-        Uses _qc_build_direct + dispatch_execute since async drivers can't
+        Uses _stmt_cache_build_direct + dispatch_execute since async drivers can't
         call cursor.execute directly. For DML operations, returns DMLResult
         to bypass full SQLResult construction.
 
@@ -361,7 +361,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQLResult or DMLResult.
         """
         compiled_sql = cached.compiled_sql
-        direct_statement = self._qc_build_direct(
+        direct_statement = self._stmt_cache_build_direct(
             sql, params, cached, params, params_are_simple=True, compiled_sql=compiled_sql
         )
 
@@ -420,7 +420,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         finally:
             self._release_pooled_statement(direct_statement)
 
-    async def _qc_lookup(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
+    async def _stmt_cache_lookup(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
         """Attempt fast-path execution for cached query (async).
 
         Args:
@@ -430,15 +430,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             SQLResult if cache hit and execution succeeds, None otherwise.
         """
-        result = super()._qc_lookup(statement, params)
+        result = super()._stmt_cache_lookup(statement, params)
         if result is None:
             return None
         return await cast("Awaitable[SQLResult | None]", result)
 
-    async def _qc_execute(self, statement: "SQL") -> "SQLResult":
+    async def _stmt_cache_execute(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path (async).
 
-        The statement is already compiled by _qc_prepare, so dispatch_execute
+        The statement is already compiled by _stmt_cache_prepare_direct, so dispatch_execute
         will hit the fast path in _get_compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
@@ -535,14 +535,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
         if (
-            self._qc_enabled
+            self._stmt_cache_enabled
             and (statement_config is None or statement_config is self.statement_config)
             and isinstance(statement, str)
             and len(parameters) == 1
             and isinstance(parameters[0], (tuple, list))
             and not kwargs
         ):
-            fast_result = await self._qc_lookup(statement, parameters[0])
+            fast_result = await self._stmt_cache_lookup(statement, parameters[0])
             if fast_result is not None:
                 return fast_result
         sql_statement = self.prepare_statement(

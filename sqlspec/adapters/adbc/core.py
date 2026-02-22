@@ -70,7 +70,7 @@ __all__ = (
     "resolve_rowcount",
 )
 
-_COLUMN_NAME_CACHE_MAX_SIZE: int = 256
+COLUMN_CACHE_MAX_SIZE: int = 256
 
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
@@ -722,7 +722,7 @@ def resolve_column_names(description: "list[Any] | None", cache: "dict[int, tupl
         return cached[1]
 
     column_names = [col[0] for col in description]
-    if len(cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+    if len(cache) >= COLUMN_CACHE_MAX_SIZE:
         cache.pop(next(iter(cache)))
     cache[cache_key] = (description, column_names)
     return column_names

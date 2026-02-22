@@ -87,7 +87,7 @@ Database Event Channels
 - Introduced the ``events`` extension migrations (``ext_events_0001``) which create the durable queue table plus composite index.
 - Added the first native backend (AsyncPG LISTEN/NOTIFY) enabled via ``driver_features["events_backend"] = "listen_notify"``; the API automatically falls back to the queue backend for other adapters.
 - Introduced experimental Oracle Advanced Queuing support (sync adapters) via ``driver_features["events_backend"] = "advanced_queue"`` with automatic fallback when AQ is unavailable.
-- Documented configuration patterns (queue table naming, lease/retention windows, Oracle ``INMEMORY`` toggle, Postgres native mode) in :doc:`/guides/events/database-event-channels`.
+- Documented configuration patterns (queue table naming, lease/retention windows, Oracle ``INMEMORY`` toggle, Postgres native mode) for database event channels.
 - Event telemetry now tracks ``events.publish``, ``events.publish.native``, ``events.deliver``, ``events.ack``, ``events.nack``, ``events.shutdown`` and listener lifecycle, so Prometheus/Otel exporters see event workloads alongside query metrics.
 - Added adapter-specific runtime hints (asyncmy, duckdb, bigquery/adbc) plus a ``poll_interval`` extension option so operators can tune leases and cadence per database.
 - Publishing, dequeue, ack, nack, and shutdown operations now emit ``sqlspec.events.*`` spans whenever ``extension_config["otel"]`` is enabled, giving full trace coverage without extra plumbing.
@@ -144,7 +144,7 @@ Simple search and replace in your codebase:
 - Reduces cognitive load when switching between adapters
 - Clearer API for new users
 
-**See:** :doc:`/guides/migration/connection-config` for detailed migration guide with before/after examples for all adapters.
+**See** the connection configuration section in :doc:`usage/configuration` for detailed migration guidance with before/after examples for all adapters.
 
 Query Stack Documentation Suite
 --------------------------------
@@ -308,7 +308,7 @@ Example conversion:
 **Documentation:**
 
 - Complete CLI reference: :doc:`usage/cli`
-- Workflow guide: :ref:`hybrid-versioning-guide`
+- Workflow guide for hybrid versioning
 - CI integration examples for GitHub Actions and GitLab CI
 
 Shell Completion Support
@@ -377,7 +377,7 @@ Extension migrations now receive automatic version prefixes and configuration ha
           "include_extensions": ["adk"]  # Simple string list
       }
 
-**Configuration Guide**: See :doc:`/migration_guides/extension_config`
+**Configuration Guide**: See :doc:`usage/migrations` for extension configuration details.
 
 Features
 --------

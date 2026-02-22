@@ -72,7 +72,7 @@ HTTP_NOT_FOUND = 404
 HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
-_COLUMN_NAME_CACHE_MAX_SIZE = 256
+COLUMN_CACHE_MAX_SIZE = 256
 
 
 def _identity(value: Any) -> Any:
@@ -546,7 +546,7 @@ def resolve_column_names(schema: Any | None, cache: "dict[int, tuple[Any, list[s
         return cached[1]
 
     column_names = [field.name for field in schema]
-    if len(cache) >= _COLUMN_NAME_CACHE_MAX_SIZE:
+    if len(cache) >= COLUMN_CACHE_MAX_SIZE:
         cache.pop(next(iter(cache)))
     cache[cache_key] = (schema, column_names)
     return column_names

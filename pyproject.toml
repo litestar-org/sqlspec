@@ -99,7 +99,6 @@ doc = [
   "sphinx-autodoc-typehints",
   "numpydoc",
   "sphinx-iconify",
-  "sphinx-docsearch",
   "jupyter-sphinx",
   "nbsphinx",
 ]
