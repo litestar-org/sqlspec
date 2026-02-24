@@ -79,6 +79,11 @@ class PsqlpyDriverFeatures(TypedDict):
         Requires pgvector-python package installed.
         Defaults to True when pgvector is installed.
         Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
+    enable_paradedb: Enable ParadeDB (pg_search) extension detection.
+        When enabled and the pg_search extension is detected, the SQL dialect
+        switches to "paradedb" which supports search operators (@@@, &&&, etc.)
+        and inherits all pgvector distance operators.
+        Defaults to True. Independent of enable_pgvector.
     json_serializer: Custom JSON serializer applied to the statement configuration.
     json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
     on_connection_create: Async callback executed when a connection is acquired from pool.
@@ -97,6 +102,7 @@ class PsqlpyDriverFeatures(TypedDict):
     """
 
     enable_pgvector: NotRequired[bool]
+    enable_paradedb: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[PsqlpyConnection], Awaitable[None]]]"
@@ -207,6 +213,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         )
         # Track initialized connections by ID (psqlpy connections don't support weak refs)
         self._initialized_connection_ids: set[int] = set()
+        self._pgvector_available: bool | None = None
+        self._paradedb_available: bool | None = None
 
         super().__init__(
             connection_config=connection_config,
@@ -230,7 +238,55 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        return ConnectionPool(**build_connection_config(self.connection_config))
+        pool = ConnectionPool(**build_connection_config(self.connection_config))
+        await self._detect_extensions(pool)
+        return pool
+
+    async def _detect_extensions(self, pool: "ConnectionPool") -> None:
+        """Detect database extensions and update dialect accordingly.
+
+        Args:
+            pool: Connection pool to acquire a connection from.
+        """
+        extensions = [
+            name
+            for name, enabled in [
+                ("vector", self.driver_features.get("enable_pgvector", False)),
+                ("pg_search", self.driver_features.get("enable_paradedb", False)),
+            ]
+            if enabled
+        ]
+        if not extensions:
+            return
+
+        async with pool.acquire() as connection:
+            try:
+                result = await connection.fetch(
+                    "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions]
+                )
+                rows = result.result() if result else []
+                detected = {r["extname"] for r in rows}
+                self._pgvector_available = "vector" in detected
+                self._paradedb_available = "pg_search" in detected
+            except Exception:
+                self._pgvector_available = False
+                self._paradedb_available = False
+
+        self._update_dialect_for_extensions()
+
+    def _update_dialect_for_extensions(self) -> None:
+        """Update statement_config dialect based on detected extensions.
+
+        Priority: paradedb > pgvector > postgres (default).
+        """
+        current_dialect = getattr(self.statement_config, "dialect", "postgres")
+        if current_dialect != "postgres":
+            return
+
+        if self._paradedb_available:
+            self.statement_config = self.statement_config.replace(dialect="paradedb")
+        elif self._pgvector_available:
+            self.statement_config = self.statement_config.replace(dialect="pgvector")
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
