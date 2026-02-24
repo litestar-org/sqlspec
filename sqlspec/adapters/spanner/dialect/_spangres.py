@@ -4,9 +4,10 @@ from typing import cast
 
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
-from sqlglot.tokens import TokenType
+from sqlglot.tokenizer_core import TokenType
 
 __all__ = ("Spangres",)
+
 
 _ROW_DELETION_NAME = "ROW_DELETION_POLICY"
 _TTL_MIN_COMPONENTS = 2
@@ -16,16 +17,16 @@ class SpangresParser(Postgres.Parser):
     """Parse Spanner row deletion policies."""
 
     def _parse_property(self) -> exp.Expression:
-        if self._match_text_seq("ROW", "DELETION", "POLICY"):  # type: ignore[no-untyped-call]
-            self._match(TokenType.L_PAREN)  # type: ignore[no-untyped-call]
-            self._match_text_seq("OLDER_THAN")  # type: ignore[no-untyped-call]
-            self._match(TokenType.L_PAREN)  # type: ignore[no-untyped-call]
+        if self._match_text_seq("ROW", "DELETION", "POLICY"):
+            self._match(TokenType.L_PAREN)
+            self._match_text_seq("OLDER_THAN")
+            self._match(TokenType.L_PAREN)
             column = cast("exp.Expression", self._parse_id_var())
-            self._match(TokenType.COMMA)  # type: ignore[no-untyped-call]
-            self._match_text_seq("INTERVAL")  # type: ignore[no-untyped-call]
+            self._match(TokenType.COMMA)
+            self._match_text_seq("INTERVAL")
             interval = cast("exp.Expression", self._parse_expression())
-            self._match(TokenType.R_PAREN)  # type: ignore[no-untyped-call]
-            self._match(TokenType.R_PAREN)  # type: ignore[no-untyped-call]
+            self._match(TokenType.R_PAREN)
+            self._match(TokenType.R_PAREN)
 
             return exp.Property(
                 this=exp.Literal.string(_ROW_DELETION_NAME), value=exp.Tuple(expressions=[column, interval])

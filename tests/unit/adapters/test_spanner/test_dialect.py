@@ -703,7 +703,7 @@ def test_dialect_inheritance() -> None:
 
 def test_dialect_keywords() -> None:
     """Test that Spanner-specific keywords are registered."""
-    from sqlglot.tokens import TokenType
+    from sqlglot.tokenizer_core import TokenType
 
     # Keywords are only registered if sqlglot supports them
     keywords = Spanner.Tokenizer.KEYWORDS

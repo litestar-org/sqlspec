@@ -394,7 +394,7 @@ class QueryBuilder(ABC):
             A new expression with literals replaced by parameter placeholders
         """
 
-        return expression.transform(_ExpressionParameterizer(self), copy=False)
+        return cast("exp.Expression", expression.transform(_ExpressionParameterizer(self), copy=False))
 
     def add_parameter(self: Self, value: Any, name: str | None = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
@@ -426,9 +426,6 @@ class QueryBuilder(ABC):
 
         Args:
             parameters: Mapping of parameter names to values.
-
-        Raises:
-            SQLBuilderError: If a parameter name already exists on the builder.
         """
         if not parameters:
             return
@@ -444,9 +441,6 @@ class QueryBuilder(ABC):
 
         Args:
             ctes: Iterable of CTE expressions to register.
-
-        Raises:
-            SQLBuilderError: If a CTE alias is missing or duplicated.
         """
         for cte in ctes:
             alias = self._resolve_cte_alias(cte)
@@ -543,7 +537,7 @@ class QueryBuilder(ABC):
             Updated expression with new placeholder names
         """
 
-        return expression.transform(_PlaceholderReplacer(param_mapping), copy=False)
+        return cast("exp.Expression", expression.transform(_PlaceholderReplacer(param_mapping), copy=False))
 
     def _generate_builder_cache_key(self, config: "StatementConfig | None" = None) -> str:
         """Generate cache key based on builder state and configuration.
@@ -893,7 +887,7 @@ class QueryBuilder(ABC):
     def _unquote_identifiers_for_oracle(self, expression: exp.Expression) -> exp.Expression:
         """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
 
-        return expression.copy().transform(_unquote_identifier, copy=False)
+        return cast("exp.Expression", expression.copy().transform(_unquote_identifier, copy=False))
 
     def _strip_lock_identifier_quotes(self, sql_string: str) -> str:
         for keyword in ("FOR UPDATE OF ", "FOR SHARE OF "):
