@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.39.0"
+version = "0.40.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -49,7 +49,7 @@ flask = ["flask"]
 fsspec = ["fsspec"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
-mypyc = []
+mypyc = ["sqlglot[c]"]
 mysql-connector = ["mysql-connector-python"]
 nanoid = ["fastnanoid>=0.4.1"]
 obstore = ["obstore"]
@@ -57,7 +57,7 @@ opentelemetry = ["opentelemetry-instrumentation"]
 oracledb = ["oracledb"]
 orjson = ["orjson"]
 pandas = ["pandas", "pyarrow"]
-performance = ["sqlglot[rs]", "msgspec"]
+performance = ["msgspec"]
 polars = ["polars", "pyarrow"]
 prometheus = ["prometheus-client"]
 psqlpy = ["psqlpy"]
@@ -241,7 +241,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.39.0"
+current_version = "0.40.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"

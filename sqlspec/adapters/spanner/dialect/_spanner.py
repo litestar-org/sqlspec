@@ -9,7 +9,7 @@ from typing import cast
 
 from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
-from sqlglot.tokens import TokenType
+from sqlglot.tokenizer_core import TokenType
 
 __all__ = ("Spanner",)
 
@@ -41,14 +41,14 @@ class SpannerParser(BigQuery.Parser):
         """Parse Spanner table options including interleaving metadata."""
         table = super()._parse_table_parts(schema=schema, is_db_reference=is_db_reference, wildcard=wildcard)
 
-        if self._match_text_seq("INTERLEAVE", "IN", "PARENT"):  # type: ignore[no-untyped-call]
+        if self._match_text_seq("INTERLEAVE", "IN", "PARENT"):
             parent = cast("exp.Expression", self._parse_table(schema=True, is_db_reference=True))
             on_delete: str | None = None
 
-            if self._match_text_seq("ON", "DELETE"):  # type: ignore[no-untyped-call]
-                if self._match_text_seq("CASCADE"):  # type: ignore[no-untyped-call]
+            if self._match_text_seq("ON", "DELETE"):
+                if self._match_text_seq("CASCADE"):
                     on_delete = "CASCADE"
-                elif self._match_text_seq("NO", "ACTION"):  # type: ignore[no-untyped-call]
+                elif self._match_text_seq("NO", "ACTION"):
                     on_delete = "NO ACTION"
 
             table.set("interleave_parent", parent)
@@ -59,25 +59,25 @@ class SpannerParser(BigQuery.Parser):
 
     def _parse_property(self) -> exp.Expression:
         """Parse Spanner row deletion policy or PostgreSQL-style TTL."""
-        if self._match_text_seq("ROW", "DELETION", "POLICY"):  # type: ignore[no-untyped-call]
-            self._match(TokenType.L_PAREN)  # type: ignore[no-untyped-call]
-            self._match_text_seq("OLDER_THAN")  # type: ignore[no-untyped-call]
-            self._match(TokenType.L_PAREN)  # type: ignore[no-untyped-call]
+        if self._match_text_seq("ROW", "DELETION", "POLICY"):
+            self._match(TokenType.L_PAREN)
+            self._match_text_seq("OLDER_THAN")
+            self._match(TokenType.L_PAREN)
             column = cast("exp.Expression", self._parse_id_var())
-            self._match(TokenType.COMMA)  # type: ignore[no-untyped-call]
-            self._match_text_seq("INTERVAL")  # type: ignore[no-untyped-call]
+            self._match(TokenType.COMMA)
+            self._match_text_seq("INTERVAL")
             interval = cast("exp.Expression", self._parse_expression())
-            self._match(TokenType.R_PAREN)  # type: ignore[no-untyped-call]
-            self._match(TokenType.R_PAREN)  # type: ignore[no-untyped-call]
+            self._match(TokenType.R_PAREN)
+            self._match(TokenType.R_PAREN)
 
             return exp.Property(
                 this=exp.Literal.string(_ROW_DELETION_NAME), value=exp.Tuple(expressions=[column, interval])
             )
 
-        if self._match_text_seq("TTL"):  # type: ignore[no-untyped-call]  # PostgreSQL-dialect style, keep for compatibility
-            self._match_text_seq("INTERVAL")  # type: ignore[no-untyped-call]
+        if self._match_text_seq("TTL"):
+            self._match_text_seq("INTERVAL")
             interval = cast("exp.Expression", self._parse_expression())
-            self._match_text_seq("ON")  # type: ignore[no-untyped-call]
+            self._match_text_seq("ON")
             column = cast("exp.Expression", self._parse_id_var())
 
             return exp.Property(this=exp.Literal.string("TTL"), value=exp.Tuple(expressions=[interval, column]))
