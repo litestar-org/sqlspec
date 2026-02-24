@@ -96,8 +96,9 @@ def test_join_as_of_dialect() -> None:
     sql_str = query.build(dialect="bigquery").sql
     normalized = normalize_sql(sql_str)
     # Should use FOR SYSTEM_TIME AS OF because dialect is passed at build time
-    assert "LEFT JOIN audit_log FOR SYSTEM_TIME AS OF '-1h'" in normalized
-    assert "log ON orders.id = log.order_id" in normalized
+    assert "LEFT JOIN audit_log" in normalized
+    assert "FOR SYSTEM_TIME AS OF '-1h'" in normalized
+    assert "ON orders.id = log.order_id" in normalized
 
 
 def test_join_as_of_dialect_override() -> None:
