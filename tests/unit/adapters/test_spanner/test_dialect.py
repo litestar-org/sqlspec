@@ -20,7 +20,7 @@ from typing import Any
 
 from sqlglot import exp, parse, parse_one, transpile
 
-from sqlspec.adapters.spanner.dialect import Spanner
+from sqlspec.dialects.spanner import Spanner
 
 
 def validate_identity(sql: str, expected: "str | None" = None, dialect: "Any" = Spanner) -> None:
