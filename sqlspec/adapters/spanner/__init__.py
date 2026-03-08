@@ -1,7 +1,6 @@
 """Google Cloud Spanner Adapter."""
 
 import sqlspec.dialects  # noqa: F401  # ensure dialect registration
-
 from sqlspec.adapters.spanner.config import (
     SpannerConnectionParams,
     SpannerDriverFeatures,
