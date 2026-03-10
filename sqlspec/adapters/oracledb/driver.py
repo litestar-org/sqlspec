@@ -19,8 +19,8 @@ from sqlspec.adapters.oracledb.core import (
     build_insert_statement,
     build_pipeline_stack_result,
     build_truncate_statement,
-    coerce_large_string_parameters_async,
-    coerce_large_string_parameters_sync,
+    coerce_large_parameters_async,
+    coerce_large_parameters_sync,
     collect_async_rows,
     collect_sync_rows,
     create_mapped_exception,
@@ -69,7 +69,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # Oracle-specific constants
-LARGE_STRING_THRESHOLD = 4000  # Threshold for large string parameters to avoid ORA-01704
+# Oracle SQL-context limits (in bytes)
+ORACLE_VARCHAR2_BYTE_LIMIT = 4000  # VARCHAR2 max in SQL context
+ORACLE_RAW_BYTE_LIMIT = 2000  # RAW max in SQL context
 
 __all__ = (
     "OracleAsyncDriver",
@@ -373,8 +375,13 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        prepared_parameters = coerce_large_string_parameters_sync(
-            self.connection, prepared_parameters, lob_type=oracledb.DB_TYPE_CLOB, threshold=LARGE_STRING_THRESHOLD
+        prepared_parameters = coerce_large_parameters_sync(
+            self.connection,
+            prepared_parameters,
+            clob_type=oracledb.DB_TYPE_CLOB,
+            blob_type=oracledb.DB_TYPE_BLOB,
+            varchar2_byte_limit=ORACLE_VARCHAR2_BYTE_LIMIT,
+            raw_byte_limit=ORACLE_RAW_BYTE_LIMIT,
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
@@ -864,8 +871,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        prepared_parameters = await coerce_large_string_parameters_async(
-            self.connection, prepared_parameters, lob_type=oracledb.DB_TYPE_CLOB, threshold=LARGE_STRING_THRESHOLD
+        prepared_parameters = await coerce_large_parameters_async(
+            self.connection,
+            prepared_parameters,
+            clob_type=oracledb.DB_TYPE_CLOB,
+            blob_type=oracledb.DB_TYPE_BLOB,
+            varchar2_byte_limit=ORACLE_VARCHAR2_BYTE_LIMIT,
+            raw_byte_limit=ORACLE_RAW_BYTE_LIMIT,
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
