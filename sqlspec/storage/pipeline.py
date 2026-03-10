@@ -484,7 +484,7 @@ class AsyncStoragePipeline:
     ) -> StorageTelemetry:
         serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
-        payload = _encode_row_payload(serialized, format_choice)
+        payload = await async_(_encode_row_payload)(serialized, format_choice)
         return await self._write_bytes_async(
             payload,
             destination,
@@ -504,7 +504,7 @@ class AsyncStoragePipeline:
     ) -> StorageTelemetry:
         format_choice = format_hint or "parquet"
         format_write_options = (storage_options or {}).get("write_options") if format_choice == "csv" else None
-        payload = _encode_arrow_payload(
+        payload = await async_(_encode_arrow_payload)(
             table, format_choice, compression=compression, write_options=format_write_options
         )
         return await self._write_bytes_async(
@@ -582,7 +582,7 @@ class AsyncStoragePipeline:
         else:
             payload = await async_(_read_backend_sync)(backend=backend, path=path, backend_name=backend_name)
 
-        table = _decode_arrow_payload(payload, file_format)
+        table = await async_(_decode_arrow_payload)(payload, file_format)
         rows_processed = int(table.num_rows)
         telemetry: StorageTelemetry = {
             "destination": path,
