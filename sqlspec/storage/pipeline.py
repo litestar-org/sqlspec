@@ -212,7 +212,7 @@ def _encode_arrow_payload(
     format_choice: StorageFormat,
     *,
     compression: str | None,
-    csv_write_options: "dict[str, Any] | None" = None,
+    write_options: "dict[str, Any] | None" = None,
 ) -> bytes:
     pa = import_pyarrow()
     sink = pa.BufferOutputStream()
@@ -222,10 +222,10 @@ def _encode_arrow_payload(
         writer.close()
     elif format_choice == "csv":
         pa_csv = import_pyarrow_csv()
-        write_options: Any = None
-        if csv_write_options:
-            write_options = pa_csv.WriteOptions(**csv_write_options)
-        pa_csv.write_csv(table, sink, write_options=write_options)
+        csv_opts: Any = None
+        if write_options:
+            csv_opts = pa_csv.WriteOptions(**write_options)
+        pa_csv.write_csv(table, sink, write_options=csv_opts)
     else:
         pq = import_pyarrow_parquet()
         pq.write_table(table, sink, compression=compression)
@@ -364,9 +364,9 @@ class SyncStoragePipeline:
         """Write an Arrow table to storage using zero-copy buffers."""
 
         format_choice = format_hint or "parquet"
-        csv_write_options = (storage_options or {}).get("csv_write_options") if format_choice == "csv" else None
+        format_write_options = (storage_options or {}).get("write_options") if format_choice == "csv" else None
         payload = _encode_arrow_payload(
-            table, format_choice, compression=compression, csv_write_options=csv_write_options
+            table, format_choice, compression=compression, write_options=format_write_options
         )
         return self._write_bytes(
             payload,
@@ -503,9 +503,9 @@ class AsyncStoragePipeline:
         compression: str | None = None,
     ) -> StorageTelemetry:
         format_choice = format_hint or "parquet"
-        csv_write_options = (storage_options or {}).get("csv_write_options") if format_choice == "csv" else None
+        format_write_options = (storage_options or {}).get("write_options") if format_choice == "csv" else None
         payload = _encode_arrow_payload(
-            table, format_choice, compression=compression, csv_write_options=csv_write_options
+            table, format_choice, compression=compression, write_options=format_write_options
         )
         return await self._write_bytes_async(
             payload,

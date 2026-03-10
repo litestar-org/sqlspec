@@ -427,7 +427,7 @@ def test_write_arrow_csv_custom_delimiter(monkeypatch: pytest.MonkeyPatch) -> No
 
     table = pa.table({"x": [10], "y": [20]})
     pipeline.write_arrow(
-        table, "data/output.csv", format_hint="csv", storage_options={"csv_write_options": {"delimiter": "|"}}
+        table, "data/output.csv", format_hint="csv", storage_options={"write_options": {"delimiter": "|"}}
     )
 
     payload = backend.payloads["data/output.csv"]
@@ -449,7 +449,7 @@ def test_write_arrow_csv_no_header(monkeypatch: pytest.MonkeyPatch) -> None:
 
     table = pa.table({"val": [42, 99]})
     pipeline.write_arrow(
-        table, "data/output.csv", format_hint="csv", storage_options={"csv_write_options": {"include_header": False}}
+        table, "data/output.csv", format_hint="csv", storage_options={"write_options": {"include_header": False}}
     )
 
     payload = backend.payloads["data/output.csv"]
