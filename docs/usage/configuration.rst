@@ -33,9 +33,23 @@ commit mode, correlation middleware, and migrations toggles.
 Multiple Databases
 ------------------
 
-Use ``SQLSpec.add_config(..., name="analytics")`` to register multiple configs on a
-single registry. Each framework integration can target a specific bind key or
-session key.
+Register multiple configs on a single ``SQLSpec`` instance and use each config
+handle independently. This pattern works for any combination of sync and async
+adapters.
+
+.. literalinclude:: /examples/configuration/multi_database.py
+   :language: python
+   :caption: ``multi-database with observability``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+Key points:
+
+- Each ``add_config()`` call returns the config handle you pass to ``provide_session()``.
+- ``ObservabilityConfig`` on the ``SQLSpec`` instance applies to all registered configs.
+- ``load_sql_files()`` accepts multiple paths and loads queries into a shared namespace.
 
 Related Guides
 --------------

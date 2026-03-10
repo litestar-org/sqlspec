@@ -41,16 +41,17 @@ class SQLSpecPlugin(_StarlettePlugin):
         from sqlspec.extensions.fastapi import SQLSpecPlugin
 
         sqlspec = SQLSpec()
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/mydb"},
-            extension_config={
-                "starlette": {
-                    "commit_mode": "autocommit",
-                    "session_key": "db"
+        config = sqlspec.add_config(
+            AsyncpgConfig(
+                connection_config={"dsn": "postgresql://localhost/mydb"},
+                extension_config={
+                    "starlette": {  # FastAPI uses the "starlette" key
+                        "commit_mode": "autocommit",
+                        "session_key": "db"
+                    }
                 }
-            }
+            )
         )
-        sqlspec.add_config(config, name="default")
 
         app = FastAPI()
         db_ext = SQLSpecPlugin(sqlspec, app)

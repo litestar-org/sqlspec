@@ -2,6 +2,10 @@
 Quickstart
 ==========
 
+.. image:: /_static/demos/quickstart.gif
+   :alt: SQLSpec quickstart demo
+   :class: demo-gif
+
 Get running with SQLSpec in a few minutes using SQLite. These examples are short on
 purpose so you can copy them into a scratch file and experiment.
 

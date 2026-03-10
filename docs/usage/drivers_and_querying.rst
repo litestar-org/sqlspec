@@ -45,6 +45,35 @@ Parameter Binding
    :dedent: 4
    :no-upgrade:
 
+Schema Mapping
+--------------
+
+Use the ``schema_type`` parameter on ``select()``, ``select_one()``, and
+``select_one_or_none()`` to map result rows to dataclass instances automatically.
+
+.. literalinclude:: /examples/querying/schema_mapping.py
+   :language: python
+   :caption: ``schema_type mapping``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+Scalar Values and Pagination
+-----------------------------
+
+``select_value`` returns a single scalar from a one-row, one-column result.
+``select_value_or_none`` returns ``None`` when no rows match.
+``select_with_total`` returns both the data page and the total count for pagination.
+
+.. literalinclude:: /examples/querying/batch_operations.py
+   :language: python
+   :caption: ``scalar values, execute_many, and pagination``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
 Statement Stacks
 ----------------
 

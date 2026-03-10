@@ -66,6 +66,24 @@ Choose a topic
 
       Trace queries, sample traffic, and log structured events.
 
+   .. grid-item-card:: Filtering & Pagination
+      :link: filtering
+      :link-type: doc
+
+      Filter data, paginate results, and auto-generate filter dependencies.
+
+   .. grid-item-card:: Testing
+      :link: testing
+      :link-type: doc
+
+      Unit test with mock adapters and integration test patterns.
+
+   .. grid-item-card:: ETL & Data Pipelines
+      :link: etl
+      :link-type: doc
+
+      Move data between databases with Arrow-based bulk transfer.
+
    .. grid-item-card:: Extensions
       :link: ../extensions/index
       :link-type: doc
@@ -94,4 +112,7 @@ Recommended Path
    migrations
    framework_integrations
    observability
+   filtering
+   testing
+   etl
    ../extensions/index

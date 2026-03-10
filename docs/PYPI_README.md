@@ -1,60 +1,19 @@
 # SQLSpec
 
-**Type-safe SQL execution layer for Python.**
+[![PyPI](https://img.shields.io/pypi/v/sqlspec)](https://pypi.org/project/sqlspec/)
+[![Python](https://img.shields.io/pypi/pyversions/sqlspec)](https://pypi.org/project/sqlspec/)
+[![License](https://img.shields.io/pypi/l/sqlspec)](https://github.com/litestar-org/sqlspec/blob/main/LICENSE)
+[![Docs](https://img.shields.io/badge/docs-sqlspec.dev-blue)](https://sqlspec.dev/)
 
-SQLSpec handles database connectivity and result mapping so you can focus on SQL. Write raw queries when you need precision, use the builder API when you need composability, or load SQL from files when you need organization. Every statement passes through a [sqlglot](https://github.com/tobymao/sqlglot)-powered AST pipeline for validation, dialect conversion, and optimization before execution. Export results as Python objects, Arrow tables, Polars or pandas DataFrames.
+SQLSpec is a SQL execution layer for Python. You write the SQL -- as strings, through a builder API, or loaded from files -- and SQLSpec handles connections, parameter binding, dialect translation, and mapping results back to typed Python objects. It uses [sqlglot](https://github.com/tobymao/sqlglot) under the hood to parse, validate, and optimize your queries before they hit the database.
 
-It's not an ORM. It's the connectivity and processing layer between your application and your database that provides the right abstraction for each situation without dictating how you write SQL.
-
-## Status
-
-SQLSpec is currently in active development. The public API may change. Follow the [docs](https://sqlspec.dev/) and changelog for updates.
-
-## What You Get
-
-**Connection Management**
-
-- Connection pooling with configurable size, timeout, and lifecycle hooks
-- Sync and async support with a unified API surface
-- Adapters for PostgreSQL (psycopg, asyncpg, psqlpy), SQLite (sqlite3, aiosqlite), DuckDB, MySQL (asyncmy, mysql-connector, pymysql), Oracle, BigQuery, and ADBC-compatible databases
-
-**Query Execution**
-
-- Raw SQL strings with automatic parameter binding and dialect translation
-- SQL AST parsing via sqlglot for validation, optimization, and dialect conversion
-- Builder API for programmatic query construction without string concatenation
-- SQL file loading to keep queries organized alongside your code (named SQL queries)
-- Statement stacks for batching multiple operations with transaction control
-
-**Result Handling**
-
-- Type-safe result mapping to Pydantic, msgspec, attrs, or dataclasses
-- Apache Arrow export for zero-copy integration with pandas, Polars, and analytical tools
-- Result iteration, single-row fetch, or bulk retrieval based on your use case
-
-**Framework Integration**
-
-- Litestar plugin with dependency injection for connections, sessions, and pools
-- Starlette/FastAPI middleware for automatic transaction management
-- Flask extension with sync/async portal support
-
-**Production Features**
-
-- SQL validation and caching via sqlglot AST parsing
-- OpenTelemetry and Prometheus instrumentation hooks
-- Database event channels with native LISTEN/NOTIFY, Oracle AQ, and a portable queue fallback
-- Structured logging with correlation ID support
-- Migration CLI for schema versioning
+It works with PostgreSQL (asyncpg, psycopg, psqlpy), SQLite (sqlite3, aiosqlite), DuckDB, MySQL (asyncmy, mysql-connector, pymysql), Oracle (oracledb), CockroachDB, BigQuery, Spanner, and anything ADBC-compatible. Sync or async, same API.
 
 ## Quick Start
 
-### Install
-
 ```bash
-pip install "sqlspec"
+pip install sqlspec
 ```
-
-### Run your first query
 
 ```python
 from pydantic import BaseModel
@@ -75,35 +34,28 @@ with spec.provide_session(db) as session:
     print(greeting.message)  # Output: Hello, SQLSpec!
 ```
 
-That's it. Write SQL, define a schema, get typed objects back. Connection pooling, parameter binding, and result mapping are handled automatically.
+Write SQL, define a schema, get typed objects back. Connection pooling, parameter binding, and result mapping are handled for you.
 
-See the [Getting Started guide](https://sqlspec.dev/getting_started/) for installation variants, adapter selection, and advanced result mapping options.
+## What It Does
+
+**Connects to databases** with pooled connections that work the same way whether you're writing sync or async code. Adapters are included for psycopg, asyncpg, psqlpy, sqlite3, aiosqlite, DuckDB, asyncmy, mysql-connector, pymysql, oracledb, BigQuery, and ADBC drivers.
+
+**Runs your SQL** with automatic parameter binding and dialect translation. You can also build queries programmatically with the builder API, load them from `.sql` files, or batch operations with statement stacks.
+
+**Maps results to types** -- Pydantic, msgspec, attrs, or plain dataclasses. Need columnar data instead? Export to Arrow tables for zero-copy handoff to pandas, Polars, or other analytical tools.
+
+**Plugs into frameworks** you already use. There's a Litestar plugin with full DI support, Starlette/FastAPI middleware, and a Flask extension.
+
+**Handles production concerns** like OpenTelemetry and Prometheus instrumentation, database event channels, structured logging with correlation IDs, and a migration CLI for schema versioning.
 
 ## Documentation
 
-- [Getting Started](https://sqlspec.dev/getting_started/)
-- [Usage Guides](https://sqlspec.dev/usage/)
-- [Examples Gallery](https://sqlspec.dev/examples/)
-- [API Reference](https://sqlspec.dev/reference/)
-- [CLI Reference](https://sqlspec.dev/usage/cli.html)
-
-## Reference Applications
-
-- **[PostgreSQL + Vertex AI Demo](https://github.com/cofin/postgres-vertexai-demo)** - Vector search with pgvector and real-time chat using Litestar and Google ADK. Shows connection pooling, migrations, type-safe result mapping, vector embeddings, and response caching.
-- **[Oracle + Vertex AI Demo](https://github.com/cofin/oracledb-vertexai-demo)** - Oracle 23ai vector search with semantic similarity using HNSW indexes. Demonstrates NumPy array conversion, large object (CLOB) handling, and real-time performance metrics.
-
-See the [usage docs](https://sqlspec.dev/usage/) for detailed guides on adapters, configuration patterns, and features like the [SQL file loader](https://sqlspec.dev/usage/loader.html).
-
-## Built With
-
-- **[sqlglot](https://github.com/tobymao/sqlglot)** - SQL parser, transpiler, and optimizer powering SQLSpec's AST pipeline
+Full docs, usage guides, and an interactive playground are available at [sqlspec.dev](https://sqlspec.dev/).
 
 ## Contributing
 
-Contributions, issue reports, and adapter ideas are welcome. Review the
-[contributor guide](https://sqlspec.dev/contributing/) and follow the project
-coding standards before opening a pull request.
+Contributions are welcome. See the [contributor guide](https://sqlspec.dev/contributing/) to get started.
 
 ## License
 
-SQLSpec is distributed under the MIT License.
+MIT

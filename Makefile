@@ -275,6 +275,25 @@ docs-linkcheck-full:                               ## Run full documentation lin
 	@uv run sphinx-build -b linkcheck ./docs ./docs/_build -D linkcheck_anchors=0
 	@echo "${OK} Full link check complete"
 
+.PHONY: docs-demos
+docs-demos:                                        ## Generate CLI demo GIFs from VHS tapes
+	@if ! command -v vhs >/dev/null 2>&1; then \
+		echo "${WARN} VHS not installed. Install: go install github.com/charmbracelet/vhs@latest"; \
+		exit 0; \
+	fi
+	@echo "${INFO} Generating CLI demo GIFs... 🎬"
+	@mkdir -p docs/_static/demos
+	@VHS_NO_SANDBOX=true; \
+	for tape in docs/_tapes/*.tape; do \
+		[ -f "$$tape" ] || continue; \
+		echo "  Recording: $$tape"; \
+		vhs "$$tape" || true; \
+	done
+	@echo "${OK} Demo GIFs generated"
+
+.PHONY: docs-all
+docs-all: docs-demos docs                         ## Generate demos then build documentation
+
 # =============================================================================
 # Benchmarks and Performance
 # =============================================================================

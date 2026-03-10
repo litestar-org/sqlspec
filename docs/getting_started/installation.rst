@@ -9,83 +9,13 @@ Install bundles
 
 .. tab-set::
 
-   .. tab-item:: Core
+   .. tab-item:: Default
 
       .. code-block:: bash
 
          uv pip install sqlspec
          # or
          pip install sqlspec
-
-   .. tab-item:: PostgreSQL
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[asyncpg]"
-         uv pip install "sqlspec[psycopg]"
-         uv pip install "sqlspec[psqlpy]"
-
-   .. tab-item:: SQLite
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[aiosqlite]"
-
-   .. tab-item:: MySQL
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[asyncmy]"
-         uv pip install "sqlspec[mysql-connector]"
-         uv pip install "sqlspec[pymysql]"
-
-   .. tab-item:: Oracle
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[oracledb]"
-
-   .. tab-item:: Analytics
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[duckdb]"
-         uv pip install "sqlspec[bigquery]"
-         uv pip install "sqlspec[spanner]"
-         uv pip install "sqlspec[adbc]"
-
-   .. tab-item:: Frameworks
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[litestar]"
-         uv pip install "sqlspec[fastapi]"
-         uv pip install "sqlspec[flask]"
-
-   .. tab-item:: Observability
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[opentelemetry]"
-         uv pip install "sqlspec[prometheus]"
-
-   .. tab-item:: Data Export
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[pandas]"
-         uv pip install "sqlspec[polars]"
-         uv pip install "sqlspec[fsspec]"
-         uv pip install "sqlspec[obstore]"
-
-   .. tab-item:: Types & Serialization
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[msgspec]"
-         uv pip install "sqlspec[pydantic]"
-         uv pip install "sqlspec[attrs]"
-         uv pip install "sqlspec[orjson]"
 
    .. tab-item:: Performance
 
