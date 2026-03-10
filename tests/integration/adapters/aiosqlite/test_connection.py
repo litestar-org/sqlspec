@@ -227,7 +227,9 @@ async def test_config_memory_database_conversion() -> None:
 
     try:
         connection_config = build_connection_config(config.connection_config)
-        assert connection_config["database"] == "file::memory:?cache=shared"
+        assert (
+            connection_config["database"].startswith("file:memory_") and "mode=memory" in connection_config["database"]
+        )
         assert connection_config.get("uri") is True
 
         async with config.provide_session() as driver:
@@ -246,7 +248,9 @@ async def test_config_default_database() -> None:
 
     try:
         connection_config = build_connection_config(config.connection_config)
-        assert connection_config["database"] == "file::memory:?cache=shared"
+        assert (
+            connection_config["database"].startswith("file:memory_") and "mode=memory" in connection_config["database"]
+        )
         assert connection_config.get("uri") is True
 
         async with config.provide_session() as driver:

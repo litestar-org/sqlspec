@@ -60,7 +60,8 @@ async def test_regular_memory_auto_converted_pooling() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
     try:
-        assert build_connection_config(config.connection_config)["database"] == "file::memory:?cache=shared"
+        db_uri = build_connection_config(config.connection_config)["database"]
+        assert db_uri.startswith("file:memory_") and "mode=memory" in db_uri and "cache=shared" in db_uri
 
         async with config.provide_session() as session1:
             await session1.execute("DROP TABLE IF EXISTS converted_test")
@@ -188,3 +189,68 @@ async def test_pool_concurrent_access(aiosqlite_config_file: AiosqliteConfig) ->
 
         await verify_session.execute("DROP TABLE IF EXISTS concurrent_test")
         await verify_session.commit()
+
+
+async def test_sequential_configs_isolated_databases() -> None:
+    """Regression test for #360: sequential configs must not share state.
+
+    Two AiosqliteConfig instances created with default settings must have
+    completely isolated in-memory databases.
+    """
+    config1 = AiosqliteConfig()
+    config2 = AiosqliteConfig()
+    try:
+        # Create a table in config1's database
+        async with config1.provide_session() as session1:
+            await session1.execute_script("""
+                CREATE TABLE isolation_test (
+                    id INTEGER PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+            await session1.commit()
+
+        # config2 must NOT see the table from config1
+        async with config2.provide_session() as session2:
+            result = await session2.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='isolation_test'"
+            )
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert len(result.data) == 0, (
+                "Table 'isolation_test' from config1 leaked into config2's database. See issue #360."
+            )
+    finally:
+        await config1.close_pool()
+        await config2.close_pool()
+
+
+async def test_same_config_pool_shares_database() -> None:
+    """Verify that connections within the same config share the database.
+
+    This ensures the fix for #360 doesn't break legitimate pooling.
+    """
+    config = AiosqliteConfig()
+    try:
+        async with config.provide_session() as session1:
+            await session1.execute_script("""
+                CREATE TABLE pool_share_test (
+                    id INTEGER PRIMARY KEY,
+                    value TEXT
+                );
+                INSERT INTO pool_share_test (value) VALUES ('shared');
+            """)
+            await session1.commit()
+
+        # A second session from the SAME config must see the table
+        async with config.provide_session() as session2:
+            result = await session2.execute("SELECT value FROM pool_share_test")
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert len(result.data) == 1
+            assert result.get_data()[0]["value"] == "shared"
+
+            await session2.execute("DROP TABLE pool_share_test")
+            await session2.commit()
+    finally:
+        await config.close_pool()
