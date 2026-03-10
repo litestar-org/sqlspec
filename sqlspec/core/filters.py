@@ -720,14 +720,16 @@ class SearchFilter(StatementFilter):
         resolved_names = self._resolve_parameter_conflicts(statement, [param_name])
         param_name = resolved_names[0]
 
-        pattern_expr = exp.Placeholder(this=param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
-            result = statement.where(like_op(this=exp.column(self.field_name), expression=pattern_expr))
+            result = statement.where(
+                like_op(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name))
+            )
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions: list[Condition] = [
-                like_op(this=exp.column(field), expression=pattern_expr) for field in self.field_name
+                like_op(this=exp.column(field), expression=exp.Placeholder(this=param_name))
+                for field in self.field_name
             ]
             if not field_conditions:
                 return statement
@@ -846,15 +848,17 @@ class NotInSearchFilter(SearchFilter):
         resolved_names = self._resolve_parameter_conflicts(statement, [param_name])
         param_name = resolved_names[0]
 
-        pattern_expr = exp.Placeholder(this=param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         result = statement
         if isinstance(self.field_name, str):
-            result = statement.where(exp.Not(this=like_op(this=exp.column(self.field_name), expression=pattern_expr)))
+            result = statement.where(
+                exp.Not(this=like_op(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name)))
+            )
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions: list[Condition] = [
-                exp.Not(this=like_op(this=exp.column(field), expression=pattern_expr)) for field in self.field_name
+                exp.Not(this=like_op(this=exp.column(field), expression=exp.Placeholder(this=param_name)))
+                for field in self.field_name
             ]
             if not field_conditions:
                 return statement

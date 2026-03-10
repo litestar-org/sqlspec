@@ -912,7 +912,7 @@ class ParameterProcessor:
         original_styles = {p.style for p in param_info} if param_info else set()
         needs_execution_conversion = self._needs_execution_placeholder_conversion(param_info, config)
 
-        input_named_parameters = tuple(p.name for p in param_info if p.name is not None)
+        input_named_parameters = tuple(dict.fromkeys(p.name for p in param_info if p.name is not None))
 
         if config.needs_static_script_compilation and param_info and parameters and not is_many:
             return self._compile_static_script(

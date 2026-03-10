@@ -2246,3 +2246,102 @@ class TestMySQLAdaptersBehavior:
         # sqlglot_sql should NOT contain %s
         assert result.sqlglot_sql is not None
         assert "%s" not in result.sqlglot_sql
+
+
+class TestDuplicateNamedParamsCacheHit:
+    """Regression tests for bugs #375 and #376.
+
+    The bug was in ParameterProcessor where ``input_named_parameters`` stored
+    duplicates when a named parameter appeared more than once in the SQL.  On
+    cache hit, ``_map_named_to_positional`` would iterate the duplicated names
+    and produce too many positional arguments.  The fix uses
+    ``dict.fromkeys()`` to deduplicate.
+    """
+
+    @pytest.fixture
+    def config(self) -> ParameterStyleConfig:
+        return ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NAMED_COLON,
+            default_execution_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles=frozenset({ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC}),
+            supported_execution_parameter_styles=frozenset({ParameterStyle.NUMERIC}),
+        )
+
+    @pytest.fixture
+    def processor(self) -> ParameterProcessor:
+        return ParameterProcessor(cache_max_size=100, validator_cache_max_size=100)
+
+    def test_duplicate_named_params_cache_hit_uuid_cast(
+        self, processor: ParameterProcessor, config: ParameterStyleConfig
+    ) -> None:
+        """Regression test for #375: duplicate params with ``::uuid`` cast.
+
+        SQL contains ``:id`` twice (once in a ``::uuid IS NULL`` cast and once
+        in a plain comparison) plus ``:ts``.  Both the cache-miss and
+        cache-hit calls must produce exactly 2 positional parameters.
+        """
+        sql = "INSERT INTO t (col) SELECT :id WHERE :id::uuid IS NULL OR col = :id AND ts = :ts"
+        params = {"id": "abc-123", "ts": "2024-01-01"}
+
+        result1 = processor.process(sql, params, config)
+        assert len(result1.parameters) == 2, f"Cache miss produced {len(result1.parameters)} params, expected 2"
+
+        result2 = processor.process(sql, params, config)
+        assert len(result2.parameters) == 2, f"Cache hit produced {len(result2.parameters)} params, expected 2"
+
+    def test_duplicate_named_params_cache_hit_interleaved(
+        self, processor: ParameterProcessor, config: ParameterStyleConfig
+    ) -> None:
+        """Regression test: interleaved duplicate named parameters.
+
+        ``:a`` and ``:b`` each appear twice.  Both calls must produce exactly
+        2 positional parameters.
+        """
+        sql = "SELECT * FROM t WHERE x = :a AND y = :b AND z = :a AND w = :b"
+        params = {"a": 1, "b": 2}
+
+        result1 = processor.process(sql, params, config)
+        assert len(result1.parameters) == 2, f"Cache miss produced {len(result1.parameters)} params, expected 2"
+
+        result2 = processor.process(sql, params, config)
+        assert len(result2.parameters) == 2, f"Cache hit produced {len(result2.parameters)} params, expected 2"
+
+    def test_duplicate_named_params_cache_hit_triple(
+        self, processor: ParameterProcessor, config: ParameterStyleConfig
+    ) -> None:
+        """Regression test: single parameter repeated three times.
+
+        ``:now`` appears three times.  Both calls must produce exactly
+        1 positional parameter.
+        """
+        sql = "SELECT :now, :now, :now"
+        params = {"now": "2024-01-01T00:00:00"}
+
+        result1 = processor.process(sql, params, config)
+        assert len(result1.parameters) == 1, f"Cache miss produced {len(result1.parameters)} params, expected 1"
+
+        result2 = processor.process(sql, params, config)
+        assert len(result2.parameters) == 1, f"Cache hit produced {len(result2.parameters)} params, expected 1"
+
+    def test_duplicate_named_params_cache_hit_embedding_query(
+        self, processor: ParameterProcessor, config: ParameterStyleConfig
+    ) -> None:
+        """Regression test for #376: vector-similarity query with repeated ``:embedding``.
+
+        ``:embedding`` appears twice (in the WHERE clause and the ORDER BY),
+        plus ``:threshold`` and ``:limit``.  Both calls must produce exactly
+        3 positional parameters.
+        """
+        sql = (
+            "SELECT * FROM items "
+            "WHERE embedding <=> :embedding > :threshold "
+            "ORDER BY embedding <=> :embedding "
+            "LIMIT :limit"
+        )
+        params = {"embedding": [0.1, 0.2, 0.3], "threshold": 0.5, "limit": 10}
+
+        result1 = processor.process(sql, params, config)
+        assert len(result1.parameters) == 3, f"Cache miss produced {len(result1.parameters)} params, expected 3"
+
+        result2 = processor.process(sql, params, config)
+        assert len(result2.parameters) == 3, f"Cache hit produced {len(result2.parameters)} params, expected 3"

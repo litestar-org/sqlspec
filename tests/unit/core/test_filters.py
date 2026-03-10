@@ -21,6 +21,7 @@ from sqlspec.core import (
     SearchFilter,
     apply_filter,
 )
+from sqlspec.core.filters import NotInSearchFilter
 from sqlspec.driver import CommonDriverAttributesMixin
 
 pytestmark = pytest.mark.xdist_group("core")
@@ -507,3 +508,116 @@ def test_not_null_filter_cache_key_uniqueness() -> None:
 
     assert key1 != key2
     assert key1 == key3
+
+
+# --- Bug #379 regression tests: multi-field placeholder independence ---
+
+
+def test_search_filter_multi_field_placeholder_independence() -> None:
+    """Regression test for bug #379: SearchFilter with multiple fields must produce
+    independent placeholder nodes for each field condition.
+
+    Previously, a single exp.Placeholder node was reused across multiple field
+    conditions. Because sqlglot nodes have mutable parent pointers, the first
+    parent would lose its child when the second parent claimed the same node,
+    resulting in corrupted SQL output with missing LIKE conditions.
+    """
+    filter_obj = SearchFilter(field_name={"name", "description"}, value="oracle")
+    sql_stmt = SQL("SELECT * FROM items")
+
+    result = apply_filter(sql_stmt, filter_obj)
+    rendered = result.sql.upper()
+
+    # Both fields must appear with LIKE conditions
+    assert "LIKE" in rendered
+    like_count = rendered.count("LIKE")
+    assert like_count == 2, f"Expected 2 LIKE conditions for 2 fields, got {like_count}. SQL: {result.sql}"
+
+    # The placeholder should appear for each field condition
+    param_name = filter_obj.get_param_name()
+    assert param_name is not None
+    placeholder_count = result.sql.count(f":{param_name}")
+    assert placeholder_count == 2, (
+        f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    )
+
+    # Only 1 named parameter value (shared across both placeholders)
+    positional, named = filter_obj.extract_parameters()
+    assert positional == []
+    assert len(named) == 1
+    assert named[param_name] == "%oracle%"
+
+
+def test_search_filter_three_fields_placeholder_independence() -> None:
+    """Regression test for bug #379: SearchFilter with three fields must produce
+    three independent LIKE conditions."""
+    filter_obj = SearchFilter(field_name={"a", "b", "c"}, value="oracle")
+    sql_stmt = SQL("SELECT * FROM items")
+
+    result = apply_filter(sql_stmt, filter_obj)
+    rendered = result.sql.upper()
+
+    like_count = rendered.count("LIKE")
+    assert like_count == 3, f"Expected 3 LIKE conditions for 3 fields, got {like_count}. SQL: {result.sql}"
+
+    param_name = filter_obj.get_param_name()
+    assert param_name is not None
+    placeholder_count = result.sql.count(f":{param_name}")
+    assert placeholder_count == 3, (
+        f"Expected 3 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    )
+
+    positional, named = filter_obj.extract_parameters()
+    assert positional == []
+    assert len(named) == 1
+    assert named[param_name] == "%oracle%"
+
+
+def test_not_in_search_filter_multi_field_placeholder_independence() -> None:
+    """Regression test for bug #379: NotInSearchFilter with multiple fields must
+    produce independent placeholder nodes for each field condition."""
+    filter_obj = NotInSearchFilter(field_name={"name", "description"}, value="oracle")
+    sql_stmt = SQL("SELECT * FROM items")
+
+    result = apply_filter(sql_stmt, filter_obj)
+    rendered = result.sql.upper()
+
+    # Both fields must appear with NOT LIKE conditions
+    assert "LIKE" in rendered
+    like_count = rendered.count("LIKE")
+    assert like_count == 2, f"Expected 2 NOT LIKE conditions for 2 fields, got {like_count}. SQL: {result.sql}"
+
+    param_name = filter_obj.get_param_name()
+    assert param_name is not None
+    placeholder_count = result.sql.count(f":{param_name}")
+    assert placeholder_count == 2, (
+        f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    )
+
+    positional, named = filter_obj.extract_parameters()
+    assert positional == []
+    assert len(named) == 1
+    assert named[param_name] == "%oracle%"
+
+
+def test_search_filter_single_field_unchanged() -> None:
+    """Non-regression test: SearchFilter with a single field (string, not set)
+    continues to work correctly after the bug #379 fix."""
+    filter_obj = SearchFilter(field_name="name", value="oracle")
+    sql_stmt = SQL("SELECT * FROM items")
+
+    result = apply_filter(sql_stmt, filter_obj)
+    rendered = result.sql.upper()
+
+    assert "LIKE" in rendered
+    like_count = rendered.count("LIKE")
+    assert like_count == 1, f"Expected 1 LIKE condition for single field, got {like_count}. SQL: {result.sql}"
+
+    param_name = filter_obj.get_param_name()
+    assert param_name == "name_search"
+    assert f":{param_name}" in result.sql
+
+    positional, named = filter_obj.extract_parameters()
+    assert positional == []
+    assert len(named) == 1
+    assert named["name_search"] == "%oracle%"
