@@ -723,10 +723,13 @@ class SearchFilter(StatementFilter):
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
-            result = statement.where(like_op(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name)))
+            result = statement.where(
+                like_op(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name))
+            )
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions: list[Condition] = [
-                like_op(this=exp.column(field), expression=exp.Placeholder(this=param_name)) for field in self.field_name
+                like_op(this=exp.column(field), expression=exp.Placeholder(this=param_name))
+                for field in self.field_name
             ]
             if not field_conditions:
                 return statement
@@ -849,10 +852,13 @@ class NotInSearchFilter(SearchFilter):
 
         result = statement
         if isinstance(self.field_name, str):
-            result = statement.where(exp.Not(this=like_op(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name))))
+            result = statement.where(
+                exp.Not(this=like_op(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name)))
+            )
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions: list[Condition] = [
-                exp.Not(this=like_op(this=exp.column(field), expression=exp.Placeholder(this=param_name))) for field in self.field_name
+                exp.Not(this=like_op(this=exp.column(field), expression=exp.Placeholder(this=param_name)))
+                for field in self.field_name
             ]
             if not field_conditions:
                 return statement

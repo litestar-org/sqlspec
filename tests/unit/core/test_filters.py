@@ -537,7 +537,9 @@ def test_search_filter_multi_field_placeholder_independence() -> None:
     param_name = filter_obj.get_param_name()
     assert param_name is not None
     placeholder_count = result.sql.count(f":{param_name}")
-    assert placeholder_count == 2, f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    assert placeholder_count == 2, (
+        f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    )
 
     # Only 1 named parameter value (shared across both placeholders)
     positional, named = filter_obj.extract_parameters()
@@ -561,7 +563,9 @@ def test_search_filter_three_fields_placeholder_independence() -> None:
     param_name = filter_obj.get_param_name()
     assert param_name is not None
     placeholder_count = result.sql.count(f":{param_name}")
-    assert placeholder_count == 3, f"Expected 3 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    assert placeholder_count == 3, (
+        f"Expected 3 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    )
 
     positional, named = filter_obj.extract_parameters()
     assert positional == []
@@ -586,7 +590,9 @@ def test_not_in_search_filter_multi_field_placeholder_independence() -> None:
     param_name = filter_obj.get_param_name()
     assert param_name is not None
     placeholder_count = result.sql.count(f":{param_name}")
-    assert placeholder_count == 2, f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    assert placeholder_count == 2, (
+        f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+    )
 
     positional, named = filter_obj.extract_parameters()
     assert positional == []
