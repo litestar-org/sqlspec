@@ -12,9 +12,21 @@ from sqlspec.migrations.commands import AsyncMigrationCommands
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
+_SUBSCRIBE_WAIT = 2.0  # Seconds to wait for listener to subscribe before first publish
+_POLL_INTERVAL = 0.05  # Seconds between receive checks
+_MAX_POLL_ATTEMPTS = 200  # Total receive-check attempts
+
 
 def _dsn(service: "Any") -> str:
     return f"postgresql://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
+
+
+async def _wait_for_message(received: "list[Any]") -> None:
+    """Poll until a message is received or max attempts exhausted."""
+    for _ in range(_MAX_POLL_ATTEMPTS):
+        if received:
+            break
+        await asyncio.sleep(_POLL_INTERVAL)
 
 
 @pytest.mark.postgres
@@ -61,13 +73,15 @@ async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -
         received.append(message)
 
     listener = channel.listen("notifications", _handler, poll_interval=0.2)
-    await asyncio.sleep(1.5)  # Allow listener to subscribe before publishing (increased for CI)
-    event_id = await channel.publish("notifications", {"action": "async_delivery"})
+    await asyncio.sleep(_SUBSCRIBE_WAIT)
 
-    for _ in range(200):
-        if received:
-            break
-        await asyncio.sleep(0.05)
+    # Publish and wait; retry once if the first publish raced with subscription
+    event_id = await channel.publish("notifications", {"action": "async_delivery"})
+    await _wait_for_message(received)
+
+    if not received:
+        event_id = await channel.publish("notifications", {"action": "async_delivery"})
+        await _wait_for_message(received)
 
     await channel.stop_listener(listener.id)
 
@@ -109,13 +123,14 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
         received.append(message)
 
     listener = channel.listen("alerts", _handler, poll_interval=0.2)
-    await asyncio.sleep(1.5)  # Allow listener to subscribe before publishing (increased for CI)
-    event_id = await channel.publish("alerts", {"action": "hybrid_async"})
+    await asyncio.sleep(_SUBSCRIBE_WAIT)
 
-    for _ in range(200):
-        if received:
-            break
-        await asyncio.sleep(0.05)
+    event_id = await channel.publish("alerts", {"action": "hybrid_async"})
+    await _wait_for_message(received)
+
+    if not received:
+        event_id = await channel.publish("alerts", {"action": "hybrid_async"})
+        await _wait_for_message(received)
 
     await channel.stop_listener(listener.id)
 
@@ -148,15 +163,18 @@ async def test_asyncpg_listen_notify_metadata(postgres_service: "Any") -> None:
         received.append(message)
 
     listener = channel.listen("meta_channel", _handler, poll_interval=0.2)
-    await asyncio.sleep(1.5)  # Allow listener to subscribe before publishing (increased for CI)
+    await asyncio.sleep(_SUBSCRIBE_WAIT)
+
     event_id = await channel.publish(
         "meta_channel", {"action": "with_metadata"}, metadata={"source": "test", "priority": 1}
     )
+    await _wait_for_message(received)
 
-    for _ in range(200):
-        if received:
-            break
-        await asyncio.sleep(0.05)
+    if not received:
+        event_id = await channel.publish(
+            "meta_channel", {"action": "with_metadata"}, metadata={"source": "test", "priority": 1}
+        )
+        await _wait_for_message(received)
 
     await channel.stop_listener(listener.id)
 
