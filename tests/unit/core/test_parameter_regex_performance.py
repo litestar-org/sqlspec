@@ -138,7 +138,7 @@ def test_regex_performance_on_large_sql() -> None:
     elapsed = time.perf_counter() - start
 
     assert len(params) == 1000
-    assert elapsed < 2.0, f"Regex took too long: {elapsed:.4f}s"
+    assert elapsed < 0.6, f"Regex took too long: {elapsed:.4f}s"
 
     start = time.perf_counter()
     params_cached = validator.extract_parameters(large_sql)
@@ -162,7 +162,7 @@ def test_no_catastrophic_backtracking() -> None:
         start = time.perf_counter()
         validator.extract_parameters(sql)
         elapsed = time.perf_counter() - start
-        assert elapsed < 2.0, f"Pathological case too slow: {elapsed:.4f}s"
+        assert elapsed < 0.6, f"Pathological case too slow: {elapsed:.4f}s"
 
 
 def test_edge_case_empty_and_whitespace() -> None:
