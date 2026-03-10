@@ -452,3 +452,116 @@ def test_await_portal_cleanup() -> None:
 
     manager.stop()
     assert not manager.is_running
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the await-bridge fix in _AwaitWrapper.__call__().
+#
+# These tests verify the behavior when asyncio.current_task() returns non-None
+# (i.e. we are inside an async task on the same event loop).  Because
+# asyncio.to_thread / run_in_executor spawn worker threads where current_task()
+# returns None, we must mock asyncio.current_task and asyncio.get_running_loop
+# to exercise the relevant branches.
+# ---------------------------------------------------------------------------
+
+
+def test_await_portal_fallback_when_current_task_exists() -> None:
+    """When current_task is non-None and raise_sync_error=False, await_ should
+    fall back to get_global_portal() instead of raising RuntimeError."""
+    from unittest.mock import MagicMock, patch
+
+    async def async_double(x: int) -> int:
+        return x * 2
+
+    mock_loop = MagicMock()
+    mock_loop.is_running.return_value = True
+
+    mock_portal = MagicMock()
+    mock_portal.call.return_value = 42
+
+    with (
+        patch("asyncio.get_running_loop", return_value=mock_loop),
+        patch("asyncio.current_task", return_value=MagicMock()),
+        patch("sqlspec.utils.sync_tools.get_global_portal", return_value=mock_portal) as mock_get_portal,
+    ):
+        sync_double = await_(async_double, raise_sync_error=False)
+        result = sync_double(21)
+
+    assert result == 42
+    mock_get_portal.assert_called()
+    mock_portal.call.assert_called_once()
+
+
+def test_await_raises_when_current_task_exists_and_raise_sync_error_true() -> None:
+    """When current_task is non-None and raise_sync_error=True, await_ should
+    raise RuntimeError with the appropriate message."""
+    from unittest.mock import MagicMock, patch
+
+    async def async_func() -> int:
+        return 1
+
+    mock_loop = MagicMock()
+    mock_loop.is_running.return_value = True
+
+    with (
+        patch("asyncio.get_running_loop", return_value=mock_loop),
+        patch("asyncio.current_task", return_value=MagicMock()),
+    ):
+        sync_func = await_(async_func, raise_sync_error=True)
+        with pytest.raises(RuntimeError, match="await_ cannot be called from within an async task"):
+            sync_func()
+
+
+def test_await_portal_fallback_propagates_exceptions() -> None:
+    """When using portal fallback (current_task non-None, raise_sync_error=False),
+    exceptions from the coroutine should propagate through the portal."""
+    from unittest.mock import MagicMock, patch
+
+    async def async_explode() -> int:
+        raise ValueError("test error from async")
+
+    mock_loop = MagicMock()
+    mock_loop.is_running.return_value = True
+
+    mock_portal = MagicMock()
+    mock_portal.call.side_effect = ValueError("test error from async")
+
+    with (
+        patch("asyncio.get_running_loop", return_value=mock_loop),
+        patch("asyncio.current_task", return_value=MagicMock()),
+        patch("sqlspec.utils.sync_tools.get_global_portal", return_value=mock_portal),
+    ):
+        sync_explode = await_(async_explode, raise_sync_error=False)
+        with pytest.raises(ValueError, match="test error from async"):
+            sync_explode()
+
+
+def test_await_run_coroutine_threadsafe_when_no_current_task() -> None:
+    """When the loop is running but current_task is None (worker thread context),
+    await_ should use asyncio.run_coroutine_threadsafe."""
+    from unittest.mock import MagicMock, patch
+
+    async def async_add(a: int, b: int) -> int:
+        return a + b
+
+    mock_loop = MagicMock()
+    mock_loop.is_running.return_value = True
+
+    mock_future = MagicMock()
+    mock_future.result.return_value = 7
+
+    def _capture_and_close_coro(coro: "Any", loop: "Any") -> MagicMock:
+        """Close the coroutine to avoid 'was never awaited' warning."""
+        coro.close()
+        return mock_future
+
+    with (
+        patch("asyncio.get_running_loop", return_value=mock_loop),
+        patch("asyncio.current_task", return_value=None),
+        patch("asyncio.run_coroutine_threadsafe", side_effect=_capture_and_close_coro) as mock_rcts,
+    ):
+        sync_add = await_(async_add, raise_sync_error=False)
+        result = sync_add(3, 4)
+
+    assert result == 7
+    mock_rcts.assert_called_once()
