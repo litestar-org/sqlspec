@@ -16,11 +16,7 @@ def test_raw_expressions(tmp_path: Path) -> None:
 
     with spec.provide_session(config) as session:
         session.execute(
-            "create table events ("
-            "  id integer primary key,"
-            "  name text,"
-            "  created_at text default (datetime('now'))"
-            ")"
+            "create table events (  id integer primary key,  name text,  created_at text default (datetime('now')))"
         )
         session.execute("insert into events (name) values ('signup'), ('login')")
 
@@ -31,12 +27,7 @@ def test_raw_expressions(tmp_path: Path) -> None:
         print(result.all())
 
         # Use RETURNING clause with INSERT
-        insert_returning = (
-            sql.insert("events")
-            .columns("name")
-            .values("logout")
-            .returning("id", "name")
-        )
+        insert_returning = sql.insert("events").columns("name").values("logout").returning("id", "name")
         new_row = session.execute(insert_returning)
         print(new_row.one())  # {"id": 3, "name": "logout"}
     # end-example

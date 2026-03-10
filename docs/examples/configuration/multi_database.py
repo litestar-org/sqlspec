@@ -11,29 +11,18 @@ def test_multi_database(tmp_path: Path) -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
     from sqlspec.observability import ObservabilityConfig, SamplingConfig
 
-    spec = SQLSpec(
-        observability_config=ObservabilityConfig(
-            sampling=SamplingConfig(sample_rate=0.1),
-            print_sql=True,
-        ),
-    )
+    spec = SQLSpec(observability_config=ObservabilityConfig(sampling=SamplingConfig(sample_rate=0.1), print_sql=True))
 
     # Primary database
-    primary = spec.add_config(
-        SqliteConfig(connection_config={"database": str(tmp_path / "primary.db")})
-    )
+    primary = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "primary.db")}))
 
     # Analytics database
-    analytics = spec.add_config(
-        SqliteConfig(connection_config={"database": str(tmp_path / "analytics.db")})
-    )
+    analytics = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "analytics.db")}))
 
     # Load SQL files from multiple directories
     sql_dir = tmp_path / "sql"
     sql_dir.mkdir()
-    (sql_dir / "queries.sql").write_text(
-        "-- name: list_users\nselect id, name from users order by id;\n"
-    )
+    (sql_dir / "queries.sql").write_text("-- name: list_users\nselect id, name from users order by id;\n")
     spec.load_sql_files(sql_dir)
 
     # Use each config independently

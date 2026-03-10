@@ -17,10 +17,7 @@ def test_pagination(tmp_path: Path) -> None:
 
     with spec.provide_session(config) as session:
         session.execute("create table items (id integer primary key, name text)")
-        session.execute_many(
-            "insert into items (name) values (?)",
-            [(f"Item {i}",) for i in range(1, 51)],
-        )
+        session.execute_many("insert into items (name) values (?)", [(f"Item {i}",) for i in range(1, 51)])
 
         # Approach 1: Use SQL.paginate() for simple offset pagination
         query = SQL("select id, name from items order by id").paginate(page=2, page_size=10)
@@ -34,12 +31,7 @@ def test_pagination(tmp_path: Path) -> None:
 
         # Approach 3: Use the builder for dynamic pagination
         builder_query = (
-            sql.select("id", "name")
-            .from_("items")
-            .where_like("name", "Item%")
-            .order_by("id")
-            .limit(10)
-            .offset(0)
+            sql.select("id", "name").from_("items").where_like("name", "Item%").order_by("id").limit(10).offset(0)
         )
         result = session.execute(builder_query)
         print(f"Builder: {len(result.all())} items")

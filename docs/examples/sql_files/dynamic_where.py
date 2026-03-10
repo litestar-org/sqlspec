@@ -17,12 +17,9 @@ def test_dynamic_where(tmp_path: Path) -> None:
     spec.add_named_sql("list_users", "select id, name, status from users")
 
     with spec.provide_session(config) as session:
+        session.execute("create table users (id integer primary key, name text, status text)")
         session.execute(
-            "create table users (id integer primary key, name text, status text)"
-        )
-        session.execute(
-            "insert into users (name, status) values "
-            "('Alice', 'active'), ('Bob', 'inactive'), ('Charlie', 'active')"
+            "insert into users (name, status) values ('Alice', 'active'), ('Bob', 'inactive'), ('Charlie', 'active')"
         )
 
         # Get the base SQL object and chain .where() calls

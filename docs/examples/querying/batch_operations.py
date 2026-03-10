@@ -20,11 +20,7 @@ def test_batch_operations(tmp_path: Path) -> None:
         # execute_many inserts multiple rows in a single call
         session.execute_many(
             "insert into users (name, email) values (?, ?)",
-            [
-                ("Alice", "alice@example.com"),
-                ("Bob", "bob@example.com"),
-                ("Charlie", "charlie@example.com"),
-            ],
+            [("Alice", "alice@example.com"), ("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")],
         )
 
         # select_value returns a single scalar value
@@ -36,9 +32,7 @@ def test_batch_operations(tmp_path: Path) -> None:
         print(count_int)  # 3
 
         # select_value_or_none returns None when no rows match
-        email = session.select_value_or_none(
-            "select email from users where name = ?", "Nobody"
-        )
+        email = session.select_value_or_none("select email from users where name = ?", "Nobody")
         print(email)  # None
 
         # select_with_total for pagination

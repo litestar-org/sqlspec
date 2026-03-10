@@ -15,26 +15,18 @@ def test_upsert(tmp_path: Path) -> None:
     config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
 
     with spec.provide_session(config) as session:
-        session.execute(
-            "create table settings ("
-            "  key text primary key,"
-            "  value text not null"
-            ")"
-        )
+        session.execute("create table settings (  key text primary key,  value text not null)")
 
         # ON CONFLICT DO NOTHING - skip if key exists
         insert_ignore = (
-            sql.insert("settings")
-            .columns("key", "value")
-            .values("theme", "dark")
-            .on_conflict("key")
-            .do_nothing()
+            sql.insert("settings").columns("key", "value").values("theme", "dark").on_conflict("key").do_nothing()
         )
         session.execute(insert_ignore)
 
         # ON CONFLICT DO UPDATE - upsert pattern
         upsert = (
-            sql.insert("settings")
+            sql
+            .insert("settings")
             .columns("key", "value")
             .values("theme", "light")
             .on_conflict("key")

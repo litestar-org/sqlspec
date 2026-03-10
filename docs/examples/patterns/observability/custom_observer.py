@@ -19,10 +19,7 @@ def test_custom_observer() -> None:
             print(f"SLOW QUERY ({event.duration_s:.2f}s): {event.sql[:80]}")
 
     # Wire the observer into the config
-    observability = ObservabilityConfig(
-        statement_observers=(my_observer,),
-        print_sql=False,
-    )
+    observability = ObservabilityConfig(statement_observers=(my_observer,), print_sql=False)
 
     spec = SQLSpec(observability_config=observability)
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))

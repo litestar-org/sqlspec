@@ -32,7 +32,6 @@ class SQLSpecLightStyle(Style):
         Token: "",
         Whitespace: "",
         Error: "#c62828",
-        # Keywords (Python + SQL)
         Keyword: "bold #0369a1",
         Keyword.Constant: "bold #0369a1",
         Keyword.Declaration: "bold #0369a1",
@@ -125,7 +124,6 @@ class SQLSpecDarkStyle(Style):
         Token: "#e6edf3",
         Whitespace: "",
         Error: "#ef9a9a",
-        # Keywords (Python + SQL)
         Keyword: "bold #7dd3fc",
         Keyword.Constant: "bold #7dd3fc",
         Keyword.Declaration: "bold #7dd3fc",
