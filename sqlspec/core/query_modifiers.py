@@ -338,17 +338,17 @@ def apply_limit(expression: exp.Expression, limit_value: int) -> exp.Expression:
     """Apply LIMIT clause to expression.
 
     Args:
-        expression: Base expression (must be SELECT)
+        expression: Base expression (must be SELECT or set operation)
         limit_value: LIMIT value
 
     Returns:
         Modified expression with LIMIT
 
     Raises:
-        SQLSpecError: If expression is not SELECT
+        SQLSpecError: If expression does not support LIMIT
     """
-    if not isinstance(expression, exp.Select):
-        msg = f"LIMIT only valid for SELECT, got {type(expression).__name__}"
+    if not isinstance(expression, (exp.Select, exp.SetOperation)):
+        msg = f"LIMIT only valid for SELECT or set operations, got {type(expression).__name__}"
         raise SQLSpecError(msg)
 
     return expression.limit(limit_value, copy=False)
@@ -358,17 +358,17 @@ def apply_offset(expression: exp.Expression, offset_value: int) -> exp.Expressio
     """Apply OFFSET clause to expression.
 
     Args:
-        expression: Base expression (must be SELECT)
+        expression: Base expression (must be SELECT or set operation)
         offset_value: OFFSET value
 
     Returns:
         Modified expression with OFFSET
 
     Raises:
-        SQLSpecError: If expression is not SELECT
+        SQLSpecError: If expression does not support OFFSET
     """
-    if not isinstance(expression, exp.Select):
-        msg = f"OFFSET only valid for SELECT, got {type(expression).__name__}"
+    if not isinstance(expression, (exp.Select, exp.SetOperation)):
+        msg = f"OFFSET only valid for SELECT or set operations, got {type(expression).__name__}"
         raise SQLSpecError(msg)
 
     return expression.offset(offset_value, copy=False)
@@ -424,7 +424,7 @@ def safe_modify_with_cte(
     cte: Any = None
     working_expr = expression
 
-    if isinstance(expression, exp.Select):
+    if isinstance(expression, (exp.Select, exp.SetOperation)):
         cte = expression.args.get("with_")
         if cte:
             working_expr = expression.copy()
@@ -432,7 +432,7 @@ def safe_modify_with_cte(
 
     result = modification_fn(working_expr)
 
-    if cte and isinstance(result, exp.Select):
+    if cte and isinstance(result, (exp.Select, exp.SetOperation)):
         result.set("with_", cte)
 
     return result

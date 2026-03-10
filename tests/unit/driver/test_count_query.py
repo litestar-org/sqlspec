@@ -641,3 +641,214 @@ def test_create_count_query_nested_limit_offset_only_excludes_outer(mock_driver:
     # Only outer pagination params should be excluded
     assert "outer_limit" not in count_sql.named_parameters
     assert "outer_offset" not in count_sql.named_parameters
+
+
+# =============================================================================
+# Set Operation (UNION ALL / EXCEPT / INTERSECT) Tests — Regression for #373
+# =============================================================================
+
+
+def test_create_count_query_with_union_all(mock_driver: "MockSyncDriver") -> None:
+    """Test that _create_count_query wraps UNION ALL in a subquery for counting."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users UNION ALL SELECT id FROM admins"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    count_str = str(count_sql)
+    assert "COUNT(*)" in count_str.upper()
+    # Should wrap in subquery since it's a set operation, not a plain SELECT
+    assert "total_query" in count_str.lower()
+
+
+def test_create_count_query_with_union_all_strips_order_by(mock_driver: "MockSyncDriver") -> None:
+    """Test that _create_count_query strips ORDER BY from UNION ALL before counting."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users UNION ALL SELECT id FROM admins ORDER BY id"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    count_str = str(count_sql)
+    assert "COUNT(*)" in count_str.upper()
+    assert "ORDER BY" not in count_str.upper()
+
+
+def test_create_count_query_with_union_all_strips_limit_offset(mock_driver: "MockSyncDriver") -> None:
+    """Test that _create_count_query strips LIMIT/OFFSET from UNION ALL before counting."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users UNION ALL SELECT id FROM admins LIMIT 10 OFFSET 20"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    count_str = str(count_sql)
+    assert "COUNT(*)" in count_str.upper()
+    assert "LIMIT" not in count_str.upper()
+    assert "OFFSET" not in count_str.upper()
+
+
+def test_create_count_query_with_except(mock_driver: "MockSyncDriver") -> None:
+    """Test that _create_count_query handles EXCEPT set operations."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users EXCEPT SELECT id FROM banned_users"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    count_str = str(count_sql)
+    assert "COUNT(*)" in count_str.upper()
+    assert "EXCEPT" in count_str.upper()
+
+
+def test_create_count_query_with_intersect(mock_driver: "MockSyncDriver") -> None:
+    """Test that _create_count_query handles INTERSECT set operations."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users INTERSECT SELECT id FROM premium_users"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    count_str = str(count_sql)
+    assert "COUNT(*)" in count_str.upper()
+    assert "INTERSECT" in count_str.upper()
+
+
+def test_create_count_query_with_union_all_and_cte(mock_driver: "MockSyncDriver") -> None:
+    """Test that _create_count_query preserves CTE on UNION ALL count queries."""
+    sql = mock_driver.prepare_statement(
+        SQL(
+            """
+            WITH active AS (SELECT id FROM users WHERE active = true)
+            SELECT id FROM active UNION ALL SELECT id FROM admins
+            """
+        ),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    count_str = str(count_sql)
+    assert "COUNT(*)" in count_str.upper()
+    assert "WITH" in count_str.upper()
+
+
+def test_create_count_query_with_union_all_preserves_named_params(mock_driver: "MockSyncDriver") -> None:
+    """Test that _create_count_query preserves named parameters on UNION ALL queries."""
+    sql = mock_driver.prepare_statement(
+        SQL(
+            "SELECT id FROM users WHERE status = :status UNION ALL SELECT id FROM admins WHERE role = :role",
+            status="active",
+            role="superadmin",
+        ),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._create_count_query(sql)
+
+    assert count_sql.named_parameters.get("status") == "active"
+    assert count_sql.named_parameters.get("role") == "superadmin"
+
+
+def test_add_count_over_column_with_union_all(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column wraps UNION ALL in subquery with COUNT(*) OVER()."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id, name FROM users UNION ALL SELECT id, name FROM admins"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    count_str = str(modified_sql)
+    assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
+    assert "_total_count" in count_str.lower()
+    # Should wrap in subquery for set operations
+    assert "__set_op_subq" in count_str.lower()
+
+
+def test_add_count_over_column_with_except(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column handles EXCEPT set operations."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users EXCEPT SELECT id FROM banned_users"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    count_str = str(modified_sql)
+    assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
+    assert "_total_count" in count_str.lower()
+
+
+def test_add_count_over_column_with_intersect(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column handles INTERSECT set operations."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users INTERSECT SELECT id FROM premium_users"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    count_str = str(modified_sql)
+    assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
+    assert "_total_count" in count_str.lower()
+
+
+def test_add_count_over_column_with_union_all_preserves_params(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column preserves parameters on UNION ALL queries."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users WHERE status = :status UNION ALL SELECT id FROM admins", status="active"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    assert modified_sql.named_parameters.get("status") == "active"
+
+
+def test_add_count_over_column_with_union_all_and_cte(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column preserves CTE on UNION ALL queries."""
+    sql = mock_driver.prepare_statement(
+        SQL(
+            """
+            WITH active AS (SELECT id, name FROM users WHERE active = true)
+            SELECT id, name FROM active UNION ALL SELECT id, name FROM admins
+            """
+        ),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql)
+
+    count_str = str(modified_sql)
+    assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
+    assert "WITH" in count_str.upper()
+    assert "_total_count" in count_str.lower()
+
+
+def test_add_count_over_column_with_union_all_custom_alias(mock_driver: "MockSyncDriver") -> None:
+    """Test that _add_count_over_column accepts custom alias for UNION ALL."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id FROM users UNION ALL SELECT id FROM admins"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    modified_sql = mock_driver._add_count_over_column(sql, alias="row_total")
+
+    count_str = str(modified_sql)
+    assert "row_total" in count_str.lower()
