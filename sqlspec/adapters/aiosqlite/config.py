@@ -1,5 +1,6 @@
 """Aiosqlite database configuration."""
 
+import uuid
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from mypy_extensions import mypyc_attr
@@ -178,7 +179,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
 
         if "database" not in config_dict or config_dict["database"] == ":memory:":
-            config_dict["database"] = "file::memory:?cache=shared"
+            config_dict["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=shared"
             config_dict["uri"] = True
         elif "database" in config_dict:
             database_path = str(config_dict["database"])
