@@ -673,3 +673,160 @@ class TestColumnPruning:
 
         assert result is not None
         assert isinstance(result, exp.Select)
+
+
+# =============================================================================
+# Set Operation (UNION ALL / EXCEPT / INTERSECT) Tests — Regression for #373
+# =============================================================================
+
+
+class TestSetOperationSupport:
+    """Tests for set operation handling in query modifiers (issue #373 regression)."""
+
+    def test_apply_limit_with_union_all(self) -> None:
+        """Test applying LIMIT to a UNION ALL expression."""
+        import sqlglot
+
+        union_expr = sqlglot.parse_one("SELECT id FROM a UNION ALL SELECT id FROM b")
+        assert isinstance(union_expr, exp.SetOperation)
+
+        result = apply_limit(union_expr, 10)
+
+        sql = result.sql()
+        assert "LIMIT 10" in sql
+        assert "UNION ALL" in sql.upper()
+
+    def test_apply_limit_with_union(self) -> None:
+        """Test applying LIMIT to a UNION (without ALL) expression."""
+        import sqlglot
+
+        union_expr = sqlglot.parse_one("SELECT id FROM a UNION SELECT id FROM b")
+        assert isinstance(union_expr, exp.SetOperation)
+
+        result = apply_limit(union_expr, 5)
+
+        sql = result.sql()
+        assert "LIMIT 5" in sql
+
+    def test_apply_limit_with_except(self) -> None:
+        """Test applying LIMIT to an EXCEPT expression."""
+        import sqlglot
+
+        except_expr = sqlglot.parse_one("SELECT id FROM a EXCEPT SELECT id FROM b")
+        assert isinstance(except_expr, exp.SetOperation)
+
+        result = apply_limit(except_expr, 15)
+
+        sql = result.sql()
+        assert "LIMIT 15" in sql
+        assert "EXCEPT" in sql.upper()
+
+    def test_apply_limit_with_intersect(self) -> None:
+        """Test applying LIMIT to an INTERSECT expression."""
+        import sqlglot
+
+        intersect_expr = sqlglot.parse_one("SELECT id FROM a INTERSECT SELECT id FROM b")
+        assert isinstance(intersect_expr, exp.SetOperation)
+
+        result = apply_limit(intersect_expr, 3)
+
+        sql = result.sql()
+        assert "LIMIT 3" in sql
+        assert "INTERSECT" in sql.upper()
+
+    def test_apply_offset_with_union_all(self) -> None:
+        """Test applying OFFSET to a UNION ALL expression."""
+        import sqlglot
+
+        union_expr = sqlglot.parse_one("SELECT id FROM a UNION ALL SELECT id FROM b")
+        assert isinstance(union_expr, exp.SetOperation)
+
+        result = apply_offset(union_expr, 5)
+
+        sql = result.sql()
+        assert "OFFSET 5" in sql
+        assert "UNION ALL" in sql.upper()
+
+    def test_apply_offset_with_except(self) -> None:
+        """Test applying OFFSET to an EXCEPT expression."""
+        import sqlglot
+
+        except_expr = sqlglot.parse_one("SELECT id FROM a EXCEPT SELECT id FROM b")
+        assert isinstance(except_expr, exp.SetOperation)
+
+        result = apply_offset(except_expr, 20)
+
+        sql = result.sql()
+        assert "OFFSET 20" in sql
+
+    def test_apply_offset_with_intersect(self) -> None:
+        """Test applying OFFSET to an INTERSECT expression."""
+        import sqlglot
+
+        intersect_expr = sqlglot.parse_one("SELECT id FROM a INTERSECT SELECT id FROM b")
+        assert isinstance(intersect_expr, exp.SetOperation)
+
+        result = apply_offset(intersect_expr, 7)
+
+        sql = result.sql()
+        assert "OFFSET 7" in sql
+
+    def test_apply_limit_and_offset_with_union_all(self) -> None:
+        """Test applying both LIMIT and OFFSET to UNION ALL."""
+        import sqlglot
+
+        union_expr = sqlglot.parse_one("SELECT id FROM a UNION ALL SELECT id FROM b")
+
+        result = apply_limit(union_expr, 10)
+        result = apply_offset(result, 20)
+
+        sql = result.sql()
+        assert "LIMIT 10" in sql
+        assert "OFFSET 20" in sql
+        assert "UNION ALL" in sql.upper()
+
+    def test_safe_modify_with_cte_preserves_cte_on_set_operation(self) -> None:
+        """Test that safe_modify_with_cte preserves CTEs on set operations."""
+        import sqlglot
+
+        cte_union = sqlglot.parse_one("WITH cte AS (SELECT 1 AS id) SELECT id FROM cte UNION ALL SELECT id FROM b")
+
+        def add_limit(expr: exp.Expression) -> exp.Expression:
+            return apply_limit(expr, 10)
+
+        result = safe_modify_with_cte(cte_union, add_limit)
+
+        sql = result.sql()
+        assert "WITH" in sql.upper()
+        assert "LIMIT 10" in sql
+        assert "UNION ALL" in sql.upper()
+
+    def test_safe_modify_with_cte_preserves_cte_on_except(self) -> None:
+        """Test that safe_modify_with_cte preserves CTEs on EXCEPT operations."""
+        import sqlglot
+
+        cte_except = sqlglot.parse_one("WITH cte AS (SELECT 1 AS id) SELECT id FROM cte EXCEPT SELECT id FROM b")
+
+        def add_offset(expr: exp.Expression) -> exp.Expression:
+            return apply_offset(expr, 5)
+
+        result = safe_modify_with_cte(cte_except, add_offset)
+
+        sql = result.sql()
+        assert "WITH" in sql.upper()
+        assert "OFFSET 5" in sql
+        assert "EXCEPT" in sql.upper()
+
+    def test_apply_limit_rejects_non_select_non_set_operation(self) -> None:
+        """Test that LIMIT still raises error for unsupported expression types."""
+        update_expr = exp.update("users", {"name": exp.Literal.string("test")})
+
+        with pytest.raises(SQLSpecError, match="LIMIT only valid for SELECT"):
+            apply_limit(update_expr, 10)
+
+    def test_apply_offset_rejects_non_select_non_set_operation(self) -> None:
+        """Test that OFFSET still raises error for unsupported expression types."""
+        update_expr = exp.update("users", {"name": exp.Literal.string("test")})
+
+        with pytest.raises(SQLSpecError, match="OFFSET only valid for SELECT"):
+            apply_offset(update_expr, 5)

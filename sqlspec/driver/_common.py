@@ -2065,7 +2065,13 @@ class CommonDriverAttributesMixin:
                 **filtered_named_params,
             )
 
-        subquery = cast("exp.Select", expr).subquery(alias="total_query")
+        # Strip ORDER BY, LIMIT, OFFSET before wrapping for count
+        # (they don't affect the total count and cause incorrect results)
+        count_source = cast("exp.Query", expr.copy())
+        count_source.set("order", None)
+        count_source.set("limit", None)
+        count_source.set("offset", None)
+        subquery = count_source.subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
         if cte is not None:
             count_expr.set("with_", cte.copy())
@@ -2108,14 +2114,28 @@ class CommonDriverAttributesMixin:
             raise ImproperConfigurationError(msg)
 
         expr = original_sql.expression
-        if not isinstance(expr, exp.Select):
-            msg = "COUNT(*) OVER() can only be added to SELECT statements"
+        if isinstance(expr, exp.SetOperation):
+            # Extract CTE before wrapping — CTE must stay at outermost level
+            cte = expr.args.get("with_")
+            expr_copy = expr.copy()
+            if cte:
+                expr_copy.set("with_", None)
+            # Wrap set operation in subquery, then select all columns + count window
+            subquery = expr_copy.subquery(alias="__set_op_subq")
+            modified_expr = exp.select(exp.Column(this=exp.Star())).from_(subquery)
+            count_window = exp.Window(this=exp.Count(this=exp.Star()))
+            aliased_count = exp.alias_(count_window, alias)
+            modified_expr = modified_expr.select(aliased_count, copy=False)
+            if cte:
+                modified_expr.set("with_", cte.copy())
+        elif isinstance(expr, exp.Select):
+            modified_expr = expr.copy()
+            count_window = exp.Window(this=exp.Count(this=exp.Star()))
+            aliased_count = exp.alias_(count_window, alias)
+            modified_expr = modified_expr.select(aliased_count, copy=False)
+        else:
+            msg = "COUNT(*) OVER() can only be added to SELECT or set operation statements"
             raise ImproperConfigurationError(msg)
-
-        modified_expr = expr.copy()
-        count_window = exp.Window(this=exp.Count(this=exp.Star()))
-        aliased_count = exp.alias_(count_window, alias)
-        modified_expr = modified_expr.select(aliased_count, copy=False)
 
         return SQL(
             modified_expr,
