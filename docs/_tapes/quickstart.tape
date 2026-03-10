@@ -43,11 +43,11 @@ Type "    driver.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT,
 Enter
 Sleep 500ms
 
-Type "    driver.execute(\"INSERT INTO users (name, email) VALUES ('alice', 'alice@example.com')\")"
+Type@50ms `    driver.execute("INSERT INTO users (name, email) VALUES ('alice', 'alice@example.com')")`
 Enter
 Sleep 500ms
 
-Type "    driver.execute(\"INSERT INTO users (name, email) VALUES ('bob', 'bob@example.com')\")"
+Type@50ms `    driver.execute("INSERT INTO users (name, email) VALUES ('bob', 'bob@example.com')")`
 Enter
 Sleep 500ms
 
