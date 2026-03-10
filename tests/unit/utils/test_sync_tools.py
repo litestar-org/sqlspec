@@ -550,10 +550,15 @@ def test_await_run_coroutine_threadsafe_when_no_current_task() -> None:
     mock_future = MagicMock()
     mock_future.result.return_value = 7
 
+    def _capture_and_close_coro(coro: "Any", loop: "Any") -> MagicMock:
+        """Close the coroutine to avoid 'was never awaited' warning."""
+        coro.close()
+        return mock_future
+
     with (
         patch("asyncio.get_running_loop", return_value=mock_loop),
         patch("asyncio.current_task", return_value=None),
-        patch("asyncio.run_coroutine_threadsafe", return_value=mock_future) as mock_rcts,
+        patch("asyncio.run_coroutine_threadsafe", side_effect=_capture_and_close_coro) as mock_rcts,
     ):
         sync_add = await_(async_add, raise_sync_error=False)
         result = sync_add(3, 4)
