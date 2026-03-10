@@ -225,8 +225,12 @@ class _AwaitWrapper(Generic[ParamSpecT, ReturnT]):
                 current_task = None
 
             if current_task is not None:
-                msg = "await_ cannot be called from within an async task running on the same event loop. Use 'await' instead."
-                raise RuntimeError(msg)
+                if self._raise_sync_error:
+                    msg = "await_ cannot be called from within an async task running on the same event loop. Use 'await' instead."
+                    raise RuntimeError(msg)
+                portal = get_global_portal()
+                typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
+                return portal.call(typed_partial)
             future = asyncio.run_coroutine_threadsafe(partial_f(), loop)
             return future.result()
         if self._raise_sync_error:
