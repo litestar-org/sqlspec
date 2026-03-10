@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Unit tests for storage bridge ingestion helpers."""
 
 import sqlite3
