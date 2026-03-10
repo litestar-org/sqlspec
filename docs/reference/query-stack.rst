@@ -63,6 +63,7 @@ StackResult
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 Driver APIs
 ===========
@@ -86,6 +87,7 @@ Exceptions
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 Usage Highlights
 ================

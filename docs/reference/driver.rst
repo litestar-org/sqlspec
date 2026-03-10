@@ -64,11 +64,13 @@ Feature Flag Types
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 .. autoclass:: FeatureVersions
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 Driver Protocols
 ================

@@ -31,7 +31,9 @@ Middleware
 .. autoclass:: sqlspec.extensions.fastapi.SQLSpecAutocommitMiddleware
    :members:
    :show-inheritance:
+   :no-index:
 
 .. autoclass:: sqlspec.extensions.fastapi.SQLSpecManualMiddleware
    :members:
    :show-inheritance:
+   :no-index:
