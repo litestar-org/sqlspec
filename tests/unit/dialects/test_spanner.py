@@ -2,11 +2,10 @@
 
 from sqlglot import parse_one
 
-import sqlspec.adapters.spanner
+import sqlspec.dialects  # noqa: F401
 
 
 def _render(sql: str) -> str:
-    assert sqlspec.adapters.spanner
 
     return parse_one(sql, dialect="spanner").sql(dialect="spanner")
 

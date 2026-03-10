@@ -1,8 +1,5 @@
 """Google Cloud Spanner Adapter."""
 
-from sqlglot.dialects.dialect import Dialect
-
-from sqlspec.adapters.spanner import dialect
 from sqlspec.adapters.spanner.config import (
     SpannerConnectionParams,
     SpannerDriverFeatures,
@@ -20,9 +17,6 @@ from sqlspec.adapters.spanner.type_converter import (
     uuid_to_spanner,
 )
 
-Dialect.classes["spanner"] = dialect.Spanner
-Dialect.classes["spangres"] = dialect.Spangres
-
 __all__ = (
     "SpannerConnectionParams",
     "SpannerDriverFeatures",
@@ -31,7 +25,6 @@ __all__ = (
     "SpannerSyncDriver",
     "bytes_to_spanner",
     "coerce_params_for_spanner",
-    "dialect",
     "infer_spanner_param_types",
     "spanner_json",
     "spanner_to_bytes",

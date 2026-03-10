@@ -2,7 +2,7 @@
 
 from sqlglot import parse_one
 
-import sqlspec.adapters.spanner  # noqa: F401
+import sqlspec.dialects  # noqa: F401
 
 
 def _render(sql: str) -> str:

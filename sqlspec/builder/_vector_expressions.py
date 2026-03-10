@@ -246,7 +246,7 @@ def _register_with_sqlglot() -> None:
     spanner_dialect: type | None = None
     spangres_dialect: type | None = None
     with suppress(ImportError):
-        from sqlspec.adapters.spanner.dialect import Spangres, Spanner
+        from sqlspec.dialects.spanner import Spangres, Spanner
 
         spanner_dialect = Spanner
         spangres_dialect = Spangres
