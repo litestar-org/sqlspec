@@ -11,7 +11,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_csv, import_pyarrow_parquet
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import from_json, get_serializer_metrics, serialize_collection, to_json
@@ -46,7 +46,7 @@ __all__ = (
     "reset_storage_bridge_metrics",
 )
 
-StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc"]
+StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv"]
 StorageDestination: TypeAlias = str | Path
 StorageDiagnostics: TypeAlias = dict[str, float]
 
@@ -207,13 +207,25 @@ def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
     return bytes(buffer)
 
 
-def _encode_arrow_payload(table: "ArrowTable", format_choice: StorageFormat, *, compression: str | None) -> bytes:
+def _encode_arrow_payload(
+    table: "ArrowTable",
+    format_choice: StorageFormat,
+    *,
+    compression: str | None,
+    write_options: "dict[str, Any] | None" = None,
+) -> bytes:
     pa = import_pyarrow()
     sink = pa.BufferOutputStream()
     if format_choice == "arrow-ipc":
         writer = pa.ipc.new_file(sink, table.schema)
         writer.write_table(table)
         writer.close()
+    elif format_choice == "csv":
+        pa_csv = import_pyarrow_csv()
+        csv_opts: Any = None
+        if write_options:
+            csv_opts = pa_csv.WriteOptions(**write_options)
+        pa_csv.write_csv(table, sink, write_options=csv_opts)
     else:
         pq = import_pyarrow_parquet()
         pq.write_table(table, sink, compression=compression)
@@ -248,6 +260,9 @@ def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "Arro
     if format_choice == "arrow-ipc":
         reader = pa.ipc.open_file(pa.BufferReader(payload))
         return cast("ArrowTable", reader.read_all())
+    if format_choice == "csv":
+        pa_csv = import_pyarrow_csv()
+        return cast("ArrowTable", pa_csv.read_csv(pa.BufferReader(payload)))
     text_payload = payload.decode()
     if format_choice == "json":
         data = from_json(text_payload)
@@ -349,7 +364,10 @@ class SyncStoragePipeline:
         """Write an Arrow table to storage using zero-copy buffers."""
 
         format_choice = format_hint or "parquet"
-        payload = _encode_arrow_payload(table, format_choice, compression=compression)
+        format_write_options = (storage_options or {}).get("write_options") if format_choice == "csv" else None
+        payload = _encode_arrow_payload(
+            table, format_choice, compression=compression, write_options=format_write_options
+        )
         return self._write_bytes(
             payload,
             destination,
@@ -466,7 +484,7 @@ class AsyncStoragePipeline:
     ) -> StorageTelemetry:
         serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
-        payload = _encode_row_payload(serialized, format_choice)
+        payload = await async_(_encode_row_payload)(serialized, format_choice)
         return await self._write_bytes_async(
             payload,
             destination,
@@ -485,7 +503,10 @@ class AsyncStoragePipeline:
         compression: str | None = None,
     ) -> StorageTelemetry:
         format_choice = format_hint or "parquet"
-        payload = _encode_arrow_payload(table, format_choice, compression=compression)
+        format_write_options = (storage_options or {}).get("write_options") if format_choice == "csv" else None
+        payload = await async_(_encode_arrow_payload)(
+            table, format_choice, compression=compression, write_options=format_write_options
+        )
         return await self._write_bytes_async(
             payload,
             destination,
@@ -561,7 +582,7 @@ class AsyncStoragePipeline:
         else:
             payload = await async_(_read_backend_sync)(backend=backend, path=path, backend_name=backend_name)
 
-        table = _decode_arrow_payload(payload, file_format)
+        table = await async_(_decode_arrow_payload)(payload, file_format)
         rows_processed = int(table.num_rows)
         telemetry: StorageTelemetry = {
             "destination": path,
