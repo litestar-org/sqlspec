@@ -46,8 +46,8 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "build_truncate_statement",
-    "coerce_large_string_parameters_async",
-    "coerce_large_string_parameters_sync",
+    "coerce_large_parameters_async",
+    "coerce_large_parameters_sync",
     "collect_async_rows",
     "collect_sync_rows",
     "create_mapped_exception",
@@ -184,49 +184,61 @@ def normalize_execute_many_parameters_async(parameters: Any) -> Any:
     return parameters
 
 
-def coerce_large_string_parameters_sync(connection: Any, parameters: Any, *, lob_type: Any, threshold: int) -> Any:
-    """Coerce large string parameters into CLOBs.
+def coerce_large_parameters_sync(
+    connection: Any, parameters: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
+) -> Any:
+    """Coerce large string/bytes parameters into CLOBs/BLOBs.
+
+    Strings whose UTF-8 encoding exceeds ``varchar2_byte_limit`` are bound as
+    CLOBs.  Bytes values longer than ``raw_byte_limit`` are bound as BLOBs.
 
     Args:
         connection: Oracle database connection.
         parameters: Prepared parameters payload.
-        lob_type: Oracle CLOB type.
-        threshold: String length threshold for CLOB conversion.
+        clob_type: Oracle CLOB DB type (``oracledb.DB_TYPE_CLOB``).
+        blob_type: Oracle BLOB DB type (``oracledb.DB_TYPE_BLOB``).
+        varchar2_byte_limit: Byte-length threshold for CLOB conversion.
+        raw_byte_limit: Byte-length threshold for BLOB conversion.
 
     Returns:
-        Parameters payload with large strings converted to CLOBs.
+        Parameters payload with large values converted to LOBs.
     """
     if not parameters or not isinstance(parameters, dict):
         return parameters
     for param_name, param_value in parameters.items():
-        if isinstance(param_value, str) and len(param_value) > threshold:
-            clob = connection.createlob(lob_type)
-            clob.write(param_value)
-            parameters[param_name] = clob
+        if isinstance(param_value, str) and len(param_value.encode("utf-8")) > varchar2_byte_limit:
+            parameters[param_name] = connection.createlob(clob_type, param_value)
+        elif isinstance(param_value, (bytes, bytearray)) and len(param_value) > raw_byte_limit:
+            parameters[param_name] = connection.createlob(blob_type, bytes(param_value))
     return parameters
 
 
-async def coerce_large_string_parameters_async(
-    connection: Any, parameters: Any, *, lob_type: Any, threshold: int
+async def coerce_large_parameters_async(
+    connection: Any, parameters: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
 ) -> Any:
-    """Coerce large string parameters into CLOBs for async Oracle drivers.
+    """Coerce large string/bytes parameters into CLOBs/BLOBs for async Oracle drivers.
+
+    Strings whose UTF-8 encoding exceeds ``varchar2_byte_limit`` are bound as
+    CLOBs.  Bytes values longer than ``raw_byte_limit`` are bound as BLOBs.
 
     Args:
         connection: Oracle database connection.
         parameters: Prepared parameters payload.
-        lob_type: Oracle CLOB type.
-        threshold: String length threshold for CLOB conversion.
+        clob_type: Oracle CLOB DB type (``oracledb.DB_TYPE_CLOB``).
+        blob_type: Oracle BLOB DB type (``oracledb.DB_TYPE_BLOB``).
+        varchar2_byte_limit: Byte-length threshold for CLOB conversion.
+        raw_byte_limit: Byte-length threshold for BLOB conversion.
 
     Returns:
-        Parameters payload with large strings converted to CLOBs.
+        Parameters payload with large values converted to LOBs.
     """
     if not parameters or not isinstance(parameters, dict):
         return parameters
     for param_name, param_value in parameters.items():
-        if isinstance(param_value, str) and len(param_value) > threshold:
-            clob = await connection.createlob(lob_type)
-            await clob.write(param_value)
-            parameters[param_name] = clob
+        if isinstance(param_value, str) and len(param_value.encode("utf-8")) > varchar2_byte_limit:
+            parameters[param_name] = await connection.createlob(clob_type, param_value)
+        elif isinstance(param_value, (bytes, bytearray)) and len(param_value) > raw_byte_limit:
+            parameters[param_name] = await connection.createlob(blob_type, bytes(param_value))
     return parameters
 
 
