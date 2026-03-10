@@ -8,7 +8,14 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 FILE_PROTOCOL: Final[str] = "file"
 FILE_SCHEME_PREFIX: Final[str] = "file://"
 
-__all__ = ("FILE_PROTOCOL", "FILE_SCHEME_PREFIX", "import_pyarrow", "import_pyarrow_parquet", "resolve_storage_path")
+__all__ = (
+    "FILE_PROTOCOL",
+    "FILE_SCHEME_PREFIX",
+    "import_pyarrow",
+    "import_pyarrow_csv",
+    "import_pyarrow_parquet",
+    "resolve_storage_path",
+)
 
 
 def import_pyarrow() -> "Any":
@@ -35,6 +42,19 @@ def import_pyarrow_parquet() -> "Any":
     import pyarrow.parquet as pq
 
     return pq
+
+
+def import_pyarrow_csv() -> "Any":
+    """Import PyArrow CSV module with optional dependency guard.
+
+    Returns:
+        PyArrow CSV module.
+    """
+
+    ensure_pyarrow()
+    import pyarrow.csv as pa_csv
+
+    return pa_csv
 
 
 def resolve_storage_path(
