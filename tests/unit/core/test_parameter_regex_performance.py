@@ -145,7 +145,7 @@ def test_regex_performance_on_large_sql() -> None:
     elapsed_cached = time.perf_counter() - start
 
     assert len(params_cached) == 1000
-    assert elapsed_cached < 0.01, f"Cache lookup too slow: {elapsed_cached:.6f}s"
+    assert elapsed_cached < 0.001, f"Cache lookup too slow: {elapsed_cached:.6f}s"
 
 
 def test_no_catastrophic_backtracking() -> None:
