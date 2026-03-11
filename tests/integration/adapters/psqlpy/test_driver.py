@@ -698,3 +698,17 @@ async def test_psqlpy_on_connection_create_hook(postgres_service: "PostgresServi
     finally:
         if config.connection_instance:
             config.connection_instance.close()
+
+
+@pytest.mark.integration
+async def test_extensions_not_enabled_on_standard_postgres(psqlpy_config: "PsqlpyConfig") -> None:
+    """Verify pgvector and paradedb extensions are not detected on standard postgres.
+
+    Standard PostgreSQL does not have the 'vector' or 'pg_search' extensions installed,
+    so the driver should detect this and keep the default 'postgres' dialect.
+    """
+    await psqlpy_config.create_pool()
+
+    assert psqlpy_config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
+    assert psqlpy_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
+    assert psqlpy_config.statement_config.dialect == "postgres"
