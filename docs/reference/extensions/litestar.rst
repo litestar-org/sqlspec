@@ -47,4 +47,8 @@ Providers
 CLI
 ===
 
-.. autofunction:: sqlspec.extensions.litestar.database_group
+.. py:data:: sqlspec.extensions.litestar.database_group
+
+   Click command group for managing SQLSpec database components (migrations, etc.).
+
+   :type: click.Group
