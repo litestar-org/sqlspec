@@ -4,7 +4,6 @@ Provides statement builders (select, insert, update, etc.) and column expression
 """
 
 import hashlib
-import inspect
 import logging
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Union, cast
@@ -1954,4 +1953,3 @@ class SQLFactory:
 
 
 sql = SQLFactory()
-sql.__signature__ = inspect.signature(SQLFactory.__call__)  # type: ignore[attr-defined]

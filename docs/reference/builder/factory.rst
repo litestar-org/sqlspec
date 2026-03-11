@@ -15,10 +15,15 @@ SQLFactory
    :members:
    :show-inheritance:
 
-Convenience Function
+Convenience Instance
 ====================
 
-.. autofunction:: sql
+.. py:data:: sqlspec.builder.sql
+   :type: SQLFactory
+
+   Pre-configured ``SQLFactory`` instance for convenient query building.
+
+   Callable as ``sql(statement, dialect=None)`` to create a builder from a SQL string.
 
 COPY Statement Helpers
 ======================
