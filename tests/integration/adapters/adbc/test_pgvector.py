@@ -24,8 +24,29 @@ def pgvector_adbc_connection_config(pgvector_service: "PostgresService") -> "dic
     }
 
 
+@pytest.fixture(scope="session")
+def _ensure_pgvector_extension(pgvector_adbc_connection_config: "dict[str, Any]") -> None:
+    """Ensure the pgvector extension exists before any config creates a detection connection."""
+    from sqlspec.adapters.adbc.core import build_connection_config, resolve_driver_connect_func
+
+    conn = resolve_driver_connect_func(None, pgvector_adbc_connection_config["uri"])(
+        **build_connection_config(pgvector_adbc_connection_config)
+    )
+    try:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        finally:
+            cursor.close()
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @pytest.fixture(scope="function")
-def pgvector_adbc_config(pgvector_adbc_connection_config: "dict[str, Any]") -> "Generator[AdbcConfig, None, None]":
+def pgvector_adbc_config(
+    pgvector_adbc_connection_config: "dict[str, Any]", _ensure_pgvector_extension: None
+) -> "Generator[AdbcConfig, None, None]":
     """Provide an AdbcConfig instance connected to pgvector postgres."""
     config = AdbcConfig(connection_config=dict(pgvector_adbc_connection_config))
     try:
@@ -44,7 +65,6 @@ def pgvector_adbc_driver(pgvector_adbc_config: "AdbcConfig") -> "Generator[AdbcD
 @pytest.fixture(scope="function")
 def pgvector_table(pgvector_adbc_driver: "AdbcDriver") -> "Generator[AdbcDriver, None, None]":
     """Create a test table with vector column for pgvector tests."""
-    pgvector_adbc_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
     pgvector_adbc_driver.execute_script("""
         DROP TABLE IF EXISTS vector_docs CASCADE;
         CREATE TABLE vector_docs (
@@ -54,15 +74,15 @@ def pgvector_table(pgvector_adbc_driver: "AdbcDriver") -> "Generator[AdbcDriver,
         );
     """)
 
-    # Insert test data — vectors as string literals for ADBC
+    # Insert test data — explicit ::vector cast required for ADBC text params
     pgvector_adbc_driver.execute(
-        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc1", "[0.1, 0.2, 0.3]")
+        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2::vector)", ("doc1", "[0.1, 0.2, 0.3]")
     )
     pgvector_adbc_driver.execute(
-        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc2", "[0.4, 0.5, 0.6]")
+        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2::vector)", ("doc2", "[0.4, 0.5, 0.6]")
     )
     pgvector_adbc_driver.execute(
-        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc3", "[0.7, 0.8, 0.9]")
+        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2::vector)", ("doc3", "[0.7, 0.8, 0.9]")
     )
 
     try:
@@ -78,7 +98,6 @@ def pgvector_table(pgvector_adbc_driver: "AdbcDriver") -> "Generator[AdbcDriver,
 def test_pgvector_extension_detected(pgvector_adbc_config: "AdbcConfig") -> None:
     """Verify pgvector extension is detected and dialect is updated."""
     with pgvector_adbc_config.provide_session() as session:
-        session.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
         session.execute("SELECT 1")
 
     assert pgvector_adbc_config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
@@ -108,10 +127,9 @@ def test_pgvector_euclidean_distance_raw_sql(pgvector_table: "AdbcDriver") -> No
         ORDER BY distance
     """)
 
-    assert result.data is not None
-    assert len(result.data) == 3
-    assert result.data[0]["content"] == "doc1"
-    assert result.data[0]["distance"] < 0.01
+    assert len(result) == 3
+    assert result[0]["content"] == "doc1"
+    assert result[0]["distance"] < 0.01
 
 
 @pytest.mark.integration
@@ -125,9 +143,8 @@ def test_pgvector_cosine_distance_raw_sql(pgvector_table: "AdbcDriver") -> None:
         ORDER BY distance
     """)
 
-    assert result.data is not None
-    assert len(result.data) == 3
-    assert result.data[0]["content"] == "doc1"
+    assert len(result) == 3
+    assert result[0]["content"] == "doc1"
 
 
 @pytest.mark.integration
@@ -141,8 +158,7 @@ def test_pgvector_inner_product_raw_sql(pgvector_table: "AdbcDriver") -> None:
         ORDER BY neg_inner_product
     """)
 
-    assert result.data is not None
-    assert len(result.data) == 3
+    assert len(result) == 3
 
 
 # --- Query Builder Tests ---
@@ -183,9 +199,8 @@ def test_pgvector_order_by_distance_raw(pgvector_table: "AdbcDriver") -> None:
         LIMIT 2
     """)
 
-    assert result.data is not None
-    assert len(result.data) == 2
-    assert result.data[0]["content"] == "doc1"
+    assert len(result) == 2
+    assert result[0]["content"] == "doc1"
 
 
 @pytest.mark.integration
@@ -199,9 +214,8 @@ def test_pgvector_distance_threshold_raw(pgvector_table: "AdbcDriver") -> None:
         WHERE embedding <-> '[0.1, 0.2, 0.3]'::vector < 0.3
     """)
 
-    assert result.data is not None
-    assert len(result.data) == 1
-    assert result.data[0]["content"] == "doc1"
+    assert len(result) == 1
+    assert result[0]["content"] == "doc1"
 
 
 @pytest.mark.integration
@@ -217,9 +231,8 @@ def test_pgvector_multiple_metrics_raw(pgvector_table: "AdbcDriver") -> None:
         FROM vector_docs
     """)
 
-    assert result.data is not None
-    assert len(result.data) == 3
-    for row in result.data:
+    assert len(result) == 3
+    for row in result:
         assert row["euclidean_dist"] is not None
         assert row["cosine_dist"] is not None
         assert row["neg_inner_product"] is not None
