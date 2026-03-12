@@ -198,6 +198,7 @@ def apply_driver_features(
     serializer = features.get("json_serializer", to_json)
     features.setdefault("json_serializer", serializer)
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+    features.setdefault("enable_paradedb", True)
 
     parameter_config = _build_psycopg_parameter_config(driver_profile, serializer)
     statement_config = statement_config.replace(parameter_config=parameter_config)

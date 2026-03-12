@@ -69,7 +69,7 @@ class PsycopgSyncSessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PsycopgSyncDriver], PsycopgSyncDriver]",
     ) -> None:
@@ -85,8 +85,9 @@ class PsycopgSyncSessionContext:
         from sqlspec.adapters.psycopg.driver import PsycopgSyncDriver
 
         self._connection = self._acquire_connection()
+        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
         self._driver = PsycopgSyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
@@ -124,7 +125,7 @@ class PsycopgAsyncSessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PsycopgAsyncDriver], PsycopgAsyncDriver]",
     ) -> None:
@@ -140,8 +141,9 @@ class PsycopgAsyncSessionContext:
         from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver
 
         self._connection = await self._acquire_connection()
+        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
         self._driver = PsycopgAsyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 

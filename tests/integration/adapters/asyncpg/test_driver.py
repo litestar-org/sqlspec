@@ -649,12 +649,18 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: "AsyncpgDr
 
 
 @pytest.mark.integration
-async def test_asyncpg_pgvector_integration(asyncpg_session: "AsyncpgDriver") -> None:
-    """Test that asyncpg driver initializes pgvector support automatically via pool init."""
+async def test_extensions_not_enabled_on_standard_postgres(asyncpg_config: "AsyncpgConfig") -> None:
+    """Verify pgvector and paradedb extensions are not detected on standard postgres.
 
-    result = await asyncpg_session.execute("SELECT 1 as test_value")
-    assert result.data is not None
-    assert result.get_data()[0]["test_value"] == 1
+    Standard PostgreSQL does not have the 'vector' or 'pg_search' extensions installed,
+    so the driver should detect this and keep the default 'postgres' dialect.
+    """
+    async with asyncpg_config.provide_session() as session:
+        await session.execute("SELECT 1")
+
+    assert asyncpg_config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
+    assert asyncpg_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
+    assert asyncpg_config.statement_config.dialect == "postgres"
 
 
 @pytest.mark.asyncpg

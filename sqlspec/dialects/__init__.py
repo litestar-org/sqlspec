@@ -11,9 +11,12 @@ Import this module to ensure all sqlspec dialects are available::
 
 from sqlglot.dialects.dialect import Dialect
 
+from sqlspec.dialects.postgres import ParadeDB, PGVector
 from sqlspec.dialects.spanner import Spangres, Spanner
 
+Dialect.classes["pgvector"] = PGVector
+Dialect.classes["paradedb"] = ParadeDB
 Dialect.classes["spanner"] = Spanner
 Dialect.classes["spangres"] = Spangres
 
-__all__ = ("Spangres", "Spanner")
+__all__ = ("PGVector", "ParadeDB", "Spangres", "Spanner")

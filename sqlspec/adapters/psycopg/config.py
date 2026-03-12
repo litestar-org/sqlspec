@@ -75,6 +75,11 @@ class PsycopgDriverFeatures(TypedDict):
         Provides automatic conversion between Python objects and PostgreSQL vector types.
         Enables vector similarity operations and index support.
         Set to False to disable pgvector support even when package is available.
+    enable_paradedb: Enable ParadeDB (pg_search) extension detection.
+        When enabled and the pg_search extension is detected, the SQL dialect
+        switches to "paradedb" which supports search operators (@@@, &&&, etc.)
+        and inherits all pgvector distance operators.
+        Defaults to True. Independent of enable_pgvector.
     json_serializer: Custom JSON serializer for StatementConfig parameter handling.
     json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
     on_connection_create: Callback executed when a connection is created/acquired from the pool.
@@ -95,6 +100,7 @@ class PsycopgDriverFeatures(TypedDict):
     """
 
     enable_pgvector: NotRequired[bool]
+    enable_paradedb: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: NotRequired["Callable[..., Any]"]
@@ -210,6 +216,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._pgvector_available: bool | None = None
+        self._paradedb_available: bool | None = None
 
         super().__init__(
             connection_config=connection_config,
@@ -244,18 +252,61 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
-            return ConnectionPool(conninfo, open=True, **pool_parameters)
+            pool = ConnectionPool(conninfo, open=True, **pool_parameters)
+        else:
+            kwargs = all_config.pop("kwargs", {})
+            all_config.update(kwargs)
+            pool = ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
 
-        kwargs = all_config.pop("kwargs", {})
-        all_config.update(kwargs)
-        return ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
+        return pool
+
+    def _update_dialect_for_extensions(self) -> None:
+        """Update statement_config dialect based on detected extensions.
+
+        Priority: paradedb > pgvector > postgres (default).
+        """
+        current_dialect = getattr(self.statement_config, "dialect", "postgres")
+        if current_dialect != "postgres":
+            return
+
+        if self._paradedb_available:
+            self.statement_config = self.statement_config.replace(dialect="paradedb")
+        elif self._pgvector_available:
+            self.statement_config = self.statement_config.replace(dialect="pgvector")
 
     def _configure_connection(self, conn: "PsycopgSyncConnection") -> None:
         autocommit_setting = self.connection_config.get("autocommit")
         if autocommit_setting is not None:
             conn.autocommit = autocommit_setting
 
-        if self.driver_features.get("enable_pgvector", False):
+        # Detect extensions on first connection, update dialect
+        if self._pgvector_available is None:
+            extensions = [
+                name
+                for name, enabled in [
+                    ("vector", self.driver_features.get("enable_pgvector", False)),
+                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
+                ]
+                if enabled
+            ]
+            if extensions:
+                try:
+                    cursor = conn.execute(
+                        "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                    )
+                    results = cursor.fetchall()
+                    detected = {r[0] for r in results}  # type: ignore[index]
+                    self._pgvector_available = "vector" in detected
+                    self._paradedb_available = "pg_search" in detected
+                except Exception:
+                    self._pgvector_available = False
+                    self._paradedb_available = False
+            else:
+                self._pgvector_available = False
+                self._paradedb_available = False
+            self._update_dialect_for_extensions()
+
+        if self._pgvector_available:
             register_pgvector_sync(conn)
 
         # Call user-provided callback after internal setup
@@ -312,7 +363,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return PsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
+            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -448,6 +499,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._pgvector_available: bool | None = None
+        self._paradedb_available: bool | None = None
 
         super().__init__(
             connection_config=connection_config,
@@ -493,12 +546,53 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         return pool
 
+    def _update_dialect_for_extensions(self) -> None:
+        """Update statement_config dialect based on detected extensions.
+
+        Priority: paradedb > pgvector > postgres (default).
+        """
+        current_dialect = getattr(self.statement_config, "dialect", "postgres")
+        if current_dialect != "postgres":
+            return
+
+        if self._paradedb_available:
+            self.statement_config = self.statement_config.replace(dialect="paradedb")
+        elif self._pgvector_available:
+            self.statement_config = self.statement_config.replace(dialect="pgvector")
+
     async def _configure_async_connection(self, conn: "PsycopgAsyncConnection") -> None:
         autocommit_setting = self.connection_config.get("autocommit")
         if autocommit_setting is not None:
             await conn.set_autocommit(autocommit_setting)
 
-        if self.driver_features.get("enable_pgvector", False):
+        # Detect extensions on first connection, update dialect
+        if self._pgvector_available is None:
+            extensions = [
+                name
+                for name, enabled in [
+                    ("vector", self.driver_features.get("enable_pgvector", False)),
+                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
+                ]
+                if enabled
+            ]
+            if extensions:
+                try:
+                    cursor = await conn.execute(
+                        "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                    )
+                    results = await cursor.fetchall()
+                    detected = {r[0] for r in results}  # type: ignore[index]
+                    self._pgvector_available = "vector" in detected
+                    self._paradedb_available = "pg_search" in detected
+                except Exception:
+                    self._pgvector_available = False
+                    self._paradedb_available = False
+            else:
+                self._pgvector_available = False
+                self._paradedb_available = False
+            self._update_dialect_for_extensions()
+
+        if self._pgvector_available:
             await register_pgvector_async(conn)
 
         # Call user-provided callback after internal setup
@@ -574,7 +668,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         return PsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
+            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

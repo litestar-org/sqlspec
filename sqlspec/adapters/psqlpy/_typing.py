@@ -46,7 +46,7 @@ class PsqlpySessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PsqlpyDriver], PsqlpyDriver]",
     ) -> None:
@@ -62,8 +62,9 @@ class PsqlpySessionContext:
         from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 
         self._connection = await self._acquire_connection()
+        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
         self._driver = PsqlpyDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 

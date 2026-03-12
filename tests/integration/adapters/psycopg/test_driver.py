@@ -673,12 +673,18 @@ def test_psycopg_copy_csv_format(psycopg_session: "PsycopgSyncDriver") -> None:
 
 
 @pytest.mark.integration
-def test_psycopg_sync_pgvector_integration(psycopg_session: "PsycopgSyncDriver") -> None:
-    """Test that psycopg sync driver initializes pgvector support automatically via pool configure."""
+def test_extensions_not_enabled_on_standard_postgres(psycopg_sync_config: "PsycopgSyncConfig") -> None:
+    """Verify pgvector and paradedb extensions are not detected on standard postgres.
 
-    result = psycopg_session.execute("SELECT 1 as test_value")
-    assert result.data is not None
-    assert result.get_data()[0]["test_value"] == 1
+    Standard PostgreSQL does not have the 'vector' or 'pg_search' extensions installed,
+    so the driver should detect this and keep the default 'postgres' dialect.
+    """
+    with psycopg_sync_config.provide_session() as session:
+        session.execute("SELECT 1")
+
+    assert psycopg_sync_config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
+    assert psycopg_sync_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
+    assert psycopg_sync_config.statement_config.dialect == "postgres"
 
 
 def test_psycopg_sync_for_update_locking(psycopg_session: "PsycopgSyncDriver") -> None:

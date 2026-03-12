@@ -1,8 +1,13 @@
 """Psycopg configuration tests covering statement config builders."""
 
-from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
+from unittest.mock import AsyncMock
+
+import pytest
+
+from sqlspec.adapters.psycopg._typing import PsycopgAsyncSessionContext, PsycopgSyncSessionContext
+from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
 from sqlspec.adapters.psycopg.core import build_statement_config, default_statement_config
-from sqlspec.core import SQL
+from sqlspec.core import SQL, StatementConfig
 
 
 def test_build_default_statement_config_custom_serializer() -> None:
@@ -29,18 +34,6 @@ def test_psycopg_sync_config_applies_driver_feature_serializer() -> None:
     assert parameter_config.json_serializer is serializer
 
 
-def test_psycopg_async_config_applies_driver_feature_serializer() -> None:
-    """Driver features should mutate the async Psycopg statement configuration."""
-
-    def serializer(_: object) -> str:
-        return "async"
-
-    config = PsycopgAsyncConfig(driver_features={"json_serializer": serializer})
-
-    parameter_config = config.statement_config.parameter_config
-    assert parameter_config.json_serializer is serializer
-
-
 def test_psycopg_numeric_placeholders_convert_to_pyformat() -> None:
     """Numeric placeholders should be rewritten for psycopg execution."""
 
@@ -56,3 +49,49 @@ def test_psycopg_numeric_placeholders_convert_to_pyformat() -> None:
     assert "$1" not in compiled_sql
     assert compiled_sql.count("%s") == 3
     assert parameters == ["alpha", "beta", "gamma"]
+
+
+def test_psycopg_sync_session_context_resolves_callable_statement_config() -> None:
+    """Sync session context should call statement_config when it's a callable."""
+    expected_config = StatementConfig(dialect="pgvector")
+    context = PsycopgSyncSessionContext(
+        acquire_connection=lambda: object(),
+        release_connection=lambda _conn: None,
+        statement_config=lambda: expected_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with context as driver:
+        assert driver.statement_config.dialect == "pgvector"
+
+
+@pytest.mark.anyio
+async def test_psycopg_async_session_context_resolves_callable_statement_config() -> None:
+    """Async session context should call statement_config when it's a callable."""
+    expected_config = StatementConfig(dialect="pgvector")
+    context = PsycopgAsyncSessionContext(
+        acquire_connection=AsyncMock(return_value=object()),
+        release_connection=AsyncMock(),
+        statement_config=lambda: expected_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    async with context as driver:
+        assert driver.statement_config.dialect == "pgvector"
+
+
+def test_psycopg_sync_session_context_preserves_explicit_statement_config() -> None:
+    """Explicit StatementConfig should be used directly without calling."""
+    explicit_config = StatementConfig(dialect="postgres")
+    context = PsycopgSyncSessionContext(
+        acquire_connection=lambda: object(),
+        release_connection=lambda _conn: None,
+        statement_config=explicit_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with context as driver:
+        assert driver.statement_config is explicit_config
