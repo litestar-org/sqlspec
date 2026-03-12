@@ -126,10 +126,11 @@ def test_pgvector_euclidean_distance_raw_sql(pgvector_table: "AdbcDriver") -> No
         FROM vector_docs
         ORDER BY distance
     """)
+    rows = result.get_data()
 
-    assert len(result) == 3
-    assert result[0]["content"] == "doc1"
-    assert result[0]["distance"] < 0.01
+    assert len(rows) == 3
+    assert rows[0]["content"] == "doc1"
+    assert rows[0]["distance"] < 0.01
 
 
 @pytest.mark.integration
@@ -142,9 +143,10 @@ def test_pgvector_cosine_distance_raw_sql(pgvector_table: "AdbcDriver") -> None:
         FROM vector_docs
         ORDER BY distance
     """)
+    rows = result.get_data()
 
-    assert len(result) == 3
-    assert result[0]["content"] == "doc1"
+    assert len(rows) == 3
+    assert rows[0]["content"] == "doc1"
 
 
 @pytest.mark.integration
@@ -157,8 +159,9 @@ def test_pgvector_inner_product_raw_sql(pgvector_table: "AdbcDriver") -> None:
         FROM vector_docs
         ORDER BY neg_inner_product
     """)
+    rows = result.get_data()
 
-    assert len(result) == 3
+    assert len(rows) == 3
 
 
 # --- Query Builder Tests ---
@@ -182,10 +185,11 @@ def test_pgvector_column_comparison_builder(pgvector_table: "AdbcDriver") -> Non
     )
 
     result = driver.execute(query)
+    rows = result.get_data()
 
-    assert len(result) == 3
-    assert result[0]["content"] == "doc1"
-    assert result[0]["distance"] < 0.01
+    assert len(rows) == 3
+    assert rows[0]["content"] == "doc1"
+    assert rows[0]["distance"] < 0.01
 
 
 @pytest.mark.integration
@@ -198,9 +202,10 @@ def test_pgvector_order_by_distance_raw(pgvector_table: "AdbcDriver") -> None:
         ORDER BY embedding <-> '[0.1, 0.2, 0.3]'::vector
         LIMIT 2
     """)
+    rows = result.get_data()
 
-    assert len(result) == 2
-    assert result[0]["content"] == "doc1"
+    assert len(rows) == 2
+    assert rows[0]["content"] == "doc1"
 
 
 @pytest.mark.integration
@@ -213,9 +218,10 @@ def test_pgvector_distance_threshold_raw(pgvector_table: "AdbcDriver") -> None:
         FROM vector_docs
         WHERE embedding <-> '[0.1, 0.2, 0.3]'::vector < 0.3
     """)
+    rows = result.get_data()
 
-    assert len(result) == 1
-    assert result[0]["content"] == "doc1"
+    assert len(rows) == 1
+    assert rows[0]["content"] == "doc1"
 
 
 @pytest.mark.integration
@@ -230,9 +236,10 @@ def test_pgvector_multiple_metrics_raw(pgvector_table: "AdbcDriver") -> None:
                embedding <#> '[0.1, 0.2, 0.3]'::vector AS neg_inner_product
         FROM vector_docs
     """)
+    rows = result.get_data()
 
-    assert len(result) == 3
-    for row in result:
+    assert len(rows) == 3
+    for row in rows:
         assert row["euclidean_dist"] is not None
         assert row["cosine_dist"] is not None
         assert row["neg_inner_product"] is not None

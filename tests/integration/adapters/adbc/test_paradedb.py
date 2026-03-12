@@ -128,8 +128,9 @@ def test_paradedb_bm25_search_operator(paradedb_search_table: "AdbcDriver") -> N
     driver = paradedb_search_table
 
     result = driver.execute("SELECT id, description FROM test_search_items WHERE description @@@ 'running'")
-    assert len(result) >= 1
-    for row in result:
+    rows = result.get_data()
+    assert len(rows) >= 1
+    for row in rows:
         assert "running" in row["description"].lower()
 
 
@@ -142,8 +143,9 @@ def test_paradedb_conjunction_match(paradedb_search_table: "AdbcDriver") -> None
         "SELECT id, description FROM test_search_items "
         "WHERE description @@@ pdb.match('running shoes', conjunction_mode => true)"
     )
-    assert len(result) >= 1
-    for row in result:
+    rows = result.get_data()
+    assert len(rows) >= 1
+    for row in rows:
         desc = row["description"].lower()
         assert "running" in desc and "shoes" in desc
 
@@ -156,8 +158,9 @@ def test_paradedb_disjunction_match(paradedb_search_table: "AdbcDriver") -> None
     result = driver.execute(
         "SELECT id, description FROM test_search_items WHERE description @@@ pdb.match('running boots')"
     )
-    assert len(result) >= 2
-    descriptions = [row["description"].lower() for row in result]
+    rows = result.get_data()
+    assert len(rows) >= 2
+    descriptions = [row["description"].lower() for row in rows]
     assert any("running" in d for d in descriptions)
     assert any("boots" in d for d in descriptions)
 
@@ -170,14 +173,15 @@ def test_paradedb_phrase_query(paradedb_search_table: "AdbcDriver") -> None:
     result = driver.execute(
         "SELECT id, description FROM test_search_items WHERE description @@@ pdb.phrase('running shoes')"
     )
-    assert len(result) >= 1
-    for row in result:
+    rows = result.get_data()
+    assert len(rows) >= 1
+    for row in rows:
         assert "running shoes" in row["description"].lower()
 
     result_wrong_order = driver.execute(
         "SELECT id, description FROM test_search_items WHERE description @@@ pdb.phrase('shoes running')"
     )
-    assert len(result_wrong_order) == 0
+    assert len(result_wrong_order.get_data()) == 0
 
 
 @pytest.mark.integration
@@ -186,13 +190,14 @@ def test_paradedb_term_query(paradedb_search_table: "AdbcDriver") -> None:
     driver = paradedb_search_table
 
     result = driver.execute("SELECT id, description FROM test_search_items WHERE description @@@ pdb.term('running')")
-    assert len(result) >= 1
+    assert len(result.get_data()) >= 1
 
     result_category = driver.execute(
         "SELECT id, category FROM test_search_items WHERE category @@@ pdb.term('footwear')"
     )
-    assert len(result_category) >= 1
-    for row in result_category:
+    rows = result_category.get_data()
+    assert len(rows) >= 1
+    for row in rows:
         assert row["category"] == "footwear"
 
 
@@ -221,8 +226,9 @@ def test_paradedb_pgvector_operations(paradedb_adbc_driver: "AdbcDriver") -> Non
             ORDER BY distance
             LIMIT 2
         """)
-        assert len(result) == 2
-        assert result[0]["distance"] < 0.01
+        rows = result.get_data()
+        assert len(rows) == 2
+        assert rows[0]["distance"] < 0.01
 
     finally:
         paradedb_adbc_driver.execute_script("DROP TABLE IF EXISTS test_vectors CASCADE")
