@@ -37,13 +37,14 @@ def psycopg_sync_config(postgres_service: "PostgresService") -> "Generator[Psyco
         config.close_pool()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 async def psycopg_async_config(postgres_service: "PostgresService") -> "AsyncGenerator[PsycopgAsyncConfig, None]":
     """Create a psycopg async configuration."""
     config = PsycopgAsyncConfig(
         connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        pool_config={"min_size": 1},
     )
     try:
         yield config

@@ -19,12 +19,12 @@ def paradedb_psycopg_connection_config(paradedb_service: "PostgresService") -> "
     }
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def paradedb_psycopg_config(
     paradedb_psycopg_connection_config: "dict[str, Any]",
 ) -> "Generator[PsycopgSyncConfig, None, None]":
     """Provide a PsycopgSyncConfig instance connected to ParadeDB."""
-    config = PsycopgSyncConfig(connection_config=dict(paradedb_psycopg_connection_config))
+    config = PsycopgSyncConfig(connection_config=dict(paradedb_psycopg_connection_config), pool_config={"min_size": 1})
     try:
         yield config
     finally:

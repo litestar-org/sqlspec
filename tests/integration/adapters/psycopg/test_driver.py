@@ -71,8 +71,6 @@ async def test_psycopg_async_connection(psycopg_async_config: "PsycopgAsyncConfi
             result = cast("tuple[Any, ...]", await cur.fetchone())
             assert result[0] == 1
 
-    await psycopg_async_config.close_pool()
-
 
 def test_psycopg_sync_connection(postgres_service: "PostgresService") -> None:
     """Test sync connection components."""

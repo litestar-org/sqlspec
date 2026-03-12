@@ -309,6 +309,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if self._pgvector_available:
             register_pgvector_sync(conn)
 
+        # Ensure connection is not left in INTRANS state from extension detection or registration
+        if not conn.autocommit:
+            conn.rollback()
+
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             self._user_connection_hook(conn)
@@ -594,6 +598,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         if self._pgvector_available:
             await register_pgvector_async(conn)
+
+        # Ensure connection is not left in INTRANS state from extension detection or registration
+        if not conn.autocommit:
+            await conn.rollback()
 
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
