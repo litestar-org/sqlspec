@@ -8,27 +8,115 @@ Install SQLSpec with the Litestar extra and a database adapter.
 
    .. tab-item:: PostgreSQL (asyncpg)
 
-      .. code-block:: bash
+      .. tab-set::
 
-         pip install "sqlspec[asyncpg,litestar]"
+         .. tab-item:: uv
+
+            .. code-block:: bash
+
+               uv add "sqlspec[asyncpg,litestar]"
+
+         .. tab-item:: pip
+
+            .. code-block:: bash
+
+               pip install "sqlspec[asyncpg,litestar]"
+
+         .. tab-item:: Poetry
+
+            .. code-block:: bash
+
+               poetry add "sqlspec[asyncpg,litestar]"
+
+         .. tab-item:: PDM
+
+            .. code-block:: bash
+
+               pdm add "sqlspec[asyncpg,litestar]"
 
    .. tab-item:: PostgreSQL (psycopg)
 
-      .. code-block:: bash
+      .. tab-set::
 
-         pip install "sqlspec[psycopg,litestar]"
+         .. tab-item:: uv
+
+            .. code-block:: bash
+
+               uv add "sqlspec[psycopg,litestar]"
+
+         .. tab-item:: pip
+
+            .. code-block:: bash
+
+               pip install "sqlspec[psycopg,litestar]"
+
+         .. tab-item:: Poetry
+
+            .. code-block:: bash
+
+               poetry add "sqlspec[psycopg,litestar]"
+
+         .. tab-item:: PDM
+
+            .. code-block:: bash
+
+               pdm add "sqlspec[psycopg,litestar]"
 
    .. tab-item:: SQLite (async)
 
-      .. code-block:: bash
+      .. tab-set::
 
-         pip install "sqlspec[aiosqlite,litestar]"
+         .. tab-item:: uv
+
+            .. code-block:: bash
+
+               uv add "sqlspec[aiosqlite,litestar]"
+
+         .. tab-item:: pip
+
+            .. code-block:: bash
+
+               pip install "sqlspec[aiosqlite,litestar]"
+
+         .. tab-item:: Poetry
+
+            .. code-block:: bash
+
+               poetry add "sqlspec[aiosqlite,litestar]"
+
+         .. tab-item:: PDM
+
+            .. code-block:: bash
+
+               pdm add "sqlspec[aiosqlite,litestar]"
 
    .. tab-item:: MySQL
 
-      .. code-block:: bash
+      .. tab-set::
 
-         pip install "sqlspec[asyncmy,litestar]"
+         .. tab-item:: uv
+
+            .. code-block:: bash
+
+               uv add "sqlspec[asyncmy,litestar]"
+
+         .. tab-item:: pip
+
+            .. code-block:: bash
+
+               pip install "sqlspec[asyncmy,litestar]"
+
+         .. tab-item:: Poetry
+
+            .. code-block:: bash
+
+               poetry add "sqlspec[asyncmy,litestar]"
+
+         .. tab-item:: PDM
+
+            .. code-block:: bash
+
+               pdm add "sqlspec[asyncmy,litestar]"
 
 Requirements
 ------------

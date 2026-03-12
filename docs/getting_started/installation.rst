@@ -9,19 +9,61 @@ Install bundles
 
 .. tab-set::
 
-   .. tab-item:: Default
+   .. tab-item:: uv
 
       .. code-block:: bash
 
-         uv pip install sqlspec
-         # or
+         uv add sqlspec
+
+   .. tab-item:: pip
+
+      .. code-block:: bash
+
          pip install sqlspec
 
-   .. tab-item:: Performance
+   .. tab-item:: Poetry
 
       .. code-block:: bash
 
-         uv pip install "sqlspec[performance]"
+         poetry add sqlspec
+
+   .. tab-item:: PDM
+
+      .. code-block:: bash
+
+         pdm add sqlspec
+
+Performance bundle
+~~~~~~~~~~~~~~~~~~
+
+For production deployments, install the ``performance`` extra for Rust-based SQL
+parsing and high-speed serialization, or the ``mypyc`` extra for C-compiled internals:
+
+.. tab-set::
+
+   .. tab-item:: uv
+
+      .. code-block:: bash
+
+         uv add "sqlspec[performance]"
+
+   .. tab-item:: pip
+
+      .. code-block:: bash
+
+         pip install "sqlspec[performance]"
+
+   .. tab-item:: Poetry
+
+      .. code-block:: bash
+
+         poetry add "sqlspec[performance]"
+
+   .. tab-item:: PDM
+
+      .. code-block:: bash
+
+         pdm add "sqlspec[performance]"
 
 Package groups
 --------------
@@ -87,6 +129,9 @@ Package groups
    * - ``msgspec``
      - ``msgspec``
      - High-performance result mapping.
+   * - ``mypyc``
+     - ``sqlglot[c]``
+     - C-compiled sqlglot internals for faster SQL parsing.
    * - ``mysql-connector``
      - ``mysql-connector-python``
      - MySQL connector driver.
@@ -142,11 +187,31 @@ Package groups
 Multiple extras
 ---------------
 
-.. code-block:: bash
+.. tab-set::
 
-   uv pip install "sqlspec[asyncpg,msgspec,litestar]"
-   # or
-   pip install "sqlspec[asyncpg,msgspec,litestar]"
+   .. tab-item:: uv
+
+      .. code-block:: bash
+
+         uv add "sqlspec[asyncpg,msgspec,litestar]"
+
+   .. tab-item:: pip
+
+      .. code-block:: bash
+
+         pip install "sqlspec[asyncpg,msgspec,litestar]"
+
+   .. tab-item:: Poetry
+
+      .. code-block:: bash
+
+         poetry add "sqlspec[asyncpg,msgspec,litestar]"
+
+   .. tab-item:: PDM
+
+      .. code-block:: bash
+
+         pdm add "sqlspec[asyncpg,msgspec,litestar]"
 
 Next steps
 ----------
