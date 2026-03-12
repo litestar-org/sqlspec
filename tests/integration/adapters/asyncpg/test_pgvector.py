@@ -91,7 +91,8 @@ async def pgvector_table(pgvector_asyncpg_driver: "AsyncpgDriver") -> "AsyncGene
 @pytest.mark.integration
 async def test_pgvector_extension_detected(pgvector_asyncpg_config: "AsyncpgConfig") -> None:
     """Verify pgvector extension is detected and dialect is updated."""
-    await pgvector_asyncpg_config.create_pool()
+    async with pgvector_asyncpg_config.provide_session() as session:
+        await session.execute("SELECT 1")
 
     assert pgvector_asyncpg_config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
     # ParadeDB not available on pgvector-only image

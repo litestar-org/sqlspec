@@ -679,7 +679,8 @@ def test_extensions_not_enabled_on_standard_postgres(psycopg_sync_config: "Psyco
     Standard PostgreSQL does not have the 'vector' or 'pg_search' extensions installed,
     so the driver should detect this and keep the default 'postgres' dialect.
     """
-    psycopg_sync_config.create_pool()
+    with psycopg_sync_config.provide_session() as session:
+        session.execute("SELECT 1")
 
     assert psycopg_sync_config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
     assert psycopg_sync_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]

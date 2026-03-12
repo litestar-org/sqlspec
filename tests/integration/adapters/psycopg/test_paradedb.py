@@ -48,7 +48,8 @@ def test_extensions_enabled_on_paradedb(paradedb_psycopg_config: "PsycopgSyncCon
     ParadeDB includes both the 'vector' (pgvector) and 'pg_search' extensions,
     so the driver should detect these and switch to the 'paradedb' dialect.
     """
-    paradedb_psycopg_config.create_pool()
+    with paradedb_psycopg_config.provide_session() as session:
+        session.execute("SELECT 1")
 
     assert paradedb_psycopg_config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
     assert paradedb_psycopg_config._paradedb_available is True  # pyright: ignore[reportPrivateUsage]

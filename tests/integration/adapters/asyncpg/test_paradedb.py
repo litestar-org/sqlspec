@@ -52,7 +52,8 @@ async def test_extensions_enabled_on_paradedb(paradedb_asyncpg_config: "AsyncpgC
     ParadeDB includes both the 'vector' (pgvector) and 'pg_search' extensions,
     so the driver should detect these and switch to the 'paradedb' dialect.
     """
-    await paradedb_asyncpg_config.create_pool()
+    async with paradedb_asyncpg_config.provide_session() as session:
+        await session.execute("SELECT 1")
 
     assert paradedb_asyncpg_config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
     assert paradedb_asyncpg_config._paradedb_available is True  # pyright: ignore[reportPrivateUsage]

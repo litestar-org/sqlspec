@@ -49,7 +49,8 @@ async def test_extensions_enabled_on_paradedb(paradedb_psqlpy_config: "PsqlpyCon
     ParadeDB includes both the 'vector' (pgvector) and 'pg_search' extensions,
     so the driver should detect these and switch to the 'paradedb' dialect.
     """
-    await paradedb_psqlpy_config.create_pool()
+    async with paradedb_psqlpy_config.provide_session() as session:
+        await session.execute("SELECT 1")
 
     assert paradedb_psqlpy_config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
     assert paradedb_psqlpy_config._paradedb_available is True  # pyright: ignore[reportPrivateUsage]

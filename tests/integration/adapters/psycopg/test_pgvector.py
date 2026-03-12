@@ -85,7 +85,8 @@ def pgvector_table(pgvector_psycopg_driver: "PsycopgSyncDriver") -> "Generator[P
 @pytest.mark.integration
 def test_pgvector_extension_detected(pgvector_psycopg_config: "PsycopgSyncConfig") -> None:
     """Verify pgvector extension is detected and dialect is updated."""
-    pgvector_psycopg_config.create_pool()
+    with pgvector_psycopg_config.provide_session() as session:
+        session.execute("SELECT 1")
 
     assert pgvector_psycopg_config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
     # ParadeDB not available on pgvector-only image

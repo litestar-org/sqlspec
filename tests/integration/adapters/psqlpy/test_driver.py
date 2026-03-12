@@ -707,7 +707,8 @@ async def test_extensions_not_enabled_on_standard_postgres(psqlpy_config: "Psqlp
     Standard PostgreSQL does not have the 'vector' or 'pg_search' extensions installed,
     so the driver should detect this and keep the default 'postgres' dialect.
     """
-    await psqlpy_config.create_pool()
+    async with psqlpy_config.provide_session() as session:
+        await session.execute("SELECT 1")
 
     assert psqlpy_config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
     assert psqlpy_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
