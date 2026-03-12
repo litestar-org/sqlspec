@@ -44,6 +44,7 @@ class AsyncpgSessionContext:
     __slots__ = (
         "_acquire_connection",
         "_connection",
+        "_default_statement_config_getter",
         "_driver",
         "_driver_features",
         "_prepare_driver",
@@ -55,13 +56,15 @@ class AsyncpgSessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | None",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AsyncpgDriver], AsyncpgDriver]",
+        default_statement_config_getter: "Callable[[], StatementConfig] | None" = None,
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
         self._statement_config = statement_config
+        self._default_statement_config_getter = default_statement_config_getter
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
@@ -71,8 +74,14 @@ class AsyncpgSessionContext:
         from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 
         self._connection = await self._acquire_connection()
+        statement_config = self._statement_config
+        if statement_config is None:
+            if self._default_statement_config_getter is None:
+                msg = "statement_config or default_statement_config_getter is required"
+                raise RuntimeError(msg)
+            statement_config = self._default_statement_config_getter()
         self._driver = AsyncpgDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 

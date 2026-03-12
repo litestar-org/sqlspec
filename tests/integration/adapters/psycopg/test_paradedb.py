@@ -55,6 +55,13 @@ def test_extensions_enabled_on_paradedb(paradedb_psycopg_config: "PsycopgSyncCon
     assert paradedb_psycopg_config.statement_config.dialect == "paradedb"
 
 
+@pytest.mark.integration
+def test_paradedb_first_session_uses_detected_dialect(paradedb_psycopg_config: "PsycopgSyncConfig") -> None:
+    """The first session should use the ParadeDB dialect without pre-creating the pool."""
+    with paradedb_psycopg_config.provide_session() as session:
+        assert session.statement_config.dialect == "paradedb"
+
+
 @pytest.fixture(scope="function")
 def paradedb_search_table(paradedb_psycopg_driver: "PsycopgSyncDriver") -> "Generator[PsycopgSyncDriver, None, None]":
     """Create a test table with BM25 index for ParadeDB search tests."""

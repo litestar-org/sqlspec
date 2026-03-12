@@ -58,6 +58,7 @@ class PsycopgSyncSessionContext:
     __slots__ = (
         "_acquire_connection",
         "_connection",
+        "_default_statement_config_getter",
         "_driver",
         "_driver_features",
         "_prepare_driver",
@@ -69,13 +70,15 @@ class PsycopgSyncSessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | None",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PsycopgSyncDriver], PsycopgSyncDriver]",
+        default_statement_config_getter: "Callable[[], StatementConfig] | None" = None,
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
         self._statement_config = statement_config
+        self._default_statement_config_getter = default_statement_config_getter
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
@@ -85,8 +88,14 @@ class PsycopgSyncSessionContext:
         from sqlspec.adapters.psycopg.driver import PsycopgSyncDriver
 
         self._connection = self._acquire_connection()
+        statement_config = self._statement_config
+        if statement_config is None:
+            if self._default_statement_config_getter is None:
+                msg = "statement_config or default_statement_config_getter is required"
+                raise RuntimeError(msg)
+            statement_config = self._default_statement_config_getter()
         self._driver = PsycopgSyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
@@ -113,6 +122,7 @@ class PsycopgAsyncSessionContext:
     __slots__ = (
         "_acquire_connection",
         "_connection",
+        "_default_statement_config_getter",
         "_driver",
         "_driver_features",
         "_prepare_driver",
@@ -124,13 +134,15 @@ class PsycopgAsyncSessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | None",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PsycopgAsyncDriver], PsycopgAsyncDriver]",
+        default_statement_config_getter: "Callable[[], StatementConfig] | None" = None,
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
         self._statement_config = statement_config
+        self._default_statement_config_getter = default_statement_config_getter
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
@@ -140,8 +152,14 @@ class PsycopgAsyncSessionContext:
         from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver
 
         self._connection = await self._acquire_connection()
+        statement_config = self._statement_config
+        if statement_config is None:
+            if self._default_statement_config_getter is None:
+                msg = "statement_config or default_statement_config_getter is required"
+                raise RuntimeError(msg)
+            statement_config = self._default_statement_config_getter()
         self._driver = PsycopgAsyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 

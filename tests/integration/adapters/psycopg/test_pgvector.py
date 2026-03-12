@@ -93,6 +93,13 @@ def test_pgvector_extension_detected(pgvector_psycopg_config: "PsycopgSyncConfig
     assert pgvector_psycopg_config.statement_config.dialect == "pgvector"
 
 
+@pytest.mark.integration
+def test_pgvector_first_session_uses_detected_dialect(pgvector_psycopg_config: "PsycopgSyncConfig") -> None:
+    """The first session should use pgvector without a prior pool bootstrap call."""
+    with pgvector_psycopg_config.provide_session() as session:
+        assert session.statement_config.dialect == "pgvector"
+
+
 # --- Raw SQL Tests ---
 
 

@@ -59,6 +59,13 @@ async def test_extensions_enabled_on_paradedb(paradedb_asyncpg_config: "AsyncpgC
     assert paradedb_asyncpg_config.statement_config.dialect == "paradedb"
 
 
+@pytest.mark.integration
+async def test_paradedb_first_session_uses_detected_dialect(paradedb_asyncpg_config: "AsyncpgConfig") -> None:
+    """The first session should use the ParadeDB dialect without pre-creating the pool."""
+    async with paradedb_asyncpg_config.provide_session() as session:
+        assert session.statement_config.dialect == "paradedb"
+
+
 @pytest.fixture(scope="function")
 async def paradedb_search_table(paradedb_asyncpg_driver: "AsyncpgDriver") -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create a test table with BM25 index for ParadeDB search tests."""
@@ -218,15 +225,15 @@ async def test_paradedb_pgvector_operations(paradedb_asyncpg_driver: "AsyncpgDri
     """)
 
     try:
-        # Insert vector data
+        # Insert vector data — use Python lists so asyncpg's pgvector codec encodes them correctly
         await paradedb_asyncpg_driver.execute(
-            "INSERT INTO test_vectors (embedding) VALUES ($1::vector)", ("[1.0, 2.0, 3.0]",)
+            "INSERT INTO test_vectors (embedding) VALUES ($1::vector)", ([1.0, 2.0, 3.0],)
         )
         await paradedb_asyncpg_driver.execute(
-            "INSERT INTO test_vectors (embedding) VALUES ($1::vector)", ("[4.0, 5.0, 6.0]",)
+            "INSERT INTO test_vectors (embedding) VALUES ($1::vector)", ([4.0, 5.0, 6.0],)
         )
         await paradedb_asyncpg_driver.execute(
-            "INSERT INTO test_vectors (embedding) VALUES ($1::vector)", ("[1.1, 2.1, 3.1]",)
+            "INSERT INTO test_vectors (embedding) VALUES ($1::vector)", ([1.1, 2.1, 3.1],)
         )
 
         # Test cosine similarity search

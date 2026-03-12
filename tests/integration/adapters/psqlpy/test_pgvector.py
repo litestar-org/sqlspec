@@ -94,6 +94,13 @@ async def test_pgvector_extension_detected(pgvector_psqlpy_config: "PsqlpyConfig
     assert pgvector_psqlpy_config.statement_config.dialect == "pgvector"
 
 
+@pytest.mark.integration
+async def test_pgvector_first_session_uses_detected_dialect(pgvector_psqlpy_config: "PsqlpyConfig") -> None:
+    """The first session should use pgvector without a prior pool bootstrap call."""
+    async with pgvector_psqlpy_config.provide_session() as session:
+        assert session.statement_config.dialect == "pgvector"
+
+
 # --- Raw SQL Tests ---
 
 

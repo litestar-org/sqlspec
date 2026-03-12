@@ -131,7 +131,10 @@ class PsycopgSyncConnectionContext:
     def __enter__(self) -> "PsycopgSyncConnection":
         if self._config.connection_instance:
             self._ctx = self._config.connection_instance.connection()
-            return cast("PsycopgSyncConnection", self._ctx.__enter__())
+            connection = cast("PsycopgSyncConnection", self._ctx.__enter__())
+            if self._config._external_pool_provided:  # pyright: ignore[reportPrivateUsage]
+                self._config._ensure_connection_ready(connection)  # pyright: ignore[reportPrivateUsage]
+            return connection
         # Fallback for no pool
         self._ctx = self._config.create_connection()
         return cast("PsycopgSyncConnection", self._ctx)
@@ -157,8 +160,11 @@ class _PsycopgSyncSessionConnectionHandler:
     def acquire_connection(self) -> "PsycopgSyncConnection":
         if self._config.connection_instance:
             self._ctx = self._config.connection_instance.connection()
-            return cast("PsycopgSyncConnection", self._ctx.__enter__())
+            connection = cast("PsycopgSyncConnection", self._ctx.__enter__())
+            self._config._ensure_connection_ready(connection)  # pyright: ignore[reportPrivateUsage]
+            return connection
         self._conn = self._config.create_connection()
+        self._config._ensure_connection_ready(self._conn)  # pyright: ignore[reportPrivateUsage]
         return self._conn
 
     def release_connection(self, _conn: "PsycopgSyncConnection") -> None:
@@ -216,6 +222,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._external_pool_provided = connection_instance is not None
+        self._extensions_bootstrapped = False
+        self._initialized_connection_ids: set[int] = set()
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
 
@@ -233,6 +242,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
         all_config = dict(self.connection_config)
+        self._detect_extensions(all_config)
 
         pool_parameters = {
             "min_size": all_config.pop("min_size", 4),
@@ -258,16 +268,52 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             all_config.update(kwargs)
             pool = ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
 
-        self._detect_extensions(pool)
         return pool
 
-    def _detect_extensions(self, pool: "ConnectionPool") -> None:
+    def _detect_extensions(self, target: "ConnectionPool | dict[str, Any] | PsycopgSyncConnection") -> None:
         """Detect database extensions and update dialect accordingly.
 
         Args:
-            pool: Connection pool to acquire a connection from.
+            target: Bootstrap config, pool, or connection to query.
         """
-        extensions = [
+        extensions = self._get_enabled_extensions()
+        if not extensions:
+            self._extensions_bootstrapped = True
+            return
+
+        connection: PsycopgSyncConnection | None = None
+        context_manager: Any = None
+        should_close = False
+        try:
+            if isinstance(target, dict):
+                connection = self._open_bootstrap_connection(target)
+                should_close = True
+            elif isinstance(target, ConnectionPool):
+                context_manager = target.connection()
+                connection = cast("PsycopgSyncConnection", context_manager.__enter__())
+            else:
+                connection = target
+            try:
+                cursor = connection.execute(
+                    "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                )
+                results = cursor.fetchall()
+                detected = {r[0] for r in results}  # type: ignore[index]
+                self._pgvector_available = "vector" in detected
+                self._paradedb_available = "pg_search" in detected
+            except Exception:
+                self._pgvector_available = False
+                self._paradedb_available = False
+        finally:
+            self._extensions_bootstrapped = True
+            if context_manager is not None:
+                context_manager.__exit__(None, None, None)
+            elif connection is not None and should_close:
+                connection.close()
+        self._update_dialect_for_extensions()
+
+    def _get_enabled_extensions(self) -> "list[str]":
+        return [
             name
             for name, enabled in [
                 ("vector", self.driver_features.get("enable_pgvector", False)),
@@ -275,23 +321,39 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             ]
             if enabled
         ]
-        if not extensions:
+
+    def _open_bootstrap_connection(self, connection_config: "dict[str, Any]") -> "PsycopgSyncConnection":
+        connection_kwargs = dict(connection_config)
+        conninfo = connection_kwargs.pop("conninfo", None)
+        kwargs = connection_kwargs.pop("kwargs", {})
+        connection_kwargs.update(kwargs)
+        for key in (
+            "configure",
+            "max_idle",
+            "max_lifetime",
+            "max_size",
+            "max_waiting",
+            "min_size",
+            "name",
+            "num_workers",
+            "reconnect_timeout",
+            "timeout",
+        ):
+            connection_kwargs.pop(key, None)
+        if conninfo:
+            return PsycopgSyncConnection.connect(conninfo=conninfo, **connection_kwargs)
+        return PsycopgSyncConnection.connect(**connection_kwargs)
+
+    def _ensure_connection_ready(self, connection: "PsycopgSyncConnection") -> None:
+        if not self._extensions_bootstrapped:
+            self._detect_extensions(connection)
+        connection_id = id(connection)
+        if self._user_connection_hook is None and not self._pgvector_available:
             return
-
-        with pool.connection() as connection:
-            try:
-                cursor = connection.execute(
-                    "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
-                )
-                results = cursor.fetchall()
-                detected = {r[0] for r in results}
-                self._pgvector_available = "vector" in detected
-                self._paradedb_available = "pg_search" in detected
-            except Exception:
-                self._pgvector_available = False
-                self._paradedb_available = False
-
-        self._update_dialect_for_extensions()
+        if connection_id in self._initialized_connection_ids:
+            return
+        self._configure_connection(connection)
+        self._initialized_connection_ids.add(connection_id)
 
     def _update_dialect_for_extensions(self) -> None:
         """Update statement_config dialect based on detected extensions.
@@ -369,7 +431,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return PsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
+            statement_config=statement_config,
+            default_statement_config_getter=lambda: self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -427,7 +490,10 @@ class PsycopgAsyncConnectionContext:
         # pool.connection() returns an async context manager
         if self._config.connection_instance:
             self._ctx = self._config.connection_instance.connection()
-            return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+            connection = cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+            if self._config._external_pool_provided:  # pyright: ignore[reportPrivateUsage]
+                await self._config._ensure_connection_ready(connection)  # pyright: ignore[reportPrivateUsage]
+            return connection
         msg = "Connection pool not initialized"
         raise ImproperConfigurationError(msg)
 
@@ -447,10 +513,15 @@ class _PsycopgAsyncSessionConnectionHandler:
         self._ctx: Any = None
 
     async def acquire_connection(self) -> "PsycopgAsyncConnection":
+        created_pool = False
         if self._config.connection_instance is None:
             self._config.connection_instance = await self._config.create_pool()
+            created_pool = True
         self._ctx = self._config.connection_instance.connection()
-        return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        connection = cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        if not created_pool and self._config._external_pool_provided:  # pyright: ignore[reportPrivateUsage]
+            await self._config._ensure_connection_ready(connection)  # pyright: ignore[reportPrivateUsage]
+        return connection
 
     async def release_connection(self, _conn: "PsycopgAsyncConnection") -> None:
         if self._ctx is None:
@@ -505,6 +576,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._external_pool_provided = connection_instance is not None
+        self._extensions_bootstrapped = False
+        self._initialized_connection_ids: set[int] = set()
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
 
@@ -523,6 +597,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Create the actual async connection pool."""
 
         all_config = dict(self.connection_config)
+        await self._detect_extensions(all_config)
 
         pool_parameters = {
             "min_size": all_config.pop("min_size", 4),
@@ -549,17 +624,53 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_parameters)
 
         await pool.open()
-        await self._detect_extensions(pool)
 
         return pool
 
-    async def _detect_extensions(self, pool: "AsyncConnectionPool") -> None:
+    async def _detect_extensions(self, target: "AsyncConnectionPool | dict[str, Any] | PsycopgAsyncConnection") -> None:
         """Detect database extensions and update dialect accordingly.
 
         Args:
-            pool: Connection pool to acquire a connection from.
+            target: Bootstrap config, pool, or connection to query.
         """
-        extensions = [
+        extensions = self._get_enabled_extensions()
+        if not extensions:
+            self._extensions_bootstrapped = True
+            return
+
+        connection: PsycopgAsyncConnection | None = None
+        context_manager: Any = None
+        should_close = False
+        try:
+            if isinstance(target, dict):
+                connection = await self._open_bootstrap_connection(target)
+                should_close = True
+            elif isinstance(target, AsyncConnectionPool):
+                context_manager = target.connection()
+                connection = cast("PsycopgAsyncConnection", await context_manager.__aenter__())
+            else:
+                connection = target
+            try:
+                cursor = await connection.execute(
+                    "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                )
+                results = await cursor.fetchall()
+                detected = {r[0] for r in results}  # type: ignore[index]
+                self._pgvector_available = "vector" in detected
+                self._paradedb_available = "pg_search" in detected
+            except Exception:
+                self._pgvector_available = False
+                self._paradedb_available = False
+        finally:
+            self._extensions_bootstrapped = True
+            if context_manager is not None:
+                await context_manager.__aexit__(None, None, None)
+            elif connection is not None and should_close:
+                await connection.close()
+        self._update_dialect_for_extensions()
+
+    def _get_enabled_extensions(self) -> "list[str]":
+        return [
             name
             for name, enabled in [
                 ("vector", self.driver_features.get("enable_pgvector", False)),
@@ -567,23 +678,39 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             ]
             if enabled
         ]
-        if not extensions:
+
+    async def _open_bootstrap_connection(self, connection_config: "dict[str, Any]") -> "PsycopgAsyncConnection":
+        connection_kwargs = dict(connection_config)
+        conninfo = connection_kwargs.pop("conninfo", None)
+        kwargs = connection_kwargs.pop("kwargs", {})
+        connection_kwargs.update(kwargs)
+        for key in (
+            "configure",
+            "max_idle",
+            "max_lifetime",
+            "max_size",
+            "max_waiting",
+            "min_size",
+            "name",
+            "num_workers",
+            "reconnect_timeout",
+            "timeout",
+        ):
+            connection_kwargs.pop(key, None)
+        if conninfo:
+            return await PsycopgAsyncConnection.connect(conninfo=conninfo, **connection_kwargs)
+        return await PsycopgAsyncConnection.connect(**connection_kwargs)
+
+    async def _ensure_connection_ready(self, connection: "PsycopgAsyncConnection") -> None:
+        if not self._extensions_bootstrapped:
+            await self._detect_extensions(connection)
+        connection_id = id(connection)
+        if self._user_connection_hook is None and not self._pgvector_available:
             return
-
-        async with pool.connection() as connection:
-            try:
-                cursor = await connection.execute(
-                    "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
-                )
-                results = await cursor.fetchall()
-                detected = {r[0] for r in results}
-                self._pgvector_available = "vector" in detected
-                self._paradedb_available = "pg_search" in detected
-            except Exception:
-                self._pgvector_available = False
-                self._paradedb_available = False
-
-        self._update_dialect_for_extensions()
+        if connection_id in self._initialized_connection_ids:
+            return
+        await self._configure_async_connection(connection)
+        self._initialized_connection_ids.add(connection_id)
 
     def _update_dialect_for_extensions(self) -> None:
         """Update statement_config dialect based on detected extensions.
@@ -680,7 +807,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         return PsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
+            statement_config=statement_config,
+            default_statement_config_getter=lambda: self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

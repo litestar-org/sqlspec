@@ -9,6 +9,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
 from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, PsqlpyExceptionHandler, PsqlpySessionContext
+from sqlspec.adapters.psqlpy.type_converter import register_pgvector
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
@@ -213,6 +214,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         )
         # Track initialized connections by ID (psqlpy connections don't support weak refs)
         self._initialized_connection_ids: set[int] = set()
+        self._extensions_bootstrapped = False
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
 
@@ -229,12 +231,16 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _ensure_connection_initialized(self, connection: "PsqlpyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection."""
-        if self._user_connection_hook is None:
-            return
+        if not self._extensions_bootstrapped:
+            await self._detect_extensions(connection)
         conn_id = id(connection)
-        if conn_id not in self._initialized_connection_ids:
+        if conn_id in self._initialized_connection_ids:
+            return
+        if self._pgvector_available:
+            register_pgvector(connection)
+        if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
-            self._initialized_connection_ids.add(conn_id)
+        self._initialized_connection_ids.add(conn_id)
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
@@ -242,11 +248,11 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         await self._detect_extensions(pool)
         return pool
 
-    async def _detect_extensions(self, pool: "ConnectionPool") -> None:
+    async def _detect_extensions(self, target: "ConnectionPool | PsqlpyConnection") -> None:
         """Detect database extensions and update dialect accordingly.
 
         Args:
-            pool: Connection pool to acquire a connection from.
+            target: Pool or connection to query.
         """
         extensions = [
             name
@@ -257,9 +263,18 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             if enabled
         ]
         if not extensions:
+            self._extensions_bootstrapped = True
             return
 
-        async with pool.acquire() as connection:
+        if isinstance(target, ConnectionPool):
+            context_manager = target.acquire()
+            connection = await context_manager.__aenter__()
+            should_release = True
+        else:
+            context_manager = None
+            connection = target
+            should_release = False
+        try:
             try:
                 result = await connection.fetch(
                     "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions]
@@ -271,6 +286,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             except Exception:
                 self._pgvector_available = False
                 self._paradedb_available = False
+        finally:
+            self._extensions_bootstrapped = True
+            if should_release and context_manager is not None:
+                await context_manager.__aexit__(None, None, None)
 
         self._update_dialect_for_extensions()
 
@@ -342,7 +361,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         return PsqlpySessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
+            statement_config=statement_config,
+            default_statement_config_getter=lambda: self.statement_config or default_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

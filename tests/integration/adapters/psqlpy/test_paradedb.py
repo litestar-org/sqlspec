@@ -56,6 +56,13 @@ async def test_extensions_enabled_on_paradedb(paradedb_psqlpy_config: "PsqlpyCon
     assert paradedb_psqlpy_config.statement_config.dialect == "paradedb"
 
 
+@pytest.mark.integration
+async def test_paradedb_first_session_uses_detected_dialect(paradedb_psqlpy_config: "PsqlpyConfig") -> None:
+    """The first session should use the ParadeDB dialect without pre-creating the pool."""
+    async with paradedb_psqlpy_config.provide_session() as session:
+        assert session.statement_config.dialect == "paradedb"
+
+
 @pytest.fixture(scope="function")
 async def paradedb_search_table(paradedb_psqlpy_driver: "PsqlpyDriver") -> "AsyncGenerator[PsqlpyDriver, None]":
     """Create a test table with BM25 index for ParadeDB search tests."""

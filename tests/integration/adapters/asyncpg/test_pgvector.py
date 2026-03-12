@@ -68,15 +68,15 @@ async def pgvector_table(pgvector_asyncpg_driver: "AsyncpgDriver") -> "AsyncGene
         );
     """)
 
-    # Insert test data
+    # Insert test data — use Python lists so asyncpg's pgvector codec encodes them correctly
     await pgvector_asyncpg_driver.execute(
-        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc1", "[0.1, 0.2, 0.3]")
+        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc1", [0.1, 0.2, 0.3])
     )
     await pgvector_asyncpg_driver.execute(
-        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc2", "[0.4, 0.5, 0.6]")
+        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc2", [0.4, 0.5, 0.6])
     )
     await pgvector_asyncpg_driver.execute(
-        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc3", "[0.7, 0.8, 0.9]")
+        "INSERT INTO vector_docs (content, embedding) VALUES ($1, $2)", ("doc3", [0.7, 0.8, 0.9])
     )
 
     try:
@@ -97,6 +97,13 @@ async def test_pgvector_extension_detected(pgvector_asyncpg_config: "AsyncpgConf
     # ParadeDB not available on pgvector-only image
     assert pgvector_asyncpg_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
     assert pgvector_asyncpg_config.statement_config.dialect == "pgvector"
+
+
+@pytest.mark.integration
+async def test_pgvector_first_session_uses_detected_dialect(pgvector_asyncpg_config: "AsyncpgConfig") -> None:
+    """The first session should use pgvector without a prior pool bootstrap call."""
+    async with pgvector_asyncpg_config.provide_session() as session:
+        assert session.statement_config.dialect == "pgvector"
 
 
 # --- Raw SQL Tests ---
@@ -155,7 +162,7 @@ async def test_pgvector_inner_product_raw_sql(pgvector_table: "AsyncpgDriver") -
     connection = driver.connection
     records = await connection.fetch(
         "SELECT content, (embedding <#> $1::vector) AS neg_inner_product FROM vector_docs ORDER BY neg_inner_product",
-        "[0.1, 0.2, 0.3]",
+        [0.1, 0.2, 0.3],
     )
 
     assert len(records) == 3
@@ -199,7 +206,7 @@ async def test_pgvector_order_by_distance_raw(pgvector_table: "AsyncpgDriver") -
 
     # Using parametrized query with explicit cast
     result = await driver.execute(
-        "SELECT content FROM vector_docs ORDER BY embedding <-> $1::vector LIMIT 2", ("[0.1, 0.2, 0.3]",)
+        "SELECT content FROM vector_docs ORDER BY embedding <-> $1::vector LIMIT 2", ([0.1, 0.2, 0.3],)
     )
 
     assert result.data is not None
@@ -240,7 +247,7 @@ async def test_pgvector_multiple_metrics_raw(pgvector_table: "AsyncpgDriver") ->
         "embedding <=> $1::vector AS cosine_dist, "
         "embedding <#> $1::vector AS neg_inner_product "
         "FROM vector_docs",
-        "[0.1, 0.2, 0.3]",
+        [0.1, 0.2, 0.3],
     )
 
     assert len(records) == 3
