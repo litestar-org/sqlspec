@@ -12,6 +12,12 @@ Configuration
    :members:
    :show-inheritance:
 
+Custom Dialects
+================
+
+Spanner uses the :doc:`Spanner and Spangres dialects <../dialects>` for SQL compilation.
+See the :doc:`Dialects <../dialects>` reference for details.
+
 Driver
 ======
 

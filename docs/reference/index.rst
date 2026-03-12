@@ -42,7 +42,7 @@ Database Layer
 Query Building
 ==============
 
-.. grid:: 2
+.. grid:: 3
 
    .. grid-item-card:: SQL Builder
       :link: builder/index
@@ -55,6 +55,12 @@ Query Building
       :link-type: doc
 
       Immutable multi-statement execution with native pipelines.
+
+   .. grid-item-card:: Dialects
+      :link: dialects
+      :link-type: doc
+
+      Custom sqlglot dialects for pgvector, ParadeDB, and Spanner extensions.
 
 Core Infrastructure
 ===================
@@ -128,6 +134,7 @@ Integrations
    driver
    builder/index
    query-stack
+   dialects
    core/index
    loader
    exceptions

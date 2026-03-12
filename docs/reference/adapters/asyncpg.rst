@@ -27,6 +27,13 @@ Driver
    :members:
    :show-inheritance:
 
+Extension Dialects
+==================
+
+AsyncPG supports the :doc:`pgvector and ParadeDB dialects <../dialects>` for vector
+similarity search and full-text search operators. See the :doc:`Dialects <../dialects>`
+reference for operator details.
+
 Data Dictionary
 ===============
 
