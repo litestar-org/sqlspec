@@ -214,7 +214,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         )
         # Track initialized connections by ID (psqlpy connections don't support weak refs)
         self._initialized_connection_ids: set[int] = set()
-        self._extensions_bootstrapped = False
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
 
@@ -231,8 +230,33 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _ensure_connection_initialized(self, connection: "PsqlpyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection."""
-        if not self._extensions_bootstrapped:
-            await self._detect_extensions(connection)
+        # Detect extensions on first connection, update dialect
+        if self._pgvector_available is None:
+            extensions = [
+                name
+                for name, enabled in [
+                    ("vector", self.driver_features.get("enable_pgvector", False)),
+                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
+                ]
+                if enabled
+            ]
+            if extensions:
+                try:
+                    result = await connection.fetch(
+                        "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions]
+                    )
+                    rows = result.result() if result else []
+                    detected = {r["extname"] for r in rows}
+                    self._pgvector_available = "vector" in detected
+                    self._paradedb_available = "pg_search" in detected
+                except Exception:
+                    self._pgvector_available = False
+                    self._paradedb_available = False
+            else:
+                self._pgvector_available = False
+                self._paradedb_available = False
+            self._update_dialect_for_extensions()
+
         conn_id = id(connection)
         if conn_id in self._initialized_connection_ids:
             return
@@ -244,54 +268,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        pool = ConnectionPool(**build_connection_config(self.connection_config))
-        await self._detect_extensions(pool)
-        return pool
-
-    async def _detect_extensions(self, target: "ConnectionPool | PsqlpyConnection") -> None:
-        """Detect database extensions and update dialect accordingly.
-
-        Args:
-            target: Pool or connection to query.
-        """
-        extensions = [
-            name
-            for name, enabled in [
-                ("vector", self.driver_features.get("enable_pgvector", False)),
-                ("pg_search", self.driver_features.get("enable_paradedb", False)),
-            ]
-            if enabled
-        ]
-        if not extensions:
-            self._extensions_bootstrapped = True
-            return
-
-        if isinstance(target, ConnectionPool):
-            context_manager = target.acquire()
-            connection = await context_manager.__aenter__()
-            should_release = True
-        else:
-            context_manager = None
-            connection = target
-            should_release = False
-        try:
-            try:
-                result = await connection.fetch(
-                    "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions]
-                )
-                rows = result.result() if result else []
-                detected = {r["extname"] for r in rows}
-                self._pgvector_available = "vector" in detected
-                self._paradedb_available = "pg_search" in detected
-            except Exception:
-                self._pgvector_available = False
-                self._paradedb_available = False
-        finally:
-            self._extensions_bootstrapped = True
-            if should_release and context_manager is not None:
-                await context_manager.__aexit__(None, None, None)
-
-        self._update_dialect_for_extensions()
+        return ConnectionPool(**build_connection_config(self.connection_config))
 
     def _update_dialect_for_extensions(self) -> None:
         """Update statement_config dialect based on detected extensions.
@@ -361,8 +338,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         return PsqlpySessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config,
-            default_statement_config_getter=lambda: self.statement_config or default_statement_config,
+            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

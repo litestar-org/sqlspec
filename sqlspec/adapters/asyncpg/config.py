@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from asyncpg import Connection, Record
-from asyncpg import connect as asyncpg_connect
 from asyncpg import create_pool as asyncpg_create_pool
 from asyncpg.connection import ConnectionMeta
 from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
@@ -234,14 +233,10 @@ class _AsyncpgSessionFactory:
 
     async def acquire_connection(self) -> "AsyncpgConnection":
         pool = self._config.connection_instance
-        created_pool = False
         if pool is None:
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
-            created_pool = True
         self._connection = await pool.acquire()
-        if not created_pool and self._config._external_pool_provided:  # pyright: ignore[reportPrivateUsage]
-            await self._config._ensure_connection_ready(self._connection)  # pyright: ignore[reportPrivateUsage]
         return self._connection
 
     async def release_connection(self, _conn: "AsyncpgConnection") -> None:
@@ -261,14 +256,10 @@ class AsyncpgConnectionContext:
 
     async def __aenter__(self) -> "AsyncpgConnection":
         pool = self._config.connection_instance
-        created_pool = False
         if pool is None:
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
-            created_pool = True
         self._connection = await pool.acquire()
-        if not created_pool and self._config._external_pool_provided:  # pyright: ignore[reportPrivateUsage]
-            await self._config._ensure_connection_ready(self._connection)  # pyright: ignore[reportPrivateUsage]
         return self._connection
 
     async def __aexit__(
@@ -342,9 +333,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         self._cloud_sql_connector: Any | None = None
         self._alloydb_connector: Any | None = None
-        self._external_pool_provided = connection_instance is not None
-        self._extensions_bootstrapped = False
-        self._initialized_connection_ids: set[int] = set()
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
 
@@ -452,94 +440,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         elif self.driver_features.get("enable_alloydb", False):
             self._setup_alloydb_connector(config)
 
-        await self._detect_extensions(config)
         config.setdefault("init", self._init_connection)
 
         return await asyncpg_create_pool(**config)
-
-    async def _detect_extensions(self, target: "Pool[Record] | dict[str, Any] | AsyncpgConnection") -> None:
-        """Detect database extensions and update dialect accordingly.
-
-        Args:
-            target: Bootstrap config, pool, or connection to query.
-        """
-        extensions = self._get_enabled_extensions()
-        if not extensions:
-            self._extensions_bootstrapped = True
-            return
-
-        connection: AsyncpgConnection | None = None
-        pool: Pool[Record] | None = None
-        should_close = False
-        try:
-            if isinstance(target, dict):
-                connection = await self._open_bootstrap_connection(target)
-                should_close = True
-            elif isinstance(target, Pool):
-                pool = target
-                connection = await pool.acquire()
-            else:
-                connection = target
-            results = await connection.fetch(
-                "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", extensions
-            )
-            detected = {r["extname"] for r in results}
-            self._pgvector_available = "vector" in detected
-            self._paradedb_available = "pg_search" in detected
-        except Exception:
-            self._pgvector_available = False
-            self._paradedb_available = False
-        finally:
-            self._extensions_bootstrapped = True
-            if connection is not None and pool is not None:
-                await pool.release(connection)  # type: ignore[arg-type]
-            elif connection is not None and should_close:
-                await connection.close()
-
-        self._update_dialect_for_extensions()
-
-    def _get_enabled_extensions(self) -> "list[str]":
-        return [
-            name
-            for name, enabled in [
-                ("vector", self.driver_features.get("enable_pgvector", False)),
-                ("pg_search", self.driver_features.get("enable_paradedb", False)),
-            ]
-            if enabled
-        ]
-
-    async def _open_bootstrap_connection(self, config: "dict[str, Any]") -> "AsyncpgConnection":
-        connector = config.get("connect")
-        if connector is not None:
-            return cast("AsyncpgConnection", await connector())
-
-        connection_config = {
-            key: value
-            for key, value in config.items()
-            if key
-            not in {
-                "extra",
-                "init",
-                "loop",
-                "max_inactive_connection_lifetime",
-                "max_queries",
-                "max_size",
-                "min_size",
-                "setup",
-            }
-        }
-        return cast("AsyncpgConnection", await asyncpg_connect(**connection_config))
-
-    async def _ensure_connection_ready(self, connection: "AsyncpgConnection") -> None:
-        if not self._extensions_bootstrapped:
-            await self._detect_extensions(connection)
-        connection_id = id(connection)
-        if self._user_connection_hook is None and not self._pgvector_available:
-            return
-        if connection_id in self._initialized_connection_ids:
-            return
-        await self._init_connection(connection)
-        self._initialized_connection_ids.add(connection_id)
 
     async def _init_connection(self, connection: "AsyncpgConnection") -> None:
         """Initialize connection with JSON codecs, pgvector support, and user callback.
@@ -553,6 +456,32 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 encoder=self.driver_features.get("json_serializer", to_json),
                 decoder=self.driver_features.get("json_deserializer", from_json),
             )
+
+        # Detect extensions on first connection, update dialect
+        if self._pgvector_available is None:
+            extensions = [
+                name
+                for name, enabled in [
+                    ("vector", self.driver_features.get("enable_pgvector", False)),
+                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
+                ]
+                if enabled
+            ]
+            if extensions:
+                try:
+                    results = await connection.fetch(
+                        "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", extensions
+                    )
+                    detected = {r["extname"] for r in results}
+                    self._pgvector_available = "vector" in detected
+                    self._paradedb_available = "pg_search" in detected
+                except Exception:
+                    self._pgvector_available = False
+                    self._paradedb_available = False
+            else:
+                self._pgvector_available = False
+                self._paradedb_available = False
+            self._update_dialect_for_extensions()
 
         if self._pgvector_available:
             await register_pgvector_support(connection)
@@ -634,8 +563,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         return AsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config,
-            default_statement_config_getter=lambda: self.statement_config or default_statement_config,
+            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

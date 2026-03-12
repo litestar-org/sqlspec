@@ -43,14 +43,13 @@ def test_asyncpg_config_applies_driver_feature_serializers() -> None:
 
 
 @pytest.mark.anyio
-async def test_asyncpg_session_context_uses_lazy_default_statement_config() -> None:
-    """Session context should resolve default config after acquiring a connection."""
-    default_statement_config = StatementConfig(dialect="pgvector")
+async def test_asyncpg_session_context_resolves_callable_statement_config() -> None:
+    """Session context should call statement_config when it's a callable."""
+    expected_config = StatementConfig(dialect="pgvector")
     context = AsyncpgSessionContext(
         acquire_connection=AsyncMock(return_value=object()),
         release_connection=AsyncMock(),
-        statement_config=None,
-        default_statement_config_getter=lambda: default_statement_config,
+        statement_config=lambda: expected_config,
         driver_features={},
         prepare_driver=lambda driver: driver,
     )
@@ -60,41 +59,16 @@ async def test_asyncpg_session_context_uses_lazy_default_statement_config() -> N
 
 
 @pytest.mark.anyio
-async def test_asyncpg_session_context_preserves_explicit_statement_config_override() -> None:
-    """Explicit statement config overrides should bypass lazy defaults."""
-    explicit_statement_config = StatementConfig(dialect="postgres")
-    default_statement_config = StatementConfig(dialect="pgvector")
+async def test_asyncpg_session_context_preserves_explicit_statement_config() -> None:
+    """Explicit StatementConfig should be used directly without calling."""
+    explicit_config = StatementConfig(dialect="postgres")
     context = AsyncpgSessionContext(
         acquire_connection=AsyncMock(return_value=object()),
         release_connection=AsyncMock(),
-        statement_config=explicit_statement_config,
-        default_statement_config_getter=lambda: default_statement_config,
+        statement_config=explicit_config,
         driver_features={},
         prepare_driver=lambda driver: driver,
     )
 
     async with context as driver:
-        assert driver.statement_config is explicit_statement_config
-
-
-@pytest.mark.anyio
-async def test_asyncpg_create_pool_bootstraps_extensions_before_pool_initialization(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Extension flags should be ready before asyncpg pool initialization runs."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
-
-    async def fake_detect_extensions(_pool: object) -> None:
-        config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
-        config._paradedb_available = False  # pyright: ignore[reportPrivateUsage]
-        config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
-
-    async def fake_create_pool(**kwargs: object) -> object:
-        assert config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
-        assert kwargs["init"] == config._init_connection  # pyright: ignore[reportPrivateUsage]
-        return object()
-
-    monkeypatch.setattr(config, "_detect_extensions", fake_detect_extensions)
-    monkeypatch.setattr("sqlspec.adapters.asyncpg.config.asyncpg_create_pool", fake_create_pool)
-
-    await config._create_pool()  # pyright: ignore[reportPrivateUsage]
+        assert driver.statement_config is explicit_config
