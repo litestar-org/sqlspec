@@ -18,6 +18,8 @@ ADBC_SPECIAL_CHARS: "frozenset[str]" = frozenset({"{", "[", "-", ":", "T", "."})
 _NATIVE_SUPPORT: "dict[str, list[str]]" = {
     "postgres": ["uuid", "json", "interval", "pg_array"],
     "postgresql": ["uuid", "json", "interval", "pg_array"],
+    "pgvector": ["uuid", "json", "interval", "pg_array"],
+    "paradedb": ["uuid", "json", "interval", "pg_array"],
     "duckdb": ["uuid", "json"],
     "bigquery": ["json"],
     "sqlite": [],
@@ -56,7 +58,7 @@ class ADBCOutputConverter(CachedOutputConverter):
             Converted value according to dialect requirements.
         """
         try:
-            if self.dialect in {"postgres", "postgresql"}:
+            if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb"}:
                 if detected_type in {"uuid", "interval"}:
                     return self.convert_value(value, detected_type)
             elif self.dialect == "duckdb":
@@ -83,7 +85,7 @@ class ADBCOutputConverter(CachedOutputConverter):
         Returns:
             Converted value appropriate for the dialect.
         """
-        if self.dialect in {"postgres", "postgresql", "bigquery"}:
+        if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb", "bigquery"}:
             return to_json(value)
         return value
 
@@ -108,7 +110,7 @@ class ADBCOutputConverter(CachedOutputConverter):
         Returns:
             Converted value according to dialect requirements.
         """
-        if self.dialect in {"postgres", "postgresql"}:
+        if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb"}:
             if target_type in {"uuid", "json", "interval"}:
                 return self.convert_value(value, target_type)
         elif self.dialect == "duckdb":

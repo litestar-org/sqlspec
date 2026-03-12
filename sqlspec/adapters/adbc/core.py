@@ -28,7 +28,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
     map_sqlstate_to_exception,
 )
-from sqlspec.typing import Empty
+from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
@@ -45,6 +45,7 @@ __all__ = (
     "collect_rows",
     "create_mapped_exception",
     "detect_dialect",
+    "detect_postgres_extensions",
     "driver_from_uri",
     "driver_kind_from_driver_name",
     "driver_kind_from_uri",
@@ -173,6 +174,44 @@ def detect_dialect(connection: Any, logger: Any | None = None) -> str:
     if logger is not None:
         logger.warning("Could not determine dialect from driver info. Defaulting to 'postgres'.")
     return "postgres"
+
+
+def detect_postgres_extensions(
+    connection: Any, *, enable_pgvector: bool = False, enable_paradedb: bool = False
+) -> "tuple[bool, bool]":
+    """Detect pgvector and paradedb extensions on a postgres connection.
+
+    Queries ``pg_extension`` for the ``vector`` and ``pg_search`` extensions.
+    Returns cached-friendly booleans suitable for storing on the config instance.
+
+    Args:
+        connection: ADBC connection to a PostgreSQL database.
+        enable_pgvector: Whether to check for the pgvector extension.
+        enable_paradedb: Whether to check for the pg_search extension.
+
+    Returns:
+        Tuple of ``(pgvector_available, paradedb_available)``.
+    """
+    extensions: list[str] = []
+    if enable_pgvector:
+        extensions.append("vector")
+    if enable_paradedb:
+        extensions.append("pg_search")
+
+    if not extensions:
+        return False, False
+
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions])
+            rows = cursor.fetchall()
+            detected: set[str] = {row[0] for row in rows} if rows else set()
+            return "vector" in detected, "pg_search" in detected
+        finally:
+            cursor.close()
+    except Exception:
+        return False, False
 
 
 def normalize_driver_path(driver_name: str) -> str:
@@ -364,8 +403,11 @@ def resolve_dialect_name(dialect: Any) -> str:
 
 
 def is_postgres_dialect(dialect_name: str) -> bool:
-    """Return True when the dialect indicates PostgreSQL."""
-    return dialect_name in {"postgres", "postgresql"}
+    """Return True when the dialect indicates PostgreSQL.
+
+    Includes pgvector and paradedb which are PostgreSQL extension dialects.
+    """
+    return dialect_name in {"postgres", "postgresql", "pgvector", "paradedb"}
 
 
 def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = None) -> None:
@@ -704,6 +746,8 @@ def apply_driver_features(
     processed_features.setdefault("enable_strict_type_coercion", processed_features["strict_type_coercion"])
     processed_features.setdefault("arrow_extension_types", True)
     processed_features.setdefault("enable_arrow_extension_types", processed_features["arrow_extension_types"])
+    processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+    processed_features.setdefault("enable_paradedb", True)
 
     if json_serializer is not None:
         statement_config = _apply_adbc_json_serializer(statement_config, json_serializer)
