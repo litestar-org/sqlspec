@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
+from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
 from sqlspec.adapters.psycopg.litestar.store import PsycopgAsyncStore
@@ -12,11 +13,38 @@ from sqlspec.adapters.psycopg.litestar.store import PsycopgAsyncStore
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psycopg, pytest.mark.integration]
 
 
+@pytest.fixture(scope="module")
+def anyio_backend() -> str:
+    """Module-scoped anyio backend for module-scoped async fixtures."""
+    return "asyncio"
+
+
+@pytest.fixture(scope="module")
+async def psycopg_async_store_config(postgres_service: "PostgresService") -> AsyncGenerator[PsycopgAsyncConfig, None]:
+    """Module-scoped config so all async store tests share one pool."""
+    config = PsycopgAsyncConfig(
+        connection_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        pool_config={"min_size": 1},
+        extension_config={"litestar": {"session_table": "test_psycopg_async_sessions"}},
+    )
+    try:
+        yield config
+    finally:
+        try:
+            if config.connection_instance:
+                await config.close_pool()
+        except RuntimeError:
+            pass
+
+
 @pytest.fixture
-async def psycopg_async_store(psycopg_async_config: PsycopgAsyncConfig) -> "AsyncGenerator[PsycopgAsyncStore, None]":
-    """Create Psycopg async store with test database."""
-    psycopg_async_config.extension_config = {"litestar": {"session_table": "test_psycopg_async_sessions"}}
-    store = PsycopgAsyncStore(psycopg_async_config)
+async def psycopg_async_store(
+    psycopg_async_store_config: PsycopgAsyncConfig,
+) -> "AsyncGenerator[PsycopgAsyncStore, None]":
+    """Create Psycopg async store using the shared module-scoped config."""
+    store = PsycopgAsyncStore(psycopg_async_store_config)
     await store.create_table()
     try:
         yield store

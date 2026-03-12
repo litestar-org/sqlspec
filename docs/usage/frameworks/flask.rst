@@ -11,9 +11,31 @@ Installation
 
 Install SQLSpec with the Flask extra:
 
-.. code-block:: bash
+.. tab-set::
 
-   pip install "sqlspec[flask]"
+   .. tab-item:: uv
+
+      .. code-block:: bash
+
+         uv add "sqlspec[flask]"
+
+   .. tab-item:: pip
+
+      .. code-block:: bash
+
+         pip install "sqlspec[flask]"
+
+   .. tab-item:: Poetry
+
+      .. code-block:: bash
+
+         poetry add "sqlspec[flask]"
+
+   .. tab-item:: PDM
+
+      .. code-block:: bash
+
+         pdm add "sqlspec[flask]"
 
 Basic Setup
 ===========

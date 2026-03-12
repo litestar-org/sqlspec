@@ -30,6 +30,12 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
 
       In-depth guides on configuration, drivers, the query builder, and more.
 
+    .. grid-item-card:: :octicon:`beaker` Recipes
+      :link: recipes/index
+      :link-type: doc
+
+      Production patterns: DI, service layers, multi-tenancy, workers, and more.
+
     .. grid-item-card:: :octicon:`package` API Reference
       :link: reference/index
       :link-type: doc
@@ -49,6 +55,7 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
 
     getting_started/index
     usage/index
+    recipes/index
     reference/index
     playground
 

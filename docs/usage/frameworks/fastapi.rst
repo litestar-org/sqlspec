@@ -11,9 +11,31 @@ Installation
 
 Install SQLSpec with the FastAPI extra:
 
-.. code-block:: bash
+.. tab-set::
 
-   pip install "sqlspec[fastapi]"
+   .. tab-item:: uv
+
+      .. code-block:: bash
+
+         uv add "sqlspec[fastapi]"
+
+   .. tab-item:: pip
+
+      .. code-block:: bash
+
+         pip install "sqlspec[fastapi]"
+
+   .. tab-item:: Poetry
+
+      .. code-block:: bash
+
+         poetry add "sqlspec[fastapi]"
+
+   .. tab-item:: PDM
+
+      .. code-block:: bash
+
+         pdm add "sqlspec[fastapi]"
 
 Basic Setup
 ===========

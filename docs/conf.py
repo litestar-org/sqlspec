@@ -306,8 +306,8 @@ html_theme_options = {
     ],
 }
 
-pygments_style = "github-light-default"
-pygments_dark_style = "github-dark"
+pygments_style = "sqlspec-light"
+pygments_dark_style = "sqlspec-dark"
 
 
 def update_html_context(

@@ -12,6 +12,12 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
 
+@pytest.fixture(scope="session")
+def anyio_backend() -> str:
+    """Session-scoped anyio backend for session-scoped async fixtures."""
+    return "asyncio"
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_portal() -> "Generator[None, None, None]":
     """Clean up the portal manager after each test.
@@ -37,17 +43,21 @@ def psycopg_sync_config(postgres_service: "PostgresService") -> "Generator[Psyco
         config.close_pool()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 async def psycopg_async_config(postgres_service: "PostgresService") -> "AsyncGenerator[PsycopgAsyncConfig, None]":
     """Create a psycopg async configuration."""
     config = PsycopgAsyncConfig(
         connection_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        pool_config={"min_size": 1},
     )
     try:
         yield config
     finally:
-        if config.connection_instance:
-            await config.close_pool()
-        config.connection_instance = None
+        try:
+            if config.connection_instance:
+                await config.close_pool()
+            config.connection_instance = None
+        except RuntimeError:
+            pass

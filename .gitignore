@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Generated demo GIFs
+docs/_static/demos/
+
 # folders
 .auto_pytabs_cache/
 .hypothesis/

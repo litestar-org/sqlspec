@@ -1,7 +1,7 @@
 """Integration tests for Psycopg sync session store."""
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from datetime import timedelta
 
 import pytest
@@ -13,9 +13,9 @@ from sqlspec.adapters.psycopg.litestar.store import PsycopgSyncStore
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psycopg, pytest.mark.integration]
 
 
-@pytest.fixture
-async def psycopg_sync_store(postgres_service: "PostgresService") -> AsyncGenerator[PsycopgSyncStore, None]:
-    """Create Psycopg sync store with test database."""
+@pytest.fixture(scope="module")
+def psycopg_sync_store_config(postgres_service: "PostgresService") -> Generator[PsycopgSyncConfig, None, None]:
+    """Module-scoped config so all store tests share one pool."""
     config = PsycopgSyncConfig(
         connection_config={
             "host": postgres_service.host,
@@ -24,9 +24,20 @@ async def psycopg_sync_store(postgres_service: "PostgresService") -> AsyncGenera
             "password": postgres_service.password,
             "dbname": postgres_service.database,
         },
+        pool_config={"min_size": 1},
         extension_config={"litestar": {"session_table": "test_psycopg_sync_sessions"}},
     )
-    store = PsycopgSyncStore(config)
+    try:
+        yield config
+    finally:
+        if config.connection_instance:
+            config.close_pool()
+
+
+@pytest.fixture
+async def psycopg_sync_store(psycopg_sync_store_config: PsycopgSyncConfig) -> AsyncGenerator[PsycopgSyncStore, None]:
+    """Create Psycopg sync store using the shared module-scoped config."""
+    store = PsycopgSyncStore(psycopg_sync_store_config)
     try:
         await store.create_table()
         yield store
@@ -35,8 +46,7 @@ async def psycopg_sync_store(postgres_service: "PostgresService") -> AsyncGenera
         except Exception:
             pass
     finally:
-        if config.connection_instance:
-            config.close_pool()
+        pass
 
 
 async def test_store_create_table(psycopg_sync_store: PsycopgSyncStore) -> None:

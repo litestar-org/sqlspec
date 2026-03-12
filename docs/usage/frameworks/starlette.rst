@@ -11,9 +11,31 @@ Installation
 
 Install SQLSpec with the Starlette extra:
 
-.. code-block:: bash
+.. tab-set::
 
-   pip install "sqlspec[starlette]"
+   .. tab-item:: uv
+
+      .. code-block:: bash
+
+         uv add "sqlspec[starlette]"
+
+   .. tab-item:: pip
+
+      .. code-block:: bash
+
+         pip install "sqlspec[starlette]"
+
+   .. tab-item:: Poetry
+
+      .. code-block:: bash
+
+         poetry add "sqlspec[starlette]"
+
+   .. tab-item:: PDM
+
+      .. code-block:: bash
+
+         pdm add "sqlspec[starlette]"
 
 Basic Setup
 ===========

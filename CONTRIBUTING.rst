@@ -63,6 +63,46 @@ Running the docs locally
 
 You can serve the documentation with ``make docs-serve``, or build them with ``make docs``.
 
+CLI demo recordings
++++++++++++++++++++
+
+SQLSpec uses `VHS <https://github.com/charmbracelet/vhs>`_ to record terminal demos as GIF files
+that are embedded in the documentation.
+
+**Requirements:** VHS, ffmpeg, ttyd
+
+**Installation:**
+
+.. code-block:: console
+
+   go install github.com/charmbracelet/vhs@latest
+
+**Recording demos:**
+
+.. code-block:: console
+
+   make docs-demos
+
+This will process every ``.tape`` file in ``docs/_tapes/`` and write GIF output to
+``docs/_static/demos/``.
+
+**Creating a new tape:**
+
+1. Create a new ``.tape`` file in ``docs/_tapes/``.
+2. Use the standard header (see existing tapes for examples). All tapes should use
+   the ``Catppuccin Mocha`` theme, font size 14, and 1000x600 dimensions.
+3. Use ``Hide``/``Show`` commands to hide setup steps like virtual environment activation.
+4. Include generous ``Sleep`` durations after commands that produce output.
+5. Run ``make docs-demos`` to generate the GIF.
+6. Reference the GIF in your documentation with an ``.. image::`` directive pointing to
+   ``/_static/demos/<name>.gif``.
+
+**Building docs with demos:**
+
+.. code-block:: console
+
+   make docs-all
+
 Creating a new release
 ----------------------
 

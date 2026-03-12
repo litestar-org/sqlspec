@@ -8,7 +8,9 @@ from sqlspec.adapters.adbc._typing import AdbcConnection
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
+    detect_postgres_extensions,
     get_statement_config,
+    is_postgres_dialect,
     resolve_dialect_from_config,
     resolve_driver_connect_func,
 )
@@ -86,6 +88,14 @@ class AdbcDriverFeatures(TypedDict):
             When False, falls back to storage types.
             Default: True
         arrow_extension_types: Alias for enable_arrow_extension_types.
+        enable_pgvector: Enable automatic pgvector extension detection.
+            When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
+            on the first connection to check for the ``vector`` extension.
+            Defaults to True when the ``pgvector`` Python package is installed.
+        enable_paradedb: Enable ParadeDB (pg_search) extension detection.
+            When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
+            on the first connection to check for the ``pg_search`` extension.
+            Defaults to True. Independent of enable_pgvector.
         enable_events: Enable database event channel support.
             Defaults to True when extension_config["events"] is configured.
             Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
@@ -102,6 +112,8 @@ class AdbcDriverFeatures(TypedDict):
     strict_type_coercion: NotRequired[bool]
     enable_arrow_extension_types: NotRequired[bool]
     arrow_extension_types: NotRequired[bool]
+    enable_pgvector: NotRequired[bool]
+    enable_paradedb: NotRequired[bool]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
 
@@ -192,6 +204,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
         self.connection_config = normalize_connection_config(connection_config)
+        self._pgvector_available: bool | None = None
+        self._paradedb_available: bool | None = None
 
         if statement_config is None:
             statement_config = get_statement_config(resolve_dialect_from_config(self.connection_config))
@@ -230,6 +244,48 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             msg = f"Could not configure connection using driver '{driver_name}'. Error: {e}"
             raise ImproperConfigurationError(msg) from e
 
+    def _update_dialect_for_extensions(self) -> None:
+        """Update statement_config dialect based on detected extensions.
+
+        Priority: paradedb > pgvector > postgres (default).
+        Only switches when current dialect is ``postgres``.
+        """
+        current_dialect = getattr(self.statement_config, "dialect", "postgres")
+        if current_dialect != "postgres":
+            return
+
+        if self._paradedb_available:
+            self.statement_config = self.statement_config.replace(dialect="paradedb")
+        elif self._pgvector_available:
+            self.statement_config = self.statement_config.replace(dialect="pgvector")
+
+    def _detect_extensions_if_needed(self) -> None:
+        """Detect postgres extensions on first call, caching results.
+
+        Only queries ``pg_extension`` when the resolved dialect is PostgreSQL
+        and detection has not yet run (``_pgvector_available is None``).
+        """
+        if self._pgvector_available is not None:
+            return
+
+        dialect = getattr(self.statement_config, "dialect", "")
+        if not is_postgres_dialect(dialect):
+            self._pgvector_available = False
+            self._paradedb_available = False
+            return
+
+        connection = self.create_connection()
+        try:
+            self._pgvector_available, self._paradedb_available = detect_postgres_extensions(
+                connection,
+                enable_pgvector=self.driver_features.get("enable_pgvector", False),
+                enable_paradedb=self.driver_features.get("enable_paradedb", False),
+            )
+        finally:
+            connection.close()
+
+        self._update_dialect_for_extensions()
+
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AdbcConnectionContext":
         """Provide a connection context manager.
 
@@ -247,6 +303,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     ) -> "AdbcSessionContext":
         """Provide a driver session context manager.
 
+        On first call with a PostgreSQL backend, detects pgvector/paradedb
+        extensions and updates the dialect accordingly.
+
         Args:
             *_args: Additional arguments.
             statement_config: Optional statement configuration override.
@@ -255,6 +314,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Returns:
             A context manager that yields an AdbcDriver instance.
         """
+        self._detect_extensions_if_needed()
         statement_config = (
             statement_config
             or self.statement_config

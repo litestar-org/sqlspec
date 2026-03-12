@@ -21,7 +21,7 @@ def pgvector_psycopg_connection_config(pgvector_service: "PostgresService") -> "
     }
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def pgvector_psycopg_config(
     pgvector_psycopg_connection_config: "dict[str, Any]",
 ) -> "Generator[PsycopgSyncConfig, None, None]":
@@ -33,7 +33,7 @@ def pgvector_psycopg_config(
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.commit()
 
-    config = PsycopgSyncConfig(connection_config=dict(pgvector_psycopg_connection_config))
+    config = PsycopgSyncConfig(connection_config=dict(pgvector_psycopg_connection_config), pool_config={"min_size": 1})
     try:
         yield config
     finally:

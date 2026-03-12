@@ -11,6 +11,33 @@ Instrumentation
 To enable observability features, you typically wrap or extend your base configuration.
 SQLSpec provides helper functions in `sqlspec.extensions` to make this easier.
 
+Custom Statement Observers
+--------------------------
+
+Create a custom observer to capture ``StatementEvent`` objects for logging, metrics,
+or alerting. Each observer is a callable that receives a ``StatementEvent`` after
+every SQL execution.
+
+.. literalinclude:: /examples/patterns/observability/custom_observer.py
+   :language: python
+   :caption: ``custom statement observer``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+``StatementEvent`` fields include:
+
+- ``sql`` -- the executed SQL string
+- ``parameters`` -- bound parameters
+- ``driver`` -- driver class name
+- ``operation`` -- SQL operation type (SELECT, INSERT, etc.)
+- ``duration_s`` -- execution time in seconds
+- ``rows_affected`` -- number of rows affected
+- ``correlation_id`` -- request correlation ID (if set)
+- ``db_system`` -- database system identifier
+- ``trace_id`` / ``span_id`` -- OpenTelemetry context (if enabled)
+
 OpenTelemetry Tracing
 ---------------------
 

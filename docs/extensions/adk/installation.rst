@@ -8,27 +8,115 @@ Install SQLSpec with a database adapter and the Google ADK SDK.
 
    .. tab-item:: PostgreSQL
 
-      .. code-block:: bash
+      .. tab-set::
 
-         pip install "sqlspec[asyncpg,adk]"
+         .. tab-item:: uv
+
+            .. code-block:: bash
+
+               uv add "sqlspec[asyncpg,adk]"
+
+         .. tab-item:: pip
+
+            .. code-block:: bash
+
+               pip install "sqlspec[asyncpg,adk]"
+
+         .. tab-item:: Poetry
+
+            .. code-block:: bash
+
+               poetry add "sqlspec[asyncpg,adk]"
+
+         .. tab-item:: PDM
+
+            .. code-block:: bash
+
+               pdm add "sqlspec[asyncpg,adk]"
 
    .. tab-item:: SQLite
 
-      .. code-block:: bash
+      .. tab-set::
 
-         pip install "sqlspec[aiosqlite,adk]"
+         .. tab-item:: uv
+
+            .. code-block:: bash
+
+               uv add "sqlspec[aiosqlite,adk]"
+
+         .. tab-item:: pip
+
+            .. code-block:: bash
+
+               pip install "sqlspec[aiosqlite,adk]"
+
+         .. tab-item:: Poetry
+
+            .. code-block:: bash
+
+               poetry add "sqlspec[aiosqlite,adk]"
+
+         .. tab-item:: PDM
+
+            .. code-block:: bash
+
+               pdm add "sqlspec[aiosqlite,adk]"
 
    .. tab-item:: MySQL
 
-      .. code-block:: bash
+      .. tab-set::
 
-         pip install "sqlspec[asyncmy,adk]"
+         .. tab-item:: uv
+
+            .. code-block:: bash
+
+               uv add "sqlspec[asyncmy,adk]"
+
+         .. tab-item:: pip
+
+            .. code-block:: bash
+
+               pip install "sqlspec[asyncmy,adk]"
+
+         .. tab-item:: Poetry
+
+            .. code-block:: bash
+
+               poetry add "sqlspec[asyncmy,adk]"
+
+         .. tab-item:: PDM
+
+            .. code-block:: bash
+
+               pdm add "sqlspec[asyncmy,adk]"
 
    .. tab-item:: DuckDB
 
-      .. code-block:: bash
+      .. tab-set::
 
-         pip install "sqlspec[duckdb,adk]"
+         .. tab-item:: uv
+
+            .. code-block:: bash
+
+               uv add "sqlspec[duckdb,adk]"
+
+         .. tab-item:: pip
+
+            .. code-block:: bash
+
+               pip install "sqlspec[duckdb,adk]"
+
+         .. tab-item:: Poetry
+
+            .. code-block:: bash
+
+               poetry add "sqlspec[duckdb,adk]"
+
+         .. tab-item:: PDM
+
+            .. code-block:: bash
+
+               pdm add "sqlspec[duckdb,adk]"
 
 What This Provides
 ------------------

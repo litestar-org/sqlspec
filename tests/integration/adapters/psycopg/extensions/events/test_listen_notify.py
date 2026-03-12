@@ -49,7 +49,6 @@ def test_psycopg_sync_listen_notify(postgres_service: "Any") -> None:
     assert message.payload["action"] == "ping"
 
 
-@pytest.mark.asyncio
 async def test_psycopg_async_listen_notify(postgres_service: "Any") -> None:
     """Async psycopg adapter delivers NOTIFY payloads via EventChannel."""
 
@@ -118,7 +117,6 @@ def test_psycopg_sync_hybrid_listen_notify_durable(postgres_service: "Any", tmp_
     assert message.payload["action"] == "hybrid"
 
 
-@pytest.mark.asyncio
 async def test_psycopg_async_hybrid_listen_notify_durable(postgres_service: "Any", tmp_path) -> None:
     """Hybrid backend stores event durably then notifies listeners (async)."""
 

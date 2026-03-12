@@ -9,89 +9,61 @@ Install bundles
 
 .. tab-set::
 
-   .. tab-item:: Core
+   .. tab-item:: uv
 
       .. code-block:: bash
 
-         uv pip install sqlspec
-         # or
+         uv add sqlspec
+
+   .. tab-item:: pip
+
+      .. code-block:: bash
+
          pip install sqlspec
 
-   .. tab-item:: PostgreSQL
+   .. tab-item:: Poetry
 
       .. code-block:: bash
 
-         uv pip install "sqlspec[asyncpg]"
-         uv pip install "sqlspec[psycopg]"
-         uv pip install "sqlspec[psqlpy]"
+         poetry add sqlspec
 
-   .. tab-item:: SQLite
+   .. tab-item:: PDM
 
       .. code-block:: bash
 
-         uv pip install "sqlspec[aiosqlite]"
+         pdm add sqlspec
 
-   .. tab-item:: MySQL
+Performance bundle
+~~~~~~~~~~~~~~~~~~
 
-      .. code-block:: bash
+For production deployments, install the ``performance`` extra for Rust-based SQL
+parsing and high-speed serialization, or the ``mypyc`` extra for C-compiled internals:
 
-         uv pip install "sqlspec[asyncmy]"
-         uv pip install "sqlspec[mysql-connector]"
-         uv pip install "sqlspec[pymysql]"
+.. tab-set::
 
-   .. tab-item:: Oracle
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[oracledb]"
-
-   .. tab-item:: Analytics
+   .. tab-item:: uv
 
       .. code-block:: bash
 
-         uv pip install "sqlspec[duckdb]"
-         uv pip install "sqlspec[bigquery]"
-         uv pip install "sqlspec[spanner]"
-         uv pip install "sqlspec[adbc]"
+         uv add "sqlspec[performance]"
 
-   .. tab-item:: Frameworks
+   .. tab-item:: pip
 
       .. code-block:: bash
 
-         uv pip install "sqlspec[litestar]"
-         uv pip install "sqlspec[fastapi]"
-         uv pip install "sqlspec[flask]"
+         pip install "sqlspec[performance]"
 
-   .. tab-item:: Observability
+   .. tab-item:: Poetry
 
       .. code-block:: bash
 
-         uv pip install "sqlspec[opentelemetry]"
-         uv pip install "sqlspec[prometheus]"
+         poetry add "sqlspec[performance]"
 
-   .. tab-item:: Data Export
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[pandas]"
-         uv pip install "sqlspec[polars]"
-         uv pip install "sqlspec[fsspec]"
-         uv pip install "sqlspec[obstore]"
-
-   .. tab-item:: Types & Serialization
+   .. tab-item:: PDM
 
       .. code-block:: bash
 
-         uv pip install "sqlspec[msgspec]"
-         uv pip install "sqlspec[pydantic]"
-         uv pip install "sqlspec[attrs]"
-         uv pip install "sqlspec[orjson]"
-
-   .. tab-item:: Performance
-
-      .. code-block:: bash
-
-         uv pip install "sqlspec[performance]"
+         pdm add "sqlspec[performance]"
 
 Package groups
 --------------
@@ -157,6 +129,9 @@ Package groups
    * - ``msgspec``
      - ``msgspec``
      - High-performance result mapping.
+   * - ``mypyc``
+     - ``sqlglot[c]``
+     - C-compiled sqlglot internals for faster SQL parsing.
    * - ``mysql-connector``
      - ``mysql-connector-python``
      - MySQL connector driver.
@@ -212,11 +187,31 @@ Package groups
 Multiple extras
 ---------------
 
-.. code-block:: bash
+.. tab-set::
 
-   uv pip install "sqlspec[asyncpg,msgspec,litestar]"
-   # or
-   pip install "sqlspec[asyncpg,msgspec,litestar]"
+   .. tab-item:: uv
+
+      .. code-block:: bash
+
+         uv add "sqlspec[asyncpg,msgspec,litestar]"
+
+   .. tab-item:: pip
+
+      .. code-block:: bash
+
+         pip install "sqlspec[asyncpg,msgspec,litestar]"
+
+   .. tab-item:: Poetry
+
+      .. code-block:: bash
+
+         poetry add "sqlspec[asyncpg,msgspec,litestar]"
+
+   .. tab-item:: PDM
+
+      .. code-block:: bash
+
+         pdm add "sqlspec[asyncpg,msgspec,litestar]"
 
 Next steps
 ----------

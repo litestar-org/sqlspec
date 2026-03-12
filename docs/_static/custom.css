@@ -72,8 +72,8 @@ html.light {
     0 0 20px rgba(var(--litestar-navy-rgb), 0.2);
 
   /* Code block colors - light mode */
-  --sqlspec-code-bg: var(--litestar-gray-50);
-  --sqlspec-code-border: var(--litestar-gray-200);
+  --sqlspec-code-bg: #f1f4f9;
+  --sqlspec-code-border: #d0d7e2;
   --sqlspec-code-text: var(--litestar-navy);
 }
 
@@ -99,7 +99,7 @@ html[data-theme="dark"] {
 
   /* Code block colors - dark mode */
   --sqlspec-code-bg: #1a1c2e; /* Slightly darker than navy */
-  --sqlspec-code-border: var(--litestar-gray-700);
+  --sqlspec-code-border: #2d3148;
   --sqlspec-code-text: var(--litestar-gray-100);
 }
 
@@ -155,9 +155,16 @@ p {
 div.highlight {
   background: var(--sqlspec-code-bg);
   border: 1px solid var(--sqlspec-code-border);
+  border-left: 3px solid rgba(237, 182, 65, 0.3);
   border-radius: 8px;
   overflow: hidden;
   margin: 1rem 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+html.dark div.highlight,
+html[data-theme="dark"] div.highlight {
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 div.highlight pre {
@@ -165,10 +172,11 @@ div.highlight pre {
   color: var(--sqlspec-code-text);
   white-space: pre;
   overflow-x: auto;
-  padding: 1rem;
+  padding: 1rem 1.25rem;
   margin: 0;
   font-size: 0.875rem;
-  line-height: 1.6;
+  line-height: 1.7;
+  font-variant-ligatures: none;
 }
 
 div.highlight pre code {
@@ -197,7 +205,7 @@ html.dark code:not([class]) {
 }
 
   html.dark .sqlspec-playground .CodeMirror .cm-property {
-    color: #FFCC80;
+    color: #f9e2af;
   }
 
   /* CodeMirror Selection - Dark Mode Highlighting Fix */

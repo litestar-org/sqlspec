@@ -54,7 +54,6 @@ def test_psycopg_sync_event_channel_queue_fallback(tmp_path, postgres_service: "
 
 
 @pytest.mark.postgres
-@pytest.mark.asyncio
 async def test_psycopg_async_event_channel_queue_fallback(tmp_path, postgres_service: "PostgresService") -> None:
     """Psycopg async configs use the queue backend."""
 
