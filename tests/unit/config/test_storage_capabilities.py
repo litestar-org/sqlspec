@@ -4,12 +4,16 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
+from sqlspec.core import StatementConfig
 from sqlspec.core.config_runtime import (
     build_default_statement_config,
+    build_postgres_extension_probe_names,
     close_async_pool,
     close_sync_pool,
     create_async_pool,
     create_sync_pool,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
     seed_runtime_driver_features,
 )
 from sqlspec.driver import (
@@ -243,6 +247,32 @@ def test_async_driver_features_seed_capabilities(monkeypatch):
 def test_build_default_statement_config_uses_requested_dialect() -> None:
     statement_config = build_default_statement_config("postgres")
     assert statement_config.dialect == "postgres"
+
+
+def test_build_postgres_extension_probe_names_filters_disabled_features() -> None:
+    assert build_postgres_extension_probe_names({"enable_pgvector": True, "enable_paradedb": False}) == ["vector"]
+
+
+def test_resolve_postgres_extension_state_promotes_paradedb() -> None:
+    statement_config, pgvector_available, paradedb_available = resolve_postgres_extension_state(
+        StatementConfig(dialect="postgres"),
+        {"enable_pgvector": True, "enable_paradedb": True},
+        {"vector", "pg_search"},
+    )
+
+    assert statement_config.dialect == "paradedb"
+    assert pgvector_available is True
+    assert paradedb_available is True
+
+
+def test_resolve_runtime_statement_config_prefers_explicit_override() -> None:
+    explicit_config = StatementConfig(dialect="pgvector")
+    configured_config = StatementConfig(dialect="postgres")
+
+    assert (
+        resolve_runtime_statement_config(explicit_config, configured_config, build_default_statement_config("postgres"))
+        is explicit_config
+    )
 
 
 def test_seed_runtime_driver_features_preserves_existing_values() -> None:
