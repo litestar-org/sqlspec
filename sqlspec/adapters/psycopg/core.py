@@ -52,6 +52,7 @@ __all__ = (
     "build_async_pipeline_execution_result",
     "build_copy_from_command",
     "build_pipeline_execution_result",
+    "build_postgres_extension_probe_names",
     "build_profile",
     "build_statement_config",
     "build_truncate_command",
@@ -63,7 +64,9 @@ __all__ = (
     "execute_with_optional_parameters_async",
     "pipeline_supported",
     "resolve_many_rowcount",
+    "resolve_postgres_extension_state",
     "resolve_rowcount",
+    "resolve_runtime_statement_config",
 )
 
 TRANSACTION_STATUS_IDLE = 0
@@ -204,6 +207,53 @@ def apply_driver_features(
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
+
+
+def build_postgres_extension_probe_names(driver_features: "Mapping[str, Any] | None") -> "list[str]":
+    """Return enabled PostgreSQL extension names to probe on first connection."""
+    if driver_features is None:
+        return []
+
+    extensions: list[str] = []
+    if driver_features.get("enable_pgvector", False):
+        extensions.append("vector")
+    if driver_features.get("enable_paradedb", False):
+        extensions.append("pg_search")
+    return extensions
+
+
+def resolve_postgres_extension_state(
+    statement_config: "StatementConfig",
+    driver_features: "Mapping[str, Any] | None",
+    detected_extensions: "set[str] | None" = None,
+) -> "tuple[StatementConfig, bool, bool]":
+    """Resolve detected PostgreSQL extension flags and promoted dialect."""
+    detected = detected_extensions or set()
+    pgvector_available = bool(driver_features and driver_features.get("enable_pgvector", False) and "vector" in detected)
+    paradedb_available = bool(
+        driver_features and driver_features.get("enable_paradedb", False) and "pg_search" in detected
+    )
+
+    if statement_config.dialect == "postgres":
+        if paradedb_available:
+            statement_config = statement_config.replace(dialect="paradedb")
+        elif pgvector_available:
+            statement_config = statement_config.replace(dialect="pgvector")
+
+    return statement_config, pgvector_available, paradedb_available
+
+
+def resolve_runtime_statement_config(
+    statement_config: "StatementConfig | None",
+    configured_statement_config: "StatementConfig | None",
+    default_config: "StatementConfig",
+) -> "StatementConfig":
+    """Resolve the effective runtime statement config for a session."""
+    if statement_config is not None:
+        return statement_config
+    if configured_statement_config is not None:
+        return configured_statement_config
+    return default_config
 
 
 def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":

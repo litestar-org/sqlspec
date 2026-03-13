@@ -8,11 +8,14 @@ from sqlspec.adapters.adbc._typing import AdbcConnection
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
+    build_postgres_extension_probe_names,
     detect_postgres_extensions,
     get_statement_config,
     is_postgres_dialect,
     resolve_dialect_from_config,
     resolve_driver_connect_func,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
 )
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, AdbcSessionContext
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
@@ -276,15 +279,25 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         connection = self.create_connection()
         try:
-            self._pgvector_available, self._paradedb_available = detect_postgres_extensions(
+            probe_names = build_postgres_extension_probe_names(self.driver_features)
+            pgvector_available, paradedb_available = detect_postgres_extensions(
                 connection,
-                enable_pgvector=self.driver_features.get("enable_pgvector", False),
-                enable_paradedb=self.driver_features.get("enable_paradedb", False),
+                enable_pgvector="vector" in probe_names,
+                enable_paradedb="pg_search" in probe_names,
             )
         finally:
             connection.close()
 
-        self._update_dialect_for_extensions()
+        detected_extensions: set[str] = set()
+        if pgvector_available:
+            detected_extensions.add("vector")
+        if paradedb_available:
+            detected_extensions.add("pg_search")
+        self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
+            self.statement_config,
+            self.driver_features,
+            detected_extensions,
+        )
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AdbcConnectionContext":
         """Provide a connection context manager.
@@ -315,10 +328,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             A context manager that yields an AdbcDriver instance.
         """
         self._detect_extensions_if_needed()
-        statement_config = (
-            statement_config
-            or self.statement_config
-            or get_statement_config(resolve_dialect_from_config(self.connection_config))
+        statement_config = resolve_runtime_statement_config(
+            statement_config,
+            self.statement_config,
+            get_statement_config(resolve_dialect_from_config(self.connection_config)),
         )
         handler = _AdbcSessionConnectionHandler(self)
 

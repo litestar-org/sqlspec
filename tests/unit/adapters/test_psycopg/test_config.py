@@ -5,8 +5,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncSessionContext, PsycopgSyncSessionContext
-from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
-from sqlspec.adapters.psycopg.core import build_statement_config, default_statement_config
+from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
+from sqlspec.adapters.psycopg.core import (
+    build_postgres_extension_probe_names,
+    build_statement_config,
+    default_statement_config,
+    resolve_postgres_extension_state,
+)
 from sqlspec.core import SQL, StatementConfig
 
 
@@ -32,6 +37,24 @@ def test_psycopg_sync_config_applies_driver_feature_serializer() -> None:
 
     parameter_config = config.statement_config.parameter_config
     assert parameter_config.json_serializer is serializer
+
+
+def test_psycopg_build_postgres_extension_probe_names_filters_disabled_features() -> None:
+    """Only enabled extension probes should be returned."""
+    assert build_postgres_extension_probe_names({"enable_pgvector": True, "enable_paradedb": False}) == ["vector"]
+
+
+def test_psycopg_resolve_postgres_extension_state_promotes_paradedb() -> None:
+    """Detected extensions should promote the runtime dialect."""
+    statement_config, pgvector_available, paradedb_available = resolve_postgres_extension_state(
+        StatementConfig(dialect="postgres"),
+        {"enable_pgvector": True, "enable_paradedb": True},
+        {"vector", "pg_search"},
+    )
+
+    assert statement_config.dialect == "paradedb"
+    assert pgvector_available is True
+    assert paradedb_available is True
 
 
 def test_psycopg_numeric_placeholders_convert_to_pyformat() -> None:
@@ -95,3 +118,25 @@ def test_psycopg_sync_session_context_preserves_explicit_statement_config() -> N
 
     with context as driver:
         assert driver.statement_config is explicit_config
+
+
+def test_psycopg_sync_provide_session_tracks_promoted_statement_config() -> None:
+    """Sync runtime statement config should resolve the current config dialect lazily."""
+    config = PsycopgSyncConfig()
+    config.statement_config = config.statement_config.replace(dialect="pgvector")
+
+    session_config = config.provide_session()._statement_config  # pyright: ignore[reportPrivateUsage]
+
+    assert callable(session_config)
+    assert session_config().dialect == "pgvector"
+
+
+def test_psycopg_async_provide_session_tracks_promoted_statement_config() -> None:
+    """Async runtime statement config should resolve the current config dialect lazily."""
+    config = PsycopgAsyncConfig()
+    config.statement_config = config.statement_config.replace(dialect="pgvector")
+
+    session_config = config.provide_session()._statement_config  # pyright: ignore[reportPrivateUsage]
+
+    assert callable(session_config)
+    assert session_config().dialect == "pgvector"

@@ -7,7 +7,13 @@ from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
-from sqlspec.adapters.psycopg.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.psycopg.core import (
+    apply_driver_features,
+    build_postgres_extension_probe_names,
+    default_statement_config,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
+)
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
     PsycopgAsyncDriver,
@@ -281,30 +287,22 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         # Detect extensions on first connection, update dialect
         if self._pgvector_available is None:
-            extensions = [
-                name
-                for name, enabled in [
-                    ("vector", self.driver_features.get("enable_pgvector", False)),
-                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
-                ]
-                if enabled
-            ]
+            detected_extensions: set[str] = set()
+            extensions = build_postgres_extension_probe_names(self.driver_features)
             if extensions:
                 try:
                     cursor = conn.execute(
                         "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
                     )
                     results = cursor.fetchall()
-                    detected = {r[0] for r in results}  # type: ignore[index]
-                    self._pgvector_available = "vector" in detected
-                    self._paradedb_available = "pg_search" in detected
+                    detected_extensions = {r[0] for r in results}  # type: ignore[index]
                 except Exception:
-                    self._pgvector_available = False
-                    self._paradedb_available = False
-            else:
-                self._pgvector_available = False
-                self._paradedb_available = False
-            self._update_dialect_for_extensions()
+                    detected_extensions = set()
+            self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
+                self.statement_config,
+                self.driver_features,
+                detected_extensions,
+            )
 
         if self._pgvector_available:
             register_pgvector_sync(conn)
@@ -367,7 +365,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return PsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -571,30 +570,22 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         # Detect extensions on first connection, update dialect
         if self._pgvector_available is None:
-            extensions = [
-                name
-                for name, enabled in [
-                    ("vector", self.driver_features.get("enable_pgvector", False)),
-                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
-                ]
-                if enabled
-            ]
+            detected_extensions: set[str] = set()
+            extensions = build_postgres_extension_probe_names(self.driver_features)
             if extensions:
                 try:
                     cursor = await conn.execute(
                         "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
                     )
                     results = await cursor.fetchall()
-                    detected = {r[0] for r in results}  # type: ignore[index]
-                    self._pgvector_available = "vector" in detected
-                    self._paradedb_available = "pg_search" in detected
+                    detected_extensions = {r[0] for r in results}  # type: ignore[index]
                 except Exception:
-                    self._pgvector_available = False
-                    self._paradedb_available = False
-            else:
-                self._pgvector_available = False
-                self._paradedb_available = False
-            self._update_dialect_for_extensions()
+                    detected_extensions = set()
+            self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
+                self.statement_config,
+                self.driver_features,
+                detected_extensions,
+            )
 
         if self._pgvector_available:
             await register_pgvector_async(conn)
@@ -676,7 +667,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         return PsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

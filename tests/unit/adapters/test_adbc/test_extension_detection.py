@@ -3,7 +3,13 @@
 from unittest.mock import MagicMock
 
 from sqlspec.adapters.adbc.config import AdbcConfig
-from sqlspec.adapters.adbc.core import apply_driver_features, detect_postgres_extensions, get_statement_config
+from sqlspec.adapters.adbc.core import (
+    apply_driver_features,
+    build_postgres_extension_probe_names,
+    detect_postgres_extensions,
+    get_statement_config,
+    resolve_postgres_extension_state,
+)
 
 
 def test_apply_driver_features_sets_pgvector_default() -> None:
@@ -28,6 +34,11 @@ def test_apply_driver_features_respects_user_overrides() -> None:
     _, features = apply_driver_features(statement_config, {"enable_pgvector": False, "enable_paradedb": False})
     assert features["enable_pgvector"] is False
     assert features["enable_paradedb"] is False
+
+
+def test_build_postgres_extension_probe_names_filters_disabled_features() -> None:
+    """Only enabled extension probes should be returned."""
+    assert build_postgres_extension_probe_names({"enable_pgvector": True, "enable_paradedb": False}) == ["vector"]
 
 
 def test_detect_postgres_extensions_returns_tuple() -> None:
@@ -92,6 +103,19 @@ def test_adbc_config_initializes_extension_flags_to_none() -> None:
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "sqlite"})
     assert config._pgvector_available is None  # pyright: ignore[reportPrivateUsage]
     assert config._paradedb_available is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_resolve_postgres_extension_state_promotes_paradedb() -> None:
+    """Detected extensions should promote the runtime dialect."""
+    statement_config, pgvector_available, paradedb_available = resolve_postgres_extension_state(
+        get_statement_config("postgres"),
+        {"enable_pgvector": True, "enable_paradedb": True},
+        {"vector", "pg_search"},
+    )
+
+    assert statement_config.dialect == "paradedb"
+    assert pgvector_available is True
+    assert paradedb_available is True
 
 
 def test_adbc_config_update_dialect_for_extensions_pgvector() -> None:

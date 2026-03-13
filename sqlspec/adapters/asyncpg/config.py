@@ -13,9 +13,12 @@ from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPool, Asy
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
     build_connection_config,
+    build_postgres_extension_probe_names,
     default_statement_config,
     register_json_codecs,
     register_pgvector_support,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
 )
 from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver, AsyncpgExceptionHandler, AsyncpgSessionContext
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
@@ -459,29 +462,21 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         # Detect extensions on first connection, update dialect
         if self._pgvector_available is None:
-            extensions = [
-                name
-                for name, enabled in [
-                    ("vector", self.driver_features.get("enable_pgvector", False)),
-                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
-                ]
-                if enabled
-            ]
+            detected_extensions: set[str] = set()
+            extensions = build_postgres_extension_probe_names(self.driver_features)
             if extensions:
                 try:
                     results = await connection.fetch(
                         "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", extensions
                     )
-                    detected = {r["extname"] for r in results}
-                    self._pgvector_available = "vector" in detected
-                    self._paradedb_available = "pg_search" in detected
+                    detected_extensions = {r["extname"] for r in results}
                 except Exception:
-                    self._pgvector_available = False
-                    self._paradedb_available = False
-            else:
-                self._pgvector_available = False
-                self._paradedb_available = False
-            self._update_dialect_for_extensions()
+                    detected_extensions = set()
+            self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
+                self.statement_config,
+                self.driver_features,
+                detected_extensions,
+            )
 
         if self._pgvector_available:
             await register_pgvector_support(connection)
@@ -563,7 +558,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         return AsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
