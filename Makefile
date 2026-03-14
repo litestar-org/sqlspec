@@ -365,7 +365,7 @@ pgo-local:                                          ## Run full three-stage PGO 
 	@echo "${OK} Instrumented wheel built"
 	@echo "${INFO} Stage 2: Running training workload..."
 	@uv pip install dist/*.whl --force-reinstall --no-deps >/dev/null 2>&1
-	@.venv/bin/python -m sqlspec._pgo_training
+	@.venv/bin/python tools/scripts/pgo_training.py
 	@echo "${OK} Training complete"
 	@rm -rf dist/ $(PGO_BUILD_DIR)/build $(PGO_BUILD_DIR)/tmp
 	@echo "${INFO} Stage 3: Building PGO-optimized wheel..."
