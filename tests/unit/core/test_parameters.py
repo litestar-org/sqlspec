@@ -14,6 +14,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from importlib import import_module
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import sqlglot
@@ -2063,6 +2064,45 @@ class TestConfigDrivenParseNormalization:
 
         # Should have NUMERIC placeholders
         assert "$" in normalized_sql
+
+    def test_process_reuses_extracted_metadata_for_parse_normalization(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """process() should normalize SQL without re-extracting placeholders."""
+        sql = "SELECT * FROM t WHERE id = %(name)s"
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            default_execution_parameter_style=ParameterStyle.NAMED_PYFORMAT,
+            supported_parameter_styles={ParameterStyle.NUMERIC},
+            supported_execution_parameter_styles={ParameterStyle.NAMED_PYFORMAT},
+        )
+
+        with patch.object(ParameterValidator, "extract_parameters", wraps=validator.extract_parameters) as mock_extract:
+            result = processor.process(sql, {"name": 1}, config)
+
+        assert mock_extract.call_count == 1
+        assert result.sql == sql
+        assert result.sqlglot_sql == "SELECT * FROM t WHERE id = $1"
+
+    def test_process_reuses_extracted_metadata_for_execution_conversion(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """process() should derive the final profile without re-parsing converted SQL."""
+        sql = "SELECT * FROM t WHERE id = :id AND name = :name"
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NAMED_COLON,
+            default_execution_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+            supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        )
+
+        with patch.object(ParameterValidator, "extract_parameters", wraps=validator.extract_parameters) as mock_extract:
+            result = processor.process(sql, {"id": 1, "name": "a"}, config)
+
+        assert mock_extract.call_count == 1
+        assert result.sql == "SELECT * FROM t WHERE id = $1 AND name = $2"
+        assert result.parameter_profile.styles == (ParameterStyle.NUMERIC.value,)
+        assert result.parameter_profile.named_parameters == ("1", "2")
 
 
 class TestDriverProfileValidation:

@@ -737,7 +737,9 @@ class ParameterProcessor:
             return sql
         # Convert to the default style that sqlglot can parse for this dialect
         target_style = config.default_parameter_style
-        normalized_sql, _ = self._converter.convert_placeholder_style(sql, None, target_style, is_many=False)
+        normalized_sql, _ = self._converter.convert_placeholder_style(
+            sql, None, target_style, is_many=False, param_info=param_info
+        )
         return normalized_sql
 
     def _make_processor_cache_key(
@@ -948,7 +950,11 @@ class ParameterProcessor:
                 target_style,
                 is_many,
                 strict_named_parameters=config.strict_named_parameters,
+                param_info=param_info,
             )
+            param_info = self._converter.convert_parameter_info_style(param_info, target_style)
+            original_styles = {target_style}
+            needs_execution_conversion = False
 
         applied_wrap_types = False
         if processed_parameters and wrap_types:
@@ -960,14 +966,14 @@ class ParameterProcessor:
         if config.type_coercion_map and processed_parameters:
             processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
 
-        processed_sql, processed_parameters = self._convert_placeholders_for_execution(
-            processed_sql, processed_parameters, config, original_styles, needs_execution_conversion, is_many
+        processed_sql, processed_parameters, converted_param_info = self._convert_placeholders_for_execution(
+            processed_sql, processed_parameters, config, param_info, original_styles, needs_execution_conversion, is_many
         )
 
         if config.output_transformer:
             processed_sql, processed_parameters = config.output_transformer(processed_sql, processed_parameters)
 
-        final_param_info = self._validator.extract_parameters(processed_sql)
+        final_param_info = converted_param_info if converted_param_info is not None else param_info
         final_profile = ParameterProfile(final_param_info)
         sqlglot_sql = (
             self._normalize_sql_for_parsing(processed_sql, final_param_info, config)
@@ -1040,34 +1046,47 @@ class ParameterProcessor:
         sql: str,
         parameters: "ParameterPayload",
         config: "ParameterStyleConfig",
+        param_info: "list[ParameterInfo]",
         original_styles: "set[ParameterStyle]",
         needs_execution_conversion: bool,
         is_many: bool,
-    ) -> "tuple[str, ConvertedParameters]":
+    ) -> "tuple[str, ConvertedParameters, list[ParameterInfo] | None]":
         if not needs_execution_conversion:
             # Convert parameters to concrete type for return
             if parameters is None:
-                return sql, None
+                return sql, None, None
             if isinstance(parameters, dict):
-                return sql, parameters
+                return sql, parameters, None
             if isinstance(parameters, list):
-                return sql, parameters
+                return sql, parameters, None
             if isinstance(parameters, tuple):
-                return sql, parameters
+                return sql, parameters, None
             if isinstance(parameters, Mapping):
-                return sql, dict(parameters)
+                return sql, dict(parameters), None
             if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-                return sql, list(parameters)
-            return sql, None
-
-        if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
-            target_style = self._select_execution_style(original_styles, config)
-            processed_sql, _ = self._converter.convert_placeholder_style(
-                sql, parameters, target_style, is_many, strict_named_parameters=config.strict_named_parameters
-            )
-            return processed_sql, parameters
+                return sql, list(parameters), None
+            return sql, None, None
 
         target_style = self._select_execution_style(original_styles, config)
-        return self._converter.convert_placeholder_style(
-            sql, parameters, target_style, is_many, strict_named_parameters=config.strict_named_parameters
+        converted_param_info = self._converter.convert_parameter_info_style(param_info, target_style)
+
+        if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
+            processed_sql, _ = self._converter.convert_placeholder_style(
+                sql,
+                parameters,
+                target_style,
+                is_many,
+                strict_named_parameters=config.strict_named_parameters,
+                param_info=param_info,
+            )
+            return processed_sql, parameters, converted_param_info
+
+        processed_sql, processed_parameters = self._converter.convert_placeholder_style(
+            sql,
+            parameters,
+            target_style,
+            is_many,
+            strict_named_parameters=config.strict_named_parameters,
+            param_info=param_info,
         )
+        return processed_sql, processed_parameters, converted_param_info

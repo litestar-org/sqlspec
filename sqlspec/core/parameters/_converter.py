@@ -78,6 +78,28 @@ def _single_parameter_style(param_info: "list[ParameterInfo]") -> "ParameterStyl
     return style
 
 
+def _is_positional_style(style: "ParameterStyle") -> bool:
+    return style in {
+        ParameterStyle.QMARK,
+        ParameterStyle.NUMERIC,
+        ParameterStyle.POSITIONAL_PYFORMAT,
+        ParameterStyle.POSITIONAL_COLON,
+    }
+
+
+def _parameter_lookup_key(param: "ParameterInfo", use_sequential_for_qmark: bool) -> str:
+    if use_sequential_for_qmark and param.style == ParameterStyle.QMARK:
+        return f"{param.placeholder_text}_{param.ordinal}"
+    return param.placeholder_text
+
+
+def _normalized_named_parameter_name(param: "ParameterInfo") -> str:
+    param_name = param.name or f"param_{param.ordinal}"
+    if param_name.isdigit():
+        return f"param_{param.ordinal}"
+    return param_name
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterConverter:
     """Parameter style conversion helper."""
@@ -106,17 +128,18 @@ class ParameterConverter:
         is_many: bool = False,
         *,
         strict_named_parameters: bool = True,
+        param_info: "list[ParameterInfo] | None" = None,
     ) -> "tuple[str, ConvertedParameters]":
-        param_info = self.validator.extract_parameters(sql)
+        extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
 
         if target_style == ParameterStyle.STATIC:
-            return self._embed_static_parameters(sql, parameters, param_info)
+            return self._embed_static_parameters(sql, parameters, extracted_param_info)
 
-        current_style = _single_parameter_style(param_info)
+        current_style = _single_parameter_style(extracted_param_info)
         if current_style is not None and target_style == current_style:
             converted_parameters = self._convert_parameter_format(
                 parameters,
-                param_info,
+                extracted_param_info,
                 target_style,
                 parameters,
                 preserve_parameter_format=True,
@@ -125,10 +148,10 @@ class ParameterConverter:
             )
             return sql, converted_parameters
 
-        converted_sql = self._convert_placeholders_to_style(sql, param_info, target_style)
+        converted_sql = self._convert_placeholders_to_style(sql, extracted_param_info, target_style)
         converted_parameters = self._convert_parameter_format(
             parameters,
-            param_info,
+            extracted_param_info,
             target_style,
             parameters,
             preserve_parameter_format=True,
@@ -136,6 +159,21 @@ class ParameterConverter:
             strict_named_parameters=strict_named_parameters,
         )
         return converted_sql, converted_parameters
+
+    def _build_conversion_plan(
+        self, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
+    ) -> "tuple[list[ParameterInfo], dict[str, int], bool]":
+        ordered_params = _ordered_parameter_info(param_info)
+        source_style = _single_parameter_style(ordered_params)
+        use_sequential_for_qmark = source_style == ParameterStyle.QMARK and target_style == ParameterStyle.NUMERIC
+
+        unique_params: dict[str, int] = {}
+        for param in ordered_params:
+            param_key = _parameter_lookup_key(param, use_sequential_for_qmark)
+            if param_key not in unique_params:
+                unique_params[param_key] = len(unique_params)
+
+        return ordered_params, unique_params, use_sequential_for_qmark
 
     def _convert_placeholders_to_style(
         self, sql: str, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
@@ -145,31 +183,14 @@ class ParameterConverter:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
-        ordered_params = _ordered_parameter_info(param_info)
-        source_style = _single_parameter_style(ordered_params)
-        use_sequential_for_qmark = source_style == ParameterStyle.QMARK and target_style == ParameterStyle.NUMERIC
-
-        unique_params: dict[str, int] = {}
-        for param in ordered_params:
-            param_key = (
-                f"{param.placeholder_text}_{param.ordinal}"
-                if use_sequential_for_qmark and param.style == ParameterStyle.QMARK
-                else param.placeholder_text
-            )
-            if param_key not in unique_params:
-                unique_params[param_key] = len(unique_params)
+        ordered_params, unique_params, use_sequential_for_qmark = self._build_conversion_plan(param_info, target_style)
 
         placeholder_text_len_cache: dict[str, int] = {}
         # Build SQL using forward iteration with list join (O(n) vs O(n^2) string slicing)
         segments: list[str] = []
         last_end = 0
 
-        is_positional_style = target_style in {
-            ParameterStyle.QMARK,
-            ParameterStyle.NUMERIC,
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.POSITIONAL_COLON,
-        }
+        is_positional_style = _is_positional_style(target_style)
 
         for param in ordered_params:
             # Cache placeholder text length
@@ -179,16 +200,10 @@ class ParameterConverter:
 
             # Generate new placeholder based on target style
             if is_positional_style:
-                param_key = (
-                    f"{param.placeholder_text}_{param.ordinal}"
-                    if use_sequential_for_qmark and param.style == ParameterStyle.QMARK
-                    else param.placeholder_text
-                )
+                param_key = _parameter_lookup_key(param, use_sequential_for_qmark)
                 new_placeholder = generator(unique_params[param_key])
             else:
-                param_name = param.name or f"param_{param.ordinal}"
-                if isinstance(param_name, str) and param_name.isdigit():
-                    param_name = f"param_{param.ordinal}"
+                param_name = _normalized_named_parameter_name(param)
                 new_placeholder = generator(param_name)
 
             # Append segment before this placeholder and the new placeholder
@@ -199,6 +214,41 @@ class ParameterConverter:
         segments.append(sql[last_end:])
 
         return "".join(segments)
+
+    def convert_parameter_info_style(
+        self, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
+    ) -> "list[ParameterInfo]":
+        generator = self._placeholder_generators.get(target_style)
+        if generator is None:
+            msg = f"Unsupported target parameter style: {target_style}"
+            raise ValueError(msg)
+
+        ordered_params, unique_params, use_sequential_for_qmark = self._build_conversion_plan(param_info, target_style)
+        is_positional_style = _is_positional_style(target_style)
+        converted_param_info: list[ParameterInfo] = []
+
+        for param in ordered_params:
+            if is_positional_style:
+                converted_index = unique_params[_parameter_lookup_key(param, use_sequential_for_qmark)]
+                placeholder_text = generator(converted_index)
+                name = None
+                if target_style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
+                    name = str(converted_index + 1)
+            else:
+                name = _normalized_named_parameter_name(param)
+                placeholder_text = generator(name)
+
+            converted_param_info.append(
+                ParameterInfo(
+                    name=name,
+                    style=target_style,
+                    position=param.position,
+                    ordinal=param.ordinal,
+                    placeholder_text=placeholder_text,
+                )
+            )
+
+        return converted_param_info
 
     def _convert_sequence_to_dict(
         self, parameters: "ParameterSequence", param_info: "list[ParameterInfo]"
