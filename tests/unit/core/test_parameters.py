@@ -1164,6 +1164,26 @@ def test_process_execute_many_coerces_only_rows_that_require_conversion(processo
     assert tuple(result.parameters[1]) == ("v2",)
 
 
+def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterProcessor") -> None:
+    """Subclass values should still hit coercion fallback when no exact entry exists."""
+
+    class MyInt(int):
+        pass
+
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        type_coercion_map={int: lambda value: value + 1},
+    )
+    sql = "SELECT * FROM metrics WHERE value = ?"
+
+    result = processor.process(sql, [MyInt(4)], config, wrap_types=False)
+
+    assert isinstance(result.parameters, list)
+    assert result.parameters == [5]
+
+
 def test_list_parameter_preservation(converter: ParameterConverter) -> None:
     """Test that list parameters are properly handled."""
     sql = "INSERT INTO users (id, name, active) VALUES (?, ?, ?)"

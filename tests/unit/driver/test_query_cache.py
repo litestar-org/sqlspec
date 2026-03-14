@@ -167,6 +167,28 @@ def test_prepare_driver_parameters_many_coerces_rows_when_needed() -> None:
     assert tuple(prepared[1]) == ("b",)
 
 
+def test_prepare_driver_parameters_many_coerces_subclass_rows_when_needed() -> None:
+    class MyInt(int):
+        pass
+
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={int: lambda value: value + 1},
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    parameters = [(MyInt(2),), ("b",)]
+
+    prepared = driver.prepare_driver_parameters(parameters, config, is_many=True)
+
+    assert isinstance(prepared, list)
+    assert prepared is not parameters
+    assert tuple(prepared[0]) == (3,)
+    assert tuple(prepared[1]) == ("b",)
+
+
 def test_sync_stmt_cache_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch) -> None:
     class _CursorManager:
         def __enter__(self) -> object:

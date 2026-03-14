@@ -225,6 +225,12 @@ _CONVERT_TO_TUPLE = object()
 _CONVERT_TO_FROZENSET = object()
 
 
+def _type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tuple[tuple[type, Any], ...]":
+    if not type_coercion_map:
+        return ()
+    return tuple(type_coercion_map.items())
+
+
 def make_cache_key_hashable(obj: Any) -> Any:
     """Recursively convert unhashable types to hashable ones for cache keys.
 
@@ -1545,29 +1551,21 @@ class CommonDriverAttributesMixin:
         if is_many:
             if isinstance(parameters, list):
                 type_coercion_map = statement_config.parameter_config.type_coercion_map
+                fallback_items = _type_coercion_fallbacks(type_coercion_map)
                 needs_transform = False
                 for param_set in parameters:
                     if isinstance(param_set, dict):
                         for value in param_set.values():
-                            value_type = type(value)
-                            if value_type is TypedParameter:
-                                needs_transform = True
-                                break
-                            if type_coercion_map and value_type in type_coercion_map:
+                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
                                 needs_transform = True
                                 break
                     elif isinstance(param_set, (list, tuple)):
                         for value in param_set:
-                            value_type = type(value)
-                            if value_type is TypedParameter:
-                                needs_transform = True
-                                break
-                            if type_coercion_map and value_type in type_coercion_map:
+                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
                                 needs_transform = True
                                 break
                     else:
-                        value_type = type(param_set)
-                        if value_type is TypedParameter or (type_coercion_map and value_type in type_coercion_map):
+                        if self._needs_coercion_candidate(param_set, type_coercion_map, fallback_items):
                             needs_transform = True
                     if needs_transform:
                         break
@@ -1604,17 +1602,49 @@ class CommonDriverAttributesMixin:
         if not type_coercion_map:
             return unwrapped_value
 
-        value_type = type(unwrapped_value)
+        return self._apply_coercion_with_fallback(
+            unwrapped_value, type_coercion_map, _type_coercion_fallbacks(type_coercion_map)
+        )
+
+    def _apply_coercion_with_fallback(
+        self,
+        value: object,
+        type_coercion_map: "dict[type, Callable[[Any], Any]]",
+        fallback_items: "tuple[tuple[type, Any], ...]",
+    ) -> object:
+        value_type = type(value)
         exact_converter = type_coercion_map.get(value_type)
         if exact_converter is not None:
-            return exact_converter(unwrapped_value)
+            return exact_converter(value)
 
-        for type_check, converter in type_coercion_map.items():
+        for type_check, converter in fallback_items:
             if type_check is value_type:
                 continue
-            if isinstance(unwrapped_value, type_check):
-                return converter(unwrapped_value)
-        return unwrapped_value
+            if isinstance(value, type_check):
+                return converter(value)
+        return value
+
+    def _needs_coercion_candidate(
+        self,
+        value: object,
+        type_coercion_map: "dict[type, Callable[[Any], Any]] | None",
+        fallback_items: "tuple[tuple[type, Any], ...]",
+    ) -> bool:
+        if type(value) is TypedParameter:
+            return True
+        if not type_coercion_map:
+            return False
+
+        value_type = type(value)
+        if value_type in type_coercion_map:
+            return True
+
+        for type_check, _converter in fallback_items:
+            if type_check is value_type:
+                continue
+            if isinstance(value, type_check):
+                return True
+        return False
 
     def _format_parameter_set_for_many(
         self, parameters: "StatementParameters", statement_config: "StatementConfig"
@@ -1636,15 +1666,15 @@ class CommonDriverAttributesMixin:
             return []
 
         type_coercion_map = statement_config.parameter_config.type_coercion_map
-        coerce_value = self._apply_coercion
+        fallback_items = _type_coercion_fallbacks(type_coercion_map)
 
         if not isinstance(parameters, (dict, list, tuple)):
-            return [coerce_value(parameters, type_coercion_map)]
+            return [self._apply_coercion_with_fallback(parameters, type_coercion_map, fallback_items)]
 
         if isinstance(parameters, dict):
             coerced_mapping: dict[str, Any] | None = None
             for key, value in parameters.items():
-                coerced_value = coerce_value(value, type_coercion_map)
+                coerced_value = self._apply_coercion_with_fallback(value, type_coercion_map, fallback_items)
                 if coerced_mapping is None:
                     if coerced_value is value:
                         continue
@@ -1656,7 +1686,7 @@ class CommonDriverAttributesMixin:
 
         updated_params: list[Any] | None = None
         for idx, value in enumerate(parameters):
-            coerced_value = coerce_value(value, type_coercion_map)
+            coerced_value = self._apply_coercion_with_fallback(value, type_coercion_map, fallback_items)
             if updated_params is None:
                 if coerced_value is value:
                     continue

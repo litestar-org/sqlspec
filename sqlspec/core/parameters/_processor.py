@@ -34,6 +34,8 @@ _EXECUTE_MANY_SAMPLE_THRESHOLD = 10
 # Number of records to sample for type signatures
 _EXECUTE_MANY_SAMPLE_SIZE = 3
 
+TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
+
 
 def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
     """Return a structural fingerprint for caching parameter payloads.
@@ -197,19 +199,50 @@ def _value_fingerprint(parameters: "ParameterPayload") -> Any:
     return ("values", repr(parameters))
 
 
-def _coerce_nested_value(value: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
+def _type_coercion_fallbacks(
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+) -> "tuple[TypeCoercionFallback, ...]":
+    return tuple(type_coercion_map.items())
+
+
+def _resolve_type_coercion(
+    value: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> object:
+    value_type = type(value)
+    exact_converter = type_coercion_map.get(value_type)
+    if exact_converter is not None:
+        return exact_converter(value)
+    for type_check, converter in fallback_items:
+        if type_check is value_type:
+            continue
+        if isinstance(value, type_check):
+            return converter(value)
+    return value
+
+
+def _coerce_nested_value(
+    value: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> object:
     # Fast type dispatch for common types
     value_type = type(value)
     if value_type is list or value_type is tuple:
         seq_value = cast("Sequence[Any]", value)
-        return [_coerce_parameter_value(item, type_coercion_map) for item in seq_value]
+        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in seq_value]
     if value_type is dict:
         dict_value = cast("dict[Any, Any]", value)
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in dict_value.items()}
+        return {key: _coerce_parameter_value(val, type_coercion_map, fallback_items) for key, val in dict_value.items()}
     return value
 
 
-def _coerce_parameter_value(value: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
+def _coerce_parameter_value(
+    value: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> object:
     if value is None:
         return value
 
@@ -221,23 +254,25 @@ def _coerce_parameter_value(value: object, type_coercion_map: "dict[type, Callab
         if wrapped_value is None:
             return wrapped_value
         original_type = typed_param.original_type
-        if original_type in type_coercion_map:
-            coerced = type_coercion_map[original_type](wrapped_value)
-            return _coerce_nested_value(coerced, type_coercion_map)
-        return wrapped_value
+        coerced = _resolve_type_coercion(wrapped_value, type_coercion_map, fallback_items)
+        if coerced is wrapped_value:
+            return wrapped_value
+        return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
 
-    if value_type in type_coercion_map:
-        coerced = type_coercion_map[value_type](value)
-        return _coerce_nested_value(coerced, type_coercion_map)
-    return value
+    coerced = _resolve_type_coercion(value, type_coercion_map, fallback_items)
+    if coerced is value:
+        return value
+    return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
 
 
 def _coerce_sequence_preserving_identity(
-    seq_value: "Sequence[Any]", type_coercion_map: "dict[type, Callable[[Any], Any]]"
+    seq_value: "Sequence[Any]",
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> "Sequence[Any] | list[Any]":
     updated_seq: list[Any] | None = None
     for idx, item in enumerate(seq_value):
-        coerced_value = _coerce_parameter_value(item, type_coercion_map)
+        coerced_value = _coerce_parameter_value(item, type_coercion_map, fallback_items)
         if updated_seq is None:
             if coerced_value is item:
                 continue
@@ -249,11 +284,13 @@ def _coerce_sequence_preserving_identity(
 
 
 def _coerce_mapping_preserving_identity(
-    mapping: "Mapping[Any, Any]", type_coercion_map: "dict[type, Callable[[Any], Any]]"
+    mapping: "Mapping[Any, Any]",
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> "Mapping[Any, Any] | dict[Any, Any]":
     updated_mapping: dict[Any, Any] | None = None
     for key, val in mapping.items():
-        coerced_value = _coerce_parameter_value(val, type_coercion_map)
+        coerced_value = _coerce_parameter_value(val, type_coercion_map, fallback_items)
         if updated_mapping is None:
             if coerced_value is val:
                 continue
@@ -264,36 +301,43 @@ def _coerce_mapping_preserving_identity(
     return updated_mapping
 
 
-def _coerce_parameter_set(param_set: object, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> object:
+def _coerce_parameter_set(
+    param_set: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> object:
     # Fast type dispatch for common types
     param_type = type(param_set)
     if param_type is list:
-        return _coerce_sequence_preserving_identity(cast("list[Any]", param_set), type_coercion_map)
+        return _coerce_sequence_preserving_identity(cast("list[Any]", param_set), type_coercion_map, fallback_items)
     if param_type is tuple:
         seq_value = cast("tuple[Any, ...]", param_set)
-        coerced_seq = _coerce_sequence_preserving_identity(seq_value, type_coercion_map)
+        coerced_seq = _coerce_sequence_preserving_identity(seq_value, type_coercion_map, fallback_items)
         if coerced_seq is seq_value:
             return seq_value
         return tuple(cast("list[Any]", coerced_seq))
     if param_type is dict:
-        return _coerce_mapping_preserving_identity(cast("dict[Any, Any]", param_set), type_coercion_map)
+        return _coerce_mapping_preserving_identity(cast("dict[Any, Any]", param_set), type_coercion_map, fallback_items)
     # Fallback to ABC checks for custom types
     if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
         seq_fallback = param_set
-        coerced_seq = _coerce_sequence_preserving_identity(seq_fallback, type_coercion_map)
+        coerced_seq = _coerce_sequence_preserving_identity(seq_fallback, type_coercion_map, fallback_items)
         if coerced_seq is seq_fallback:
             return param_set
         return coerced_seq
     if isinstance(param_set, Mapping):
-        coerced_mapping = _coerce_mapping_preserving_identity(param_set, type_coercion_map)
+        coerced_mapping = _coerce_mapping_preserving_identity(param_set, type_coercion_map, fallback_items)
         if coerced_mapping is param_set:
             return param_set
         return coerced_mapping
-    return _coerce_parameter_value(param_set, type_coercion_map)
+    return _coerce_parameter_value(param_set, type_coercion_map, fallback_items)
 
 
 def _coerce_parameters_payload(
-    parameters: "ParameterPayload", type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool
+    parameters: "ParameterPayload",
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+    is_many: bool,
 ) -> object:
     # Fast type dispatch for common types
     param_type = type(parameters)
@@ -302,7 +346,7 @@ def _coerce_parameters_payload(
         if is_many:
             updated_many: list[Any] | None = None
             for idx, param_set in enumerate(seq_params):
-                coerced_set = _coerce_parameter_set(param_set, type_coercion_map)
+                coerced_set = _coerce_parameter_set(param_set, type_coercion_map, fallback_items)
                 if updated_many is None:
                     if coerced_set is param_set:
                         continue
@@ -314,7 +358,7 @@ def _coerce_parameters_payload(
 
         updated_seq: list[Any] | None = None
         for idx, item in enumerate(seq_params):
-            coerced_item = _coerce_parameter_value(item, type_coercion_map)
+            coerced_item = _coerce_parameter_value(item, type_coercion_map, fallback_items)
             if updated_seq is None:
                 if coerced_item is item:
                     continue
@@ -326,13 +370,13 @@ def _coerce_parameters_payload(
     if param_type is tuple:
         tuple_params = cast("tuple[Any, ...]", parameters)
         if is_many:
-            return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in tuple_params]
-        return [_coerce_parameter_value(item, type_coercion_map) for item in tuple_params]
+            return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in tuple_params]
+        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in tuple_params]
     if param_type is dict:
         dict_params = cast("dict[Any, Any]", parameters)
         updated_mapping: dict[Any, Any] | None = None
         for key, val in dict_params.items():
-            coerced_value = _coerce_parameter_value(val, type_coercion_map)
+            coerced_value = _coerce_parameter_value(val, type_coercion_map, fallback_items)
             if updated_mapping is None:
                 if coerced_value is val:
                     continue
@@ -343,12 +387,12 @@ def _coerce_parameters_payload(
         return updated_mapping
     # Fallback to ABC checks for custom types
     if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-        return [_coerce_parameter_set(param_set, type_coercion_map) for param_set in parameters]
+        return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in parameters]
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-        return [_coerce_parameter_value(item, type_coercion_map) for item in parameters]
+        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in parameters]
     if isinstance(parameters, Mapping):
-        return {key: _coerce_parameter_value(val, type_coercion_map) for key, val in parameters.items()}
-    return _coerce_parameter_value(parameters, type_coercion_map)
+        return {key: _coerce_parameter_value(val, type_coercion_map, fallback_items) for key, val in parameters.items()}
+    return _coerce_parameter_value(parameters, type_coercion_map, fallback_items)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -516,7 +560,8 @@ class ParameterProcessor:
         type_coercion_map: "dict[type, Callable[[Any], Any]]",
         is_many: bool = False,
     ) -> "ConvertedParameters":
-        result = _coerce_parameters_payload(parameters, type_coercion_map, is_many)
+        fallback_items = _type_coercion_fallbacks(type_coercion_map)
+        result = _coerce_parameters_payload(parameters, type_coercion_map, fallback_items, is_many)
         # Fast type narrowing - _coerce_parameters_payload returns object but produces concrete types
         if result is None:
             return None
