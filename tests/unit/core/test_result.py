@@ -1,9 +1,12 @@
 """Tests for the SQLResult iteration functionality."""
 
+from dataclasses import dataclass
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
+import sqlspec.core.result._base as result_base
 from sqlspec.core import SQL, ArrowResult, SQLResult, StackResult, create_sql_result
 from sqlspec.typing import PYARROW_INSTALLED
 
@@ -175,7 +178,6 @@ def test_create_sql_result_iteration() -> None:
 
 def test_sql_result_get_data_with_schema_type() -> None:
     """Test SQLResult.get_data() with schema_type parameter."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -265,7 +267,6 @@ def test_stack_result_with_error_and_factory() -> None:
 
 def test_sql_result_all_with_schema_type() -> None:
     """Test SQLResult.all() with schema_type parameter."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -290,7 +291,6 @@ def test_sql_result_all_with_schema_type() -> None:
 
 def test_sql_result_one_with_schema_type() -> None:
     """Test SQLResult.one() with schema_type parameter."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -311,7 +311,6 @@ def test_sql_result_one_with_schema_type() -> None:
 
 def test_sql_result_one_or_none_with_schema_type() -> None:
     """Test SQLResult.one_or_none() with schema_type parameter."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -335,7 +334,6 @@ def test_sql_result_one_or_none_with_schema_type() -> None:
 
 def test_sql_result_get_first_with_schema_type() -> None:
     """Test SQLResult.get_first() with schema_type parameter."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -358,6 +356,55 @@ def test_sql_result_get_first_with_schema_type() -> None:
     empty_result = SQLResult(statement=sql_stmt, data=[], rows_affected=0)
     none_user = empty_result.get_first(schema_type=User)
     assert none_user is None
+
+
+def test_sql_result_reuses_cached_schema_list_conversion() -> None:
+    """Repeated list-shaped schema access should not re-run to_schema()."""
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    result = SQLResult(
+        statement=SQL("SELECT id, name FROM users"),
+        data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+        rows_affected=2,
+    )
+
+    original_to_schema = result_base.to_schema
+    with patch.object(result_base, "to_schema", wraps=original_to_schema) as mocked_to_schema:
+        first = result.get_data(schema_type=User)
+        second = result.all(schema_type=User)
+
+    assert first is second
+    assert mocked_to_schema.call_count == 1
+
+
+def test_sql_result_reuses_cached_single_row_schema_conversion() -> None:
+    """Repeated single-row schema access should not re-run to_schema()."""
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    result = SQLResult(
+        statement=SQL("SELECT id, name FROM users WHERE id = 1"),
+        data=[{"id": 1, "name": "Alice"}],
+        rows_affected=1,
+    )
+
+    original_to_schema = result_base.to_schema
+    with patch.object(result_base, "to_schema", wraps=original_to_schema) as mocked_to_schema:
+        first = result.get_first(schema_type=User)
+        second = result.one(schema_type=User)
+        third = result.one_or_none(schema_type=User)
+
+    assert isinstance(first, User)
+    assert first is second
+    assert second is third
+    assert mocked_to_schema.call_count == 1
 
 
 class TestTupleFormatSchemaType:
