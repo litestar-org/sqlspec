@@ -1,0 +1,285 @@
+{
+  "task_id": "sqlspec-iab.6.1",
+  "captured_on": "2026-03-14",
+  "summary": {
+    "adapter_count": 16,
+    "bench_harness_driver_count": 4,
+    "regression_gate_driver_count": 1
+  },
+  "benchmark_scripts": {
+    "bench.py": {
+      "drivers": [
+        "aiosqlite",
+        "asyncpg",
+        "duckdb",
+        "sqlite"
+      ],
+      "core_scenarios": [
+        "initialization",
+        "write_heavy",
+        "read_heavy",
+        "iterative_inserts",
+        "repeated_queries"
+      ],
+      "extended_scenarios": [
+        "dict_key_transform",
+        "schema_mapping",
+        "complex_parameters",
+        "thin_path_stress"
+      ]
+    },
+    "bench_gate.py": {
+      "drivers": [
+        "sqlite"
+      ],
+      "gate_scenarios": [
+        "iterative_inserts",
+        "repeated_queries",
+        "write_heavy",
+        "read_heavy"
+      ]
+    },
+    "bench_subsystems.py": {
+      "drivers": [
+        "sqlite"
+      ],
+      "focus_areas": [
+        "SQL object construction",
+        "SQL.compile()",
+        "query-cache prepare/lookup",
+        "parameter processing",
+        "cursor lifecycle",
+        "storage/runtime helpers"
+      ]
+    }
+  },
+  "build_workflows": {
+    "publish.yml": {
+      "tier": "release",
+      "builds_mypyc_wheels": true,
+      "exercises_three_stage_pgo": true,
+      "uses_packaged_training_module": true,
+      "notes": "Release wheels still run `python -m sqlspec._pgo_training` during the three-stage PGO flow."
+    },
+    "test-build.yml": {
+      "tier": "pull_request/workflow_dispatch",
+      "builds_mypyc_wheels": true,
+      "exercises_three_stage_pgo": false,
+      "uses_packaged_training_module": false,
+      "notes": "PR build validation compiles mypyc wheels but does not run reduced three-stage PGO parity."
+    }
+  },
+  "external_infra": {
+    "dma_accelerator": {
+      "reusable_lifecycle_modules": [
+        "postgres",
+        "mysql",
+        "oracle",
+        "sqlserver"
+      ],
+      "root_cli_registered_families": [
+        "postgres"
+      ],
+      "notes": "Reusable lifecycle code exists for PostgreSQL, MySQL, Oracle, and SQL Server, but the root CLI currently mounts only PostgreSQL. MySQL and Oracle still need SQLSpec-facing exposure work before they can be treated as directly reusable perf infrastructure."
+    }
+  },
+  "adapters": [
+    {
+      "name": "adbc",
+      "execution_surfaces": [
+        "sync"
+      ],
+      "config_surface": "sqlspec/adapters/adbc/config.py",
+      "integration_root": "tests/integration/adapters/adbc",
+      "current_infra_family": "bridge/underlying-engine",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Integration coverage spans PostgreSQL, SQLite, and DuckDB backends, but no dedicated perf-harness workload exists yet."
+    },
+    {
+      "name": "aiosqlite",
+      "execution_surfaces": [
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/aiosqlite/config.py",
+      "integration_root": "tests/integration/adapters/aiosqlite",
+      "current_infra_family": "file-local",
+      "bench_harness_driver": true,
+      "regression_gate_driver": false,
+      "notes": "Covered in bench.py, but not in bench_gate.py or bench_subsystems.py."
+    },
+    {
+      "name": "asyncmy",
+      "execution_surfaces": [
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/asyncmy/config.py",
+      "integration_root": "tests/integration/adapters/asyncmy",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "MySQL-family integration coverage exists, but there is no current perf-harness workload."
+    },
+    {
+      "name": "asyncpg",
+      "execution_surfaces": [
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/asyncpg/config.py",
+      "integration_root": "tests/integration/adapters/asyncpg",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": true,
+      "regression_gate_driver": false,
+      "notes": "Bench coverage exists in bench.py, but the regression gate remains SQLite-only."
+    },
+    {
+      "name": "bigquery",
+      "execution_surfaces": [
+        "sync"
+      ],
+      "config_surface": "sqlspec/adapters/bigquery/config.py",
+      "integration_root": "tests/integration/adapters/bigquery",
+      "current_infra_family": "cloud-managed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Integration coverage exists, but there is no current perf or build-path matrix entry for the adapter."
+    },
+    {
+      "name": "cockroach_asyncpg",
+      "execution_surfaces": [
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/cockroach_asyncpg/config.py",
+      "integration_root": "tests/integration/adapters/cockroach_asyncpg",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Cockroach async coverage exists in integration tests only."
+    },
+    {
+      "name": "cockroach_psycopg",
+      "execution_surfaces": [
+        "sync",
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/cockroach_psycopg/config.py",
+      "integration_root": "tests/integration/adapters/cockroach_psycopg",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Cockroach psycopg integration coverage exists, but no perf harness tracks either sync or async surfaces."
+    },
+    {
+      "name": "duckdb",
+      "execution_surfaces": [
+        "sync"
+      ],
+      "config_surface": "sqlspec/adapters/duckdb/config.py",
+      "integration_root": "tests/integration/adapters/duckdb",
+      "current_infra_family": "file-local",
+      "bench_harness_driver": true,
+      "regression_gate_driver": false,
+      "notes": "Bench coverage exists in bench.py, but no driver-specific gate or subsystem micro-benchmark exists."
+    },
+    {
+      "name": "mock",
+      "execution_surfaces": [
+        "sync",
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/mock/config.py",
+      "integration_root": null,
+      "current_infra_family": "mock-only",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Useful for isolated behavior tests, but not a real performance validation surface."
+    },
+    {
+      "name": "mysqlconnector",
+      "execution_surfaces": [
+        "sync",
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/mysqlconnector/config.py",
+      "integration_root": "tests/integration/adapters/mysqlconnector",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Integration coverage exists for sync and async paths, but the perf harness does not exercise them yet."
+    },
+    {
+      "name": "oracledb",
+      "execution_surfaces": [
+        "sync",
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/oracledb/config.py",
+      "integration_root": "tests/integration/adapters/oracledb",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Integration coverage exists for sync and async Oracle paths, but there is no Oracle perf workload in the harness."
+    },
+    {
+      "name": "psqlpy",
+      "execution_surfaces": [
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/psqlpy/config.py",
+      "integration_root": "tests/integration/adapters/psqlpy",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Integration coverage exists, but the current perf harness does not represent the adapter."
+    },
+    {
+      "name": "psycopg",
+      "execution_surfaces": [
+        "sync",
+        "async"
+      ],
+      "config_surface": "sqlspec/adapters/psycopg/config.py",
+      "integration_root": "tests/integration/adapters/psycopg",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Integration coverage exists for sync and async psycopg paths, but the perf harness still skips them."
+    },
+    {
+      "name": "pymysql",
+      "execution_surfaces": [
+        "sync"
+      ],
+      "config_surface": "sqlspec/adapters/pymysql/config.py",
+      "integration_root": "tests/integration/adapters/pymysql",
+      "current_infra_family": "server-backed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Integration coverage exists, but no current perf workload or gate covers the adapter."
+    },
+    {
+      "name": "spanner",
+      "execution_surfaces": [
+        "sync"
+      ],
+      "config_surface": "sqlspec/adapters/spanner/config.py",
+      "integration_root": "tests/integration/adapters/spanner",
+      "current_infra_family": "cloud-managed",
+      "bench_harness_driver": false,
+      "regression_gate_driver": false,
+      "notes": "Integration coverage exists, but cloud-managed validation is not represented in the current perf harness."
+    },
+    {
+      "name": "sqlite",
+      "execution_surfaces": [
+        "sync"
+      ],
+      "config_surface": "sqlspec/adapters/sqlite/config.py",
+      "integration_root": "tests/integration/adapters/sqlite",
+      "current_infra_family": "file-local",
+      "bench_harness_driver": true,
+      "regression_gate_driver": true,
+      "notes": "SQLite is the only adapter covered by bench.py, bench_gate.py, and bench_subsystems.py."
+    }
+  ]
+}
