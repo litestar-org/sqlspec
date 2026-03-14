@@ -1,0 +1,1 @@
+sqlspec-iab.6.1: captured current perf/build surface inventory in performance_surface_inventory.json and guarded it with tests/unit/test_perf_surface_inventory.py
