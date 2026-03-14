@@ -663,8 +663,9 @@ class ParameterProcessor:
         param_type = type(parameters)
 
         if is_many and (param_type is list or param_type is tuple):
+            parameter_rows = cast("Sequence[Any]", parameters)
             updated_rows: list[Any] | None = None
-            for idx, row in enumerate(parameters):  # type: ignore[union-attr]
+            for idx, row in enumerate(parameter_rows):
                 row_type = type(row)
                 if row_type is dict:
                     row_dict: dict[str, Any] = row  # type: ignore[assignment]
@@ -692,7 +693,7 @@ class ParameterProcessor:
                 if updated_rows is None:
                     if mapped_row is row:
                         continue
-                    updated_rows = list(parameters[:idx])  # type: ignore[index]
+                    updated_rows = list(parameter_rows[:idx])
                 updated_rows.append(mapped_row)
 
             if updated_rows is None:

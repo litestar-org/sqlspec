@@ -209,6 +209,9 @@ include = [
   "sqlspec/loader.py",                     # Loader module
   "sqlspec/observability/**/*.py",         # Observability utilities
   "sqlspec/driver/**/*.py",                # Driver module
+  "sqlspec/storage/registry.py",           # Safe storage registry/runtime routing
+  "sqlspec/storage/errors.py",             # Safe storage error normalization
+  "sqlspec/storage/backends/base.py",      # Storage backend runtime base classes and iterators
   "sqlspec/data_dictionary/**/*.py",       # Data dictionary mixin (required for adapter inheritance)
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
