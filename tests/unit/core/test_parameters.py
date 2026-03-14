@@ -1729,6 +1729,32 @@ def test_positional_parameter_output_type_narrowing(converter: ParameterConverte
     assert result_dict == (1, 2, 3)
 
 
+def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(converter: ParameterConverter, monkeypatch: Any) -> None:
+    """Position-ordered parameter metadata should not pay an extra sorted() pass."""
+    sql = "SELECT :a, :b, :c"
+    param_info = converter.validator.extract_parameters(sql)
+
+    def fail_sorted(*_args: Any, **_kwargs: Any) -> object:
+        raise AssertionError("sorted() should not run for already ordered parameter metadata")
+
+    monkeypatch.setattr("builtins.sorted", fail_sorted)
+
+    converted_sql = converter._convert_placeholders_to_style(sql, param_info, ParameterStyle.NUMERIC)  # pyright: ignore
+
+    assert converted_sql == "SELECT $1, $2, $3"
+
+
+def test_convert_placeholders_to_style_sorts_unsafely_ordered_params_as_fallback(converter: ParameterConverter) -> None:
+    """Manually unordered parameter metadata should still be normalized correctly."""
+    sql = "SELECT :a, :b, :c"
+    param_info = converter.validator.extract_parameters(sql)
+    unordered = [param_info[2], param_info[0], param_info[1]]
+
+    converted_sql = converter._convert_placeholders_to_style(sql, unordered, ParameterStyle.NUMERIC)  # pyright: ignore
+
+    assert converted_sql == "SELECT $1, $2, $3"
+
+
 def test_named_parameter_output_type_narrowing(converter: ParameterConverter) -> None:
     """Test _convert_sequence_to_dict returns NamedParameterOutput."""
     sql = "SELECT * FROM table WHERE id = :id AND name = :name"

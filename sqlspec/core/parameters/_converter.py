@@ -20,6 +20,8 @@ from sqlspec.exceptions import SQLSpecError
 
 __all__ = ("ParameterConverter",)
 
+_ORDERED_PARAM_INFO_MIN_SIZE = 2
+
 
 def _placeholder_qmark(_: Any) -> str:
     return "?"
@@ -51,6 +53,29 @@ def _placeholder_named_pyformat(name: Any) -> str:
 
 def _placeholder_positional_pyformat(_: Any) -> str:
     return "%s"
+
+
+def _ordered_parameter_info(param_info: "list[ParameterInfo]") -> "list[ParameterInfo]":
+    if len(param_info) < _ORDERED_PARAM_INFO_MIN_SIZE:
+        return param_info
+
+    previous_position = param_info[0].position
+    for param in param_info[1:]:
+        if param.position < previous_position:
+            return sorted(param_info, key=lambda item: item.position)
+        previous_position = param.position
+    return param_info
+
+
+def _single_parameter_style(param_info: "list[ParameterInfo]") -> "ParameterStyle | None":
+    if not param_info:
+        return None
+
+    style = param_info[0].style
+    for param in param_info[1:]:
+        if param.style != style:
+            return None
+    return style
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -87,8 +112,8 @@ class ParameterConverter:
         if target_style == ParameterStyle.STATIC:
             return self._embed_static_parameters(sql, parameters, param_info)
 
-        current_styles = {p.style for p in param_info}
-        if len(current_styles) == 1 and target_style in current_styles:
+        current_style = _single_parameter_style(param_info)
+        if current_style is not None and target_style == current_style:
             converted_parameters = self._convert_parameter_format(
                 parameters,
                 param_info,
@@ -120,13 +145,12 @@ class ParameterConverter:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
-        param_styles = {p.style for p in param_info}
-        use_sequential_for_qmark = (
-            len(param_styles) == 1 and ParameterStyle.QMARK in param_styles and target_style == ParameterStyle.NUMERIC
-        )
+        ordered_params = _ordered_parameter_info(param_info)
+        source_style = _single_parameter_style(ordered_params)
+        use_sequential_for_qmark = source_style == ParameterStyle.QMARK and target_style == ParameterStyle.NUMERIC
 
         unique_params: dict[str, int] = {}
-        for param in param_info:
+        for param in ordered_params:
             param_key = (
                 f"{param.placeholder_text}_{param.ordinal}"
                 if use_sequential_for_qmark and param.style == ParameterStyle.QMARK
@@ -135,8 +159,6 @@ class ParameterConverter:
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
-        # Sort by position for forward iteration (O(n) string building)
-        sorted_params = sorted(param_info, key=lambda p: p.position)
         placeholder_text_len_cache: dict[str, int] = {}
         # Build SQL using forward iteration with list join (O(n) vs O(n^2) string slicing)
         segments: list[str] = []
@@ -149,7 +171,7 @@ class ParameterConverter:
             ParameterStyle.POSITIONAL_COLON,
         }
 
-        for param in sorted_params:
+        for param in ordered_params:
             # Cache placeholder text length
             if param.placeholder_text not in placeholder_text_len_cache:
                 placeholder_text_len_cache[param.placeholder_text] = len(param.placeholder_text)
