@@ -26,7 +26,16 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-__all__ = ("main", "print_gate_table", "run_gate")
+__all__ = (
+    "BENCHMARK_SCENARIO_MATRIX",
+    "CHAPTER_ROLLOUT_ORDER",
+    "DEFAULT_THRESHOLDS",
+    "GATE_SCENARIOS",
+    "MODULE_ADMISSION_CRITERIA",
+    "main",
+    "print_gate_table",
+    "run_gate",
+)
 
 
 # Import bench.py from the same directory, regardless of working directory
@@ -50,6 +59,58 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
 
 # Core scenarios to gate on
 GATE_SCENARIOS = ["iterative_inserts", "repeated_queries", "write_heavy", "read_heavy"]
+
+# PRD benchmark matrix for mypyc expansion work. This keeps the benchmark
+# expectations next to the scripts that actually exercise them.
+BENCHMARK_SCENARIO_MATRIX: dict[str, dict[str, str | tuple[str, ...]]] = {
+    "parameter_pipeline": {
+        "tracked_by": "tools/scripts/bench_subsystems.py + tools/scripts/bench.py",
+        "goal": "Placeholder conversion, parameter preparation, and execute-many shaping",
+        "scenarios": (
+            "prepare_driver_parameters (tuple)",
+            "prepare_driver_parameters (dict)",
+            "_format_parameter_set (3 params)",
+            "complex_parameters",
+        ),
+    },
+    "coercion_engine": {
+        "tracked_by": "tools/scripts/bench.py",
+        "goal": "Schema mapping, key transformation, and JSON-heavy coercion paths",
+        "scenarios": ("schema_mapping", "dict_key_transform", "complex_parameters"),
+    },
+    "adapter_runtime_boundaries": {
+        "tracked_by": "tools/scripts/bench.py + tools/scripts/bench_subsystems.py",
+        "goal": "Startup/runtime setup and end-to-end thin execution path overhead",
+        "scenarios": ("initialization", "session.execute() - full path"),
+    },
+    "storage_runtime_expansion": {
+        "tracked_by": "tools/scripts/bench.py",
+        "goal": "Storage-adjacent write/read throughput until dedicated storage micro-benchmarks land",
+        "scenarios": ("write_heavy", "read_heavy"),
+    },
+    "exclusion_revalidation": {
+        "tracked_by": "tools/scripts/bench.py",
+        "goal": "Regression proof that narrowing exclusions does not harm hot-path throughput",
+        "scenarios": ("thin_path_stress", "repeated_queries"),
+    },
+}
+
+MODULE_ADMISSION_CRITERIA: dict[str, str] = {
+    "benchmark_delta": "measurable or neutral",
+    "mypy_mypyc": "must compile cleanly",
+    "segfaults": "no new crashes or segfaults",
+    "any_boundaries": "explicitly justified",
+    "unsafe_surfaces": "keep Arrow/metaclass-heavy paths interpreted",
+}
+
+CHAPTER_ROLLOUT_ORDER: tuple[str, ...] = (
+    "compile-boundary-guardrails",
+    "compiled-parameter-pipeline",
+    "compiled-coercion-engine",
+    "adapter-runtime-boundaries",
+    "storage-runtime-expansion",
+    "exclusion-revalidation",
+)
 
 
 def run_gate(
