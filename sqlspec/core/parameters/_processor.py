@@ -663,9 +663,8 @@ class ParameterProcessor:
         param_type = type(parameters)
 
         if is_many and (param_type is list or param_type is tuple):
-            # Process each row in execute_many
-            result: list[Any] = []
-            for row in parameters:  # type: ignore[union-attr]
+            updated_rows: list[Any] | None = None
+            for idx, row in enumerate(parameters):  # type: ignore[union-attr]
                 row_type = type(row)
                 if row_type is dict:
                     row_dict: dict[str, Any] = row  # type: ignore[assignment]
@@ -676,7 +675,7 @@ class ParameterProcessor:
 
                             msg = f"Missing required parameters: {missing}"
                             raise SQLSpecError(msg)
-                    result.append(tuple(row_dict.get(name) for name in named_order))
+                    mapped_row: Any = tuple(row_dict.get(name) for name in named_order)
                 elif isinstance(row, Mapping):
                     # Fallback for custom Mapping types
                     if strict:
@@ -686,10 +685,21 @@ class ParameterProcessor:
 
                             msg = f"Missing required parameters: {missing}"
                             raise SQLSpecError(msg)
-                    result.append(tuple(row.get(name) for name in named_order))
+                    mapped_row = tuple(row.get(name) for name in named_order)
                 else:
-                    result.append(row)
-            return result
+                    mapped_row = row
+
+                if updated_rows is None:
+                    if mapped_row is row:
+                        continue
+                    updated_rows = list(parameters[:idx])  # type: ignore[index]
+                updated_rows.append(mapped_row)
+
+            if updated_rows is None:
+                return parameters
+            if param_type is tuple:
+                return tuple(updated_rows)
+            return updated_rows
 
         if param_type is dict:
             if strict:

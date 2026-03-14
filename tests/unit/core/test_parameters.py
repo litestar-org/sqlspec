@@ -1184,6 +1184,31 @@ def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterP
     assert result.parameters == [5]
 
 
+def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_already_positional(
+    processor: "ParameterProcessor",
+) -> None:
+    """execute_many rebinding should avoid allocating when every row is already positional."""
+    parameters = [(1, 2), (3, 4)]
+
+    remapped = processor._map_named_to_positional(parameters, ("a", "b"), is_many=True)  # pyright: ignore[reportPrivateUsage]
+
+    assert remapped is parameters
+
+
+def test_map_named_to_positional_only_allocates_when_execute_many_row_needs_mapping(
+    processor: "ParameterProcessor",
+) -> None:
+    """execute_many rebinding should allocate only after the first mapping row."""
+    parameters: list[object] = [(1, 2), {"a": 3, "b": 4}]
+
+    remapped = processor._map_named_to_positional(parameters, ("a", "b"), is_many=True)  # pyright: ignore[reportPrivateUsage]
+
+    assert isinstance(remapped, list)
+    assert remapped is not parameters
+    assert remapped[0] is parameters[0]
+    assert remapped[1] == (3, 4)
+
+
 def test_list_parameter_preservation(converter: ParameterConverter) -> None:
     """Test that list parameters are properly handled."""
     sql = "INSERT INTO users (id, name, active) VALUES (?, ?, ?)"
