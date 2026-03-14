@@ -5,7 +5,7 @@ import decimal
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
+from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -877,7 +877,7 @@ def prepare_parameters_with_casts(
 
     if isinstance(parameters, (list, tuple)):
         result: list[Any] = []
-        converter = ADBCOutputConverter(dialect)
+        converter = get_adbc_type_converter(dialect)
         for idx, param in enumerate(parameters, start=1):
             cast_type = parameter_casts.get(idx, "").upper()
             if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:

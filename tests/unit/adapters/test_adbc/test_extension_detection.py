@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+from pytest import MonkeyPatch
+
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
@@ -10,6 +12,7 @@ from sqlspec.adapters.adbc.core import (
     get_statement_config,
     resolve_postgres_extension_state,
 )
+from sqlspec.core import StatementConfig
 
 
 def test_apply_driver_features_sets_pgvector_default() -> None:
@@ -148,8 +151,6 @@ def test_adbc_config_update_dialect_skips_non_postgres() -> None:
 
 def test_adbc_config_update_dialect_preserves_custom_dialect() -> None:
     """If user explicitly set a non-postgres dialect, don't override it."""
-    from sqlspec.core import StatementConfig
-
     config = AdbcConfig(
         connection_config={"uri": "postgresql://localhost/test"}, statement_config=StatementConfig(dialect="custom")
     )
@@ -157,3 +158,20 @@ def test_adbc_config_update_dialect_preserves_custom_dialect() -> None:
     config._paradedb_available = True  # pyright: ignore[reportPrivateUsage]
     config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
     assert config.statement_config.dialect == "custom"
+
+
+def test_adbc_config_provide_session_skips_extension_probe_for_non_postgres(monkeypatch: MonkeyPatch) -> None:
+    """Non-postgres sessions should not create a connection for extension detection."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
+
+    def fail_create_connection() -> None:
+        raise AssertionError("non-postgres startup path should not probe extensions")
+
+    monkeypatch.setattr(config, "create_connection", fail_create_connection)
+
+    session = config.provide_session()
+
+    assert session is not None
+    assert config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
+    assert config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
+    assert config.statement_config.dialect == "sqlite"
