@@ -28,6 +28,8 @@ def test_build_boundary_map_reports_expected_hot_groups() -> None:
         "storage_arrow_edges": 3,
         "any_audit_seams": 8,
         "exclusion_revalidation_buckets": 7,
+        "helper_split_designs": 3,
+        "rollout_feedback_entries": 3,
     }
 
 
@@ -119,3 +121,31 @@ def test_build_boundary_map_seeds_exclusion_revalidation_buckets() -> None:
     assert exclusion_seed["sqlspec/builder/_vector_expressions.py"]["bucket"] == "helper_split"
     assert exclusion_seed["sqlspec/data_dictionary/_loader.py"]["bucket"] == "helper_split"
     assert exclusion_seed["sqlspec/dialects/**"]["bucket"] == "low_roi"
+
+
+def test_build_boundary_map_records_helper_split_designs_and_rollout_feedback() -> None:
+    module = _load_mypyc_boundary_map_module()
+
+    boundary_map = module.build_boundary_map()
+
+    helper_splits = {entry["surface"]: entry for entry in boundary_map["helper_split_designs"]}
+    assert helper_splits["sqlspec/builder/_vector_expressions.py"]["extract_module"] == (
+        "sqlspec/builder/_vector_renderers.py"
+    )
+    assert "render_postgres_vector_distance" in helper_splits["sqlspec/builder/_vector_expressions.py"]["safe_symbols"]
+    assert "_register_with_sqlglot" in helper_splits["sqlspec/builder/_vector_expressions.py"][
+        "keep_interpreted_symbols"
+    ]
+    assert helper_splits["sqlspec/data_dictionary/_loader.py"]["compile_target"] == (
+        "sqlspec/data_dictionary/_loader_core.py"
+    )
+    assert "ensure_dialect_path" in helper_splits["sqlspec/data_dictionary/_loader.py"]["safe_symbols"]
+    assert helper_splits["sqlspec/adapters/**/data_dictionary.py"]["extract_module"] == (
+        "sqlspec/data_dictionary/_plans.py"
+    )
+    assert "build_query_plan" in helper_splits["sqlspec/adapters/**/data_dictionary.py"]["safe_symbols"]
+
+    rollout_feedback = {entry["task_id"]: entry["recommendation"] for entry in boundary_map["rollout_feedback"]}
+    assert "renderer helper module" in rollout_feedback["sqlspec-k1a.4"]
+    assert "Arrow boundaries interpreted" in rollout_feedback["sqlspec-k1a.5"]
+    assert "_loader_core.py" in rollout_feedback["sqlspec-k1a.6.3"]

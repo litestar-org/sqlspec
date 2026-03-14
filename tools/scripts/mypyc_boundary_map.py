@@ -14,6 +14,8 @@ __all__ = (
     "ANY_AUDIT_SEAMS",
     "CONFIG_RUNTIME_BOUNDARIES",
     "EXCLUSION_REVALIDATION_SEED",
+    "HELPER_SPLIT_DESIGNS",
+    "ROLLOUT_FEEDBACK",
     "STORAGE_ARROW_BOUNDARIES",
     "build_boundary_map",
     "classify_module",
@@ -187,6 +189,105 @@ EXCLUSION_REVALIDATION_SEED: dict[str, dict[str, str]] = {
 }
 
 
+HELPER_SPLIT_DESIGNS: tuple[dict[str, Any], ...] = (
+    {
+        "surface": "sqlspec/builder/_vector_expressions.py",
+        "split_kind": "extract_pure_renderers",
+        "extract_module": "sqlspec/builder/_vector_renderers.py",
+        "compile_target": "sqlspec/builder/_vector_renderers.py",
+        "safe_symbols": (
+            "_normalize_metric_name",
+            "_coerce_oracle_vector_literal",
+            "_maybe_wrap_mysql_vector_literal",
+            "_duckdb_target_type",
+            "render_postgres_vector_distance",
+            "render_mysql_vector_distance",
+            "render_oracle_vector_distance",
+            "render_bigquery_vector_distance",
+            "render_duckdb_vector_distance",
+            "render_generic_vector_distance",
+        ),
+        "keep_interpreted_symbols": (
+            "VectorDistance",
+            "_register_with_sqlglot",
+            "_vector_distance_sql_base",
+            "_vector_distance_sql_postgres",
+            "_vector_distance_sql_mysql",
+            "_vector_distance_sql_oracle",
+            "_vector_distance_sql_bigquery",
+            "_vector_distance_sql_spanner",
+            "_vector_distance_sql_duckdb",
+        ),
+        "reason": "The expression subclass and sqlglot registration side effects remain unsafe, but dialect-specific string rendering and metric normalization are pure helpers.",
+        "feeds_chapter": "adapter-runtime-boundaries",
+    },
+    {
+        "surface": "sqlspec/data_dictionary/_loader.py",
+        "split_kind": "extract_loader_state_and_path_resolution",
+        "extract_module": "sqlspec/data_dictionary/_loader_core.py",
+        "compile_target": "sqlspec/data_dictionary/_loader_core.py",
+        "safe_symbols": (
+            "build_sql_dir_path",
+            "ensure_dialect_path",
+            "list_sql_dialects",
+            "get_or_create_loader",
+            "mark_dialect_loaded",
+            "is_dialect_loaded",
+        ),
+        "keep_interpreted_symbols": (
+            "SQL_DIR",
+            "DataDictionaryLoader._ensure_dialect_loaded",
+            "DataDictionaryLoader.get_query",
+            "DataDictionaryLoader.get_query_text",
+            "get_data_dictionary_loader",
+        ),
+        "reason": "Path discovery and loader-cache mutation are straightforward helpers; keep singleton lifecycle and SQLFileLoader orchestration interpreted.",
+        "feeds_chapter": "exclusion-revalidation",
+    },
+    {
+        "surface": "sqlspec/adapters/**/data_dictionary.py",
+        "split_kind": "extract_query_plans_and_version_resolution",
+        "extract_module": "sqlspec/data_dictionary/_plans.py",
+        "compile_target": "sqlspec/data_dictionary/_plans.py",
+        "safe_symbols": (
+            "resolve_schema_name",
+            "resolve_feature_flag_from_version",
+            "resolve_optimal_type_from_version",
+            "build_query_plan",
+            "build_sqlite_query_text_plan",
+            "collect_index_columns_metadata",
+        ),
+        "keep_interpreted_symbols": (
+            "SyncDataDictionaryBase subclasses",
+            "AsyncDataDictionaryBase subclasses",
+            "get_version",
+            "get_tables",
+            "get_columns",
+            "get_indexes",
+            "get_foreign_keys",
+        ),
+        "reason": "Cross-module inheritance and driver I/O stay unsafe, but repeated schema resolution, feature gating, and query-plan assembly can be centralized into compiled helpers.",
+        "feeds_chapter": "storage-runtime-expansion",
+    },
+)
+
+
+ROLLOUT_FEEDBACK: tuple[dict[str, str], ...] = (
+    {
+        "task_id": "sqlspec-k1a.4",
+        "recommendation": "Do not reopen adapter runtime compilation for dialect/vector registration; only revisit if a pure renderer helper module is extracted first.",
+    },
+    {
+        "task_id": "sqlspec-k1a.5",
+        "recommendation": "Keep Arrow boundaries interpreted and only route data-dictionary query-plan helpers toward future storage/runtime widening.",
+    },
+    {
+        "task_id": "sqlspec-k1a.6.3",
+        "recommendation": "Prioritize `_loader_core.py` and shared data-dictionary plan helpers before any file-level exclusion removal.",
+    },
+)
+
+
 def load_mypyc_patterns(root: Path) -> tuple[list[str], list[str]]:
     """Load mypyc include/exclude globs from pyproject.toml."""
 
@@ -315,6 +416,8 @@ def build_boundary_map(root: Path | None = None) -> dict[str, Any]:
             "storage_arrow_edges": len(storage_boundaries),
             "any_audit_seams": len(ANY_AUDIT_SEAMS),
             "exclusion_revalidation_buckets": len(EXCLUSION_REVALIDATION_SEED),
+            "helper_split_designs": len(HELPER_SPLIT_DESIGNS),
+            "rollout_feedback_entries": len(ROLLOUT_FEEDBACK),
         },
         "config_runtime_boundaries": config_boundaries,
         "adapter_config_core_boundaries": adapter_boundaries,
@@ -322,6 +425,8 @@ def build_boundary_map(root: Path | None = None) -> dict[str, Any]:
         "storage_arrow_boundaries": storage_boundaries,
         "any_audit_matrix": list(ANY_AUDIT_SEAMS),
         "exclusion_revalidation_seed": EXCLUSION_REVALIDATION_SEED,
+        "helper_split_designs": list(HELPER_SPLIT_DESIGNS),
+        "rollout_feedback": list(ROLLOUT_FEEDBACK),
     }
 
 
