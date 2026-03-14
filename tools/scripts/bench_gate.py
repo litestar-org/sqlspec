@@ -84,9 +84,15 @@ BENCHMARK_SCENARIO_MATRIX: dict[str, dict[str, str | tuple[str, ...]]] = {
         "scenarios": ("initialization", "session.execute() - full path"),
     },
     "storage_runtime_expansion": {
-        "tracked_by": "tools/scripts/bench.py",
-        "goal": "Storage-adjacent write/read throughput until dedicated storage micro-benchmarks land",
-        "scenarios": ("write_heavy", "read_heavy"),
+        "tracked_by": "tools/scripts/bench.py + tools/scripts/bench_subsystems.py",
+        "goal": "Storage registry/runtime write overhead and JSONL-to-Arrow boundary crossings",
+        "scenarios": (
+            "write_heavy",
+            "read_heavy",
+            "StorageRegistry.get() - cached alias",
+            "SyncStoragePipeline.write_rows() - local jsonl",
+            "_decode_arrow_payload() - jsonl",
+        ),
     },
     "exclusion_revalidation": {
         "tracked_by": "tools/scripts/bench.py",
