@@ -1,5 +1,6 @@
 """Base classes and detection for adapter type conversion."""
 
+import json
 import re
 from collections.abc import Callable
 from datetime import date, datetime, time, timezone
@@ -9,8 +10,6 @@ from typing import Any, Final
 from uuid import UUID
 
 from mypy_extensions import mypyc_attr
-
-from sqlspec._serialization import decode_json
 
 __all__ = (
     "DEFAULT_CACHE_SIZE",
@@ -110,7 +109,9 @@ def convert_json(value: str) -> "Any":
     Returns:
         Decoded Python object.
     """
-    return decode_json(value)
+    # Keep the hot coercion path in this compiled module instead of bouncing
+    # through the interpreted serializer-selection shell.
+    return json.loads(value)
 
 
 def convert_decimal(value: str) -> "Decimal":
