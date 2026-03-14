@@ -56,6 +56,11 @@ logger = get_logger(__name__)
 
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
 _DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
+_MSGSPEC_RENAME_CONVERTERS: Final[dict[str, Callable[[str], str]]] = {
+    "camel": camelize,
+    "kebab": kebabize,
+    "pascal": pascalize,
+}
 
 
 # =============================================================================
@@ -370,6 +375,11 @@ def _default_msgspec_deserializer(
     return value
 
 
+_DEFAULT_MSGSPEC_DESERIALIZER: Final[Callable[[Any, Any], Any]] = partial(
+    _default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS
+)
+
+
 def _convert_numpy_recursive(obj: Any) -> Any:
     """Recursively convert numpy arrays to lists.
 
@@ -400,13 +410,11 @@ def _convert_numpy_recursive(obj: Any) -> Any:
 def _convert_msgspec(data: Any, schema_type: Any) -> Any:
     """Convert data to msgspec Struct."""
     rename_config = get_msgspec_rename_config(schema_type)
-    deserializer = partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS)
 
     transformed_data = data
     if (rename_config and is_dict(data)) or (isinstance(data, Sequence) and data and is_dict(data[0])):
         try:
-            converter_map: dict[str, Callable[[str], str]] = {"camel": camelize, "kebab": kebabize, "pascal": pascalize}
-            converter = converter_map.get(rename_config) if rename_config else None
+            converter = _MSGSPEC_RENAME_CONVERTERS.get(rename_config) if rename_config else None
             if converter:
                 transformed_data = (
                     [transform_dict_keys(item, converter) if is_dict(item) else item for item in data]
@@ -423,7 +431,7 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
         obj=transformed_data,
         type=(list[schema_type] if isinstance(transformed_data, Sequence) else schema_type),
         from_attributes=True,
-        dec_hook=deserializer,
+        dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER,
     )
 
 
@@ -973,10 +981,10 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
 
     # Schema types (Pydantic, dataclass, msgspec, attrs, TypedDict)
     # Deferred after scalar checks to avoid overhead for common scalar queries
-    schema_type_key = _detect_schema_type(value_type)  # type: ignore[arg-type]
-    if schema_type_key is not None:
+    schema_converter = _get_schema_converter(value_type)  # type: ignore[arg-type]
+    if schema_converter is not None:
         parsed = _ensure_json_parsed(value)
-        return cast("ValueT", to_schema(parsed, schema_type=value_type))
+        return cast("ValueT", schema_converter(parsed, value_type))
 
     # Fallback: try direct construction for custom types
     try:

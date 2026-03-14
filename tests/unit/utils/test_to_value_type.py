@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
+from unittest.mock import patch
 from uuid import UUID
 
 import attrs
@@ -12,6 +13,7 @@ import msgspec
 import pytest
 from pydantic import BaseModel
 
+import sqlspec.utils.schema as schema_utils
 from sqlspec.utils.schema import to_value_type
 
 # =============================================================================
@@ -646,6 +648,16 @@ class TestPydanticConversion:
         result = to_value_type(user, UserPydantic)
         assert isinstance(result, UserPydantic)
         assert result.name == "Charlie"
+
+    def test_schema_conversion_uses_cached_converter_path(self) -> None:
+        """Schema conversion should not re-enter schema-type detection before dispatch."""
+        data = {"name": "Alice", "email": "alice@example.com"}
+
+        with patch.object(schema_utils, "_detect_schema_type", side_effect=AssertionError("unexpected schema detection")):
+            result = to_value_type(data, UserPydantic)
+
+        assert isinstance(result, UserPydantic)
+        assert result.name == "Alice"
 
 
 class TestDataclassConversion:
