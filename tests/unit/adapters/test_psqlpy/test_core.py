@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from sqlspec.adapters.psqlpy.core import coerce_records_for_execute_many, collect_rows, format_execute_many_parameters
+from sqlspec.adapters.psqlpy.core import (
+    coerce_numeric_for_write,
+    coerce_records_for_execute_many,
+    collect_rows,
+    format_execute_many_parameters,
+)
 
 pytestmark = pytest.mark.xdist_group("adapter_unit")
 
@@ -38,6 +43,37 @@ def test_format_execute_many_parameters_with_coercion_converts_float_to_decimal(
 
     assert formatted[0][0] == Decimal("1.5")
     assert formatted[1][0] == 2
+
+
+def test_coerce_numeric_for_write_preserves_identity_when_unchanged() -> None:
+    """Nested payloads without float values should keep their existing container identities."""
+    payload = {"items": [1, {"value": Decimal("1.5")}], "meta": ("a", None)}
+
+    coerced = coerce_numeric_for_write(payload)
+
+    assert coerced is payload
+    assert coerced["items"] is payload["items"]
+    assert coerced["items"][1] is payload["items"][1]
+    assert coerced["meta"] is payload["meta"]
+
+
+def test_coerce_numeric_for_write_copies_only_changed_branch() -> None:
+    """Numeric write coercion should allocate only along branches containing float values."""
+    payload = {
+        "changed": [1.5, {"value": 2.5}],
+        "unchanged": ("a", {"value": Decimal("3.5")}),
+    }
+
+    coerced = coerce_numeric_for_write(payload)
+
+    assert coerced == {
+        "changed": [Decimal("1.5"), {"value": Decimal("2.5")}],
+        "unchanged": ("a", {"value": Decimal("3.5")}),
+    }
+    assert coerced is not payload
+    assert coerced["changed"] is not payload["changed"]
+    assert coerced["changed"][1] is not payload["changed"][1]
+    assert coerced["unchanged"] is payload["unchanged"]
 
 
 def test_format_execute_many_parameters_handles_scalar_input() -> None:

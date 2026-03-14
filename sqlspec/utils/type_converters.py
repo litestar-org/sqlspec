@@ -70,11 +70,35 @@ class _DecimalNormalizer:
         if isinstance(value, decimal.Decimal):
             return self._decimal_converter(value)
         if isinstance(value, list):
-            return [self(item) for item in value]
+            normalized_list: list[Any] | None = None
+            for index, item in enumerate(value):
+                normalized_item = self(item)
+                if normalized_list is None:
+                    if normalized_item is item:
+                        continue
+                    normalized_list = list(value[:index])
+                normalized_list.append(normalized_item)
+            return value if normalized_list is None else normalized_list
         if isinstance(value, tuple):
-            return tuple(self(item) for item in value)
+            normalized_tuple: list[Any] | None = None
+            for index, item in enumerate(value):
+                normalized_item = self(item)
+                if normalized_tuple is None:
+                    if normalized_item is item:
+                        continue
+                    normalized_tuple = list(value[:index])
+                normalized_tuple.append(normalized_item)
+            return value if normalized_tuple is None else tuple(normalized_tuple)
         if isinstance(value, dict):
-            return {key: self(item) for key, item in value.items()}
+            normalized_dict: dict[Any, Any] | None = None
+            for key, item in value.items():
+                normalized_item = self(item)
+                if normalized_dict is None:
+                    if normalized_item is item:
+                        continue
+                    normalized_dict = dict(value)
+                normalized_dict[key] = normalized_item
+            return value if normalized_dict is None else normalized_dict
         return value
 
 

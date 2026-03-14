@@ -292,12 +292,35 @@ def coerce_numeric_for_write(value: Any) -> Any:
     if isinstance(value, decimal.Decimal):
         return value
     if isinstance(value, list):
-        return [coerce_numeric_for_write(item) for item in value]
+        coerced_list: list[Any] | None = None
+        for index, item in enumerate(value):
+            coerced_item = coerce_numeric_for_write(item)
+            if coerced_list is None:
+                if coerced_item is item:
+                    continue
+                coerced_list = list(value[:index])
+            coerced_list.append(coerced_item)
+        return value if coerced_list is None else coerced_list
     if isinstance(value, tuple):
-        coerced = [coerce_numeric_for_write(item) for item in value]
-        return tuple(coerced)
+        coerced_tuple: list[Any] | None = None
+        for index, item in enumerate(value):
+            coerced_item = coerce_numeric_for_write(item)
+            if coerced_tuple is None:
+                if coerced_item is item:
+                    continue
+                coerced_tuple = list(value[:index])
+            coerced_tuple.append(coerced_item)
+        return value if coerced_tuple is None else tuple(coerced_tuple)
     if isinstance(value, dict):
-        return {key: coerce_numeric_for_write(item) for key, item in value.items()}
+        coerced_dict: dict[Any, Any] | None = None
+        for key, item in value.items():
+            coerced_item = coerce_numeric_for_write(item)
+            if coerced_dict is None:
+                if coerced_item is item:
+                    continue
+                coerced_dict = dict(value)
+            coerced_dict[key] = coerced_item
+        return value if coerced_dict is None else coerced_dict
     return value
 
 
