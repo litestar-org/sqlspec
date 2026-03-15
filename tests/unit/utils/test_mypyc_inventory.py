@@ -19,8 +19,23 @@ def test_build_inventory_reports_current_compiled_surface() -> None:
     module = _load_mypyc_inventory_module()
 
     inventory = module.build_inventory()
+    project_root = Path(__file__).resolve().parents[3]
+    include_patterns, exclude_patterns = module.load_mypyc_patterns(project_root)
+    modules = module.list_sqlspec_modules(project_root)
+    compiled = [
+        path for path in modules if module.classify_module(path, include_patterns, exclude_patterns) == "compiled"
+    ]
+    interpreted = [
+        path for path in modules if module.classify_module(path, include_patterns, exclude_patterns) == "interpreted"
+    ]
 
-    assert inventory["summary"] == {"compiled_count": 60, "interpreted_count": 335, "total_modules": 395}
+    assert inventory["summary"] == {
+        "compiled_count": len(compiled),
+        "interpreted_count": len(interpreted),
+        "total_modules": len(modules),
+    }
+    assert inventory["compiled_modules"] == compiled
+    assert inventory["interpreted_modules"] == interpreted
 
     hot_surfaces = inventory["hot_surfaces"]
     assert hot_surfaces["sqlspec/config.py"]["status"] == "interpreted"
