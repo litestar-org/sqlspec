@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
 
+from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.core import (
     PREPARED_STATEMENT_CACHE_SIZE,
     NormalizedStackOperation,
@@ -46,25 +47,10 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
 
 __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "AsyncpgSessionContext")
 
 logger = get_logger("sqlspec.adapters.asyncpg")
-
-
-class AsyncpgCursor:
-    """Context manager for AsyncPG cursor management."""
-
-    __slots__ = ("connection",)
-
-    def __init__(self, connection: "AsyncpgConnection") -> None:
-        self.connection = connection
-
-    async def __aenter__(self) -> "AsyncpgConnection":
-        return self.connection
-
-    async def __aexit__(self, *_: Any) -> None: ...
 
 
 class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
@@ -438,12 +424,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "AsyncpgCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "AsyncpgConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect asyncpg rows for the direct execution path."""
         data, column_names = collect_rows(fetched)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: "AsyncpgCursor") -> int:
+    def resolve_rowcount(self, cursor: "AsyncpgConnection") -> int:
         """Resolve rowcount from asyncpg status for the direct execution path."""
         return parse_status(cursor)
 

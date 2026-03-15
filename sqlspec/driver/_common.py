@@ -37,9 +37,9 @@ from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFil
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.typing import VersionCacheResult, VersionInfo
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
-from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.type_guards import (
     has_array_interface,
     has_cursor_metadata,
@@ -195,7 +195,8 @@ class SyncExceptionHandler(Protocol):
     handlers store mapped exceptions in pending_exception for the caller to raise.
     """
 
-    pending_exception: Exception | None
+    @property
+    def pending_exception(self) -> Exception | None: ...
 
     def __enter__(self) -> Self: ...
 
@@ -212,7 +213,8 @@ class AsyncExceptionHandler(Protocol):
     handlers store mapped exceptions in pending_exception for the caller to raise.
     """
 
-    pending_exception: Exception | None
+    @property
+    def pending_exception(self) -> Exception | None: ...
 
     async def __aenter__(self) -> Self: ...
 
@@ -452,7 +454,7 @@ class StackExecutionObserver:
     ) -> Literal[False]:
         duration = perf_counter() - self.started
         self.metrics.record_duration(duration)
-        if exc_val is not None:
+        if isinstance(exc_val, Exception):
             self.metrics.record_error(exc_val)
         self.runtime.span_manager.end_span(self.span, error=exc_val if exc_val is not None else None)
         self.metrics.emit(self.runtime)

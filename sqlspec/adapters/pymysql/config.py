@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlSessionContext
+from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlCursor, PyMysqlSessionContext
 from sqlspec.adapters.pymysql.core import apply_driver_features, default_statement_config
-from sqlspec.adapters.pymysql.driver import PyMysqlCursor, PyMysqlDriver, PyMysqlExceptionHandler
+from sqlspec.adapters.pymysql.driver import PyMysqlDriver, PyMysqlExceptionHandler
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.extensions.events import EventRuntimeHints

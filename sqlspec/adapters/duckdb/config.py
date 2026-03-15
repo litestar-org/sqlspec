@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.duckdb._typing import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import DuckDBConnection, DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb.core import (
     apply_driver_features,
     build_connection_config,
     build_statement_config,
     default_statement_config,
 )
-from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, DuckDBExceptionHandler, DuckDBSessionContext
+from sqlspec.adapters.duckdb.driver import DuckDBDriver, DuckDBExceptionHandler
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.extensions.events import EventRuntimeHints

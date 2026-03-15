@@ -5,6 +5,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -20,9 +21,34 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     AiosqliteConnection: TypeAlias = _AiosqliteConnection
+    AiosqliteCursorType: TypeAlias = aiosqlite.Cursor
 
 if not TYPE_CHECKING:
     AiosqliteConnection = _AiosqliteConnection
+    AiosqliteCursorType = aiosqlite.Cursor
+
+
+class AiosqliteCursor:
+    """Async context manager for AIOSQLite cursors."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "AiosqliteConnection") -> None:
+        self.connection = connection
+        self.cursor: Any = None
+
+    async def __aenter__(self) -> Any:
+        self.cursor = await self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        if exc_type is not None:
+            return
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                await self.cursor.close()
 
 
 class AiosqliteSessionContext:
@@ -80,4 +106,4 @@ class AiosqliteSessionContext:
         return None
 
 
-__all__ = ("AiosqliteConnection", "AiosqliteSessionContext")
+__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteCursorType", "AiosqliteSessionContext")

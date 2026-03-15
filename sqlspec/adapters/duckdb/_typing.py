@@ -24,6 +24,28 @@ if not TYPE_CHECKING:
     DuckDBConnection = _DuckDBConnection
 
 
+class DuckDBCursor:
+    """Context manager for DuckDB connection-as-cursor.
+
+    DuckDB connections implement the cursor interface and preserve
+    variable state. Using connection directly avoids cursor overhead
+    and fixes SET VARIABLE persistence.
+
+    See: https://github.com/litestar-org/sqlspec/issues/341
+    """
+
+    __slots__ = ("connection",)
+
+    def __init__(self, connection: "DuckDBConnection") -> None:
+        self.connection = connection
+
+    def __enter__(self) -> "DuckDBConnection":
+        return self.connection
+
+    def __exit__(self, *_: Any) -> None:
+        pass  # Connection lifecycle managed by pool/session
+
+
 class DuckDBSessionContext:
     """Sync context manager for DuckDB sessions.
 
@@ -79,4 +101,4 @@ class DuckDBSessionContext:
         return None
 
 
-__all__ = ("DuckDBConnection", "DuckDBSessionContext")
+__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")

@@ -6,7 +6,14 @@ from mypy_extensions import mypyc_attr
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg._typing import (
+    PsycopgAsyncConnection,
+    PsycopgAsyncCursor,
+    PsycopgAsyncSessionContext,
+    PsycopgSyncConnection,
+    PsycopgSyncCursor,
+    PsycopgSyncSessionContext,
+)
 from sqlspec.adapters.psycopg.core import (
     apply_driver_features,
     build_postgres_extension_probe_names,
@@ -15,14 +22,10 @@ from sqlspec.adapters.psycopg.core import (
     resolve_runtime_statement_config,
 )
 from sqlspec.adapters.psycopg.driver import (
-    PsycopgAsyncCursor,
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
-    PsycopgAsyncSessionContext,
-    PsycopgSyncCursor,
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
-    PsycopgSyncSessionContext,
 )
 from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig

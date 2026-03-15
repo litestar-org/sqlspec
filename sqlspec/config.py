@@ -1564,7 +1564,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             self.get_observability_runtime().emit_pool_create,
         )
         self.connection_instance = created_pool
-        return created_pool
+        return cast("PoolT", created_pool)
 
     def close_pool(self) -> None:
         """Close the connection pool."""
@@ -1775,7 +1775,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             self.get_observability_runtime().emit_pool_create,
         )
         self.connection_instance = created_pool
-        return created_pool
+        return cast("PoolT", created_pool)
 
     async def close_pool(self) -> None:
         """Close the connection pool."""

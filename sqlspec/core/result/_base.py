@@ -415,7 +415,7 @@ class SQLResult(StatementResult):
             cached_row = row_cache.get(schema_type)
             if cached_row is not None:
                 return cast("SchemaT", cached_row)
-        converted_row = cast("SchemaT", to_schema(row, schema_type=schema_type))
+        converted_row = to_schema(row, schema_type=schema_type)
         if row_cache is None:
             self._schema_row_cache = {schema_type: converted_row}
         else:

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from google.cloud.exceptions import GoogleCloudError
 
-from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
+from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
     build_dml_rowcount,
     build_inlined_script,
@@ -63,31 +63,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
-
-
-class BigQueryCursor:
-    """BigQuery cursor with resource management."""
-
-    __slots__ = ("connection", "job")
-
-    def __init__(self, connection: "BigQueryConnection") -> None:
-        self.connection = connection
-        self.job: QueryJob | None = None
-
-    def __enter__(self) -> "BigQueryConnection":
-        return self.connection
-
-    def __exit__(self, *_: Any) -> None:
-        """Clean up cursor resources including active QueryJobs."""
-        if self.job is not None:
-            try:
-                # Cancel the job if it's still running to free up resources
-                if self.job.state in {"PENDING", "RUNNING"}:
-                    self.job.cancel()
-                # Clear the job reference
-                self.job = None
-            except Exception:
-                logger.exception("Failed to cancel BigQuery job during cursor cleanup")
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
@@ -165,7 +140,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: "BigQueryCursor", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
 
         Args:
@@ -206,7 +181,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = build_dml_rowcount(cursor.job, 0)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    def dispatch_execute_many(self, cursor: "BigQueryCursor", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """BigQuery execute_many with Parquet bulk load optimization.
 
         Uses Parquet bulk load for INSERT operations (fast path) and falls back
@@ -255,7 +230,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "BigQueryCursor", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -541,14 +516,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "BigQueryCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect BigQuery rows for the direct execution path."""
         schema = cursor.job.schema if cursor.job else None
         column_names = resolve_column_names(schema, self._column_name_cache)
         data, _ = collect_rows(fetched, schema, column_names=column_names)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: "BigQueryCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from BigQuery job for the direct execution path."""
         return build_dml_rowcount(cursor.job, 0) if cursor.job else 0
 

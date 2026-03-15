@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
 
-from sqlspec.adapters.spanner._typing import SpannerSessionContext
+from sqlspec.adapters.spanner._typing import SpannerSessionContext, SpannerSyncCursor
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
     coerce_params,
@@ -93,21 +93,6 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
-
-
-class SpannerSyncCursor:
-    """Context manager that yields the active Spanner connection."""
-
-    __slots__ = ("connection",)
-
-    def __init__(self, connection: "SpannerConnection") -> None:
-        self.connection = connection
-
-    def __enter__(self) -> "SpannerConnection":
-        return self.connection
-
-    def __exit__(self, *_: Any) -> None:
-        return None
 
 
 class SpannerSyncDriver(SyncDriverAdapterBase):
@@ -372,7 +357,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "SpannerSyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "SpannerConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Spanner rows for the direct execution path.
 
         Note: Spanner's collect_rows requires result set fields and a type converter.
@@ -390,7 +375,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         # For tuple rows without metadata, return as-is
         return fetched, [], len(fetched)
 
-    def resolve_rowcount(self, cursor: "SpannerSyncCursor") -> int:
+    def resolve_rowcount(self, cursor: "SpannerConnection") -> int:
         """Resolve rowcount from Spanner cursor for the direct execution path."""
         # Spanner uses execute_update return value, not cursor.rowcount
         return 0

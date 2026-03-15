@@ -680,7 +680,7 @@ class ParameterProcessor:
             for idx, row in enumerate(parameter_rows):
                 row_type = type(row)
                 if row_type is dict:
-                    row_dict: dict[str, Any] = row  # type: ignore[assignment]
+                    row_dict: dict[str, Any] = row
                     if strict:
                         missing = [name for name in named_order if name not in row_dict]
                         if missing:

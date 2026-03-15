@@ -50,13 +50,20 @@ With Test Fixtures:
     1
 """
 
-from sqlspec.adapters.mock._typing import MockAsyncSessionContext, MockConnection, MockSyncSessionContext
+from sqlspec.adapters.mock._typing import (
+    MockAsyncCursor,
+    MockAsyncSessionContext,
+    MockConnection,
+    MockCursor,
+    MockSyncSessionContext,
+)
 from sqlspec.adapters.mock.config import MockAsyncConfig, MockConnectionParams, MockDriverFeatures, MockSyncConfig
 from sqlspec.adapters.mock.data_dictionary import MockAsyncDataDictionary, MockDataDictionary
-from sqlspec.adapters.mock.driver import MockAsyncDriver, MockCursor, MockExceptionHandler, MockSyncDriver
+from sqlspec.adapters.mock.driver import MockAsyncDriver, MockExceptionHandler, MockSyncDriver
 
 __all__ = (
     "MockAsyncConfig",
+    "MockAsyncCursor",
     "MockAsyncDataDictionary",
     "MockAsyncDriver",
     "MockAsyncSessionContext",

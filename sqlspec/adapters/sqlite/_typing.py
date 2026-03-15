@@ -4,6 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
@@ -18,9 +19,50 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     SqliteConnection: TypeAlias = _SqliteConnection
+    SqliteCursorType: TypeAlias = sqlite3.Cursor
 
 if not TYPE_CHECKING:
     SqliteConnection = _SqliteConnection
+    SqliteCursorType = sqlite3.Cursor
+
+
+class SqliteCursor:
+    """Context manager for SQLite cursor management.
+
+    Provides automatic cursor creation and cleanup for SQLite database operations.
+    """
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "SqliteConnection") -> None:
+        """Initialize cursor manager.
+
+        Args:
+            connection: SQLite database connection
+        """
+        self.connection = connection
+        self.cursor: Any = None
+
+    def __enter__(self) -> Any:
+        """Create and return a new cursor.
+
+        Returns:
+            Active SQLite cursor object
+        """
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: Any) -> None:
+        """Clean up cursor resources.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()
 
 
 class SqliteSessionContext:
@@ -78,4 +120,4 @@ class SqliteSessionContext:
         return None
 
 
-__all__ = ("SqliteConnection", "SqliteSessionContext")
+__all__ = ("SqliteConnection", "SqliteCursor", "SqliteCursorType", "SqliteSessionContext")

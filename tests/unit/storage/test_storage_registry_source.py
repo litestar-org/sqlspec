@@ -5,10 +5,11 @@ when a stale compiled extension exists in the workspace.
 """
 
 import importlib.util
+import types
 from pathlib import Path
 
 
-def _load_registry_source_module():
+def _load_registry_source_module() -> "types.ModuleType":
     module_path = Path(__file__).resolve().parents[3] / "sqlspec" / "storage" / "registry.py"
     spec = importlib.util.spec_from_file_location("storage_registry_source_tests", module_path)
     assert spec is not None

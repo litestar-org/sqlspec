@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import duckdb
 
+from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb.core import (
     apply_driver_features,
     collect_rows,
@@ -31,35 +32,12 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-from sqlspec.adapters.duckdb._typing import DuckDBSessionContext
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
 logger = get_logger("sqlspec.adapters.duckdb")
 
 _type_converter = DuckDBOutputConverter()
-
-
-class DuckDBCursor:
-    """Context manager for DuckDB connection-as-cursor.
-
-    DuckDB connections implement the cursor interface and preserve
-    variable state. Using connection directly avoids cursor overhead
-    and fixes SET VARIABLE persistence.
-
-    See: https://github.com/litestar-org/sqlspec/issues/341
-    """
-
-    __slots__ = ("connection",)
-
-    def __init__(self, connection: "DuckDBConnection") -> None:
-        self.connection = connection
-
-    def __enter__(self) -> "DuckDBConnection":
-        return self.connection
-
-    def __exit__(self, *_: Any) -> None:
-        pass  # Connection lifecycle managed by pool/session
 
 
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
@@ -116,7 +94,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: "DuckDBCursor", statement: SQL) -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement with data handling.
 
         Executes a SQL statement with parameter binding and processes the results.
@@ -152,7 +130,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
-    def dispatch_execute_many(self, cursor: "DuckDBCursor", statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using batch processing.
 
         Uses DuckDB's executemany method for batch operations and calculates
@@ -177,7 +155,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "DuckDBCursor", statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parses multi-statement scripts and executes each statement sequentially
@@ -422,12 +400,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "DuckDBCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "DuckDBConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect DuckDB rows for the direct execution path."""
         data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: "DuckDBCursor") -> int:
+    def resolve_rowcount(self, cursor: "DuckDBConnection") -> int:
         """Resolve rowcount from DuckDB cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

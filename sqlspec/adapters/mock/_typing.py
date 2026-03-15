@@ -4,6 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
@@ -18,9 +19,76 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     MockConnection: TypeAlias = _MockConnection
+    MockRawCursor: TypeAlias = sqlite3.Cursor
 
 if not TYPE_CHECKING:
     MockConnection = _MockConnection
+    MockRawCursor = sqlite3.Cursor
+
+
+class MockCursor:
+    """Context manager for Mock SQLite cursor management.
+
+    Provides automatic cursor creation and cleanup for SQLite database operations.
+    """
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "MockConnection") -> None:
+        """Initialize cursor manager.
+
+        Args:
+            connection: SQLite database connection
+        """
+        self.connection = connection
+        self.cursor: Any = None
+
+    def __enter__(self) -> Any:
+        """Create and return a new cursor.
+
+        Returns:
+            Active SQLite cursor object
+        """
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: Any) -> None:
+        """Clean up cursor resources."""
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()
+
+
+class MockAsyncCursor:
+    """Async context manager for Mock SQLite cursor management."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "MockConnection") -> None:
+        """Initialize async cursor manager.
+
+        Args:
+            connection: SQLite database connection
+        """
+        self.connection = connection
+        self.cursor: Any = None
+
+    async def __aenter__(self) -> Any:
+        """Create and return a new cursor.
+
+        Returns:
+            Active SQLite cursor object
+        """
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        """Clean up cursor resources."""
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()
 
 
 class MockSyncSessionContext:
@@ -145,4 +213,11 @@ class MockAsyncSessionContext:
         return None
 
 
-__all__ = ("MockAsyncSessionContext", "MockConnection", "MockSyncSessionContext")
+__all__ = (
+    "MockAsyncCursor",
+    "MockAsyncSessionContext",
+    "MockConnection",
+    "MockCursor",
+    "MockRawCursor",
+    "MockSyncSessionContext",
+)

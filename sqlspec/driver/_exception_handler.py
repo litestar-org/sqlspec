@@ -8,7 +8,7 @@ from typing_extensions import Self
 if TYPE_CHECKING:
     from types import TracebackType
 
-__all__ = ("BaseAsyncExceptionHandler", "BaseSyncExceptionHandler", )
+__all__ = ("BaseAsyncExceptionHandler", "BaseSyncExceptionHandler")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

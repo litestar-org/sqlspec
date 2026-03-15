@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncmy.errors  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
-from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
+from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmySessionContext
 from sqlspec.adapters.asyncmy.core import (
     build_insert_statement,
     collect_rows,
@@ -42,8 +42,6 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from sqlspec.adapters.asyncmy._typing import AsyncmySessionContext
-
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "AsyncmySessionContext")
 
 logger = get_logger(__name__)
@@ -52,27 +50,6 @@ json_type_value = (
     ASYNC_MY_FIELD_TYPE.JSON if ASYNC_MY_FIELD_TYPE is not None and supports_json_type(ASYNC_MY_FIELD_TYPE) else None
 )
 ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
-
-
-class AsyncmyCursor:
-    """Context manager for AsyncMy cursor operations.
-
-    Provides automatic cursor acquisition and cleanup for database operations.
-    """
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "AsyncmyConnection") -> None:
-        self.connection = connection
-        self.cursor: Cursor | DictCursor | None = None
-
-    async def __aenter__(self) -> Cursor | DictCursor:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            await self.cursor.close()
 
 
 class AsyncmyExceptionHandler(BaseAsyncExceptionHandler):
@@ -129,7 +106,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS - The Execution Engine
     # ─────────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_execute(self, cursor: "AsyncmyCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
         Handles parameter processing, result fetching, and data transformation
@@ -168,7 +145,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    async def dispatch_execute_many(self, cursor: "AsyncmyCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL statement with multiple parameter sets.
 
         Uses AsyncMy's executemany for batch operations with MySQL type conversion
@@ -194,7 +171,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def dispatch_execute_script(self, cursor: "AsyncmyCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Splits multi-statement scripts and executes each statement sequentially.
@@ -380,7 +357,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "AsyncmyCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect asyncmy rows for the direct execution path."""
         description = cursor.description or None
         column_names = resolve_column_names(description)
@@ -391,7 +368,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         )
         return rows, column_names, len(rows)
 
-    def resolve_rowcount(self, cursor: "AsyncmyCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from asyncmy cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

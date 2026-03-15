@@ -4,14 +4,15 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any
 
 from asyncmy import Connection  # pyright: ignore
+from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import Protocol
+    from typing import Protocol, TypeAlias
 
     from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
     from sqlspec.core import StatementConfig
@@ -26,8 +27,32 @@ if TYPE_CHECKING:
         async def close(self) -> Any: ...
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
-else:
+    AsyncmyCursorType: TypeAlias = _AsyncmyCursor
+
+if not TYPE_CHECKING:
     AsyncmyConnection = Connection
+    AsyncmyCursorType = _AsyncmyCursor
+
+
+class AsyncmyCursor:
+    """Context manager for AsyncMy cursor operations.
+
+    Provides automatic cursor acquisition and cleanup for database operations.
+    """
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "AsyncmyConnection") -> None:
+        self.connection = connection
+        self.cursor: Any = None
+
+    async def __aenter__(self) -> Any:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(self, *_: Any) -> None:
+        if self.cursor is not None:
+            await self.cursor.close()
 
 
 class AsyncmySessionContext:
@@ -85,4 +110,4 @@ class AsyncmySessionContext:
         return None
 
 
-__all__ = ("AsyncmyConnection", "AsyncmySessionContext")
+__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyCursorType", "AsyncmySessionContext")

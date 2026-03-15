@@ -35,9 +35,46 @@ if TYPE_CHECKING:
 
     MysqlConnectorSyncConnection: TypeAlias = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
-else:
+
+if not TYPE_CHECKING:
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
+
+
+class MysqlConnectorSyncCursor:
+    """Context manager for mysql-connector sync cursor operations."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "MysqlConnectorSyncConnection") -> None:
+        self.connection = connection
+        self.cursor: Any = None
+
+    def __enter__(self) -> Any:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: Any) -> None:
+        if self.cursor is not None:
+            self.cursor.close()
+
+
+class MysqlConnectorAsyncCursor:
+    """Async context manager for mysql-connector async cursor operations."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "MysqlConnectorAsyncConnection") -> None:
+        self.connection = connection
+        self.cursor: Any | None = None
+
+    async def __aenter__(self) -> Any:
+        self.cursor = await self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(self, *_: Any) -> None:
+        if self.cursor is not None:
+            await self.cursor.close()
 
 
 class MysqlConnectorSyncSessionContext:
@@ -136,7 +173,9 @@ class MysqlConnectorAsyncSessionContext:
 
 __all__ = (
     "MysqlConnectorAsyncConnection",
+    "MysqlConnectorAsyncCursor",
     "MysqlConnectorAsyncSessionContext",
     "MysqlConnectorSyncConnection",
+    "MysqlConnectorSyncCursor",
     "MysqlConnectorSyncSessionContext",
 )

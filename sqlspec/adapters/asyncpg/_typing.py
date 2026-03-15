@@ -6,15 +6,16 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+from asyncpg import Pool
 from asyncpg.pool import PoolConnectionProxy
+from asyncpg.prepared_stmt import PreparedStatement
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
 
-    from asyncpg import Connection, Pool, Record
-    from asyncpg.prepared_stmt import PreparedStatement
+    from asyncpg import Connection, Record
 
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
     from sqlspec.core import StatementConfig
@@ -22,13 +23,25 @@ if TYPE_CHECKING:
     AsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
     AsyncpgPool: TypeAlias = Pool[Record]
     AsyncpgPreparedStatement: TypeAlias = PreparedStatement[Record]
-else:
-    from asyncpg import Pool
-    from asyncpg.prepared_stmt import PreparedStatement
 
+if not TYPE_CHECKING:
     AsyncpgConnection = PoolConnectionProxy
     AsyncpgPool = Pool
     AsyncpgPreparedStatement = PreparedStatement
+
+
+class AsyncpgCursor:
+    """Context manager for AsyncPG cursor management."""
+
+    __slots__ = ("connection",)
+
+    def __init__(self, connection: "AsyncpgConnection") -> None:
+        self.connection = connection
+
+    async def __aenter__(self) -> "AsyncpgConnection":
+        return self.connection
+
+    async def __aexit__(self, *_: Any) -> None: ...
 
 
 class AsyncpgSessionContext:
@@ -87,4 +100,4 @@ class AsyncpgSessionContext:
         return None
 
 
-__all__ = ("AsyncpgConnection", "AsyncpgPool", "AsyncpgPreparedStatement", "AsyncpgSessionContext")
+__all__ = ("AsyncpgConnection", "AsyncpgCursor", "AsyncpgPool", "AsyncpgPreparedStatement", "AsyncpgSessionContext")

@@ -113,17 +113,17 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
     ) -> "ExecutionResult":
         return await super().dispatch_execute_script(cursor, statement)
 
-    async def dispatch_execute(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         if not self._enable_retry:
             return await self._dispatch_execute_impl(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_impl, cursor, statement)
 
-    async def dispatch_execute_many(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         if not self._enable_retry:
             return await super().dispatch_execute_many(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_many_impl, cursor, statement)
 
-    async def dispatch_execute_script(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         if not self._enable_retry:
             return await super().dispatch_execute_script(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_script_impl, cursor, statement)

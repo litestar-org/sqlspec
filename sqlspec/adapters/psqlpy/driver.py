@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import psqlpy.exceptions
 
-from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
     build_insert_statement,
     coerce_numeric_for_write,
@@ -47,43 +47,6 @@ __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySess
 logger = get_logger("sqlspec.adapters.psqlpy")
 
 _type_converter = PostgreSQLOutputConverter()
-
-
-class PsqlpyCursor:
-    """Context manager for psqlpy cursor management."""
-
-    __slots__ = ("_in_use", "connection")
-
-    def __init__(self, connection: "PsqlpyConnection") -> None:
-        self.connection = connection
-        self._in_use = False
-
-    async def __aenter__(self) -> "PsqlpyConnection":
-        """Enter cursor context.
-
-        Returns:
-            Psqlpy connection object
-        """
-        self._in_use = True
-        return self.connection
-
-    async def __aexit__(self, *_: Any) -> None:
-        """Exit cursor context.
-
-        Args:
-            exc_type: Exception type
-            exc_val: Exception value
-            exc_tb: Exception traceback
-        """
-        self._in_use = False
-
-    def is_in_use(self) -> bool:
-        """Check if cursor is currently in use.
-
-        Returns:
-            True if cursor is in use, False otherwise
-        """
-        return self._in_use
 
 
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
@@ -420,7 +383,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "PsqlpyCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "PsqlpyConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psqlpy rows for the direct execution path.
 
         The ``fetched`` argument may be a psqlpy query result or a plain list.
@@ -428,7 +391,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         dict_rows, column_names = collect_rows(fetched)
         return dict_rows, column_names, len(dict_rows)
 
-    def resolve_rowcount(self, cursor: "PsqlpyCursor") -> int:
+    def resolve_rowcount(self, cursor: "PsqlpyConnection") -> int:
         """Resolve rowcount from psqlpy result for the direct execution path."""
         return extract_rows_affected(cursor)
 

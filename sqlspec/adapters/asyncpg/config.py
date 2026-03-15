@@ -9,7 +9,13 @@ from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
+from sqlspec.adapters.asyncpg._typing import (
+    AsyncpgConnection,
+    AsyncpgCursor,
+    AsyncpgPool,
+    AsyncpgPreparedStatement,
+    AsyncpgSessionContext,
+)
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
     build_connection_config,
@@ -20,7 +26,7 @@ from sqlspec.adapters.asyncpg.core import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver, AsyncpgExceptionHandler, AsyncpgSessionContext
+from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -133,7 +139,7 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_instance_uri: AlloyDB instance URI.
         Format: "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
         Required when enable_alloydb is True.
-    alloydb_enable_iam_auth: Enable IAM database authentication.
+    enable_alloydb_iam_auth: Enable IAM database authentication.
         Defaults to False for passwordless authentication.
     alloydb_ip_type: IP address type for connection.
         Options: "PUBLIC", "PRIVATE", "PSC"
@@ -162,7 +168,7 @@ class AsyncpgDriverFeatures(TypedDict):
     cloud_sql_ip_type: NotRequired[str]
     enable_alloydb: NotRequired[bool]
     alloydb_instance_uri: NotRequired[str]
-    alloydb_enable_iam_auth: NotRequired[bool]
+    enable_alloydb_iam_auth: NotRequired[bool]
     alloydb_ip_type: NotRequired[str]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
@@ -216,7 +222,7 @@ class _AsyncpgAlloydbConnector:
         conn_kwargs: dict[str, Any] = {
             "instance_uri": self._config.driver_features["alloydb_instance_uri"],
             "driver": "asyncpg",
-            "enable_iam_auth": self._config.driver_features.get("alloydb_enable_iam_auth", False),
+            "enable_iam_auth": self._config.driver_features.get("enable_alloydb_iam_auth", False),
             "ip_type": self._config.driver_features.get("alloydb_ip_type", "PRIVATE"),
         }
         if self._user:

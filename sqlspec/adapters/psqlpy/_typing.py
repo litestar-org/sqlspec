@@ -22,6 +22,43 @@ if not TYPE_CHECKING:
     PsqlpyConnection = _PsqlpyConnection
 
 
+class PsqlpyCursor:
+    """Context manager for psqlpy cursor management."""
+
+    __slots__ = ("_in_use", "connection")
+
+    def __init__(self, connection: "PsqlpyConnection") -> None:
+        self.connection = connection
+        self._in_use = False
+
+    async def __aenter__(self) -> "PsqlpyConnection":
+        """Enter cursor context.
+
+        Returns:
+            Psqlpy connection object
+        """
+        self._in_use = True
+        return self.connection
+
+    async def __aexit__(self, *_: Any) -> None:
+        """Exit cursor context.
+
+        Args:
+            exc_type: Exception type
+            exc_val: Exception value
+            exc_tb: Exception traceback
+        """
+        self._in_use = False
+
+    def is_in_use(self) -> bool:
+        """Check if cursor is currently in use.
+
+        Returns:
+            True if cursor is in use, False otherwise
+        """
+        return self._in_use
+
+
 class PsqlpySessionContext:
     """Async context manager for psqlpy sessions.
 
@@ -78,4 +115,4 @@ class PsqlpySessionContext:
         return None
 
 
-__all__ = ("PsqlpyConnection", "PsqlpySessionContext")
+__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpySessionContext")

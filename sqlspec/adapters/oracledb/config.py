@@ -10,20 +10,20 @@ from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers  #
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
+    OracleAsyncCursor,
+    OracleAsyncSessionContext,
     OracleSyncConnection,
     OracleSyncConnectionPool,
+    OracleSyncCursor,
+    OracleSyncSessionContext,
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config, requires_session_callback
 from sqlspec.adapters.oracledb.driver import (
-    OracleAsyncCursor,
     OracleAsyncDriver,
     OracleAsyncExceptionHandler,
-    OracleAsyncSessionContext,
-    OracleSyncCursor,
     OracleSyncDriver,
     OracleSyncExceptionHandler,
-    OracleSyncSessionContext,
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig

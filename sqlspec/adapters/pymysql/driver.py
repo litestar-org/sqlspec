@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import pymysql
 from pymysql.constants import FIELD_TYPE
 
+from sqlspec.adapters.pymysql._typing import PyMysqlCursor, PyMysqlSessionContext
 from sqlspec.adapters.pymysql.core import (
     build_insert_statement,
     collect_rows,
@@ -37,32 +38,12 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from sqlspec.adapters.pymysql._typing import PyMysqlSessionContext
-
 __all__ = ("PyMysqlCursor", "PyMysqlDriver", "PyMysqlExceptionHandler", "PyMysqlSessionContext")
 
 logger = get_logger("sqlspec.adapters.pymysql")
 
 json_type_value = FIELD_TYPE.JSON if supports_json_type(FIELD_TYPE) else None
 PYMYSQL_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
-
-
-class PyMysqlCursor:
-    """Context manager for PyMySQL cursor operations."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "PyMysqlConnection") -> None:
-        self.connection = connection
-        self.cursor: Any | None = None
-
-    def __enter__(self) -> Any:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            self.cursor.close()
 
 
 class PyMysqlExceptionHandler(BaseSyncExceptionHandler):
@@ -102,7 +83,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PyMysqlDataDictionary | None = None
 
-    def dispatch_execute(self, cursor: "PyMysqlCursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
@@ -129,7 +110,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    def dispatch_execute_many(self, cursor: "PyMysqlCursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
@@ -139,7 +120,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "PyMysqlCursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -254,7 +235,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
             self._data_dictionary = PyMysqlDataDictionary()
         return self._data_dictionary
 
-    def collect_rows(self, cursor: "PyMysqlCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect PyMySQL rows for the direct execution path."""
         description = cursor.description or None
         column_names = resolve_column_names(description)
@@ -265,7 +246,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         )
         return rows, column_names, len(rows)
 
-    def resolve_rowcount(self, cursor: "PyMysqlCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from PyMySQL cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

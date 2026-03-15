@@ -75,9 +75,12 @@ class _DecimalNormalizer:
             return value
         return handler(self, value)
 
+    def convert_decimal(self, value: "decimal.Decimal") -> Any:
+        return self._decimal_converter(value)
+
 
 def _normalize_decimal_value(normalizer: "_DecimalNormalizer", value: Any) -> Any:
-    return normalizer._decimal_converter(value)
+    return normalizer.convert_decimal(value)
 
 
 def _normalize_decimal_list(normalizer: "_DecimalNormalizer", value: Any) -> Any:

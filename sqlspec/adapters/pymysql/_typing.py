@@ -22,6 +22,24 @@ if not TYPE_CHECKING:
     PyMysqlConnection = pymysql.connections.Connection
 
 
+class PyMysqlCursor:
+    """Context manager for PyMySQL cursor operations."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "PyMysqlConnection") -> None:
+        self.connection = connection
+        self.cursor: Any = None
+
+    def __enter__(self) -> Any:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: Any) -> None:
+        if self.cursor is not None:
+            self.cursor.close()
+
+
 class PyMysqlSessionContext:
     """Sync context manager for PyMySQL sessions."""
 
@@ -69,4 +87,4 @@ class PyMysqlSessionContext:
         return None
 
 
-__all__ = ("PyMysqlConnection", "PyMysqlSessionContext")
+__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlSessionContext")

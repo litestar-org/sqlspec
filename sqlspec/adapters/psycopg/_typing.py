@@ -6,6 +6,7 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any, Protocol
 
+from psycopg import AsyncConnection, Connection
 from psycopg.rows import DictRow as PsycopgDictRow
 
 if TYPE_CHECKING:
@@ -13,19 +14,55 @@ if TYPE_CHECKING:
     from types import TracebackType
     from typing import TypeAlias
 
-    from psycopg import AsyncConnection, Connection
-
     from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, Statement, StatementConfig
 
     PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
     PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
-else:
-    from psycopg import AsyncConnection, Connection
 
+if not TYPE_CHECKING:
     PsycopgSyncConnection = Connection
     PsycopgAsyncConnection = AsyncConnection
+
+
+class PsycopgSyncCursor:
+    """Context manager for PostgreSQL psycopg cursor management."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "PsycopgSyncConnection") -> None:
+        self.connection = connection
+        self.cursor: Any = None
+
+    def __enter__(self) -> Any:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: Any) -> None:
+        if self.cursor is not None:
+            self.cursor.close()
+
+
+class PsycopgAsyncCursor:
+    """Async context manager for PostgreSQL psycopg cursor management."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "PsycopgAsyncConnection") -> None:
+        self.connection = connection
+        self.cursor: Any = None
+
+    async def __aenter__(self) -> Any:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        _ = (exc_type, exc_val, exc_tb)
+        if self.cursor is not None:
+            await self.cursor.close()
 
 
 class PsycopgPipelineDriver(Protocol):
@@ -159,9 +196,11 @@ class PsycopgAsyncSessionContext:
 
 __all__ = (
     "PsycopgAsyncConnection",
+    "PsycopgAsyncCursor",
     "PsycopgAsyncSessionContext",
     "PsycopgDictRow",
     "PsycopgPipelineDriver",
     "PsycopgSyncConnection",
+    "PsycopgSyncCursor",
     "PsycopgSyncSessionContext",
 )

@@ -6,14 +6,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection, AiosqliteCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.core import apply_driver_features, build_connection_config, default_statement_config
-from sqlspec.adapters.aiosqlite.driver import (
-    AiosqliteCursor,
-    AiosqliteDriver,
-    AiosqliteExceptionHandler,
-    AiosqliteSessionContext,
-)
+from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import (
     AiosqliteConnectionPool,
     AiosqlitePoolConnection,

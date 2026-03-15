@@ -6,11 +6,10 @@ as the execution backend while accepting SQL written in other dialects
 execution using sqlglot.
 """
 
-import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.mock._typing import MockAsyncSessionContext, MockSyncSessionContext
+from sqlspec.adapters.mock._typing import MockAsyncCursor, MockAsyncSessionContext, MockCursor, MockSyncSessionContext
 from sqlspec.adapters.mock.core import (
     build_insert_statement,
     collect_rows,
@@ -35,14 +34,13 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from types import TracebackType
-
     from sqlspec.adapters.mock._typing import MockConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
+    "MockAsyncCursor",
     "MockAsyncDriver",
     "MockAsyncSessionContext",
     "MockCursor",
@@ -50,71 +48,6 @@ __all__ = (
     "MockSyncDriver",
     "MockSyncSessionContext",
 )
-
-
-class MockCursor:
-    """Context manager for Mock SQLite cursor management.
-
-    Provides automatic cursor creation and cleanup for SQLite database operations.
-    """
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "MockConnection") -> None:
-        """Initialize cursor manager.
-
-        Args:
-            connection: SQLite database connection
-        """
-        self.connection = connection
-        self.cursor: sqlite3.Cursor | None = None
-
-    def __enter__(self) -> "sqlite3.Cursor":
-        """Create and return a new cursor.
-
-        Returns:
-            Active SQLite cursor object
-        """
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: Any) -> None:
-        """Clean up cursor resources."""
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                self.cursor.close()
-
-
-class MockAsyncCursor:
-    """Async context manager for Mock SQLite cursor management."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "MockConnection") -> None:
-        """Initialize async cursor manager.
-
-        Args:
-            connection: SQLite database connection
-        """
-        self.connection = connection
-        self.cursor: sqlite3.Cursor | None = None
-
-    async def __aenter__(self) -> "sqlite3.Cursor":
-        """Create and return a new cursor.
-
-        Returns:
-            Active SQLite cursor object
-        """
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> None:
-        """Clean up cursor resources."""
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                self.cursor.close()
 
 
 class MockExceptionHandler(BaseSyncExceptionHandler):
@@ -195,7 +128,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
         Args:
@@ -224,7 +157,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
         Args:
@@ -242,7 +175,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Args:
@@ -431,11 +364,11 @@ class MockSyncDriver(SyncDriverAdapterBase):
             return sql
         return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
 
-    def collect_rows(self, cursor: "MockCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mock sync rows for the direct execution path."""
         return collect_rows(fetched, cursor.description)
 
-    def resolve_rowcount(self, cursor: "MockCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from mock cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
@@ -487,7 +420,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement asynchronously.
 
         Args:
@@ -519,7 +452,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    async def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets asynchronously.
 
         Args:
@@ -538,7 +471,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script asynchronously.
 
         Args:
@@ -735,11 +668,11 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             return sql
         return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
 
-    def collect_rows(self, cursor: "MockAsyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mock async rows for the direct execution path."""
         return collect_rows(fetched, cursor.description)
 
-    def resolve_rowcount(self, cursor: "MockAsyncCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from mock cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

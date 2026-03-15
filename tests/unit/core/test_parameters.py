@@ -10,7 +10,7 @@ Tests the 2-Phase Parameter Conversion System:
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from importlib import import_module
@@ -1195,10 +1195,12 @@ def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterP
 
 def test_resolve_type_coercion_supports_virtual_abc_fallback() -> None:
     """ABC-registered coercions should still resolve for builtin sequence payloads."""
-    type_map = {Sequence: lambda value: tuple(value)}
-    fallback_items = _processor_module._type_coercion_fallbacks(type_map)
+    type_map: dict[type, Callable[[Any], Any]] = {Sequence: lambda value: tuple(value)}  # type: ignore[dict-item]
+    fallback_items = _processor_module._type_coercion_fallbacks(type_map)  # pyright: ignore[reportPrivateUsage]
 
-    assert _processor_module._resolve_type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
+    assert _processor_module._resolve_type_coercion(  # pyright: ignore[reportPrivateUsage]
+        [1, 2, 3], type_map, fallback_items
+    ) == (1, 2, 3)
 
 
 def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_already_positional(

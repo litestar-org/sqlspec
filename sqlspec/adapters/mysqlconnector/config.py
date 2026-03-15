@@ -10,16 +10,16 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncConnection,
+    MysqlConnectorAsyncCursor,
     MysqlConnectorAsyncSessionContext,
     MysqlConnectorSyncConnection,
+    MysqlConnectorSyncCursor,
     MysqlConnectorSyncSessionContext,
 )
 from sqlspec.adapters.mysqlconnector.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.mysqlconnector.driver import (
-    MysqlConnectorAsyncCursor,
     MysqlConnectorAsyncDriver,
     MysqlConnectorAsyncExceptionHandler,
-    MysqlConnectorSyncCursor,
     MysqlConnectorSyncDriver,
     MysqlConnectorSyncExceptionHandler,
 )

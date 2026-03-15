@@ -142,7 +142,7 @@ async def test_alloydb_connection_basic() -> None:
         driver_features={
             "enable_alloydb": True,
             "alloydb_instance_uri": instance_uri,
-            "alloydb_enable_iam_auth": False,
+            "enable_alloydb_iam_auth": False,
         },
     )
 
@@ -169,7 +169,7 @@ async def test_alloydb_query_execution() -> None:
         driver_features={
             "enable_alloydb": True,
             "alloydb_instance_uri": instance_uri,
-            "alloydb_enable_iam_auth": False,
+            "enable_alloydb_iam_auth": False,
         },
     )
 
@@ -193,7 +193,7 @@ async def test_alloydb_iam_auth() -> None:
 
     config = AsyncpgConfig(
         connection_config={"user": user, "database": database, "min_size": 1, "max_size": 2},
-        driver_features={"enable_alloydb": True, "alloydb_instance_uri": instance_uri, "alloydb_enable_iam_auth": True},
+        driver_features={"enable_alloydb": True, "alloydb_instance_uri": instance_uri, "enable_alloydb_iam_auth": True},
     )
 
     await config.create_pool()

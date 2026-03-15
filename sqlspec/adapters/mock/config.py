@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mock._typing import MockAsyncSessionContext, MockConnection, MockSyncSessionContext
+from sqlspec.adapters.mock._typing import MockAsyncSessionContext, MockConnection, MockCursor, MockSyncSessionContext
 from sqlspec.adapters.mock.core import apply_driver_features, default_statement_config
-from sqlspec.adapters.mock.driver import MockAsyncDriver, MockCursor, MockExceptionHandler, MockSyncDriver
+from sqlspec.adapters.mock.driver import MockAsyncDriver, MockExceptionHandler, MockSyncDriver
 from sqlspec.config import ExtensionConfigs, NoPoolAsyncConfig, NoPoolSyncConfig
 from sqlspec.driver import convert_to_dialect
 from sqlspec.utils.sync_tools import async_

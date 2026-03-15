@@ -3,7 +3,7 @@
 from pathlib import Path
 
 try:
-    import tomllib
+    import tomllib  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib
 

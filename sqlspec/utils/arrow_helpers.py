@@ -8,7 +8,7 @@ when compiled drivers touch Arrow objects.
 """
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
@@ -167,12 +167,12 @@ def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
     if has_get_data(source):
         table = source.get_data()
         if _get_arrow_table_coercer().get(table) is _coerce_arrow_table_identity:
-            return table
+            return cast("ArrowTable", table)
         msg = "ArrowResult did not return a pyarrow.Table instance"
         raise TypeError(msg)
     coercer = _get_arrow_table_coercer().get(source)
     if coercer is not None:
-        return coercer(source)
+        return cast("ArrowTable", coercer(source))
     if isinstance(source, Iterable):
         import pyarrow as pa
 

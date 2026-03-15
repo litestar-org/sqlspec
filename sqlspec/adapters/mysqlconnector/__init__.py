@@ -1,4 +1,9 @@
-from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorAsyncConnection, MysqlConnectorSyncConnection
+from sqlspec.adapters.mysqlconnector._typing import (
+    MysqlConnectorAsyncConnection,
+    MysqlConnectorAsyncCursor,
+    MysqlConnectorSyncConnection,
+    MysqlConnectorSyncCursor,
+)
 from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorAsyncConfig,
     MysqlConnectorAsyncConnectionParams,
@@ -9,10 +14,8 @@ from sqlspec.adapters.mysqlconnector.config import (
 )
 from sqlspec.adapters.mysqlconnector.core import default_statement_config
 from sqlspec.adapters.mysqlconnector.driver import (
-    MysqlConnectorAsyncCursor,
     MysqlConnectorAsyncDriver,
     MysqlConnectorAsyncExceptionHandler,
-    MysqlConnectorSyncCursor,
     MysqlConnectorSyncDriver,
     MysqlConnectorSyncExceptionHandler,
 )

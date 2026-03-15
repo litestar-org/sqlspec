@@ -49,7 +49,12 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorAsyncSessionContext, MysqlConnectorSyncSessionContext
+from sqlspec.adapters.mysqlconnector._typing import (
+    MysqlConnectorAsyncCursor,
+    MysqlConnectorAsyncSessionContext,
+    MysqlConnectorSyncCursor,
+    MysqlConnectorSyncSessionContext,
+)
 
 __all__ = (
     "MysqlConnectorAsyncCursor",
@@ -66,24 +71,6 @@ logger = get_logger("sqlspec.adapters.mysqlconnector")
 
 json_type_value = FieldType.JSON if supports_json_type(FieldType) else None
 MYSQLCONNECTOR_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
-
-
-class MysqlConnectorSyncCursor:
-    """Context manager for mysql-connector sync cursor operations."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "MysqlConnectorSyncConnection") -> None:
-        self.connection = connection
-        self.cursor: Any | None = None
-
-    def __enter__(self) -> Any:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            self.cursor.close()
 
 
 class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
@@ -123,7 +110,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MysqlConnectorSyncDataDictionary | None = None
 
-    def dispatch_execute(self, cursor: "MysqlConnectorSyncCursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
@@ -150,7 +137,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    def dispatch_execute_many(self, cursor: "MysqlConnectorSyncCursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
@@ -160,7 +147,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "MysqlConnectorSyncCursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -275,9 +262,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             self._data_dictionary = MysqlConnectorSyncDataDictionary()
         return self._data_dictionary
 
-    def collect_rows(
-        self, cursor: "MysqlConnectorSyncCursor", fetched: "list[Any]"
-    ) -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector sync rows for the direct execution path."""
         description = cursor.description or None
         column_names = resolve_column_names(description)
@@ -288,7 +273,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         )
         return rows, column_names, len(rows)
 
-    def resolve_rowcount(self, cursor: "MysqlConnectorSyncCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from mysql-connector cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
@@ -300,24 +285,6 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             except Exception:
                 return False
         return False
-
-
-class MysqlConnectorAsyncCursor:
-    """Async context manager for mysql-connector async cursor operations."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "MysqlConnectorAsyncConnection") -> None:
-        self.connection = connection
-        self.cursor: Any | None = None
-
-    async def __aenter__(self) -> Any:
-        self.cursor = await self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            await self.cursor.close()
 
 
 class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
@@ -357,7 +324,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MysqlConnectorAsyncDataDictionary | None = None
 
-    async def dispatch_execute(self, cursor: "MysqlConnectorAsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
@@ -384,7 +351,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    async def dispatch_execute_many(self, cursor: "MysqlConnectorAsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
@@ -394,7 +361,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def dispatch_execute_script(self, cursor: "MysqlConnectorAsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -511,9 +478,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             self._data_dictionary = MysqlConnectorAsyncDataDictionary()
         return self._data_dictionary
 
-    def collect_rows(
-        self, cursor: "MysqlConnectorAsyncCursor", fetched: "list[Any]"
-    ) -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector async rows for the direct execution path."""
         description = cursor.description or None
         column_names = resolve_column_names(description)
@@ -524,7 +489,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         )
         return rows, column_names, len(rows)
 
-    def resolve_rowcount(self, cursor: "MysqlConnectorAsyncCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from mysql-connector cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

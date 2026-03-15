@@ -384,7 +384,7 @@ async def test_alloydb_iam_auth_enabled(mock_alloydb_module) -> None:
                 driver_features={
                     "enable_alloydb": True,
                     "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
-                    "alloydb_enable_iam_auth": True,
+                    "enable_alloydb_iam_auth": True,
                 },
             )
 

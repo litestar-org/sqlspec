@@ -4,10 +4,9 @@ Provides database connectivity through ADBC with support for multiple
 database dialects, parameter style conversion, and transaction management.
 """
 
-import contextlib
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from sqlspec.adapters.adbc._typing import AdbcSessionContext
+from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     collect_rows,
     create_mapped_exception,
@@ -36,9 +35,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from adbc_driver_manager.dbapi import Cursor
-
-    from sqlspec.adapters.adbc._typing import AdbcConnection
+    from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcRawCursor
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
@@ -48,25 +45,6 @@ if TYPE_CHECKING:
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext")
 
 logger = get_logger("sqlspec.adapters.adbc")
-
-
-class AdbcCursor:
-    """Context manager for cursor management."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "AdbcConnection") -> None:
-        self.connection = connection
-        self.cursor: Cursor | None = None
-
-    def __enter__(self) -> "Cursor":
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                self.cursor.close()  # type: ignore[no-untyped-call]
 
 
 class AdbcExceptionHandler(BaseSyncExceptionHandler):
@@ -130,7 +108,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "AdbcRawCursor", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
 
         Args:
@@ -181,7 +159,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         row_count = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
-    def dispatch_execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "AdbcRawCursor", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
         Args:
@@ -230,7 +208,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "AdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script containing multiple statements.
 
         Args:
@@ -492,7 +470,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "AdbcCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "AdbcRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect ADBC rows for the direct execution path."""
         column_names = self._resolve_column_names(cursor.description)
         data, column_names = collect_rows(
@@ -500,7 +478,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         )
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: "AdbcCursor") -> int:
+    def resolve_rowcount(self, cursor: "AdbcRawCursor") -> int:
         """Resolve rowcount from ADBC cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

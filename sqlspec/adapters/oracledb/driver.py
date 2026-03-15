@@ -1,16 +1,16 @@
 """Oracle Driver"""
 
-import contextlib
 import logging
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import oracledb
-from oracledb import AsyncCursor, Cursor
 
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
+    OracleAsyncCursor,
     OracleAsyncSessionContext,
     OracleSyncConnection,
+    OracleSyncCursor,
     OracleSyncSessionContext,
 )
 from sqlspec.adapters.oracledb.core import (
@@ -57,7 +57,6 @@ from sqlspec.utils.type_guards import has_pipeline_capability
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from types import TracebackType
 
     from sqlspec.adapters.oracledb._typing import OraclePipelineDriver
     from sqlspec.builder import QueryBuilder
@@ -228,48 +227,6 @@ class OraclePipelineMixin:
         )
 
 
-class OracleSyncCursor:
-    """Sync context manager for Oracle cursor management."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: OracleSyncConnection) -> None:
-        self.connection = connection
-        self.cursor: Cursor | None = None
-
-    def __enter__(self) -> Cursor:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: object) -> None:
-        if self.cursor is not None:
-            self.cursor.close()
-
-
-class OracleAsyncCursor:
-    """Async context manager for Oracle cursor management."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: OracleAsyncConnection) -> None:
-        self.connection = connection
-        self.cursor: AsyncCursor | None = None
-
-    async def __aenter__(self) -> AsyncCursor:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
-    ) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                # Oracle async cursors have a synchronous close method
-                # but we need to ensure proper cleanup in the event loop context
-                self.cursor.close()
-
-
 class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
     """Sync Context manager for handling Oracle database exceptions.
 
@@ -352,7 +309,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
         Args:
@@ -402,7 +359,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    def dispatch_execute_many(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
 
         Args:
@@ -425,7 +382,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -701,7 +658,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "OracleSyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle sync rows for the direct execution path."""
         column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
         data, column_names = collect_sync_rows(
@@ -713,7 +670,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         )
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: "OracleSyncCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from Oracle cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
@@ -848,7 +805,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_execute(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
         Args:
@@ -900,7 +857,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    async def dispatch_execute_many(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
 
         Args:
@@ -923,7 +880,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def dispatch_execute_script(self, cursor: "AsyncCursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -1203,7 +1160,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: "OracleAsyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle async rows for the direct execution path.
 
         Uses synchronous LOB coercion. For async LOB coercion, the standard
@@ -1219,7 +1176,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         )
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: "OracleAsyncCursor") -> int:
+    def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from Oracle cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

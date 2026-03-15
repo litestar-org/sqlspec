@@ -1,4 +1,9 @@
-from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg._typing import (
+    PsycopgAsyncConnection,
+    PsycopgAsyncCursor,
+    PsycopgSyncConnection,
+    PsycopgSyncCursor,
+)
 from sqlspec.adapters.psycopg.config import (
     PsycopgAsyncConfig,
     PsycopgConnectionParams,
@@ -7,10 +12,8 @@ from sqlspec.adapters.psycopg.config import (
 )
 from sqlspec.adapters.psycopg.core import default_statement_config
 from sqlspec.adapters.psycopg.driver import (
-    PsycopgAsyncCursor,
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
-    PsycopgSyncCursor,
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
 )

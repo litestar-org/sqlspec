@@ -22,8 +22,8 @@ from sqlspec.typing import (
     convert,
     get_type_adapter,
 )
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.dispatch import TypeDispatcher
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
@@ -1004,7 +1004,7 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
 
     # Schema types (Pydantic, dataclass, msgspec, attrs, TypedDict)
     # Deferred after scalar checks to avoid overhead for common scalar queries
-    schema_converter = _get_schema_converter(value_type)  # type: ignore[arg-type]
+    schema_converter = _get_schema_converter(value_type)
     if schema_converter is not None:
         parsed = _ensure_json_parsed(value)
         return cast("ValueT", schema_converter(parsed, value_type))

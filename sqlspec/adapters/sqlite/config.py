@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite._typing import SqliteConnection
+from sqlspec.adapters.sqlite._typing import SqliteConnection, SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite.core import apply_driver_features, build_connection_config, default_statement_config
-from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, SqliteSessionContext
+from sqlspec.adapters.sqlite.driver import SqliteDriver, SqliteExceptionHandler
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig

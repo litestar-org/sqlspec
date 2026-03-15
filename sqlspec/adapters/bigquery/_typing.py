@@ -4,29 +4,50 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import logging
 from typing import TYPE_CHECKING, Any
+
+from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
 
-    from google.cloud.bigquery import ArrayQueryParameter, Client, ScalarQueryParameter
-
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
     from sqlspec.core import StatementConfig
 
     BigQueryConnection: TypeAlias = Client
     BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter
-else:
-    try:
-        from google.cloud.bigquery import ArrayQueryParameter, Client, ScalarQueryParameter
-    except Exception:
-        BigQueryConnection = Any
-        BigQueryParam = Any
-    else:
-        BigQueryConnection = Client
-        BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
+
+if not TYPE_CHECKING:
+    BigQueryConnection = Client
+    BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
+
+
+class BigQueryCursor:
+    """BigQuery cursor with resource management."""
+
+    __slots__ = ("connection", "job")
+
+    def __init__(self, connection: "BigQueryConnection") -> None:
+        self.connection = connection
+        self.job: QueryJob | None = None
+
+    def __enter__(self) -> "BigQueryConnection":
+        return self.connection
+
+    def __exit__(self, *_: Any) -> None:
+        """Clean up cursor resources including active QueryJobs."""
+        if self.job is not None:
+            try:
+                # Cancel the job if it's still running to free up resources
+                if self.job.state in {"PENDING", "RUNNING"}:
+                    self.job.cancel()
+                # Clear the job reference
+                self.job = None
+            except Exception:
+                logging.getLogger(__name__).exception("Failed to cancel BigQuery job during cursor cleanup")
 
 
 class BigQuerySessionContext:
@@ -84,4 +105,4 @@ class BigQuerySessionContext:
         return None
 
 
-__all__ = ("BigQueryConnection", "BigQueryParam", "BigQuerySessionContext")
+__all__ = ("BigQueryConnection", "BigQueryCursor", "BigQueryParam", "BigQuerySessionContext")
