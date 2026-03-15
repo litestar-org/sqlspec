@@ -51,6 +51,7 @@ from sqlspec.utils.type_guards import (
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
+    from types import TracebackType
 
     from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
@@ -197,7 +198,7 @@ class SyncExceptionHandler(Protocol):
 
     def __enter__(self) -> Self: ...
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
+    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> bool: ...
 
 
 class AsyncExceptionHandler(Protocol):
@@ -212,7 +213,7 @@ class AsyncExceptionHandler(Protocol):
 
     async def __aenter__(self) -> Self: ...
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> bool: ...
 
 
 logger = get_logger("sqlspec.driver")
@@ -429,19 +430,19 @@ class StackExecutionObserver:
         )
         return self
 
-    def __exit__(self, exc_type: Any, exc: Exception | None, exc_tb: Any) -> Literal[False]:
+    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> Literal[False]:
         duration = perf_counter() - self.started
         self.metrics.record_duration(duration)
-        if exc is not None:
-            self.metrics.record_error(exc)
-        self.runtime.span_manager.end_span(self.span, error=exc if exc is not None else None)
+        if exc_val is not None:
+            self.metrics.record_error(exc_val)
+        self.runtime.span_manager.end_span(self.span, error=exc_val if exc_val is not None else None)
         self.metrics.emit(self.runtime)
-        level = logging.ERROR if exc is not None else logging.DEBUG
+        level = logging.ERROR if exc_val is not None else logging.DEBUG
         trace_id, span_id = get_trace_context()
         log_with_context(
             logger,
             level,
-            "stack.execute.failed" if exc is not None else "stack.execute.complete",
+            "stack.execute.failed" if exc_val is not None else "stack.execute.complete",
             driver=type(self.driver).__name__,
             db_system=resolve_db_system(type(self.driver).__name__),
             stack_size=len(self.stack.operations),
@@ -450,7 +451,7 @@ class StackExecutionObserver:
             forced_disable=self.driver.stack_native_disabled,
             hashed_operations=self.hashed_operations,
             duration_ms=duration * 1000,
-            error_type=type(exc).__name__ if exc is not None else None,
+            error_type=type(exc_val).__name__ if exc_val is not None else None,
             trace_id=trace_id,
             span_id=span_id,
         )

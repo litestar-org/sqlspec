@@ -82,7 +82,7 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         self.pending_exception = create_mapped_exception(exc_val)

@@ -19,7 +19,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from sqlspec.utils.profiling import HotPathProfiler
+from tools.profiling import HotPathProfiler
 
 __all__ = ("SubsystemBenchmark", "main", "print_results_table", "run_benchmarks")
 

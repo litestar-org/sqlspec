@@ -29,6 +29,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from mysql.connector.pooling import MySQLConnectionPool
 
@@ -143,7 +144,7 @@ class MysqlConnectorSyncConnectionContext:
         return self._connection
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._connection is not None:
             self._connection.close()
@@ -187,7 +188,7 @@ class MysqlConnectorAsyncConnectionContext:
         return self._connection
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._connection is not None:
             await self._connection.close()

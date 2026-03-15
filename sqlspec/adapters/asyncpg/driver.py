@@ -80,7 +80,7 @@ class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
         if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
             self.pending_exception = create_mapped_exception(exc_val)

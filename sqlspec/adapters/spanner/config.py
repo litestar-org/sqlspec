@@ -17,6 +17,7 @@ from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from google.auth.credentials import Credentials
     from google.cloud.spanner_v1.database import Database
@@ -102,7 +103,7 @@ class SpannerConnectionContext:
             return self._connection
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._transaction and self._connection:
             txn = cast("Any", self._connection)
@@ -150,7 +151,7 @@ class _SpannerSessionConnectionHandler:
         _conn: "SpannerConnection",
         exc_type: "type[BaseException] | None",
         exc_val: "BaseException | None",
-        exc_tb: Any,
+        exc_tb: "TracebackType | None",
     ) -> None:
         self._connection_ctx.__exit__(exc_type, exc_val, exc_tb)
 

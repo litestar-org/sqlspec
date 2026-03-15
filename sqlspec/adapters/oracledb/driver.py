@@ -57,6 +57,7 @@ from sqlspec.utils.type_guards import has_pipeline_capability
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from types import TracebackType
 
     from sqlspec.adapters.oracledb._typing import OraclePipelineDriver
     from sqlspec.builder import QueryBuilder
@@ -258,7 +259,7 @@ class OracleAsyncCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> None:
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         if self.cursor is not None:
             with contextlib.suppress(Exception):
@@ -280,7 +281,7 @@ class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, oracledb.DatabaseError):
@@ -302,7 +303,7 @@ class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, oracledb.DatabaseError):

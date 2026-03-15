@@ -10,6 +10,7 @@ from psqlpy import Connection as _PsqlpyConnection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
@@ -69,7 +70,7 @@ class PsqlpySessionContext:
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)

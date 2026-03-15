@@ -32,6 +32,7 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -266,7 +267,7 @@ class AsyncpgConnectionContext:
         return self._connection
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._connection is not None:
             if self._config.connection_instance:

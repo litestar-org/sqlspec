@@ -1,9 +1,12 @@
 """Shared exception handler bases for driver adapters."""
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -22,7 +25,7 @@ class BaseAsyncExceptionHandler:
         self,
         exc_type: "type[BaseException] | None",
         exc_val: "BaseException | None",
-        exc_tb: Any,
+        exc_tb: "TracebackType | None",
     ) -> bool:
         _ = exc_tb
         if exc_val is None:
@@ -58,7 +61,7 @@ class BaseSyncExceptionHandler:
         self,
         exc_type: "type[BaseException] | None",
         exc_val: "BaseException | None",
-        exc_tb: Any,
+        exc_tb: "TracebackType | None",
     ) -> bool:
         _ = exc_tb
         if exc_val is None:

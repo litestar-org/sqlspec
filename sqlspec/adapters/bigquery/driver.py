@@ -103,7 +103,7 @@ class BigQueryExceptionHandler(BaseSyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, GoogleCloudError):

@@ -23,6 +23,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
 
@@ -166,7 +167,7 @@ class PsqlpyConnectionContext:
         return connection  # type: ignore[no-any-return]
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]

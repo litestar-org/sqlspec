@@ -31,6 +31,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from oracledb import AuthMode
 
@@ -142,7 +143,7 @@ class OracleSyncConnectionContext:
         return self._conn
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._conn:
             if self._config.connection_instance:
@@ -339,7 +340,7 @@ class OracleAsyncConnectionContext:
         return self._conn
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._conn:
             if self._config.connection_instance:

@@ -34,6 +34,7 @@ from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from types import TracebackType
 
     from sqlspec.core import SQL
     from sqlspec.typing import PoolT
@@ -59,7 +60,7 @@ class _RuntimeConnectionContext(AbstractContextManager[ConnectionT]):
         self._runtime.emit_connection_create(self._connection)
         return self._connection
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "bool | None":
+    def __exit__(self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None") -> "bool | None":
         try:
             return self._context.__exit__(exc_type, exc_val, exc_tb)
         finally:
@@ -79,7 +80,7 @@ class _RuntimeAsyncConnectionContext(AbstractAsyncContextManager[ConnectionT]):
         self._runtime.emit_connection_create(self._connection)
         return self._connection
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "bool | None":
+    async def __aexit__(self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None") -> "bool | None":
         try:
             return await self._context.__aexit__(exc_type, exc_val, exc_tb)
         finally:
@@ -110,7 +111,7 @@ class _RuntimeSessionContext(AbstractContextManager[DriverT]):
         self._runtime.emit_session_start(driver)
         return driver
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "bool | None":
+    def __exit__(self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None") -> "bool | None":
         try:
             return self._context.__exit__(exc_type, exc_val, exc_tb)
         finally:
@@ -144,7 +145,7 @@ class _RuntimeAsyncSessionContext(AbstractAsyncContextManager[DriverT]):
         self._runtime.emit_session_start(driver)
         return driver
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "bool | None":
+    async def __aexit__(self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None") -> "bool | None":
         try:
             return await self._context.__aexit__(exc_type, exc_val, exc_tb)
         finally:
@@ -255,7 +256,7 @@ class SQLSpec:
         """Async context manager entry."""
         return self
 
-    async def __aexit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+    async def __aexit__(self, _exc_type: "type[BaseException] | None", _exc_val: "BaseException | None", _exc_tb: "TracebackType | None") -> None:
         """Async context manager exit with automatic cleanup."""
         await self.close_all_pools()
 

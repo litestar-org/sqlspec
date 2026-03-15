@@ -10,6 +10,7 @@ from asyncpg.pool import PoolConnectionProxy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from asyncpg import Connection, Pool, Record
@@ -78,7 +79,7 @@ class AsyncpgSessionContext:
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)

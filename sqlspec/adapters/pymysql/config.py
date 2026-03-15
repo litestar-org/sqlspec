@@ -14,6 +14,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -86,7 +87,7 @@ class PyMysqlConnectionContext:
         return cast("PyMysqlConnection", self._ctx.__enter__())
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))

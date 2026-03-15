@@ -26,6 +26,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from sqlspec.observability import ObservabilityConfig
 
@@ -135,7 +136,7 @@ class AdbcConnectionContext:
         return self._connection
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._connection:
             self._connection.close()

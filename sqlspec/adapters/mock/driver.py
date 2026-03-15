@@ -35,6 +35,8 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from sqlspec.adapters.mock._typing import MockConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -107,7 +109,7 @@ class MockAsyncCursor:
         return self.cursor
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
         """Clean up cursor resources."""
         if self.cursor is not None:
@@ -128,7 +130,7 @@ class MockExceptionHandler(BaseSyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, sqlite3.Error):
@@ -145,7 +147,7 @@ class MockAsyncExceptionHandler(BaseAsyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, sqlite3.Error):

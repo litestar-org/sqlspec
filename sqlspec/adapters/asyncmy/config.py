@@ -18,6 +18,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
     from asyncmy.pool import Pool  # pyright: ignore
@@ -137,7 +138,7 @@ class AsyncmyConnectionContext:
         return connection
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))

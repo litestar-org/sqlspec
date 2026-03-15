@@ -195,7 +195,7 @@ def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], descriptio
     return exc
 
 
-def create_mapped_exception(exc_type: Any, error: Any) -> SQLSpecError:
+def create_mapped_exception(exc_type: "type[BaseException]", error: "BaseException") -> SQLSpecError:
     """Map DuckDB exceptions to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than

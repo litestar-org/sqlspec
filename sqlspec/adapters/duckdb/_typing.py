@@ -12,6 +12,7 @@ _DuckDBConnection = DuckDBPyConnection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
@@ -70,7 +71,7 @@ class DuckDBSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)

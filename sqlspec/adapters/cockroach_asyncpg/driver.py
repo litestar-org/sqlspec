@@ -38,7 +38,7 @@ class CockroachAsyncpgExceptionHandler(BaseAsyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
         if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
             if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":

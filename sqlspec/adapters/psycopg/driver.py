@@ -55,6 +55,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_readable
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
     from sqlspec.driver import ExecutionResult
@@ -145,7 +147,7 @@ class PsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
@@ -186,7 +188,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "PsycopgSyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
         Args:
@@ -217,7 +219,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "PsycopgSyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
         Args:
@@ -238,7 +240,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "PsycopgSyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with multiple statements.
 
         Args:
@@ -262,7 +264,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+    def dispatch_special_handling(self, cursor: "PsycopgSyncCursor", statement: "SQL") -> "SQLResult | None":
         """Hook for PostgreSQL-specific special operations.
 
         Args:
@@ -566,13 +568,13 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         self._column_name_cache[cache_key] = (description, column_names)
         return column_names
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "PsycopgSyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psycopg sync rows for the direct execution path."""
         data = cast("list[Any] | None", fetched) or []
         column_names = self._resolve_column_names(cursor.description)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "PsycopgSyncCursor") -> int:
         """Resolve rowcount from psycopg cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
@@ -594,7 +596,7 @@ class PsycopgAsyncCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> None:
         _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             await self.cursor.close()
@@ -613,7 +615,7 @@ class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):

@@ -3,10 +3,13 @@
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.sync_tools import CapacityLimiter
@@ -288,7 +291,7 @@ class AsyncThreadedBytesIterator:
         return self
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc: "BaseException | None", tb: "Any | None"
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
         """Close the underlying file when exiting a context."""
         await self.aclose()

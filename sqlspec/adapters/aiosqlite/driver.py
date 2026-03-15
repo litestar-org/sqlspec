@@ -25,6 +25,8 @@ from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -57,7 +59,7 @@ class AiosqliteCursor:
         self.cursor = await self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any) -> None:
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> None:
         if exc_type is not None:
             return
         if self.cursor is not None:
@@ -78,7 +80,7 @@ class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
 
     __slots__ = ()
 
-    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
         if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):
             self.pending_exception = create_mapped_exception(exc_val)
