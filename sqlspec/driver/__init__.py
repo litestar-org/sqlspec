@@ -10,12 +10,15 @@ from sqlspec.driver._common import (
     describe_stack_statement,
     hash_stack_operations,
 )
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._sql_helpers import convert_to_dialect
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 
 __all__ = (
     "AsyncDataDictionaryBase",
     "AsyncDriverAdapterBase",
+    "BaseAsyncExceptionHandler",
+    "BaseSyncExceptionHandler",
     "CommonDriverAttributesMixin",
     "DataDictionaryDialectMixin",
     "DataDictionaryMixin",

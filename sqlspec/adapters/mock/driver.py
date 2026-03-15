@@ -10,8 +10,6 @@ import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
-from typing_extensions import Self
-
 from sqlspec.adapters.mock._typing import MockAsyncSessionContext, MockSyncSessionContext
 from sqlspec.adapters.mock.core import (
     build_insert_statement,
@@ -26,7 +24,13 @@ from sqlspec.adapters.mock.core import (
 )
 from sqlspec.adapters.mock.data_dictionary import MockAsyncDataDictionary, MockDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase, convert_to_dialect
+from sqlspec.driver import (
+    AsyncDriverAdapterBase,
+    BaseAsyncExceptionHandler,
+    BaseSyncExceptionHandler,
+    SyncDriverAdapterBase,
+    convert_to_dialect,
+)
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.sync_tools import async_
 
@@ -111,7 +115,7 @@ class MockAsyncCursor:
                 self.cursor.close()
 
 
-class MockExceptionHandler:
+class MockExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling SQLite database exceptions.
 
     Maps SQLite extended result codes to specific SQLSpec exceptions
@@ -122,15 +126,9 @@ class MockExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, sqlite3.Error):
@@ -139,21 +137,15 @@ class MockExceptionHandler:
         return False
 
 
-class MockAsyncExceptionHandler:
+class MockAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling SQLite database exceptions.
 
     Uses deferred exception pattern for mypyc compatibility.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, sqlite3.Error):

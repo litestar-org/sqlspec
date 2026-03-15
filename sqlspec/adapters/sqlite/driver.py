@@ -4,8 +4,6 @@ import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
-from typing_extensions import Self
-
 from sqlspec.adapters.sqlite._typing import SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
     build_insert_statement,
@@ -21,7 +19,7 @@ from sqlspec.adapters.sqlite.core import (
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_config, register_driver_profile
 from sqlspec.core.result import DMLResult
-from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
@@ -78,7 +76,7 @@ class SqliteCursor:
                 self.cursor.close()
 
 
-class SqliteExceptionHandler:
+class SqliteExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling SQLite database exceptions.
 
     Maps SQLite extended result codes to specific SQLSpec exceptions
@@ -89,15 +87,9 @@ class SqliteExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, sqlite3.Error):

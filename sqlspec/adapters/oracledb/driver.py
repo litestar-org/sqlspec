@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
-from typing_extensions import Self
 
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
@@ -44,6 +43,8 @@ from sqlspec.core import (
 )
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
+    BaseAsyncExceptionHandler,
+    BaseSyncExceptionHandler,
     StackExecutionObserver,
     SyncDriverAdapterBase,
     describe_stack_statement,
@@ -266,7 +267,7 @@ class OracleAsyncCursor:
                 self.cursor.close()
 
 
-class OracleSyncExceptionHandler:
+class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
     """Sync Context manager for handling Oracle database exceptions.
 
     Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
@@ -277,16 +278,9 @@ class OracleSyncExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        _ = exc_tb
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, oracledb.DatabaseError):
@@ -295,7 +289,7 @@ class OracleSyncExceptionHandler:
         return False
 
 
-class OracleAsyncExceptionHandler:
+class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling Oracle database exceptions.
 
     Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
@@ -306,16 +300,9 @@ class OracleAsyncExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        _ = exc_tb
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, oracledb.DatabaseError):

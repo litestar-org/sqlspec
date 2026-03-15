@@ -18,7 +18,7 @@ from sqlspec.adapters.duckdb.core import (
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
-from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -30,8 +30,6 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
-
-from typing_extensions import Self
 
 from sqlspec.adapters.duckdb._typing import DuckDBSessionContext
 
@@ -64,7 +62,7 @@ class DuckDBCursor:
         pass  # Connection lifecycle managed by pool/session
 
 
-class DuckDBExceptionHandler:
+class DuckDBExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling DuckDB database exceptions.
 
     Uses exception type and message-based detection to map DuckDB errors
@@ -75,16 +73,9 @@ class DuckDBExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        _ = exc_tb
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         self.pending_exception = create_mapped_exception(exc_type, exc_val)

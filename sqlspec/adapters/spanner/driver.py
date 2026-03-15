@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
-from typing_extensions import Self
 
 from sqlspec.adapters.spanner._typing import SpannerSessionContext
 from sqlspec.adapters.spanner.core import (
@@ -24,7 +23,7 @@ from sqlspec.adapters.spanner.core import (
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
 from sqlspec.core import StatementConfig, create_arrow_result, register_driver_profile
-from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.serializers import from_json
 
@@ -76,7 +75,7 @@ class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
     def rollback(self) -> None: ...
 
 
-class SpannerExceptionHandler:
+class SpannerExceptionHandler(BaseSyncExceptionHandler):
     """Map Spanner client exceptions to SQLSpec exceptions.
 
     Uses deferred exception pattern for mypyc compatibility: exceptions
@@ -84,16 +83,9 @@ class SpannerExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        _ = exc_tb
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
 

@@ -8,7 +8,6 @@ import inspect
 from typing import TYPE_CHECKING, Any, cast
 
 import psqlpy.exceptions
-from typing_extensions import Self
 
 from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
@@ -31,7 +30,7 @@ from sqlspec.adapters.psqlpy.core import (
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
@@ -87,7 +86,7 @@ class PsqlpyCursor:
         return self._in_use
 
 
-class PsqlpyExceptionHandler:
+class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling psqlpy database exceptions.
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
@@ -98,15 +97,9 @@ class PsqlpyExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error)):

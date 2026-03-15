@@ -21,7 +21,7 @@ from sqlspec.adapters.aiosqlite.core import (
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
@@ -29,8 +29,6 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-
-from typing_extensions import Self
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteSessionContext
 
@@ -67,7 +65,7 @@ class AiosqliteCursor:
                 await self.cursor.close()
 
 
-class AiosqliteExceptionHandler:
+class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiosqlite database exceptions.
 
     Maps SQLite extended result codes to specific SQLSpec exceptions
@@ -78,17 +76,10 @@ class AiosqliteExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        if exc_val is None:
-            return False
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
+        _ = exc_type
         if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True

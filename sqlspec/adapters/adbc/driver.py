@@ -7,8 +7,6 @@ database dialects, parameter style conversion, and transaction management.
 import contextlib
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from typing_extensions import Self
-
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     collect_rows,
@@ -29,7 +27,7 @@ from sqlspec.adapters.adbc.core import (
 )
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
-from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -71,7 +69,7 @@ class AdbcCursor:
                 self.cursor.close()  # type: ignore[no-untyped-call]
 
 
-class AdbcExceptionHandler:
+class AdbcExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling ADBC database exceptions.
 
     ADBC propagates underlying database errors. Exception mapping
@@ -82,16 +80,9 @@ class AdbcExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        _ = exc_tb
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         self.pending_exception = create_mapped_exception(exc_val)

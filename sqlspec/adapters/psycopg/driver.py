@@ -5,7 +5,6 @@ from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
-from typing_extensions import Self
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
@@ -45,6 +44,8 @@ from sqlspec.core import (
 )
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
+    BaseAsyncExceptionHandler,
+    BaseSyncExceptionHandler,
     StackExecutionObserver,
     SyncDriverAdapterBase,
     describe_stack_statement,
@@ -131,7 +132,7 @@ class PsycopgSyncCursor:
             self.cursor.close()
 
 
-class PsycopgSyncExceptionHandler:
+class PsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling PostgreSQL psycopg database exceptions.
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
@@ -142,15 +143,9 @@ class PsycopgSyncExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
@@ -605,7 +600,7 @@ class PsycopgAsyncCursor:
             await self.cursor.close()
 
 
-class PsycopgAsyncExceptionHandler:
+class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling PostgreSQL psycopg database exceptions.
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
@@ -616,15 +611,9 @@ class PsycopgAsyncExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: Any, exc_val: BaseException) -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
