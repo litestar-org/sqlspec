@@ -6,6 +6,7 @@ This module provides functionality to track applied migrations in the database.
 import logging
 import os
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
@@ -92,6 +93,8 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as exc:
+            with suppress(Exception):
+                driver.rollback()
             log_with_context(
                 logger,
                 logging.ERROR,
@@ -467,6 +470,8 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as exc:
+            with suppress(Exception):
+                await driver.rollback()
             log_with_context(
                 logger,
                 logging.ERROR,

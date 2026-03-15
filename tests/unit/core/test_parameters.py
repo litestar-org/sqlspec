@@ -1625,6 +1625,22 @@ def test_duplicate_parameters_qmark_to_numeric(converter: ParameterConverter) ->
     assert "$2" in converted_sql
 
 
+def test_distinct_positional_pyformat_parameters_to_numeric(converter: ParameterConverter) -> None:
+    """Repeated ``%s`` placeholders should remain distinct when normalized."""
+    sql = "SELECT * FROM table WHERE col1 = %s AND col2 = %s"
+
+    converted_sql, _ = converter.convert_placeholder_style(sql, None, ParameterStyle.NUMERIC)
+    converted_info = converter.convert_parameter_info_style(
+        converter.validator.extract_parameters(sql), ParameterStyle.NUMERIC
+    )
+
+    assert converted_sql == "SELECT * FROM table WHERE col1 = $1 AND col2 = $2"
+    assert [(param.name, param.position, param.placeholder_text) for param in converted_info] == [
+        ("1", 33, "$1"),
+        ("2", 47, "$2"),
+    ]
+
+
 def test_vector_similarity_search_example(converter: ParameterConverter) -> None:
     """Test the exact example from the bug report."""
     sql = """SELECT
@@ -2340,6 +2356,21 @@ class TestPsycopgSpecificBehavior:
         # sqlglot_sql should NOT contain pyformat (normalized for parsing)
         assert result.sqlglot_sql is not None
         assert "%(name)s" not in result.sqlglot_sql
+
+    def test_psycopg_positional_pyformat_preserves_distinct_positions(
+        self, processor: ParameterProcessor, psycopg_config: ParameterStyleConfig | None
+    ) -> None:
+        """Psycopg: repeated ``%s`` placeholders should normalize to distinct numeric positions."""
+        if psycopg_config is None:
+            pytest.skip("psycopg adapter not available")
+
+        sql = "SELECT * FROM t WHERE name = ? AND value > ?"
+        params = ["test", 100]
+
+        result = processor.process(sql, params, psycopg_config, dialect="postgres")
+
+        assert result.sql == "SELECT * FROM t WHERE name = %s AND value > %s"
+        assert result.sqlglot_sql == "SELECT * FROM t WHERE name = $1 AND value > $2"
 
 
 class TestMySQLAdaptersBehavior:

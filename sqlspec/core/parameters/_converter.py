@@ -87,8 +87,8 @@ def _is_positional_style(style: "ParameterStyle") -> bool:
     }
 
 
-def _parameter_lookup_key(param: "ParameterInfo", use_sequential_for_qmark: bool) -> str:
-    if use_sequential_for_qmark and param.style == ParameterStyle.QMARK:
+def _parameter_lookup_key(param: "ParameterInfo") -> str:
+    if param.style in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}:
         return f"{param.placeholder_text}_{param.ordinal}"
     return param.placeholder_text
 
@@ -162,18 +162,16 @@ class ParameterConverter:
 
     def _build_conversion_plan(
         self, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
-    ) -> "tuple[list[ParameterInfo], dict[str, int], bool]":
+    ) -> "tuple[list[ParameterInfo], dict[str, int]]":
         ordered_params = _ordered_parameter_info(param_info)
-        source_style = _single_parameter_style(ordered_params)
-        use_sequential_for_qmark = source_style == ParameterStyle.QMARK and target_style == ParameterStyle.NUMERIC
 
         unique_params: dict[str, int] = {}
         for param in ordered_params:
-            param_key = _parameter_lookup_key(param, use_sequential_for_qmark)
+            param_key = _parameter_lookup_key(param)
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
-        return ordered_params, unique_params, use_sequential_for_qmark
+        return ordered_params, unique_params
 
     def _convert_placeholders_to_style(
         self, sql: str, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
@@ -183,7 +181,7 @@ class ParameterConverter:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
-        ordered_params, unique_params, use_sequential_for_qmark = self._build_conversion_plan(param_info, target_style)
+        ordered_params, unique_params = self._build_conversion_plan(param_info, target_style)
 
         placeholder_text_len_cache: dict[str, int] = {}
         # Build SQL using forward iteration with list join (O(n) vs O(n^2) string slicing)
@@ -200,7 +198,7 @@ class ParameterConverter:
 
             # Generate new placeholder based on target style
             if is_positional_style:
-                param_key = _parameter_lookup_key(param, use_sequential_for_qmark)
+                param_key = _parameter_lookup_key(param)
                 new_placeholder = generator(unique_params[param_key])
             else:
                 param_name = _normalized_named_parameter_name(param)
@@ -223,13 +221,14 @@ class ParameterConverter:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
-        ordered_params, unique_params, use_sequential_for_qmark = self._build_conversion_plan(param_info, target_style)
+        ordered_params, unique_params = self._build_conversion_plan(param_info, target_style)
         is_positional_style = _is_positional_style(target_style)
         converted_param_info: list[ParameterInfo] = []
+        delta = 0
 
         for param in ordered_params:
             if is_positional_style:
-                converted_index = unique_params[_parameter_lookup_key(param, use_sequential_for_qmark)]
+                converted_index = unique_params[_parameter_lookup_key(param)]
                 placeholder_text = generator(converted_index)
                 name = None
                 if target_style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
@@ -238,15 +237,17 @@ class ParameterConverter:
                 name = _normalized_named_parameter_name(param)
                 placeholder_text = generator(name)
 
+            converted_position = param.position + delta
             converted_param_info.append(
                 ParameterInfo(
                     name=name,
                     style=target_style,
-                    position=param.position,
+                    position=converted_position,
                     ordinal=param.ordinal,
                     placeholder_text=placeholder_text,
                 )
             )
+            delta += len(placeholder_text) - len(param.placeholder_text)
 
         return converted_param_info
 
