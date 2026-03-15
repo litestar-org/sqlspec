@@ -12,6 +12,8 @@ from sqlspec.typing import PYARROW_INSTALLED
 
 pytestmark = pytest.mark.xdist_group("core")
 
+_RESULT_BASE_COMPILED = (result_base.__file__ or "").endswith((".so", ".pyd"))
+
 
 @pytest.fixture
 def sample_data() -> list[dict[str, Any]]:
@@ -358,6 +360,7 @@ def test_sql_result_get_first_with_schema_type() -> None:
     assert none_user is None
 
 
+@pytest.mark.skipif(_RESULT_BASE_COMPILED, reason="patch.object cannot intercept mypyc-compiled modules")
 def test_sql_result_reuses_cached_schema_list_conversion() -> None:
     """Repeated list-shaped schema access should not re-run to_schema()."""
 
@@ -381,6 +384,7 @@ def test_sql_result_reuses_cached_schema_list_conversion() -> None:
     assert mocked_to_schema.call_count == 1
 
 
+@pytest.mark.skipif(_RESULT_BASE_COMPILED, reason="patch.object cannot intercept mypyc-compiled modules")
 def test_sql_result_reuses_cached_single_row_schema_conversion() -> None:
     """Repeated single-row schema access should not re-run to_schema()."""
 

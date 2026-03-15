@@ -25,6 +25,13 @@ from sqlspec.utils.sync_tools import (
     with_ensure_async_,
 )
 
+# Detect whether the sync_tools module is mypyc-compiled.
+# When compiled, `patch.object` / `patch()` on C-extension modules is a no-op,
+# so tests that assert mock call counts must be skipped.
+import sqlspec.utils.sync_tools as _sync_tools_module
+
+_SYNC_TOOLS_COMPILED = (_sync_tools_module.__file__ or "").endswith((".so", ".pyd"))
+
 pytestmark = pytest.mark.xdist_group("utils")
 
 
@@ -465,6 +472,7 @@ def test_await_portal_cleanup() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(_SYNC_TOOLS_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
 def test_await_portal_fallback_when_current_task_exists() -> None:
     """When current_task is non-None and raise_sync_error=False, await_ should
     fall back to get_global_portal() instead of raising RuntimeError."""
@@ -492,6 +500,7 @@ def test_await_portal_fallback_when_current_task_exists() -> None:
     mock_portal.call.assert_called_once()
 
 
+@pytest.mark.skipif(_SYNC_TOOLS_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
 def test_await_raises_when_current_task_exists_and_raise_sync_error_true() -> None:
     """When current_task is non-None and raise_sync_error=True, await_ should
     raise RuntimeError with the appropriate message."""
@@ -512,6 +521,7 @@ def test_await_raises_when_current_task_exists_and_raise_sync_error_true() -> No
             sync_func()
 
 
+@pytest.mark.skipif(_SYNC_TOOLS_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
 def test_await_portal_fallback_propagates_exceptions() -> None:
     """When using portal fallback (current_task non-None, raise_sync_error=False),
     exceptions from the coroutine should propagate through the portal."""
@@ -536,6 +546,7 @@ def test_await_portal_fallback_propagates_exceptions() -> None:
             sync_explode()
 
 
+@pytest.mark.skipif(_SYNC_TOOLS_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
 def test_await_run_coroutine_threadsafe_when_no_current_task() -> None:
     """When the loop is running but current_task is None (worker thread context),
     await_ should use asyncio.run_coroutine_threadsafe."""
