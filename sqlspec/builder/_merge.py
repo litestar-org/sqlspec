@@ -23,6 +23,7 @@ from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_expression_and_sql
 
@@ -32,6 +33,24 @@ if TYPE_CHECKING:
 __all__ = ("Merge",)
 
 MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb"})
+_POSTGRES_TYPE_DISPATCHER = TypeDispatcher[str]()
+_ORACLE_TYPE_DISPATCHER = TypeDispatcher[str]()
+
+_POSTGRES_TYPE_DISPATCHER.register(bool, "BOOLEAN")
+_POSTGRES_TYPE_DISPATCHER.register(int, "INTEGER")
+_POSTGRES_TYPE_DISPATCHER.register(float, "DOUBLE PRECISION")
+_POSTGRES_TYPE_DISPATCHER.register(Decimal, "NUMERIC")
+_POSTGRES_TYPE_DISPATCHER.register(dict, "JSONB")
+_POSTGRES_TYPE_DISPATCHER.register(list, "JSONB")
+_POSTGRES_TYPE_DISPATCHER.register(datetime, "TIMESTAMP")
+
+_ORACLE_TYPE_DISPATCHER.register(bool, "NUMBER(1)")
+_ORACLE_TYPE_DISPATCHER.register(int, "NUMBER")
+_ORACLE_TYPE_DISPATCHER.register(float, "NUMBER")
+_ORACLE_TYPE_DISPATCHER.register(Decimal, "NUMBER")
+_ORACLE_TYPE_DISPATCHER.register(dict, "JSON")
+_ORACLE_TYPE_DISPATCHER.register(list, "JSON")
+_ORACLE_TYPE_DISPATCHER.register(datetime, "TIMESTAMP")
 
 
 @trait
@@ -263,32 +282,18 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         """
         if value is None:
             return "NUMERIC"
-        if isinstance(value, bool):
-            return "BOOLEAN"
-        if isinstance(value, int):
-            return "INTEGER"
-        if isinstance(value, float):
-            return "DOUBLE PRECISION"
-        if isinstance(value, Decimal):
-            return "NUMERIC"
-        if isinstance(value, (dict, list)):
-            return "JSONB"
-        if isinstance(value, datetime):
-            return "TIMESTAMP"
+        resolved_type = _POSTGRES_TYPE_DISPATCHER.get(value)
+        if resolved_type is not None:
+            return resolved_type
         return "TEXT"
 
     def _infer_oracle_type(self, value: "Any") -> str:
         """Infer Oracle column type for JSON_TABLE projection."""
         varchar2_max = 4000
 
-        if isinstance(value, bool):
-            return "NUMBER(1)"
-        if isinstance(value, (int, float, Decimal)):
-            return "NUMBER"
-        if isinstance(value, (dict, list)):
-            return "JSON"
-        if isinstance(value, datetime):
-            return "TIMESTAMP"
+        resolved_type = _ORACLE_TYPE_DISPATCHER.get(value)
+        if resolved_type is not None:
+            return resolved_type
         if value is not None and len(str(value)) > varchar2_max:
             return "CLOB"
         return f"VARCHAR2({varchar2_max})"

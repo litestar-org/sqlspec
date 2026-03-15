@@ -221,7 +221,9 @@ class MysqlConnectorSyncConfig(
 
     driver_type: ClassVar[type[MysqlConnectorSyncDriver]] = MysqlConnectorSyncDriver
     connection_type: ClassVar[type[MysqlConnectorSyncConnection]] = MysqlConnectorSyncConnection
-    _connection_context_class: "ClassVar[type[MysqlConnectorSyncConnectionContext]]" = MysqlConnectorSyncConnectionContext
+    _connection_context_class: "ClassVar[type[MysqlConnectorSyncConnectionContext]]" = (
+        MysqlConnectorSyncConnectionContext
+    )
     _session_factory_class: "ClassVar[type[_MysqlConnectorSyncSessionConnectionHandler]]" = (
         _MysqlConnectorSyncSessionConnectionHandler
     )

@@ -92,9 +92,7 @@ def test_mysqlconnector_sync_exception_handler_preserves_suppression(monkeypatch
 
 
 @pytest.mark.anyio
-async def test_mysqlconnector_async_exception_handler_preserves_suppression(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_mysqlconnector_async_exception_handler_preserves_suppression(monkeypatch: pytest.MonkeyPatch) -> None:
     """mysql-connector async handler should preserve migration-suppression sentinel values."""
     pytest.importorskip("mysql.connector")
     import mysql.connector

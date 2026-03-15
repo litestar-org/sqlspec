@@ -102,7 +102,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PyMysqlDataDictionary | None = None
 
-    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "PyMysqlCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
@@ -129,7 +129,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "PyMysqlCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
@@ -139,7 +139,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "PyMysqlCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -254,7 +254,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
             self._data_dictionary = PyMysqlDataDictionary()
         return self._data_dictionary
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "PyMysqlCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect PyMySQL rows for the direct execution path."""
         description = cursor.description or None
         column_names = resolve_column_names(description)
@@ -265,7 +265,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         )
         return rows, column_names, len(rows)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "PyMysqlCursor") -> int:
         """Resolve rowcount from PyMySQL cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

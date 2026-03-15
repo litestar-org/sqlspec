@@ -10,6 +10,7 @@ Tests the 2-Phase Parameter Conversion System:
 
 import json
 import math
+from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from importlib import import_module
@@ -37,13 +38,14 @@ from sqlspec.core import (
     replace_placeholders_with_literals,
     wrap_with_type,
 )
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
-from sqlspec.utils.serializers import from_json, to_json
 
 # Detect whether the core parameters module is mypyc-compiled.
 # When compiled, `patch.object` on C-extension classes is a no-op,
 # so tests that assert mock call counts must be skipped.
+from sqlspec.core.parameters import _processor as _processor_module
 from sqlspec.core.parameters import _validator as _validator_module
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.utils.serializers import from_json, to_json
 
 _VALIDATOR_COMPILED = (_validator_module.__file__ or "").endswith((".so", ".pyd"))
 
@@ -1191,6 +1193,14 @@ def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterP
     assert result.parameters == [5]
 
 
+def test_resolve_type_coercion_supports_virtual_abc_fallback() -> None:
+    """ABC-registered coercions should still resolve for builtin sequence payloads."""
+    type_map = {Sequence: lambda value: tuple(value)}
+    fallback_items = _processor_module._type_coercion_fallbacks(type_map)
+
+    assert _processor_module._resolve_type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
+
+
 def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_already_positional(
     processor: "ParameterProcessor",
 ) -> None:
@@ -1782,7 +1792,9 @@ def test_positional_parameter_output_type_narrowing(converter: ParameterConverte
     assert result_dict == (1, 2, 3)
 
 
-def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(converter: ParameterConverter, monkeypatch: Any) -> None:
+def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(
+    converter: ParameterConverter, monkeypatch: Any
+) -> None:
     """Position-ordered parameter metadata should not pay an extra sorted() pass."""
     sql = "SELECT :a, :b, :c"
     param_info = converter.validator.extract_parameters(sql)

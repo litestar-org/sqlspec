@@ -492,7 +492,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "AdbcCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect ADBC rows for the direct execution path."""
         column_names = self._resolve_column_names(cursor.description)
         data, column_names = collect_rows(
@@ -500,7 +500,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         )
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "AdbcCursor") -> int:
         """Resolve rowcount from ADBC cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

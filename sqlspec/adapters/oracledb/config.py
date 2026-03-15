@@ -380,7 +380,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
     migration_tracker_type: "ClassVar[type[OracleAsyncMigrationTracker]]" = OracleAsyncMigrationTracker
     _connection_context_class: "ClassVar[type[OracleAsyncConnectionContext]]" = OracleAsyncConnectionContext
-    _session_factory_class: "ClassVar[type[_OracleAsyncSessionConnectionHandler]]" = _OracleAsyncSessionConnectionHandler
+    _session_factory_class: "ClassVar[type[_OracleAsyncSessionConnectionHandler]]" = (
+        _OracleAsyncSessionConnectionHandler
+    )
     _session_context_class: "ClassVar[type[OracleAsyncSessionContext]]" = OracleAsyncSessionContext
     _default_statement_config = default_statement_config
     supports_transactional_ddl: ClassVar[bool] = False

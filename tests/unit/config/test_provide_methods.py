@@ -233,8 +233,7 @@ class _AsyncTemplateConfig(_AsyncPoolConfigBase):
 @requires_interpreted
 def test_sync_database_config_template_provides_connection_and_session() -> None:
     config = _SyncTemplateConfig(
-        statement_config=StatementConfig(dialect="postgres"),
-        driver_features={"enable_events": True},
+        statement_config=StatementConfig(dialect="postgres"), driver_features={"enable_events": True}
     )
 
     connection_context = config.provide_connection()
@@ -262,8 +261,7 @@ def test_sync_database_config_template_uses_default_statement_config_when_unset(
 @requires_interpreted
 async def test_async_database_config_template_provides_connection_and_session() -> None:
     config = _AsyncTemplateConfig(
-        statement_config=StatementConfig(dialect="postgres"),
-        driver_features={"enable_events": True},
+        statement_config=StatementConfig(dialect="postgres"), driver_features={"enable_events": True}
     )
 
     connection_context = config.provide_connection()
@@ -351,7 +349,11 @@ def test_pooled_adapters_inherit_base_provide_connection(config_type: type[Any],
     ],
 )
 def test_template_only_adapters_inherit_base_provide_session(config_type: type[Any]) -> None:
-    base_method = SyncDatabaseConfig.provide_session if issubclass(config_type, SyncDatabaseConfig) else AsyncDatabaseConfig.provide_session
+    base_method = (
+        SyncDatabaseConfig.provide_session
+        if issubclass(config_type, SyncDatabaseConfig)
+        else AsyncDatabaseConfig.provide_session
+    )
     assert config_type.provide_session is base_method
 
 
@@ -369,5 +371,9 @@ def test_template_only_adapters_inherit_base_provide_session(config_type: type[A
     ],
 )
 def test_specialized_adapters_keep_provide_session_override(config_type: type[Any]) -> None:
-    base_method = SyncDatabaseConfig.provide_session if issubclass(config_type, SyncDatabaseConfig) else AsyncDatabaseConfig.provide_session
+    base_method = (
+        SyncDatabaseConfig.provide_session
+        if issubclass(config_type, SyncDatabaseConfig)
+        else AsyncDatabaseConfig.provide_session
+    )
     assert config_type.provide_session is not base_method

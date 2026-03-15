@@ -29,6 +29,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer
@@ -76,6 +77,7 @@ _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 _JSONB_TYPE: "type[Any] | None" = None
 _JSONB_RESOLVED: bool = False
+_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
@@ -264,6 +266,7 @@ def apply_driver_features(
 
     return statement_config, features
 
+
 def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect psqlpy rows and column names.
 
@@ -416,6 +419,20 @@ def get_parameter_casts(statement: "SQL") -> "dict[int, str]":
     return {}
 
 
+def _get_type_coercion_dispatcher(
+    type_map: "dict[type, Callable[[Any], Any]]",
+) -> "TypeDispatcher[Callable[[Any], Any]]":
+    fallback_items = tuple(type_map.items())
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
+
+
 def prepare_parameters_with_casts(
     parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
 ) -> Any:
@@ -424,14 +441,18 @@ def prepare_parameters_with_casts(
         result: list[Any] = []
         serializer = statement_config.parameter_config.json_serializer or to_json
         type_map = statement_config.parameter_config.type_coercion_map
+        dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
         for idx, param in enumerate(parameters, start=1):
             cast_type = parameter_casts.get(idx, "")
             prepared_value = param
-            if type_map:
-                for type_check, converter in type_map.items():
-                    if isinstance(prepared_value, type_check):
-                        prepared_value = converter(prepared_value)
-                        break
+            if type_map and dispatcher is not None:
+                exact_converter = type_map.get(type(prepared_value))
+                if exact_converter is not None:
+                    prepared_value = exact_converter(prepared_value)
+                else:
+                    fallback_converter = dispatcher.get(prepared_value)
+                    if fallback_converter is not None:
+                        prepared_value = fallback_converter(prepared_value)
             if cast_type:
                 prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
             result.append(prepared_value)

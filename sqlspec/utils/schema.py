@@ -23,6 +23,7 @@ from sqlspec.typing import (
     get_type_adapter,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
@@ -61,6 +62,7 @@ _MSGSPEC_RENAME_CONVERTERS: Final[dict[str, Callable[[str], str]]] = {
     "kebab": kebabize,
     "pascal": pascalize,
 }
+_NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = None
 
 
 # =============================================================================
@@ -395,16 +397,37 @@ def _convert_numpy_recursive(obj: Any) -> Any:
     if not NUMPY_INSTALLED:
         return obj
 
-    import numpy as np
-
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, dict):
-        return {k: _convert_numpy_recursive(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        converted = [_convert_numpy_recursive(item) for item in obj]
-        return type(obj)(converted)
+    handler = _get_numpy_recursive_dispatcher().get(obj)
+    if handler is not None:
+        return handler(obj)
     return obj
+
+
+def _convert_numpy_array(obj: Any) -> Any:
+    return obj.tolist()
+
+
+def _convert_numpy_mapping(obj: Any) -> Any:
+    return {key: _convert_numpy_recursive(value) for key, value in obj.items()}
+
+
+def _convert_numpy_sequence(obj: Any) -> Any:
+    converted = [_convert_numpy_recursive(item) for item in obj]
+    return type(obj)(converted)
+
+
+def _get_numpy_recursive_dispatcher() -> "TypeDispatcher[Callable[[Any], Any]]":
+    global _NUMPY_RECURSIVE_DISPATCHER
+    if _NUMPY_RECURSIVE_DISPATCHER is None:
+        import numpy as np
+
+        dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
+        dispatcher.register(np.ndarray, _convert_numpy_array)
+        dispatcher.register(dict, _convert_numpy_mapping)
+        dispatcher.register(list, _convert_numpy_sequence)
+        dispatcher.register(tuple, _convert_numpy_sequence)
+        _NUMPY_RECURSIVE_DISPATCHER = dispatcher
+    return _NUMPY_RECURSIVE_DISPATCHER
 
 
 def _convert_msgspec(data: Any, schema_type: Any) -> Any:

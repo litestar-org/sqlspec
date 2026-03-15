@@ -123,7 +123,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MysqlConnectorSyncDataDictionary | None = None
 
-    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "MysqlConnectorSyncCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
@@ -150,7 +150,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "MysqlConnectorSyncCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
@@ -160,7 +160,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "MysqlConnectorSyncCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -275,7 +275,9 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             self._data_dictionary = MysqlConnectorSyncDataDictionary()
         return self._data_dictionary
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(
+        self, cursor: "MysqlConnectorSyncCursor", fetched: "list[Any]"
+    ) -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector sync rows for the direct execution path."""
         description = cursor.description or None
         column_names = resolve_column_names(description)
@@ -286,7 +288,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         )
         return rows, column_names, len(rows)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "MysqlConnectorSyncCursor") -> int:
         """Resolve rowcount from mysql-connector cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
@@ -355,7 +357,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MysqlConnectorAsyncDataDictionary | None = None
 
-    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "MysqlConnectorAsyncCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
@@ -382,7 +384,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         last_id = normalize_lastrowid(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "MysqlConnectorAsyncCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
@@ -392,7 +394,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "MysqlConnectorAsyncCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -509,7 +511,9 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             self._data_dictionary = MysqlConnectorAsyncDataDictionary()
         return self._data_dictionary
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(
+        self, cursor: "MysqlConnectorAsyncCursor", fetched: "list[Any]"
+    ) -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector async rows for the direct execution path."""
         description = cursor.description or None
         column_names = resolve_column_names(description)
@@ -520,7 +524,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         )
         return rows, column_names, len(rows)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "MysqlConnectorAsyncCursor") -> int:
         """Resolve rowcount from mysql-connector cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

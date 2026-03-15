@@ -165,7 +165,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute(self, cursor: "BigQueryCursor", statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
 
         Args:
@@ -206,7 +206,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = build_dml_rowcount(cursor.job, 0)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: "BigQueryCursor", statement: "SQL") -> ExecutionResult:
         """BigQuery execute_many with Parquet bulk load optimization.
 
         Uses Parquet bulk load for INSERT operations (fast path) and falls back
@@ -255,7 +255,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_script(self, cursor: "BigQueryCursor", statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
@@ -541,14 +541,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "BigQueryCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect BigQuery rows for the direct execution path."""
         schema = cursor.job.schema if cursor.job else None
         column_names = resolve_column_names(schema, self._column_name_cache)
         data, _ = collect_rows(fetched, schema, column_names=column_names)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "BigQueryCursor") -> int:
         """Resolve rowcount from BigQuery job for the direct execution path."""
         return build_dml_rowcount(cursor.job, 0) if cursor.job else 0
 

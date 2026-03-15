@@ -20,6 +20,7 @@ from sqlspec.core.parameters._types import (
     wrap_with_type,
 )
 from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = (
     "ParameterProcessor",
@@ -35,6 +36,7 @@ _EXECUTE_MANY_SAMPLE_THRESHOLD = 10
 _EXECUTE_MANY_SAMPLE_SIZE = 3
 
 TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
+_TYPE_COERCION_DISPATCHERS: "dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 
 
 def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
@@ -205,6 +207,19 @@ def _type_coercion_fallbacks(
     return tuple(type_coercion_map.items())
 
 
+def _get_type_coercion_dispatcher(
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> "TypeDispatcher[Callable[[Any], Any]]":
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
+
+
 def _resolve_type_coercion(
     value: object,
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
@@ -214,11 +229,9 @@ def _resolve_type_coercion(
     exact_converter = type_coercion_map.get(value_type)
     if exact_converter is not None:
         return exact_converter(value)
-    for type_check, converter in fallback_items:
-        if type_check is value_type:
-            continue
-        if isinstance(value, type_check):
-            return converter(value)
+    fallback_converter = _get_type_coercion_dispatcher(fallback_items).get(value)
+    if fallback_converter is not None:
+        return fallback_converter(value)
     return value
 
 
@@ -253,7 +266,6 @@ def _coerce_parameter_value(
         wrapped_value: object = typed_param.value
         if wrapped_value is None:
             return wrapped_value
-        original_type = typed_param.original_type
         coerced = _resolve_type_coercion(wrapped_value, type_coercion_map, fallback_items)
         if coerced is wrapped_value:
             return wrapped_value
@@ -1023,7 +1035,13 @@ class ParameterProcessor:
             processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
 
         processed_sql, processed_parameters, converted_param_info = self._convert_placeholders_for_execution(
-            processed_sql, processed_parameters, config, param_info, original_styles, needs_execution_conversion, is_many
+            processed_sql,
+            processed_parameters,
+            config,
+            param_info,
+            original_styles,
+            needs_execution_conversion,
+            is_many,
         )
 
         if config.output_transformer:

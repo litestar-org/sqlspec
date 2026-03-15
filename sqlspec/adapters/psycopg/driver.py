@@ -596,7 +596,9 @@ class PsycopgAsyncCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> None:
         _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             await self.cursor.close()
@@ -657,7 +659,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "PsycopgAsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement (async).
 
         Args:
@@ -688,7 +690,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "PsycopgAsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets (async).
 
         Args:
@@ -709,7 +711,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "PsycopgAsyncCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with multiple statements (async).
 
         Args:
@@ -733,7 +735,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    async def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+    async def dispatch_special_handling(self, cursor: "PsycopgAsyncCursor", statement: "SQL") -> "SQLResult | None":
         """Hook for PostgreSQL-specific special operations.
 
         Args:
@@ -1047,13 +1049,13 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         self._column_name_cache[cache_key] = (description, column_names)
         return column_names
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "PsycopgAsyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psycopg async rows for the direct execution path."""
         data = cast("list[Any] | None", fetched) or []
         column_names = self._resolve_column_names(cursor.description)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "PsycopgAsyncCursor") -> int:
         """Resolve rowcount from psycopg cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

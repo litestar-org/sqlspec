@@ -111,9 +111,7 @@ def test_adbc_config_initializes_extension_flags_to_none() -> None:
 def test_resolve_postgres_extension_state_promotes_paradedb() -> None:
     """Detected extensions should promote the runtime dialect."""
     statement_config, pgvector_available, paradedb_available = resolve_postgres_extension_state(
-        get_statement_config("postgres"),
-        {"enable_pgvector": True, "enable_paradedb": True},
-        {"vector", "pg_search"},
+        get_statement_config("postgres"), {"enable_pgvector": True, "enable_paradedb": True}, {"vector", "pg_search"}
     )
 
     assert statement_config.dialect == "paradedb"

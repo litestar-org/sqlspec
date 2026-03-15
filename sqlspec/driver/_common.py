@@ -39,6 +39,7 @@ from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProt
 from sqlspec.typing import VersionCacheResult, VersionInfo
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.type_guards import (
     has_array_interface,
     has_cursor_metadata,
@@ -198,7 +199,9 @@ class SyncExceptionHandler(Protocol):
 
     def __enter__(self) -> Self: ...
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> bool: ...
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> bool: ...
 
 
 class AsyncExceptionHandler(Protocol):
@@ -213,7 +216,9 @@ class AsyncExceptionHandler(Protocol):
 
     async def __aenter__(self) -> Self: ...
 
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> bool: ...
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> bool: ...
 
 
 logger = get_logger("sqlspec.driver")
@@ -224,12 +229,24 @@ VERSION_GROUPS_MIN_FOR_PATCH = 2
 
 _CONVERT_TO_TUPLE = object()
 _CONVERT_TO_FROZENSET = object()
+_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Any], ...], TypeDispatcher[Any]]" = {}
 
 
 def _type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tuple[tuple[type, Any], ...]":
     if not type_coercion_map:
         return ()
     return tuple(type_coercion_map.items())
+
+
+def _get_type_coercion_dispatcher(fallback_items: "tuple[tuple[type, Any], ...]") -> "TypeDispatcher[Any]":
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher[Any]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
 
 
 def make_cache_key_hashable(obj: Any) -> Any:
@@ -430,7 +447,9 @@ class StackExecutionObserver:
         )
         return self
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> Literal[False]:
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> Literal[False]:
         duration = perf_counter() - self.started
         self.metrics.record_duration(duration)
         if exc_val is not None:
@@ -1574,9 +1593,8 @@ class CommonDriverAttributesMixin:
                             if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
                                 needs_transform = True
                                 break
-                    else:
-                        if self._needs_coercion_candidate(param_set, type_coercion_map, fallback_items):
-                            needs_transform = True
+                    elif self._needs_coercion_candidate(param_set, type_coercion_map, fallback_items):
+                        needs_transform = True
                     if needs_transform:
                         break
 
@@ -1626,12 +1644,9 @@ class CommonDriverAttributesMixin:
         exact_converter = type_coercion_map.get(value_type)
         if exact_converter is not None:
             return exact_converter(value)
-
-        for type_check, converter in fallback_items:
-            if type_check is value_type:
-                continue
-            if isinstance(value, type_check):
-                return converter(value)
+        fallback_converter = _get_type_coercion_dispatcher(fallback_items).get(value)
+        if fallback_converter is not None:
+            return fallback_converter(value)
         return value
 
     def _needs_coercion_candidate(
@@ -1648,13 +1663,7 @@ class CommonDriverAttributesMixin:
         value_type = type(value)
         if value_type in type_coercion_map:
             return True
-
-        for type_check, _converter in fallback_items:
-            if type_check is value_type:
-                continue
-            if isinstance(value, type_check):
-                return True
-        return False
+        return _get_type_coercion_dispatcher(fallback_items).get(value) is not None
 
     def _format_parameter_set_for_many(
         self, parameters: "StatementParameters", statement_config: "StatementConfig"

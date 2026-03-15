@@ -347,11 +347,7 @@ class SyncStoragePipeline:
         payload = _encode_row_payload(serialized, format_choice)
         resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
         return self._write_bytes(
-            payload,
-            destination,
-            rows=len(serialized),
-            format_label=format_choice,
-            storage_options=resolved_options,
+            payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
         )
 
     def write_arrow(
@@ -372,11 +368,7 @@ class SyncStoragePipeline:
             table, format_choice, compression=compression, write_options=format_write_options
         )
         return self._write_bytes(
-            payload,
-            destination,
-            rows=int(table.num_rows),
-            format_label=format_choice,
-            storage_options=resolved_options,
+            payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
         )
 
     def read_arrow(
@@ -490,11 +482,7 @@ class AsyncStoragePipeline:
         payload = await async_(_encode_row_payload)(serialized, format_choice)
         resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
         return await self._write_bytes_async(
-            payload,
-            destination,
-            rows=len(serialized),
-            format_label=format_choice,
-            storage_options=resolved_options,
+            payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
         )
 
     async def write_arrow(
@@ -513,11 +501,7 @@ class AsyncStoragePipeline:
             table, format_choice, compression=compression, write_options=format_write_options
         )
         return await self._write_bytes_async(
-            payload,
-            destination,
-            rows=int(table.num_rows),
-            format_label=format_choice,
-            storage_options=resolved_options,
+            payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
         )
 
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:

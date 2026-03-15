@@ -1,8 +1,11 @@
 """Unit tests for asyncpg type handlers."""
 
+import asyncpg
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlspec.adapters.asyncpg.core import create_mapped_exception
 from sqlspec.adapters.asyncpg.config import register_json_codecs, register_pgvector_support
+from sqlspec.exceptions import PermissionDeniedError, UniqueViolationError
 
 
 async def test_register_json_codecs_success() -> None:
@@ -64,3 +67,21 @@ async def test_register_pgvector_support_handles_exception() -> None:
     with patch("pgvector.asyncpg.register_vector", new_callable=AsyncMock) as mock_register:
         mock_register.side_effect = Exception("Registration error")
         await register_pgvector_support(connection)
+
+
+def test_create_mapped_exception_uses_exact_exception_dispatch() -> None:
+    error = asyncpg.exceptions.UniqueViolationError("duplicate key")
+
+    result = create_mapped_exception(error)
+
+    assert isinstance(result, UniqueViolationError)
+    assert result.__cause__ is error
+
+
+def test_create_mapped_exception_uses_registered_permission_dispatch() -> None:
+    error = asyncpg.exceptions.InvalidPasswordError("bad password")
+
+    result = create_mapped_exception(error)
+
+    assert isinstance(result, PermissionDeniedError)
+    assert result.__cause__ is error

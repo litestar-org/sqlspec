@@ -32,15 +32,13 @@ def build_default_statement_config(default_dialect: str) -> StatementConfig:
     return StatementConfig(
         dialect=default_dialect,
         parameter_config=ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.QMARK,
-            supported_parameter_styles={ParameterStyle.QMARK},
+            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
         ),
     )
 
 
 def seed_runtime_driver_features(
-    driver_features: "dict[str, Any] | None",
-    storage_capabilities: "dict[str, Any] | StorageCapabilities | None",
+    driver_features: "dict[str, Any] | None", storage_capabilities: "dict[str, Any] | StorageCapabilities | None"
 ) -> "dict[str, Any]":
     """Clone and seed driver feature state used on the runtime hot path."""
     seeded_features = dict(driver_features) if driver_features else {}
@@ -69,7 +67,9 @@ def resolve_postgres_extension_state(
 ) -> "tuple[StatementConfig, bool, bool]":
     """Resolve detected PostgreSQL extension flags and promoted dialect."""
     detected = detected_extensions or set()
-    pgvector_available = bool(driver_features and driver_features.get("enable_pgvector", False) and "vector" in detected)
+    pgvector_available = bool(
+        driver_features and driver_features.get("enable_pgvector", False) and "vector" in detected
+    )
     paradedb_available = bool(
         driver_features and driver_features.get("enable_paradedb", False) and "pg_search" in detected
     )
@@ -117,9 +117,7 @@ def create_sync_pool(
 
 
 def close_sync_pool(
-    connection_instance: "PoolT | None",
-    close_pool: "Callable[[], None]",
-    emit_pool_destroy: "Callable[[PoolT], None]",
+    connection_instance: "PoolT | None", close_pool: "Callable[[], None]", emit_pool_destroy: "Callable[[PoolT], None]"
 ) -> None:
     """Close a sync pool and emit teardown hooks."""
     close_pool()

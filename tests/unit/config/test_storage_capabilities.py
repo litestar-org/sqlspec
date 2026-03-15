@@ -255,9 +255,7 @@ def test_build_postgres_extension_probe_names_filters_disabled_features() -> Non
 
 def test_resolve_postgres_extension_state_promotes_paradedb() -> None:
     statement_config, pgvector_available, paradedb_available = resolve_postgres_extension_state(
-        StatementConfig(dialect="postgres"),
-        {"enable_pgvector": True, "enable_paradedb": True},
-        {"vector", "pg_search"},
+        StatementConfig(dialect="postgres"), {"enable_pgvector": True, "enable_paradedb": True}, {"vector", "pg_search"}
     )
 
     assert statement_config.dialect == "paradedb"

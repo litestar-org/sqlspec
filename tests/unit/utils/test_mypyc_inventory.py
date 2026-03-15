@@ -20,11 +20,7 @@ def test_build_inventory_reports_current_compiled_surface() -> None:
 
     inventory = module.build_inventory()
 
-    assert inventory["summary"] == {
-        "compiled_count": 60,
-        "interpreted_count": 335,
-        "total_modules": 395,
-    }
+    assert inventory["summary"] == {"compiled_count": 60, "interpreted_count": 335, "total_modules": 395}
 
     hot_surfaces = inventory["hot_surfaces"]
     assert hot_surfaces["sqlspec/config.py"]["status"] == "interpreted"

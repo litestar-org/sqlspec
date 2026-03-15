@@ -431,11 +431,11 @@ class MockSyncDriver(SyncDriverAdapterBase):
             return sql
         return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "MockCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mock sync rows for the direct execution path."""
         return collect_rows(fetched, cursor.description)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "MockCursor") -> int:
         """Resolve rowcount from mock cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
@@ -735,11 +735,11 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             return sql
         return convert_to_dialect(statement, self._target_dialect, "sqlite", pretty=False)
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "MockAsyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mock async rows for the direct execution path."""
         return collect_rows(fetched, cursor.description)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "MockAsyncCursor") -> int:
         """Resolve rowcount from mock cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

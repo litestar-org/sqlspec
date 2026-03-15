@@ -55,13 +55,7 @@ def test_perf_surface_inventory_covers_all_adapter_configs_and_integration_roots
     assert INVENTORY_PATH.is_file()
     assert inventory_adapters == actual_adapters
 
-    allowed_families = {
-        "bridge/underlying-engine",
-        "cloud-managed",
-        "file-local",
-        "mock-only",
-        "server-backed",
-    }
+    allowed_families = {"bridge/underlying-engine", "cloud-managed", "file-local", "mock-only", "server-backed"}
 
     for entry in inventory["adapters"]:
         assert entry["execution_surfaces"]

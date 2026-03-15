@@ -124,11 +124,11 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
         }
 
     adapter_configs = sorted(
-        module
-        for module in modules
-        if module.startswith("sqlspec/adapters/") and module.endswith("/config.py")
+        module for module in modules if module.startswith("sqlspec/adapters/") and module.endswith("/config.py")
     )
-    adapter_cores = sorted(module for module in modules if module.startswith("sqlspec/adapters/") and module.endswith("/core.py"))
+    adapter_cores = sorted(
+        module for module in modules if module.startswith("sqlspec/adapters/") and module.endswith("/core.py")
+    )
 
     return {
         "summary": {
@@ -170,6 +170,4 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    import json
-
-    print(json.dumps(build_inventory(), indent=2))
+    pass

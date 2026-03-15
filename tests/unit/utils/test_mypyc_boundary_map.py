@@ -101,9 +101,7 @@ def test_build_boundary_map_tracks_serializer_and_any_seams() -> None:
         "compiled_to_interpreted_json_boundary"
     )
 
-    any_seams = {
-        (entry["module"], entry["symbol"]): entry for entry in boundary_map["any_audit_matrix"]
-    }
+    any_seams = {(entry["module"], entry["symbol"]): entry for entry in boundary_map["any_audit_matrix"]}
     assert any_seams[("sqlspec/config.py", "_DriverFeatureHookWrapper.__init__")]["annotation"] == "Callable[..., Any]"
     assert any_seams[("sqlspec/storage/pipeline.py", "_encode_arrow_payload")]["annotation"] == (
         "write_options: dict[str, Any] | None"
@@ -133,9 +131,9 @@ def test_build_boundary_map_records_helper_split_designs_and_rollout_feedback() 
         "sqlspec/builder/_vector_renderers.py"
     )
     assert "render_postgres_vector_distance" in helper_splits["sqlspec/builder/_vector_expressions.py"]["safe_symbols"]
-    assert "_register_with_sqlglot" in helper_splits["sqlspec/builder/_vector_expressions.py"][
-        "keep_interpreted_symbols"
-    ]
+    assert (
+        "_register_with_sqlglot" in helper_splits["sqlspec/builder/_vector_expressions.py"]["keep_interpreted_symbols"]
+    )
     assert helper_splits["sqlspec/data_dictionary/_loader.py"]["compile_target"] == (
         "sqlspec/data_dictionary/_loader_core.py"
     )

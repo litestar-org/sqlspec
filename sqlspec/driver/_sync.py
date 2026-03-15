@@ -32,7 +32,6 @@ from sqlspec.driver._storage_helpers import (
 )
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
-from sqlspec.typing import VersionInfo
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import ValueT, to_value_type
@@ -54,6 +53,7 @@ if TYPE_CHECKING:
         SchemaT,
         StatementParameters,
         TableMetadata,
+        VersionInfo,
     )
 
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
@@ -1873,4 +1873,3 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             List of foreign key metadata
 
         """
-

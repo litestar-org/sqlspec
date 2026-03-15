@@ -1,5 +1,6 @@
 """Unit tests for ADBC core execute-many helpers."""
 
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
@@ -93,12 +94,39 @@ def test_prepare_parameters_with_casts_uses_type_converter_factory(monkeypatch: 
     monkeypatch.setattr(adbc_core, "get_adbc_type_converter", fake_factory)
 
     prepared = prepare_parameters_with_casts(
-        [{"id": 1}],
-        {},
-        statement_config,
-        dialect="postgres",
-        json_serializer=lambda value: str(value),
+        [{"id": 1}], {}, statement_config, dialect="postgres", json_serializer=lambda value: str(value)
     )
 
     assert prepared == ["factory:[('id', 1)]"]
     assert factory_calls == [("postgres", 5000)]
+
+
+def test_prepare_parameters_with_casts_supports_subclass_type_dispatch() -> None:
+    class MyInt(int):
+        pass
+
+    statement_config = get_statement_config("postgres")
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(type_coercion_map={int: lambda value: value + 1})
+    )
+
+    prepared = prepare_parameters_with_casts(
+        [MyInt(4)], {}, statement_config, dialect="postgres", json_serializer=lambda value: str(value)
+    )
+
+    assert prepared == [5]
+
+
+def test_prepare_parameters_with_casts_supports_virtual_abc_dispatch() -> None:
+    statement_config = get_statement_config("postgres")
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(
+            type_coercion_map={Sequence: lambda value: tuple(value)}
+        )
+    )
+
+    prepared = prepare_parameters_with_casts(
+        [[1, 2]], {}, statement_config, dialect="postgres", json_serializer=lambda value: str(value)
+    )
+
+    assert prepared == [(1, 2)]

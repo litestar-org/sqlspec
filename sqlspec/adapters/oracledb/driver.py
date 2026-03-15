@@ -259,7 +259,9 @@ class OracleAsyncCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> None:
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         if self.cursor is not None:
             with contextlib.suppress(Exception):
@@ -699,7 +701,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "OracleSyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle sync rows for the direct execution path."""
         column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
         data, column_names = collect_sync_rows(
@@ -711,7 +713,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         )
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "OracleSyncCursor") -> int:
         """Resolve rowcount from Oracle cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
@@ -1201,7 +1203,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "OracleAsyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle async rows for the direct execution path.
 
         Uses synchronous LOB coercion. For async LOB coercion, the standard
@@ -1217,7 +1219,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         )
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "OracleAsyncCursor") -> int:
         """Resolve rowcount from Oracle cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

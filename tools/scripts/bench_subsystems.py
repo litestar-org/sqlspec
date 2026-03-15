@@ -446,12 +446,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
 
     # Store session context for cleanup
     benchmarks.append(
-        SubsystemBenchmark(
-            name="_cleanup_",
-            bench_fn=lambda: None,
-            iterations=0,
-            setup_fn=cleanup_benchmarks,
-        )
+        SubsystemBenchmark(name="_cleanup_", bench_fn=lambda: None, iterations=0, setup_fn=cleanup_benchmarks)
     )
 
     return benchmarks

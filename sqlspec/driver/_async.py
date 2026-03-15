@@ -32,7 +32,6 @@ from sqlspec.driver._storage_helpers import (
 )
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-from sqlspec.typing import VersionInfo
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import ValueT, to_value_type
@@ -45,8 +44,6 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
-    from sqlspec.data_dictionary._types import DialectConfig
-    from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol
     from sqlspec.typing import (
         ArrowReturnFormat,
         ArrowTable,
@@ -56,6 +53,7 @@ if TYPE_CHECKING:
         SchemaT,
         StatementParameters,
         TableMetadata,
+        VersionInfo,
     )
 
 
@@ -1911,4 +1909,3 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             List of foreign key metadata
 
         """
-

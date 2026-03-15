@@ -8,6 +8,8 @@ from typing_extensions import Self
 if TYPE_CHECKING:
     from types import TracebackType
 
+__all__ = ("BaseAsyncExceptionHandler", "BaseSyncExceptionHandler", )
+
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class BaseAsyncExceptionHandler:
@@ -22,21 +24,14 @@ class BaseAsyncExceptionHandler:
         return self
 
     async def __aexit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: "TracebackType | None",
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool:
         _ = exc_tb
         if exc_val is None:
             return False
         return self._handle_exception(exc_type, exc_val)
 
-    def _handle_exception(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException",
-    ) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         """Handle an adapter exception.
 
         Subclasses should set ``pending_exception`` before returning ``True``.
@@ -58,21 +53,14 @@ class BaseSyncExceptionHandler:
         return self
 
     def __exit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: "TracebackType | None",
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool:
         _ = exc_tb
         if exc_val is None:
             return False
         return self._handle_exception(exc_type, exc_val)
 
-    def _handle_exception(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException",
-    ) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         """Handle an adapter exception.
 
         Subclasses should set ``pending_exception`` before returning ``True``.

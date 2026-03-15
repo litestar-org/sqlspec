@@ -394,9 +394,7 @@ def test_sql_result_reuses_cached_single_row_schema_conversion() -> None:
         name: str
 
     result = SQLResult(
-        statement=SQL("SELECT id, name FROM users WHERE id = 1"),
-        data=[{"id": 1, "name": "Alice"}],
-        rows_affected=1,
+        statement=SQL("SELECT id, name FROM users WHERE id = 1"), data=[{"id": 1, "name": "Alice"}], rows_affected=1
     )
 
     original_to_schema = result_base.to_schema

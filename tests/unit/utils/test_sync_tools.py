@@ -12,6 +12,10 @@ from typing import Any
 import pytest
 from typing_extensions import Self
 
+# Detect whether the sync_tools module is mypyc-compiled.
+# When compiled, `patch.object` / `patch()` on C-extension modules is a no-op,
+# so tests that assert mock call counts must be skipped.
+import sqlspec.utils.sync_tools as _sync_tools_module
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.portal import PortalManager
 from sqlspec.utils.sync_tools import (
@@ -24,11 +28,6 @@ from sqlspec.utils.sync_tools import (
     run_,
     with_ensure_async_,
 )
-
-# Detect whether the sync_tools module is mypyc-compiled.
-# When compiled, `patch.object` / `patch()` on C-extension modules is a no-op,
-# so tests that assert mock call counts must be skipped.
-import sqlspec.utils.sync_tools as _sync_tools_module
 
 _SYNC_TOOLS_COMPILED = (_sync_tools_module.__file__ or "").endswith((".so", ".pyd"))
 

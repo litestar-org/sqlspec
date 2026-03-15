@@ -372,7 +372,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "SpannerSyncCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Spanner rows for the direct execution path.
 
         Note: Spanner's collect_rows requires result set fields and a type converter.
@@ -390,7 +390,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         # For tuple rows without metadata, return as-is
         return fetched, [], len(fetched)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "SpannerSyncCursor") -> int:
         """Resolve rowcount from Spanner cursor for the direct execution path."""
         # Spanner uses execute_update return value, not cursor.rowcount
         return 0

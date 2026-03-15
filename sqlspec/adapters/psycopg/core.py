@@ -213,6 +213,7 @@ def apply_driver_features(
 
     return statement_config, features
 
+
 def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":
     """Collect psycopg rows and column names.
 

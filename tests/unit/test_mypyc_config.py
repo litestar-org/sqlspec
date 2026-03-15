@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover

@@ -282,9 +282,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         try:
             probe_names = build_postgres_extension_probe_names(self.driver_features)
             pgvector_available, paradedb_available = detect_postgres_extensions(
-                connection,
-                enable_pgvector="vector" in probe_names,
-                enable_paradedb="pg_search" in probe_names,
+                connection, enable_pgvector="vector" in probe_names, enable_paradedb="pg_search" in probe_names
             )
         finally:
             connection.close()
@@ -295,9 +293,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         if paradedb_available:
             detected_extensions.add("pg_search")
         self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
-            self.statement_config,
-            self.driver_features,
-            detected_extensions,
+            self.statement_config, self.driver_features, detected_extensions
         )
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AdbcConnectionContext":

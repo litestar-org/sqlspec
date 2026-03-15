@@ -420,7 +420,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "PsqlpyCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psqlpy rows for the direct execution path.
 
         The ``fetched`` argument may be a psqlpy query result or a plain list.
@@ -428,7 +428,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         dict_rows, column_names = collect_rows(fetched)
         return dict_rows, column_names, len(dict_rows)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "PsqlpyCursor") -> int:
         """Resolve rowcount from psqlpy result for the direct execution path."""
         return extract_rows_affected(cursor)
 

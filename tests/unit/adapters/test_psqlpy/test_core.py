@@ -1,15 +1,18 @@
 """Unit tests for psqlpy core helpers."""
 
+from collections.abc import Sequence
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
 from sqlspec.adapters.psqlpy.core import (
+    build_statement_config,
     coerce_numeric_for_write,
     coerce_records_for_execute_many,
     collect_rows,
     format_execute_many_parameters,
+    prepare_parameters_with_casts,
 )
 
 pytestmark = pytest.mark.xdist_group("adapter_unit")
@@ -59,10 +62,7 @@ def test_coerce_numeric_for_write_preserves_identity_when_unchanged() -> None:
 
 def test_coerce_numeric_for_write_copies_only_changed_branch() -> None:
     """Numeric write coercion should allocate only along branches containing float values."""
-    payload = {
-        "changed": [1.5, {"value": 2.5}],
-        "unchanged": ("a", {"value": Decimal("3.5")}),
-    }
+    payload = {"changed": [1.5, {"value": 2.5}], "unchanged": ("a", {"value": Decimal("3.5")})}
 
     coerced = coerce_numeric_for_write(payload)
 
@@ -130,3 +130,30 @@ def test_collect_rows_accepts_raw_list_payload() -> None:
 
     assert rows is payload
     assert columns == ["id", "name"]
+
+
+def test_prepare_parameters_with_casts_supports_subclass_type_dispatch() -> None:
+    class MyInt(int):
+        pass
+
+    statement_config = build_statement_config()
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(type_coercion_map={int: lambda value: value + 1})
+    )
+
+    prepared = prepare_parameters_with_casts([MyInt(4)], {}, statement_config)
+
+    assert prepared == [5]
+
+
+def test_prepare_parameters_with_casts_supports_virtual_abc_dispatch() -> None:
+    statement_config = build_statement_config()
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(
+            type_coercion_map={Sequence: lambda value: tuple(value)}
+        )
+    )
+
+    prepared = prepare_parameters_with_casts([[1, 2]], {}, statement_config)
+
+    assert prepared == [(1, 2)]

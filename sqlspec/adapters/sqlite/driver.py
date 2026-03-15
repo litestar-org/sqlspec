@@ -544,11 +544,11 @@ class SqliteDriver(SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "SqliteCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect SQLite rows for the direct execution path."""
         return collect_rows(fetched, cursor.description)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "SqliteCursor") -> int:
         """Resolve rowcount from SQLite cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

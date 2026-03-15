@@ -438,12 +438,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "AsyncpgCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect asyncpg rows for the direct execution path."""
         data, column_names = collect_rows(fetched)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "AsyncpgCursor") -> int:
         """Resolve rowcount from asyncpg status for the direct execution path."""
         return parse_status(cursor)
 

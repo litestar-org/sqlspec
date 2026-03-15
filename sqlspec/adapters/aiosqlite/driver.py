@@ -59,7 +59,9 @@ class AiosqliteCursor:
         self.cursor = await self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None") -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> None:
         if exc_type is not None:
             return
         if self.cursor is not None:
@@ -307,11 +309,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "AiosqliteCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect aiosqlite rows for the direct execution path."""
         return collect_rows(fetched, cursor.description)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "AiosqliteCursor") -> int:
         """Resolve rowcount from aiosqlite cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

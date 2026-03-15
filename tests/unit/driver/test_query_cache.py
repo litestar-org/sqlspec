@@ -2,6 +2,7 @@
 """Unit tests for fast-path query cache behavior."""
 
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Sequence
 from typing import Any, Literal, cast
 
 import pytest
@@ -187,6 +188,24 @@ def test_prepare_driver_parameters_many_coerces_subclass_rows_when_needed() -> N
     assert prepared is not parameters
     assert tuple(prepared[0]) == (3,)
     assert tuple(prepared[1]) == ("b",)
+
+
+def test_prepare_driver_parameters_many_coerces_virtual_abc_rows_when_needed() -> None:
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={Sequence: lambda value: tuple(value)},
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    parameters = [[1, 2], ["b"]]
+
+    prepared = driver.prepare_driver_parameters(parameters, config, is_many=True)
+
+    assert isinstance(prepared, list)
+    assert prepared is not parameters
+    assert prepared == [(1, 2), ("b",)]
 
 
 def test_sync_stmt_cache_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch) -> None:

@@ -3,6 +3,8 @@
 import decimal
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.utils.dispatch import TypeDispatcher
+
 if TYPE_CHECKING:
     import datetime
     from collections.abc import Callable, Sequence
@@ -19,6 +21,7 @@ __all__ = (
 
 JSON_NESTED_TYPES: "tuple[type[Any], ...]" = (dict, list, tuple)
 DEFAULT_DECIMAL_MODE: str = "preserve"
+_DECIMAL_NORMALIZER_DISPATCHER = TypeDispatcher["Callable[['_DecimalNormalizer', Any], Any]"]()
 
 
 def _decimal_identity(value: "decimal.Decimal") -> "decimal.Decimal":
@@ -67,39 +70,56 @@ class _DecimalNormalizer:
         self._decimal_converter = decimal_converter
 
     def __call__(self, value: Any) -> Any:
-        if isinstance(value, decimal.Decimal):
-            return self._decimal_converter(value)
-        if isinstance(value, list):
-            normalized_list: list[Any] | None = None
-            for index, item in enumerate(value):
-                normalized_item = self(item)
-                if normalized_list is None:
-                    if normalized_item is item:
-                        continue
-                    normalized_list = list(value[:index])
-                normalized_list.append(normalized_item)
-            return value if normalized_list is None else normalized_list
-        if isinstance(value, tuple):
-            normalized_tuple: list[Any] | None = None
-            for index, item in enumerate(value):
-                normalized_item = self(item)
-                if normalized_tuple is None:
-                    if normalized_item is item:
-                        continue
-                    normalized_tuple = list(value[:index])
-                normalized_tuple.append(normalized_item)
-            return value if normalized_tuple is None else tuple(normalized_tuple)
-        if isinstance(value, dict):
-            normalized_dict: dict[Any, Any] | None = None
-            for key, item in value.items():
-                normalized_item = self(item)
-                if normalized_dict is None:
-                    if normalized_item is item:
-                        continue
-                    normalized_dict = dict(value)
-                normalized_dict[key] = normalized_item
-            return value if normalized_dict is None else normalized_dict
-        return value
+        handler = _DECIMAL_NORMALIZER_DISPATCHER.get(value)
+        if handler is None:
+            return value
+        return handler(self, value)
+
+
+def _normalize_decimal_value(normalizer: "_DecimalNormalizer", value: Any) -> Any:
+    return normalizer._decimal_converter(value)
+
+
+def _normalize_decimal_list(normalizer: "_DecimalNormalizer", value: Any) -> Any:
+    normalized_list: list[Any] | None = None
+    for index, item in enumerate(value):
+        normalized_item = normalizer(item)
+        if normalized_list is None:
+            if normalized_item is item:
+                continue
+            normalized_list = list(value[:index])
+        normalized_list.append(normalized_item)
+    return value if normalized_list is None else normalized_list
+
+
+def _normalize_decimal_tuple(normalizer: "_DecimalNormalizer", value: Any) -> Any:
+    normalized_tuple: list[Any] | None = None
+    for index, item in enumerate(value):
+        normalized_item = normalizer(item)
+        if normalized_tuple is None:
+            if normalized_item is item:
+                continue
+            normalized_tuple = list(value[:index])
+        normalized_tuple.append(normalized_item)
+    return value if normalized_tuple is None else tuple(normalized_tuple)
+
+
+def _normalize_decimal_dict(normalizer: "_DecimalNormalizer", value: Any) -> Any:
+    normalized_dict: dict[Any, Any] | None = None
+    for key, item in value.items():
+        normalized_item = normalizer(item)
+        if normalized_dict is None:
+            if normalized_item is item:
+                continue
+            normalized_dict = dict(value)
+        normalized_dict[key] = normalized_item
+    return value if normalized_dict is None else normalized_dict
+
+
+_DECIMAL_NORMALIZER_DISPATCHER.register(decimal.Decimal, _normalize_decimal_value)
+_DECIMAL_NORMALIZER_DISPATCHER.register(list, _normalize_decimal_list)
+_DECIMAL_NORMALIZER_DISPATCHER.register(tuple, _normalize_decimal_tuple)
+_DECIMAL_NORMALIZER_DISPATCHER.register(dict, _normalize_decimal_dict)
 
 
 def _time_iso_convert(value: "datetime.date | datetime.datetime | datetime.time") -> str:

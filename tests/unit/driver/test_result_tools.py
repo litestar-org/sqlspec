@@ -12,6 +12,7 @@ import msgspec
 import pytest
 from typing_extensions import TypedDict
 
+import sqlspec.utils.schema as schema_utils
 from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.schema import (
@@ -20,7 +21,6 @@ from sqlspec.utils.schema import (
     _default_msgspec_deserializer,
     _is_list_type_target,
 )
-import sqlspec.utils.schema as schema_utils
 
 pytestmark = pytest.mark.xdist_group("driver")
 

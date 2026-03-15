@@ -116,7 +116,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "DuckDBCursor", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement with data handling.
 
         Executes a SQL statement with parameter binding and processes the results.
@@ -152,7 +152,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
-    def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "DuckDBCursor", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using batch processing.
 
         Uses DuckDB's executemany method for batch operations and calculates
@@ -177,7 +177,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "DuckDBCursor", statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Parses multi-statement scripts and executes each statement sequentially
@@ -422,12 +422,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "DuckDBCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect DuckDB rows for the direct execution path."""
         data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "DuckDBCursor") -> int:
         """Resolve rowcount from DuckDB cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 

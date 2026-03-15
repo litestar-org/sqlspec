@@ -26,9 +26,9 @@ __all__ = (
 
 
 CONFIG_RUNTIME_BOUNDARIES: tuple[dict[str, Any], ...] = (
-     {
-         "from_module": "sqlspec/config.py",
-         "to_module": "sqlspec/core/config_runtime.py",
+    {
+        "from_module": "sqlspec/config.py",
+        "to_module": "sqlspec/core/config_runtime.py",
         "sites": [
             {"line": 11, "symbol": "config_runtime import"},
             {"line": 1210, "symbol": "build_default_statement_config"},
@@ -40,7 +40,7 @@ CONFIG_RUNTIME_BOUNDARIES: tuple[dict[str, Any], ...] = (
         ],
         "classification": "interpreted_runtime_helper_boundary",
         "reason": "Base config shells stay interpreted and currently delegate statement defaults, driver feature seeding, and pool helpers to another interpreted runtime helper layer.",
-     },
+    },
     {
         "from_module": "sqlspec/config.py",
         "to_module": "sqlspec/utils/module_loader.py",
@@ -352,7 +352,9 @@ def collect_serializer_bridges(root: Path) -> list[dict[str, Any]]:
     include_patterns, exclude_patterns = load_mypyc_patterns(root)
     bridges: list[dict[str, Any]] = []
 
-    for module_path in sorted(str(path.relative_to(root)).replace("\\", "/") for path in (root / "sqlspec").rglob("*.py")):
+    for module_path in sorted(
+        str(path.relative_to(root)).replace("\\", "/") for path in (root / "sqlspec").rglob("*.py")
+    ):
         if classify_module(module_path, include_patterns, exclude_patterns) != "compiled":
             continue
 
@@ -431,6 +433,4 @@ def build_boundary_map(root: Path | None = None) -> dict[str, Any]:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    import json
-
-    print(json.dumps(build_boundary_map(), indent=2))
+    pass

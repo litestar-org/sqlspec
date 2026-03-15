@@ -7,7 +7,7 @@ import pytest
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import PYARROW_INSTALLED
-from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+from sqlspec.utils.arrow_helpers import coerce_arrow_table, convert_dict_to_arrow
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 
@@ -143,3 +143,21 @@ def test_convert_with_missing_keys_in_some_rows() -> None:
     assert pydict["id"] == [1, 2, 3]
     assert pydict["name"] == ["Alice", "Bob", None]
     assert pydict["email"] == ["alice@example.com", None, None]
+
+
+def test_coerce_arrow_table_accepts_record_batch() -> None:
+    import pyarrow as pa
+
+    batch = pa.RecordBatch.from_pylist([{"id": 1}, {"id": 2}])
+
+    table = coerce_arrow_table(batch)
+
+    assert table.num_rows == 2
+    assert table.column_names == ["id"]
+
+
+def test_coerce_arrow_table_accepts_iterable_rows() -> None:
+    table = coerce_arrow_table(iter([{"id": 1}, {"id": 2}]))
+
+    assert table.num_rows == 2
+    assert table.column_names == ["id"]

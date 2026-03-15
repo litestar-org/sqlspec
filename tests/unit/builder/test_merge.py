@@ -657,6 +657,24 @@ def test_merge_oracle_dialect_allowed() -> None:
     assert "MERGE INTO" in stmt.sql.upper()
 
 
+def test_merge_type_inference_supports_sequence_subclasses() -> None:
+    """MERGE type inference should treat builtin container subclasses as JSON payloads."""
+
+    class JsonList(list):
+        pass
+
+    builder = sql.merge(dialect="postgres")
+
+    assert builder._infer_postgres_type(JsonList([1, 2])) == "JSONB"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_merge_type_inference_preserves_bool_priority_for_oracle() -> None:
+    """Boolean values should resolve before int-compatible handlers."""
+    builder = sql.merge(dialect="oracle")
+
+    assert builder._infer_oracle_type(True) == "NUMBER(1)"  # pyright: ignore[reportPrivateUsage]
+
+
 def test_merge_no_dialect_allowed() -> None:
     """Test MERGE with no dialect specified is allowed."""
     query = (

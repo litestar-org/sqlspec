@@ -475,10 +475,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     detected_extensions = {r["extname"] for r in results}
                 except Exception:
                     detected_extensions = set()
-            self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
-                self.statement_config,
-                self.driver_features,
-                detected_extensions,
+            self.statement_config, self._pgvector_available, self._paradedb_available = (
+                resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
             )
 
         if self._pgvector_available:

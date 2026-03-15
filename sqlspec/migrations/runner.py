@@ -8,7 +8,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from sqlspec.core import SQL
 from sqlspec.loader import SQLFileLoader
@@ -267,7 +267,7 @@ class BaseMigrationRunner(ABC):
         return hashlib.md5(canonical_content.encode()).hexdigest()  # noqa: S324
 
     @abstractmethod
-    def load_migration(self, file_path: Path) -> Union["dict[str, Any]", "Coroutine[Any, Any, dict[str, Any]]"]:
+    def load_migration(self, file_path: Path) -> "dict[str, Any] | Awaitable[dict[str, Any]]":
         """Load a migration file and extract its components.
 
         Args:
