@@ -167,6 +167,10 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     supports_native_parquet_export: ClassVar[bool] = False
     supports_native_parquet_import: ClassVar[bool] = False
     requires_staging_for_load: ClassVar[bool] = False
+    _connection_context_class: "ClassVar[type[SpannerConnectionContext]]" = SpannerConnectionContext
+    _session_factory_class: "ClassVar[type[_SpannerSessionConnectionHandler]]" = _SpannerSessionConnectionHandler
+    _session_context_class: "ClassVar[type[SpannerSessionContext]]" = SpannerSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

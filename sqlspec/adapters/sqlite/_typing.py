@@ -19,11 +19,11 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     SqliteConnection: TypeAlias = _SqliteConnection
-    SqliteCursorType: TypeAlias = sqlite3.Cursor
+    SqliteRawCursor: TypeAlias = sqlite3.Cursor
 
 if not TYPE_CHECKING:
     SqliteConnection = _SqliteConnection
-    SqliteCursorType = sqlite3.Cursor
+    SqliteRawCursor = sqlite3.Cursor
 
 
 class SqliteCursor:
@@ -41,9 +41,9 @@ class SqliteCursor:
             connection: SQLite database connection
         """
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: SqliteRawCursor | None = None
 
-    def __enter__(self) -> Any:
+    def __enter__(self) -> "SqliteRawCursor":
         """Create and return a new cursor.
 
         Returns:
@@ -120,4 +120,4 @@ class SqliteSessionContext:
         return None
 
 
-__all__ = ("SqliteConnection", "SqliteCursor", "SqliteCursorType", "SqliteSessionContext")
+__all__ = ("SqliteConnection", "SqliteCursor", "SqliteRawCursor", "SqliteSessionContext")

@@ -186,13 +186,17 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
     connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
-    _connection_context_class: "ClassVar[type[PsycopgSyncConnectionContext]]" = PsycopgSyncConnectionContext
-    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[PsycopgSyncConnectionContext]]" = PsycopgSyncConnectionContext
+    _session_factory_class: "ClassVar[type[_PsycopgSyncSessionConnectionHandler]]" = (
+        _PsycopgSyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[PsycopgSyncSessionContext]]" = PsycopgSyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -454,13 +458,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
     connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
-    _connection_context_class: "ClassVar[type[PsycopgAsyncConnectionContext]]" = PsycopgAsyncConnectionContext
-    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    _connection_context_class: "ClassVar[type[PsycopgAsyncConnectionContext]]" = PsycopgAsyncConnectionContext
+    _session_factory_class: "ClassVar[type[_PsycopgAsyncSessionConnectionHandler]]" = (
+        _PsycopgAsyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[PsycopgAsyncSessionContext]]" = PsycopgAsyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

@@ -171,6 +171,10 @@ class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[MockSyncConnectionContext]]" = MockSyncConnectionContext
+    _session_factory_class: "ClassVar[type[_MockSyncSessionFactory]]" = _MockSyncSessionFactory
+    _session_context_class: "ClassVar[type[MockSyncSessionContext]]" = MockSyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -338,6 +342,10 @@ class MockAsyncConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[MockAsyncConnectionContext]]" = MockAsyncConnectionContext
+    _session_factory_class: "ClassVar[type[_MockAsyncSessionFactory]]" = _MockAsyncSessionFactory
+    _session_context_class: "ClassVar[type[MockAsyncSessionContext]]" = MockAsyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

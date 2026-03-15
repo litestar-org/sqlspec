@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     class AsyncmyConnectionProtocol(Protocol):
-        def cursor(self) -> Any: ...
+        def cursor(self) -> "AsyncmyRawCursor": ...
 
         async def commit(self) -> Any: ...
 
@@ -27,11 +27,11 @@ if TYPE_CHECKING:
         async def close(self) -> Any: ...
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
-    AsyncmyCursorType: TypeAlias = _AsyncmyCursor
+    AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
 
 if not TYPE_CHECKING:
     AsyncmyConnection = Connection
-    AsyncmyCursorType = _AsyncmyCursor
+    AsyncmyRawCursor = _AsyncmyCursor
 
 
 class AsyncmyCursor:
@@ -44,9 +44,9 @@ class AsyncmyCursor:
 
     def __init__(self, connection: "AsyncmyConnection") -> None:
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: AsyncmyRawCursor | None = None
 
-    async def __aenter__(self) -> Any:
+    async def __aenter__(self) -> "AsyncmyRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -110,4 +110,4 @@ class AsyncmySessionContext:
         return None
 
 
-__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyCursorType", "AsyncmySessionContext")
+__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyRawCursor", "AsyncmySessionContext")

@@ -1,4 +1,4 @@
-from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection, AiosqliteCursor
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection, AiosqliteCursor, AiosqliteRawCursor
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqliteConnectionParams, AiosqlitePoolParams
 from sqlspec.adapters.aiosqlite.core import default_statement_config
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
@@ -21,5 +21,6 @@ __all__ = (
     "AiosqlitePoolClosedError",
     "AiosqlitePoolConnection",
     "AiosqlitePoolParams",
+    "AiosqliteRawCursor",
     "default_statement_config",
 )

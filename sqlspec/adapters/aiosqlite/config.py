@@ -139,15 +139,15 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
     driver_type: "ClassVar[type[AiosqliteDriver]]" = AiosqliteDriver
     connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
-    _connection_context_class: "ClassVar[type[AiosqliteConnectionContext]]" = AiosqliteConnectionContext
-    _session_factory_class: "ClassVar[type[_AiosqliteSessionFactory]]" = _AiosqliteSessionFactory
-    _session_context_class: "ClassVar[type[AiosqliteSessionContext]]" = AiosqliteSessionContext
-    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[AiosqliteConnectionContext]]" = AiosqliteConnectionContext
+    _session_factory_class: "ClassVar[type[_AiosqliteSessionFactory]]" = _AiosqliteSessionFactory
+    _session_context_class: "ClassVar[type[AiosqliteSessionContext]]" = AiosqliteSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

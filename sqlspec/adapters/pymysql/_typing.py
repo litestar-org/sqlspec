@@ -17,9 +17,11 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     PyMysqlConnection: TypeAlias = pymysql.connections.Connection
+    PyMysqlRawCursor: TypeAlias = pymysql.cursors.Cursor
 
 if not TYPE_CHECKING:
     PyMysqlConnection = pymysql.connections.Connection
+    PyMysqlRawCursor = pymysql.cursors.Cursor
 
 
 class PyMysqlCursor:
@@ -29,9 +31,9 @@ class PyMysqlCursor:
 
     def __init__(self, connection: "PyMysqlConnection") -> None:
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: PyMysqlRawCursor | None = None
 
-    def __enter__(self) -> Any:
+    def __enter__(self) -> "PyMysqlRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -87,4 +89,4 @@ class PyMysqlSessionContext:
         return None
 
 
-__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlSessionContext")
+__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlRawCursor", "PyMysqlSessionContext")

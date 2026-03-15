@@ -39,20 +39,22 @@ class MockCursor:
 
         Args:
             connection: SQLite database connection
+
         """
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: MockRawCursor | None = None
 
-    def __enter__(self) -> Any:
+    def __enter__(self) -> "MockRawCursor":
         """Create and return a new cursor.
 
         Returns:
             Active SQLite cursor object
+
         """
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, *_: object) -> None:
         """Clean up cursor resources."""
         if self.cursor is not None:
             with contextlib.suppress(Exception):
@@ -69,15 +71,17 @@ class MockAsyncCursor:
 
         Args:
             connection: SQLite database connection
+
         """
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: MockRawCursor | None = None
 
-    async def __aenter__(self) -> Any:
+    async def __aenter__(self) -> "MockRawCursor":
         """Create and return a new cursor.
 
         Returns:
             Active SQLite cursor object
+
         """
         self.cursor = self.connection.cursor()
         return self.cursor

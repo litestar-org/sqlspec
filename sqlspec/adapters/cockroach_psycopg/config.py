@@ -43,6 +43,8 @@ __all__ = (
     "CockroachPsycopgSyncConfig",
 )
 
+default_statement_config = build_statement_config()
+
 
 class CockroachPsycopgConnectionConfig(TypedDict):
     """CockroachDB connection parameters."""
@@ -163,14 +165,19 @@ class CockroachPsycopgSyncConfig(
 
     driver_type: "ClassVar[type[CockroachPsycopgSyncDriver]]" = CockroachPsycopgSyncDriver
     connection_type: "ClassVar[type[CockroachSyncConnection]]" = CockroachSyncConnection
-    _connection_context_class: "ClassVar[type[CockroachPsycopgSyncConnectionContext]]" = (
-        CockroachPsycopgSyncConnectionContext
-    )
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[CockroachPsycopgSyncConnectionContext]]" = (
+        CockroachPsycopgSyncConnectionContext
+    )
+    _session_factory_class: "ClassVar[type[_CockroachPsycopgSyncSessionConnectionHandler]]" = (
+        _CockroachPsycopgSyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[CockroachPsycopgSyncSessionContext]]" = CockroachPsycopgSyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -186,7 +193,7 @@ class CockroachPsycopgSyncConfig(
         **kwargs: Any,
     ) -> None:
         connection_config = normalize_connection_config(connection_config)
-        statement_config = statement_config or build_statement_config()
+        statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
@@ -278,7 +285,7 @@ class CockroachPsycopgSyncConfig(
         return CockroachPsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or build_statement_config(),
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -359,14 +366,19 @@ class CockroachPsycopgAsyncConfig(
 
     driver_type: "ClassVar[type[CockroachPsycopgAsyncDriver]]" = CockroachPsycopgAsyncDriver
     connection_type: "ClassVar[type[CockroachAsyncConnection]]" = CockroachAsyncConnection
-    _connection_context_class: "ClassVar[type[CockroachPsycopgAsyncConnectionContext]]" = (
-        CockroachPsycopgAsyncConnectionContext
-    )
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[CockroachPsycopgAsyncConnectionContext]]" = (
+        CockroachPsycopgAsyncConnectionContext
+    )
+    _session_factory_class: "ClassVar[type[_CockroachPsycopgAsyncSessionConnectionHandler]]" = (
+        _CockroachPsycopgAsyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[CockroachPsycopgAsyncSessionContext]]" = CockroachPsycopgAsyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -382,7 +394,7 @@ class CockroachPsycopgAsyncConfig(
         **kwargs: Any,
     ) -> None:
         connection_config = normalize_connection_config(connection_config)
-        statement_config = statement_config or build_statement_config()
+        statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)

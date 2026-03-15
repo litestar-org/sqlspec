@@ -6,7 +6,7 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any, Protocol
 
-from psycopg import AsyncConnection, Connection
+from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
 from psycopg.rows import DictRow as PsycopgDictRow
 
 if TYPE_CHECKING:
@@ -20,10 +20,14 @@ if TYPE_CHECKING:
 
     PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
     PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
+    PsycopgSyncRawCursor: TypeAlias = Cursor[PsycopgDictRow]
+    PsycopgAsyncRawCursor: TypeAlias = AsyncCursor[PsycopgDictRow]
 
 if not TYPE_CHECKING:
     PsycopgSyncConnection = Connection
     PsycopgAsyncConnection = AsyncConnection
+    PsycopgSyncRawCursor = Cursor
+    PsycopgAsyncRawCursor = AsyncCursor
 
 
 class PsycopgSyncCursor:
@@ -33,9 +37,9 @@ class PsycopgSyncCursor:
 
     def __init__(self, connection: "PsycopgSyncConnection") -> None:
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: PsycopgSyncRawCursor | None = None
 
-    def __enter__(self) -> Any:
+    def __enter__(self) -> "PsycopgSyncRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -51,9 +55,9 @@ class PsycopgAsyncCursor:
 
     def __init__(self, connection: "PsycopgAsyncConnection") -> None:
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: PsycopgAsyncRawCursor | None = None
 
-    async def __aenter__(self) -> Any:
+    async def __aenter__(self) -> "PsycopgAsyncRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -197,10 +201,12 @@ class PsycopgAsyncSessionContext:
 __all__ = (
     "PsycopgAsyncConnection",
     "PsycopgAsyncCursor",
+    "PsycopgAsyncRawCursor",
     "PsycopgAsyncSessionContext",
     "PsycopgDictRow",
     "PsycopgPipelineDriver",
     "PsycopgSyncConnection",
     "PsycopgSyncCursor",
+    "PsycopgSyncRawCursor",
     "PsycopgSyncSessionContext",
 )

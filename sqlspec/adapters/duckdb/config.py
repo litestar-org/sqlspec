@@ -252,16 +252,16 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
     connection_type: "ClassVar[type[DuckDBConnection]]" = DuckDBConnection
-    _connection_context_class: "ClassVar[type[DuckDBConnectionContext]]" = DuckDBConnectionContext
-    _session_factory_class: "ClassVar[type[_DuckDBSessionConnectionHandler]]" = _DuckDBSessionConnectionHandler
-    _session_context_class: "ClassVar[type[DuckDBSessionContext]]" = DuckDBSessionContext
-    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed", "rows_per_chunk", "manifest")
+    _connection_context_class: "ClassVar[type[DuckDBConnectionContext]]" = DuckDBConnectionContext
+    _session_factory_class: "ClassVar[type[_DuckDBSessionConnectionHandler]]" = _DuckDBSessionConnectionHandler
+    _session_context_class: "ClassVar[type[DuckDBSessionContext]]" = DuckDBSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

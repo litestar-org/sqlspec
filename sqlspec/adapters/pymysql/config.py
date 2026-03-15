@@ -118,15 +118,15 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     driver_type: "ClassVar[type[PyMysqlDriver]]" = PyMysqlDriver
     connection_type: "ClassVar[type[PyMysqlConnection]]" = cast("type[PyMysqlConnection]", PyMysqlConnection)
-    _connection_context_class: "ClassVar[type[PyMysqlConnectionContext]]" = PyMysqlConnectionContext
-    _session_factory_class: "ClassVar[type[_PyMysqlSessionConnectionHandler]]" = _PyMysqlSessionConnectionHandler
-    _session_context_class: "ClassVar[type[PyMysqlSessionContext]]" = PyMysqlSessionContext
-    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[PyMysqlConnectionContext]]" = PyMysqlConnectionContext
+    _session_factory_class: "ClassVar[type[_PyMysqlSessionConnectionHandler]]" = _PyMysqlSessionConnectionHandler
+    _session_context_class: "ClassVar[type[PyMysqlSessionContext]]" = PyMysqlSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

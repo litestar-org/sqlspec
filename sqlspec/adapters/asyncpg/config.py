@@ -288,13 +288,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
     connection_type: "ClassVar[type[AsyncpgConnection]]" = type(AsyncpgConnection)  # type: ignore[assignment]
-    _connection_context_class: "ClassVar[type[AsyncpgConnectionContext]]" = AsyncpgConnectionContext
-    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[AsyncpgConnectionContext]]" = AsyncpgConnectionContext
+    _session_factory_class: "ClassVar[type[_AsyncpgSessionFactory]]" = _AsyncpgSessionFactory
+    _session_context_class: "ClassVar[type[AsyncpgSessionContext]]" = AsyncpgSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

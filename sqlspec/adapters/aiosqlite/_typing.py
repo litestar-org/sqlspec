@@ -21,11 +21,11 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     AiosqliteConnection: TypeAlias = _AiosqliteConnection
-    AiosqliteCursorType: TypeAlias = aiosqlite.Cursor
+    AiosqliteRawCursor: TypeAlias = aiosqlite.Cursor
 
 if not TYPE_CHECKING:
     AiosqliteConnection = _AiosqliteConnection
-    AiosqliteCursorType = aiosqlite.Cursor
+    AiosqliteRawCursor = aiosqlite.Cursor
 
 
 class AiosqliteCursor:
@@ -35,9 +35,9 @@ class AiosqliteCursor:
 
     def __init__(self, connection: "AiosqliteConnection") -> None:
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: AiosqliteRawCursor | None = None
 
-    async def __aenter__(self) -> Any:
+    async def __aenter__(self) -> "AiosqliteRawCursor":
         self.cursor = await self.connection.cursor()
         return self.cursor
 
@@ -106,4 +106,4 @@ class AiosqliteSessionContext:
         return None
 
 
-__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteCursorType", "AiosqliteSessionContext")
+__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteRawCursor", "AiosqliteSessionContext")

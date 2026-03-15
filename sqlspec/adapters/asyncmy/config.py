@@ -151,15 +151,15 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncmyConnection)
-    _connection_context_class: "ClassVar[type[AsyncmyConnectionContext]]" = AsyncmyConnectionContext
-    _session_factory_class: "ClassVar[type[_AsyncmySessionFactory]]" = _AsyncmySessionFactory
-    _session_context_class: "ClassVar[type[AsyncmySessionContext]]" = AsyncmySessionContext
-    _default_statement_config = default_statement_config
     supports_transactional_ddl: ClassVar[bool] = False
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    _connection_context_class: "ClassVar[type[AsyncmyConnectionContext]]" = AsyncmyConnectionContext
+    _session_factory_class: "ClassVar[type[_AsyncmySessionFactory]]" = _AsyncmySessionFactory
+    _session_context_class: "ClassVar[type[AsyncmySessionContext]]" = AsyncmySessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

@@ -181,15 +181,15 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
     migration_tracker_type: "ClassVar[type[OracleSyncMigrationTracker]]" = OracleSyncMigrationTracker
-    _connection_context_class: "ClassVar[type[OracleSyncConnectionContext]]" = OracleSyncConnectionContext
-    _session_factory_class: "ClassVar[type[_OracleSyncSessionConnectionHandler]]" = _OracleSyncSessionConnectionHandler
-    _session_context_class: "ClassVar[type[OracleSyncSessionContext]]" = OracleSyncSessionContext
-    _default_statement_config = default_statement_config
     supports_transactional_ddl: ClassVar[bool] = False
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    _connection_context_class: "ClassVar[type[OracleSyncConnectionContext]]" = OracleSyncConnectionContext
+    _session_factory_class: "ClassVar[type[_OracleSyncSessionConnectionHandler]]" = _OracleSyncSessionConnectionHandler
+    _session_context_class: "ClassVar[type[OracleSyncSessionContext]]" = OracleSyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -379,17 +379,17 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     connection_type: "ClassVar[type[OracleAsyncConnection]]" = OracleAsyncConnection
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
     migration_tracker_type: "ClassVar[type[OracleAsyncMigrationTracker]]" = OracleAsyncMigrationTracker
+    supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_parquet_import: ClassVar[bool] = True
     _connection_context_class: "ClassVar[type[OracleAsyncConnectionContext]]" = OracleAsyncConnectionContext
     _session_factory_class: "ClassVar[type[_OracleAsyncSessionConnectionHandler]]" = (
         _OracleAsyncSessionConnectionHandler
     )
     _session_context_class: "ClassVar[type[OracleAsyncSessionContext]]" = OracleAsyncSessionContext
     _default_statement_config = default_statement_config
-    supports_transactional_ddl: ClassVar[bool] = False
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
-    supports_native_parquet_export: ClassVar[bool] = True
-    supports_native_parquet_import: ClassVar[bool] = True
 
     def __init__(
         self,

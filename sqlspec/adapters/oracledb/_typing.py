@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     OracleAsyncConnection: TypeAlias = AsyncConnection
     OracleSyncConnectionPool: TypeAlias = ConnectionPool
     OracleAsyncConnectionPool: TypeAlias = AsyncConnectionPool
-    OracleSyncCursorType: TypeAlias = Cursor
-    OracleAsyncCursorType: TypeAlias = AsyncCursor
+    OracleSyncRawCursor: TypeAlias = Cursor
+    OracleAsyncRawCursor: TypeAlias = AsyncCursor
     OracleVectorType: TypeAlias = int
 
 if not TYPE_CHECKING:
@@ -42,8 +42,8 @@ if not TYPE_CHECKING:
     OracleAsyncConnection = AsyncConnection
     OracleSyncConnectionPool = ConnectionPool
     OracleAsyncConnectionPool = AsyncConnectionPool
-    OracleSyncCursorType = Cursor
-    OracleAsyncCursorType = AsyncCursor
+    OracleSyncRawCursor = Cursor
+    OracleAsyncRawCursor = AsyncCursor
 
 
 class OracleSyncCursor:
@@ -53,9 +53,9 @@ class OracleSyncCursor:
 
     def __init__(self, connection: OracleSyncConnection) -> None:
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: OracleSyncRawCursor | None = None
 
-    def __enter__(self) -> Any:
+    def __enter__(self) -> "OracleSyncRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -71,9 +71,9 @@ class OracleAsyncCursor:
 
     def __init__(self, connection: OracleAsyncConnection) -> None:
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: OracleAsyncRawCursor | None = None
 
-    async def __aenter__(self) -> Any:
+    async def __aenter__(self) -> "OracleAsyncRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -221,13 +221,13 @@ __all__ = (
     "OracleAsyncConnection",
     "OracleAsyncConnectionPool",
     "OracleAsyncCursor",
-    "OracleAsyncCursorType",
+    "OracleAsyncRawCursor",
     "OracleAsyncSessionContext",
     "OraclePipelineDriver",
     "OracleSyncConnection",
     "OracleSyncConnectionPool",
     "OracleSyncCursor",
-    "OracleSyncCursorType",
+    "OracleSyncRawCursor",
     "OracleSyncSessionContext",
     "OracleVectorType",
 )

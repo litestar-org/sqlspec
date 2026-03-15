@@ -7,17 +7,16 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
-
-try:
-    from mysql.connector.aio import (
-        MySQLConnection as _MysqlConnectorAsyncConnection,  # pyright: ignore[reportMissingImports]
-    )
-except ImportError:  # pragma: no cover - optional async import
-    _MysqlConnectorAsyncConnection = _MysqlConnectorSyncConnection  # type: ignore[assignment,misc]
-
+from mysql.connector.aio import (
+    MySQLConnection as _MysqlConnectorAsyncConnection,  # pyright: ignore[reportMissingImports]
+)
+from mysql.connector.aio.cursor import (
+    MySQLCursor as _MysqlConnectorAsyncRawCursor,  # pyright: ignore[reportMissingImports]
+)
+from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import Protocol, TypeAlias
 
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     class MysqlConnectorAsyncConnectionProtocol(Protocol):
-        def cursor(self, **kwargs: Any) -> Any: ...
+        def cursor(self, **kwargs: Any) -> "Awaitable[MysqlConnectorAsyncRawCursor]": ...
 
         async def commit(self) -> Any: ...
 
@@ -35,10 +34,14 @@ if TYPE_CHECKING:
 
     MysqlConnectorSyncConnection: TypeAlias = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
+    MysqlConnectorSyncRawCursor: TypeAlias = _MysqlConnectorSyncRawCursor
+    MysqlConnectorAsyncRawCursor: TypeAlias = _MysqlConnectorAsyncRawCursor
 
 if not TYPE_CHECKING:
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
+    MysqlConnectorSyncRawCursor = _MysqlConnectorSyncRawCursor
+    MysqlConnectorAsyncRawCursor = _MysqlConnectorAsyncRawCursor
 
 
 class MysqlConnectorSyncCursor:
@@ -48,9 +51,9 @@ class MysqlConnectorSyncCursor:
 
     def __init__(self, connection: "MysqlConnectorSyncConnection") -> None:
         self.connection = connection
-        self.cursor: Any = None
+        self.cursor: MysqlConnectorSyncRawCursor | None = None
 
-    def __enter__(self) -> Any:
+    def __enter__(self) -> "MysqlConnectorSyncRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -66,9 +69,9 @@ class MysqlConnectorAsyncCursor:
 
     def __init__(self, connection: "MysqlConnectorAsyncConnection") -> None:
         self.connection = connection
-        self.cursor: Any | None = None
+        self.cursor: MysqlConnectorAsyncRawCursor | None = None
 
-    async def __aenter__(self) -> Any:
+    async def __aenter__(self) -> "MysqlConnectorAsyncRawCursor":
         self.cursor = await self.connection.cursor()
         return self.cursor
 
@@ -174,8 +177,10 @@ class MysqlConnectorAsyncSessionContext:
 __all__ = (
     "MysqlConnectorAsyncConnection",
     "MysqlConnectorAsyncCursor",
+    "MysqlConnectorAsyncRawCursor",
     "MysqlConnectorAsyncSessionContext",
     "MysqlConnectorSyncConnection",
     "MysqlConnectorSyncCursor",
+    "MysqlConnectorSyncRawCursor",
     "MysqlConnectorSyncSessionContext",
 )

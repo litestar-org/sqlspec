@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import aiosqlite
 
-from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteSessionContext
+from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.core import (
     build_insert_statement,
     collect_rows,
@@ -30,7 +30,13 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-__all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "AiosqliteSessionContext")
+__all__ = (
+    "AiosqliteCursor",
+    "AiosqliteDriver",
+    "AiosqliteExceptionHandler",
+    "AiosqliteRawCursor",
+    "AiosqliteSessionContext",
+)
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
@@ -87,7 +93,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
@@ -111,7 +117,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -121,7 +127,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)

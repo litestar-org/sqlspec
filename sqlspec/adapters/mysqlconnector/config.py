@@ -221,6 +221,11 @@ class MysqlConnectorSyncConfig(
 
     driver_type: ClassVar[type[MysqlConnectorSyncDriver]] = MysqlConnectorSyncDriver
     connection_type: ClassVar[type[MysqlConnectorSyncConnection]] = MysqlConnectorSyncConnection
+    supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_import: ClassVar[bool] = True
     _connection_context_class: "ClassVar[type[MysqlConnectorSyncConnectionContext]]" = (
         MysqlConnectorSyncConnectionContext
     )
@@ -229,11 +234,6 @@ class MysqlConnectorSyncConfig(
     )
     _session_context_class: "ClassVar[type[MysqlConnectorSyncSessionContext]]" = MysqlConnectorSyncSessionContext
     _default_statement_config = default_statement_config
-    supports_transactional_ddl: ClassVar[bool] = False
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_parquet_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
-    supports_native_parquet_import: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -331,6 +331,14 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    _connection_context_class: "ClassVar[type[MysqlConnectorAsyncConnectionContext]]" = (
+        MysqlConnectorAsyncConnectionContext
+    )
+    _session_factory_class: "ClassVar[type[_MysqlConnectorAsyncSessionConnectionHandler]]" = (
+        _MysqlConnectorAsyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[MysqlConnectorAsyncSessionContext]]" = MysqlConnectorAsyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
