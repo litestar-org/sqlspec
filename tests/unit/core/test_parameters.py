@@ -40,6 +40,13 @@ from sqlspec.core import (
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 
+# Detect whether the core parameters module is mypyc-compiled.
+# When compiled, `patch.object` on C-extension classes is a no-op,
+# so tests that assert mock call counts must be skipped.
+from sqlspec.core.parameters import _validator as _validator_module
+
+_VALIDATOR_COMPILED = (_validator_module.__file__ or "").endswith((".so", ".pyd"))
+
 _ADAPTER_DRIVER_MODULES: "tuple[str, ...]" = (
     "sqlspec.adapters.adbc.driver",
     "sqlspec.adapters.aiosqlite.driver",
@@ -2110,6 +2117,7 @@ class TestConfigDrivenParseNormalization:
         # Should have NUMERIC placeholders
         assert "$" in normalized_sql
 
+    @pytest.mark.skipif(_VALIDATOR_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
     def test_process_reuses_extracted_metadata_for_parse_normalization(
         self, processor: ParameterProcessor, validator: ParameterValidator
     ) -> None:
@@ -2129,6 +2137,7 @@ class TestConfigDrivenParseNormalization:
         assert result.sql == sql
         assert result.sqlglot_sql == "SELECT * FROM t WHERE id = $1"
 
+    @pytest.mark.skipif(_VALIDATOR_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
     def test_process_reuses_extracted_metadata_for_execution_conversion(
         self, processor: ParameterProcessor, validator: ParameterValidator
     ) -> None:

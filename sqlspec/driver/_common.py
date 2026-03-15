@@ -8,7 +8,7 @@ from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
-from mypy_extensions import mypyc_attr
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -479,27 +479,28 @@ def handle_single_row_error(error: ValueError) -> "NoReturn":
     raise error
 
 
-@mypyc_attr(native_class=False, allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class DataDictionaryDialectMixin:
     """Mixin providing dialect SQL helpers for data dictionaries."""
 
     __slots__ = ()
 
-    dialect: str
+    dialect: "ClassVar[str]"
 
     def get_dialect_config(self) -> "DialectConfig":
         """Return the dialect configuration for this data dictionary."""
-        return get_dialect_config(self.dialect)
+        return get_dialect_config(type(self).dialect)
 
     def get_query(self, name: str) -> "SQL":
         """Return a named SQL query for this dialect."""
         loader = get_data_dictionary_loader()
-        return loader.get_query(self.dialect, name)
+        return loader.get_query(type(self).dialect, name)
 
     def get_query_text(self, name: str) -> str:
         """Return raw SQL text for a named query for this dialect."""
         loader = get_data_dictionary_loader()
-        return loader.get_query_text(self.dialect, name)
+        return loader.get_query_text(type(self).dialect, name)
 
     def get_query_text_or_none(self, name: str) -> "str | None":
         """Return raw SQL text for a named query or None if missing."""
@@ -526,14 +527,26 @@ class DataDictionaryDialectMixin:
             return False
         return bool(version >= required_version)
 
+    def get_default_features(self) -> "list[str]":
+        """Get default feature flags. Overridden by DataDictionaryMixin."""
+        return []
+
     def list_available_features(self) -> "list[str]":
-        """List available feature flags for this dialect."""
+        """List all features that can be checked via get_feature_flag.
+
+        Returns:
+            List of feature names this data dictionary supports
+
+        """
         config = self.get_dialect_config()
-        features = set(config.feature_flags.keys()) | set(config.feature_versions.keys())
+        features = set(self.get_default_features())
+        features.update(config.feature_flags.keys())
+        features.update(config.feature_versions.keys())
         return sorted(features)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality.
 
@@ -541,14 +554,12 @@ class DataDictionaryMixin:
     feature flags or optimal types.
     """
 
-    __slots__ = ("_version_cache", "_version_fetch_attempted")
+    __slots__ = ()
+
+    dialect: "ClassVar[str]"
 
     _version_cache: "dict[int, VersionInfo | None]"
     _version_fetch_attempted: "set[int]"
-
-    def __init__(self) -> None:
-        self._version_cache = {}
-        self._version_fetch_attempted = set()
 
     def get_cached_version(self, driver_id: int) -> "VersionCacheResult":
         """Get cached version info for a driver.
@@ -649,9 +660,7 @@ class DataDictionaryMixin:
 
     def _resolve_log_adapter(self) -> str:
         """Resolve adapter identifier for logging."""
-        if hasattr(self, "dialect"):
-            return str(self.dialect)  # pyright: ignore[reportAttributeAccessIssue]
-        return type(self).__name__
+        return str(type(self).dialect)
 
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
         """Log detected database version with db.system context."""
