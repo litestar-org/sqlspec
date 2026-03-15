@@ -251,6 +251,10 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
     connection_type: "ClassVar[type[DuckDBConnection]]" = DuckDBConnection
+    _connection_context_class: "ClassVar[type[DuckDBConnectionContext]]" = DuckDBConnectionContext
+    _session_factory_class: "ClassVar[type[_DuckDBSessionConnectionHandler]]" = _DuckDBSessionConnectionHandler
+    _session_context_class: "ClassVar[type[DuckDBSessionContext]]" = DuckDBSessionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -378,41 +382,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         pool = self.provide_pool()
 
         return pool.acquire()
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "DuckDBConnectionContext":
-        """Provide a pooled DuckDB connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A DuckDB connection context manager.
-        """
-        return DuckDBConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "DuckDBSessionContext":
-        """Provide a DuckDB driver session context manager.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            A DuckDB driver session context manager.
-        """
-        handler = _DuckDBSessionConnectionHandler(self)
-
-        return DuckDBSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for DuckDB types.

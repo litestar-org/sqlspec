@@ -117,6 +117,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
     driver_type: "ClassVar[type[SqliteDriver]]" = SqliteDriver
     connection_type: "ClassVar[type[SqliteConnection]]" = SqliteConnection
+    _connection_context_class: "ClassVar[type[SqliteConnectionContext]]" = SqliteConnectionContext
+    _session_factory_class: "ClassVar[type[_SqliteSessionConnectionHandler]]" = _SqliteSessionConnectionHandler
+    _session_context_class: "ClassVar[type[SqliteSessionContext]]" = SqliteSessionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -235,41 +239,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """
         pool = self.provide_pool()
         return pool.acquire()
-
-    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "SqliteConnectionContext":
-        """Provide a SQLite connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A Sqlite connection context manager.
-        """
-        return SqliteConnectionContext(self)
-
-    def provide_session(
-        self, *_args: "Any", statement_config: "StatementConfig | None" = None, **_kwargs: "Any"
-    ) -> "SqliteSessionContext":
-        """Provide a SQLite driver session.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            A Sqlite driver session context manager.
-        """
-        handler = _SqliteSessionConnectionHandler(self)
-
-        return SqliteSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SQLite types.

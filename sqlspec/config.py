@@ -1512,6 +1512,10 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
+    _connection_context_class: "ClassVar[type[Any]]"
+    _session_factory_class: "ClassVar[type[Any]]"
+    _session_context_class: "ClassVar[type[Any]]"
+    _default_statement_config: "ClassVar[StatementConfig]"
 
     def __init__(
         self,
@@ -1578,13 +1582,23 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
         """Provide a database connection context manager."""
-        raise NotImplementedError
+        return cast("AbstractContextManager[ConnectionT]", self._connection_context_class(self))
 
     def provide_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractContextManager[DriverT]":
         """Provide a database session context manager."""
-        raise NotImplementedError
+        handler = self._session_factory_class(self)
+        return cast(
+            "AbstractContextManager[DriverT]",
+            self._session_context_class(
+                acquire_connection=handler.acquire_connection,
+                release_connection=handler.release_connection,
+                statement_config=statement_config or self.statement_config or self._default_statement_config,
+                driver_features=self.driver_features,
+                prepare_driver=self._prepare_driver,
+            ),
+        )
 
     @abstractmethod
     def _create_pool(self) -> PoolT:
@@ -1709,6 +1723,10 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
+    _connection_context_class: "ClassVar[type[Any]]"
+    _session_factory_class: "ClassVar[type[Any]]"
+    _session_context_class: "ClassVar[type[Any]]"
+    _default_statement_config: "ClassVar[StatementConfig]"
 
     def __init__(
         self,
@@ -1775,13 +1793,23 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a database connection context manager."""
-        raise NotImplementedError
+        return cast("AbstractAsyncContextManager[ConnectionT]", self._connection_context_class(self))
 
     def provide_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[DriverT]":
         """Provide a database session context manager."""
-        raise NotImplementedError
+        handler = self._session_factory_class(self)
+        return cast(
+            "AbstractAsyncContextManager[DriverT]",
+            self._session_context_class(
+                acquire_connection=handler.acquire_connection,
+                release_connection=handler.release_connection,
+                statement_config=statement_config or self.statement_config or self._default_statement_config,
+                driver_features=self.driver_features,
+                prepare_driver=self._prepare_driver,
+            ),
+        )
 
     @abstractmethod
     async def _create_pool(self) -> PoolT:

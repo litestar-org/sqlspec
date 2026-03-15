@@ -179,6 +179,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
+    _connection_context_class: "ClassVar[type[PsqlpyConnectionContext]]" = PsqlpyConnectionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
@@ -307,18 +309,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             self.connection_instance = pool
 
         return await pool.connection()
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "PsqlpyConnectionContext":
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A psqlpy Connection context manager.
-        """
-        return PsqlpyConnectionContext(self)
 
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any

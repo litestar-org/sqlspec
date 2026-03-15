@@ -281,6 +281,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
     connection_type: "ClassVar[type[AsyncpgConnection]]" = type(AsyncpgConnection)  # type: ignore[assignment]
+    _connection_context_class: "ClassVar[type[AsyncpgConnectionContext]]" = AsyncpgConnectionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -528,18 +530,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             pool = await self.create_pool()
             self.connection_instance = pool
         return await pool.acquire()
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncpgConnectionContext":
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            An AsyncPG connection context manager.
-        """
-        return AsyncpgConnectionContext(self)
 
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any

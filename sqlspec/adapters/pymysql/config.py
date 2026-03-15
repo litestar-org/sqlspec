@@ -117,6 +117,10 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     driver_type: "ClassVar[type[PyMysqlDriver]]" = PyMysqlDriver
     connection_type: "ClassVar[type[PyMysqlConnection]]" = cast("type[PyMysqlConnection]", PyMysqlConnection)
+    _connection_context_class: "ClassVar[type[PyMysqlConnectionContext]]" = PyMysqlConnectionContext
+    _session_factory_class: "ClassVar[type[_PyMysqlSessionConnectionHandler]]" = _PyMysqlSessionConnectionHandler
+    _session_context_class: "ClassVar[type[PyMysqlSessionContext]]" = PyMysqlSessionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -181,22 +185,6 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
     def create_connection(self) -> PyMysqlConnection:
         pool = self.provide_pool()
         return pool.acquire()
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "PyMysqlConnectionContext":
-        return PyMysqlConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "PyMysqlSessionContext":
-        handler = _PyMysqlSessionConnectionHandler(self)
-
-        return PyMysqlSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()

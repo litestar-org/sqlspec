@@ -162,6 +162,9 @@ class CockroachPsycopgSyncConfig(
 
     driver_type: "ClassVar[type[CockroachPsycopgSyncDriver]]" = CockroachPsycopgSyncDriver
     connection_type: "ClassVar[type[CockroachSyncConnection]]" = CockroachSyncConnection
+    _connection_context_class: "ClassVar[type[CockroachPsycopgSyncConnectionContext]]" = (
+        CockroachPsycopgSyncConnectionContext
+    )
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -255,9 +258,6 @@ class CockroachPsycopgSyncConfig(
         if self.connection_instance is None:
             self.connection_instance = self.create_pool()
         return cast("CockroachSyncConnection", self.connection_instance.getconn())
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "CockroachPsycopgSyncConnectionContext":
-        return CockroachPsycopgSyncConnectionContext(self)
 
     def provide_session(
         self,
@@ -358,6 +358,9 @@ class CockroachPsycopgAsyncConfig(
 
     driver_type: "ClassVar[type[CockroachPsycopgAsyncDriver]]" = CockroachPsycopgAsyncDriver
     connection_type: "ClassVar[type[CockroachAsyncConnection]]" = CockroachAsyncConnection
+    _connection_context_class: "ClassVar[type[CockroachPsycopgAsyncConnectionContext]]" = (
+        CockroachPsycopgAsyncConnectionContext
+    )
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -456,9 +459,6 @@ class CockroachPsycopgAsyncConfig(
         if self.connection_instance is None:
             self.connection_instance = await self.create_pool()
         return cast("CockroachAsyncConnection", await self.connection_instance.getconn())
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "CockroachPsycopgAsyncConnectionContext":
-        return CockroachPsycopgAsyncConnectionContext(self)
 
     def provide_session(
         self,

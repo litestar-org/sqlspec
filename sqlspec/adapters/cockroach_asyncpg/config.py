@@ -143,6 +143,8 @@ class CockroachAsyncpgConfig(
 
     driver_type: "ClassVar[type[CockroachAsyncpgDriver]]" = CockroachAsyncpgDriver
     connection_type: "ClassVar[type[CockroachAsyncpgConnection]]" = CockroachAsyncpgConnection  # type: ignore[assignment]
+    _connection_context_class: "ClassVar[type[CockroachAsyncpgConnectionContext]]" = CockroachAsyncpgConnectionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -207,9 +209,6 @@ class CockroachAsyncpgConfig(
         if self.connection_instance is None:
             self.connection_instance = await self.create_pool()
         return cast("CockroachAsyncpgConnection", await self.connection_instance.acquire())
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "CockroachAsyncpgConnectionContext":
-        return CockroachAsyncpgConnectionContext(self)
 
     def provide_session(
         self,

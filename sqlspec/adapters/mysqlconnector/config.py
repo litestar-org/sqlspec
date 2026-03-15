@@ -220,6 +220,12 @@ class MysqlConnectorSyncConfig(
 
     driver_type: ClassVar[type[MysqlConnectorSyncDriver]] = MysqlConnectorSyncDriver
     connection_type: ClassVar[type[MysqlConnectorSyncConnection]] = MysqlConnectorSyncConnection
+    _connection_context_class: "ClassVar[type[MysqlConnectorSyncConnectionContext]]" = MysqlConnectorSyncConnectionContext
+    _session_factory_class: "ClassVar[type[_MysqlConnectorSyncSessionConnectionHandler]]" = (
+        _MysqlConnectorSyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[MysqlConnectorSyncSessionContext]]" = MysqlConnectorSyncSessionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: ClassVar[bool] = False
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
@@ -294,23 +300,6 @@ class MysqlConnectorSyncConfig(
             with contextlib.suppress(Exception):
                 setattr(connection, "autocommit", bool(autocommit))
         return connection
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "MysqlConnectorSyncConnectionContext":
-        return MysqlConnectorSyncConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "MysqlConnectorSyncSessionContext":
-        statement_config = statement_config or self.statement_config or default_statement_config
-        handler = _MysqlConnectorSyncSessionConnectionHandler(self)
-
-        return MysqlConnectorSyncSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()

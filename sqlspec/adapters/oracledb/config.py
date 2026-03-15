@@ -180,6 +180,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
     migration_tracker_type: "ClassVar[type[OracleSyncMigrationTracker]]" = OracleSyncMigrationTracker
+    _connection_context_class: "ClassVar[type[OracleSyncConnectionContext]]" = OracleSyncConnectionContext
+    _session_factory_class: "ClassVar[type[_OracleSyncSessionConnectionHandler]]" = _OracleSyncSessionConnectionHandler
+    _session_context_class: "ClassVar[type[OracleSyncSessionContext]]" = OracleSyncSessionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: ClassVar[bool] = False
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
@@ -279,37 +283,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self.connection_instance = self.create_pool()
         return self.connection_instance.acquire()
 
-    def provide_connection(self) -> "OracleSyncConnectionContext":
-        """Provide a connection context manager.
-
-        Returns:
-            An Oracle Connection context manager.
-        """
-        return OracleSyncConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "OracleSyncSessionContext":
-        """Provide a driver session context manager.
-
-        Args:
-            *_args: Positional arguments (unused).
-            statement_config: Optional statement configuration override.
-            **_kwargs: Keyword arguments (unused).
-
-        Returns:
-            An OracleSyncDriver session context manager.
-        """
-        handler = _OracleSyncSessionConnectionHandler(self)
-
-        return OracleSyncSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
-
     def provide_pool(self) -> "OracleSyncConnectionPool":
         """Provide pool instance.
 
@@ -405,6 +378,10 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     connection_type: "ClassVar[type[OracleAsyncConnection]]" = OracleAsyncConnection
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
     migration_tracker_type: "ClassVar[type[OracleAsyncMigrationTracker]]" = OracleAsyncMigrationTracker
+    _connection_context_class: "ClassVar[type[OracleAsyncConnectionContext]]" = OracleAsyncConnectionContext
+    _session_factory_class: "ClassVar[type[_OracleAsyncSessionConnectionHandler]]" = _OracleAsyncSessionConnectionHandler
+    _session_context_class: "ClassVar[type[OracleAsyncSessionContext]]" = OracleAsyncSessionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: ClassVar[bool] = False
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
@@ -506,37 +483,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if self.connection_instance is None:
             self.connection_instance = await self.create_pool()
         return cast("OracleAsyncConnection", await self.connection_instance.acquire())
-
-    def provide_connection(self) -> "OracleAsyncConnectionContext":
-        """Provide an async connection context manager.
-
-        Returns:
-            An Oracle AsyncConnection context manager.
-        """
-        return OracleAsyncConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "OracleAsyncSessionContext":
-        """Provide an async driver session context manager.
-
-        Args:
-            *_args: Positional arguments (unused).
-            statement_config: Optional statement configuration override.
-            **_kwargs: Keyword arguments (unused).
-
-        Returns:
-            An OracleAsyncDriver session context manager.
-        """
-        handler = _OracleAsyncSessionConnectionHandler(self)
-
-        return OracleAsyncSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     async def provide_pool(self) -> "OracleAsyncConnectionPool":
         """Provide async pool instance.

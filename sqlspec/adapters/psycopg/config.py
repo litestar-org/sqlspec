@@ -182,6 +182,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
     connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
+    _connection_context_class: "ClassVar[type[PsycopgSyncConnectionContext]]" = PsycopgSyncConnectionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -335,18 +337,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self.connection_instance = self.create_pool()
         return cast("PsycopgSyncConnection", self.connection_instance.getconn())  # pyright: ignore
 
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "PsycopgSyncConnectionContext":
-        """Provide a connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A psycopg Connection context manager.
-        """
-        return PsycopgSyncConnectionContext(self)
-
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
     ) -> "PsycopgSyncSessionContext":
@@ -462,6 +452,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
     connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
+    _connection_context_class: "ClassVar[type[PsycopgAsyncConnectionContext]]" = PsycopgAsyncConnectionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
@@ -617,18 +609,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if self.connection_instance is None:
             self.connection_instance = await self.create_pool()
         return cast("PsycopgAsyncConnection", await self.connection_instance.getconn())  # pyright: ignore
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "PsycopgAsyncConnectionContext":  # pyright: ignore
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A psycopg AsyncConnection context manager.
-        """
-        return PsycopgAsyncConnectionContext(self)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for PsycopgAsyncConfig types.

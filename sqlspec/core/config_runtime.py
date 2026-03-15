@@ -9,6 +9,8 @@ from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from sqlspec.storage import StorageCapabilities
+
 
 __all__ = (
     "build_default_statement_config",
@@ -37,7 +39,8 @@ def build_default_statement_config(default_dialect: str) -> StatementConfig:
 
 
 def seed_runtime_driver_features(
-    driver_features: "dict[str, Any] | None", storage_capabilities: "dict[str, Any] | None"
+    driver_features: "dict[str, Any] | None",
+    storage_capabilities: "dict[str, Any] | StorageCapabilities | None",
 ) -> "dict[str, Any]":
     """Clone and seed driver feature state used on the runtime hot path."""
     seeded_features = dict(driver_features) if driver_features else {}

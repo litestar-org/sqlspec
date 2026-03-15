@@ -143,6 +143,10 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
     driver_type: "ClassVar[type[AiosqliteDriver]]" = AiosqliteDriver
     connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
+    _connection_context_class: "ClassVar[type[AiosqliteConnectionContext]]" = AiosqliteConnectionContext
+    _session_factory_class: "ClassVar[type[_AiosqliteSessionFactory]]" = _AiosqliteSessionFactory
+    _session_context_class: "ClassVar[type[AiosqliteSessionContext]]" = AiosqliteSessionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -212,42 +216,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             extension_config=extension_config,
             observability_config=observability_config,
             **kwargs,
-        )
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "AiosqliteConnectionContext":
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            An aiosqlite connection context manager.
-
-        """
-        return AiosqliteConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "AiosqliteSessionContext":
-        """Provide an async driver session context manager.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            An AiosqliteDriver session context manager.
-
-        """
-        factory = _AiosqliteSessionFactory(self)
-        return AiosqliteSessionContext(
-            acquire_connection=factory.acquire_connection,
-            release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
         )
 
     async def _create_pool(self) -> AiosqliteConnectionPool:

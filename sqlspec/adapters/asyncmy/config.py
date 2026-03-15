@@ -150,6 +150,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncmyConnection)
+    _connection_context_class: "ClassVar[type[AsyncmyConnectionContext]]" = AsyncmyConnectionContext
+    _session_factory_class: "ClassVar[type[_AsyncmySessionFactory]]" = _AsyncmySessionFactory
+    _session_context_class: "ClassVar[type[AsyncmySessionContext]]" = AsyncmySessionContext
+    _default_statement_config = default_statement_config
     supports_transactional_ddl: ClassVar[bool] = False
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
@@ -257,40 +261,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         connection = cast("AsyncmyConnection", await pool.acquire())
         await self._ensure_connection_initialized(connection)
         return connection
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncmyConnectionContext":
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            An Asyncmy connection context manager.
-        """
-        return AsyncmyConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "AsyncmySessionContext":
-        """Provide an async driver session context manager.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            An Asyncmy driver session context manager.
-        """
-        factory = _AsyncmySessionFactory(self)
-        return AsyncmySessionContext(
-            acquire_connection=factory.acquire_connection,
-            release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":
         """Provide async pool instance.
